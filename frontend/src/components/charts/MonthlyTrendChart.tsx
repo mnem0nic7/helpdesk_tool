@@ -12,6 +12,7 @@ import type { WeeklyVolume } from "../../lib/api.ts";
 
 interface Props {
   data: WeeklyVolume[];
+  onPointClick?: (weekStart: string) => void;
 }
 
 /** Format a week-start date (YYYY-MM-DD) as a short label like "Jan 20". */
@@ -20,7 +21,7 @@ function formatWeekLabel(iso: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-export default function MonthlyTrendChart({ data }: Props) {
+export default function MonthlyTrendChart({ data, onPointClick }: Props) {
   if (!data || data.length === 0) {
     return (
       <div className="flex h-[300px] items-center justify-center text-sm text-gray-400">
@@ -40,7 +41,15 @@ export default function MonthlyTrendChart({ data }: Props) {
         Weekly Ticket Trend (Last 8 Weeks)
       </h3>
       <ResponsiveContainer width="100%" height={300}>
-        <LineChart data={chartData}>
+        <LineChart
+          data={chartData}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          onClick={onPointClick ? (state: any) => {
+            const week = state?.activePayload?.[0]?.payload?.week;
+            if (week) onPointClick(week);
+          } : undefined}
+          style={onPointClick ? { cursor: "pointer" } : undefined}
+        >
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
           <XAxis
             dataKey="label"
@@ -73,7 +82,7 @@ export default function MonthlyTrendChart({ data }: Props) {
             stroke="#3b82f6"
             strokeWidth={2}
             dot={{ r: 3 }}
-            activeDot={{ r: 5 }}
+            activeDot={{ r: 5, style: onPointClick ? { cursor: "pointer" } : undefined }}
           />
           <Line
             type="monotone"
@@ -82,7 +91,7 @@ export default function MonthlyTrendChart({ data }: Props) {
             stroke="#22c55e"
             strokeWidth={2}
             dot={{ r: 3 }}
-            activeDot={{ r: 5 }}
+            activeDot={{ r: 5, style: onPointClick ? { cursor: "pointer" } : undefined }}
           />
         </LineChart>
       </ResponsiveContainer>

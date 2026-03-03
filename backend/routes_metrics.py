@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from issue_cache import cache
 from metrics import (
@@ -34,11 +35,45 @@ _SLA_FIELD_IDS = [
 ]
 
 
+def _filter_by_date(
+    issues: list[dict[str, Any]],
+    date_from: Optional[date],
+    date_to: Optional[date],
+) -> list[dict[str, Any]]:
+    """Filter issues by their created date."""
+    if not date_from and not date_to:
+        return issues
+    result = []
+    for issue in issues:
+        created_str = issue.get("fields", {}).get("created", "")
+        if not created_str:
+            continue
+        try:
+            created = datetime.fromisoformat(created_str.replace("Z", "+00:00")).date()
+        except (ValueError, TypeError):
+            continue
+        if date_from and created < date_from:
+            continue
+        if date_to and created > date_to:
+            continue
+        result.append(issue)
+    return result
+
+
 @router.get("/metrics")
-async def get_metrics() -> dict[str, Any]:
+async def get_metrics(
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+) -> dict[str, Any]:
     """Return all dashboard metrics computed from the full OIT issue set."""
     issues = cache.get_filtered_issues()
     excluded_count = cache.issue_count - cache.filtered_count
+
+    # Parse and apply date range filter
+    df = date.fromisoformat(date_from) if date_from else None
+    dt = date.fromisoformat(date_to) if date_to else None
+    issues = _filter_by_date(issues, df, dt)
+
     return {
         "headline": compute_headline_metrics(issues, excluded_count),
         "weekly_volumes": compute_weekly_volumes(issues),

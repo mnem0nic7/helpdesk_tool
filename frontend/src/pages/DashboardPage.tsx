@@ -1,7 +1,11 @@
+import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../lib/api.ts";
-import type { AssigneeStats } from "../lib/api.ts";
+import type { AssigneeStats, MetricsQueryParams } from "../lib/api.ts";
 import MetricCard from "../components/MetricCard.tsx";
+import DateRangeSelector from "../components/DateRangeSelector.tsx";
+import type { DateRange } from "../components/DateRangeSelector.tsx";
 import MonthlyTrendChart from "../components/charts/MonthlyTrendChart.tsx";
 import AgingPieChart from "../components/charts/AgingPieChart.tsx";
 import TTRDistributionChart from "../components/charts/TTRDistributionChart.tsx";
@@ -30,6 +34,13 @@ function computeStale(ageBuckets: { bucket: string; count: number }[]): number {
     (b) => b.bucket === "30+d" || b.bucket.includes("30+")
   );
   return stale?.count ?? 0;
+}
+
+/** Add 7 days to a YYYY-MM-DD string. */
+function weekEnd(weekStart: string): string {
+  const d = new Date(weekStart + "T00:00:00");
+  d.setDate(d.getDate() + 6);
+  return d.toISOString().slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -63,7 +74,12 @@ function LoadingSkeleton() {
 // Assignees table
 // ---------------------------------------------------------------------------
 
-function AssigneesTable({ rows }: { rows: AssigneeStats[] }) {
+interface AssigneesTableProps {
+  rows: AssigneeStats[];
+  onRowClick?: (name: string) => void;
+}
+
+function AssigneesTable({ rows, onRowClick }: AssigneesTableProps) {
   if (!rows || rows.length === 0) {
     return (
       <p className="py-8 text-center text-sm text-gray-400">
@@ -90,7 +106,9 @@ function AssigneesTable({ rows }: { rows: AssigneeStats[] }) {
               className={[
                 "border-b border-gray-100 transition-colors hover:bg-blue-50",
                 idx % 2 === 0 ? "bg-white" : "bg-gray-50/50",
+                onRowClick ? "cursor-pointer" : "",
               ].join(" ")}
+              onClick={onRowClick ? () => onRowClick(row.name) : undefined}
             >
               <td className="px-4 py-3 font-medium text-gray-900">
                 {row.name || "Unassigned"}
@@ -117,10 +135,47 @@ function AssigneesTable({ rows }: { rows: AssigneeStats[] }) {
 // ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Read date range from URL search params
+  const dateRange: DateRange = {
+    date_from: searchParams.get("date_from") ?? undefined,
+    date_to: searchParams.get("date_to") ?? undefined,
+  };
+
+  const metricsParams: MetricsQueryParams = {
+    date_from: dateRange.date_from,
+    date_to: dateRange.date_to,
+  };
+
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["metrics"],
-    queryFn: api.getMetrics,
+    queryKey: ["metrics", metricsParams],
+    queryFn: () => api.getMetrics(metricsParams),
   });
+
+  // Update URL when date range changes
+  const handleDateRangeChange = useCallback(
+    (range: DateRange) => {
+      const params = new URLSearchParams();
+      if (range.date_from) params.set("date_from", range.date_from);
+      if (range.date_to) params.set("date_to", range.date_to);
+      setSearchParams(params, { replace: true });
+    },
+    [setSearchParams]
+  );
+
+  // Navigate to /tickets with filters pre-populated
+  const drillDown = useCallback(
+    (filters: Record<string, string>) => {
+      const params = new URLSearchParams(filters);
+      // Carry date range as created_after/created_before
+      if (dateRange.date_from) params.set("created_after", dateRange.date_from);
+      if (dateRange.date_to) params.set("created_before", dateRange.date_to);
+      navigate(`/tickets?${params.toString()}`);
+    },
+    [navigate, dateRange]
+  );
 
   if (isLoading) {
     return (
@@ -161,12 +216,15 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Overview of OIT helpdesk metrics and KPIs
-        </p>
+      {/* Page header + date range selector */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Overview of OIT helpdesk metrics and KPIs
+          </p>
+        </div>
+        <DateRangeSelector value={dateRange} onChange={handleDateRangeChange} />
       </div>
 
       {/* Headline metric cards */}
@@ -175,44 +233,64 @@ export default function DashboardPage() {
           label="Total Tickets"
           value={headline.total_tickets.toLocaleString()}
           color="blue"
+          onClick={() => drillDown({})}
         />
         <MetricCard
           label="Open Backlog"
           value={headline.open_backlog.toLocaleString()}
           color="yellow"
           subtitle={`${((headline.open_backlog / headline.total_tickets) * 100).toFixed(1)}% of total`}
+          onClick={() => drillDown({ open_only: "true" })}
         />
         <MetricCard
           label="Resolved"
           value={headline.resolved.toLocaleString()}
           color="green"
+          onClick={() => drillDown({ status: "Resolved" })}
         />
         <MetricCard
           label="Median TTR"
           value={formatHours(headline.median_ttr_hours)}
           color="blue"
           subtitle="Time to resolution"
+          onClick={() => drillDown({ status: "Resolved" })}
         />
         <MetricCard
           label="P90 TTR"
           value={formatHours(headline.p90_ttr_hours)}
           color="red"
           subtitle="90th percentile"
+          onClick={() => drillDown({ status: "Resolved" })}
         />
         <MetricCard
           label="Stale Tickets"
           value={staleCount.toLocaleString()}
           color={staleCount > 0 ? "red" : "green"}
           subtitle="Open > 30 days"
+          onClick={() => drillDown({ stale_only: "true" })}
         />
       </div>
 
       {/* Charts grid */}
       <div className="grid gap-6 lg:grid-cols-2">
-        <MonthlyTrendChart data={weekly_volumes} />
-        <AgingPieChart data={age_buckets} />
-        <TTRDistributionChart data={ttr_distribution} />
-        <PriorityBarChart data={priority_counts} />
+        <MonthlyTrendChart
+          data={weekly_volumes}
+          onPointClick={(ws) =>
+            drillDown({ created_after: ws, created_before: weekEnd(ws) })
+          }
+        />
+        <AgingPieChart
+          data={age_buckets}
+          onSliceClick={() => drillDown({ open_only: "true" })}
+        />
+        <TTRDistributionChart
+          data={ttr_distribution}
+          onBarClick={() => drillDown({ status: "Resolved" })}
+        />
+        <PriorityBarChart
+          data={priority_counts}
+          onBarClick={(priority) => drillDown({ priority })}
+        />
       </div>
 
       {/* Top Assignees */}
@@ -220,7 +298,10 @@ export default function DashboardPage() {
         <h2 className="mb-3 text-lg font-semibold text-gray-800">
           Top Assignees
         </h2>
-        <AssigneesTable rows={assignee_stats} />
+        <AssigneesTable
+          rows={assignee_stats}
+          onRowClick={(name) => drillDown({ assignee: name })}
+        />
       </div>
     </div>
   );

@@ -11,9 +11,10 @@ import type { TTRBucket } from "../../lib/api.ts";
 
 interface Props {
   data: TTRBucket[];
+  onBarClick?: (bucket: string) => void;
 }
 
-export default function TTRDistributionChart({ data }: Props) {
+export default function TTRDistributionChart({ data, onBarClick }: Props) {
   if (!data || data.length === 0) {
     return (
       <div className="flex h-[300px] items-center justify-center text-sm text-gray-400">
@@ -59,7 +60,14 @@ export default function TTRDistributionChart({ data }: Props) {
               border: "1px solid #e5e7eb",
             }}
           />
-          <Bar dataKey="count" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+          <Bar
+            dataKey="count"
+            fill="#3b82f6"
+            radius={[4, 4, 0, 0]}
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            onClick={onBarClick ? (entry: any) => onBarClick(entry.bucket) : undefined}
+            style={onBarClick ? { cursor: "pointer" } : undefined}
+          />
         </BarChart>
       </ResponsiveContainer>
     </div>

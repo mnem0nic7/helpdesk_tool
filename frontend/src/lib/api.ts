@@ -207,9 +207,17 @@ export interface TicketQueryParams {
   search?: string;
   open_only?: boolean;
   stale_only?: boolean;
+  created_after?: string;
+  created_before?: string;
 }
 
-function buildQuery(params: TicketQueryParams): string {
+export interface MetricsQueryParams {
+  date_from?: string;
+  date_to?: string;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildQuery(params: any): string {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") {
@@ -225,9 +233,9 @@ function buildQuery(params: TicketQueryParams): string {
 // ---------------------------------------------------------------------------
 
 export const api = {
-  /** Fetch aggregate dashboard metrics. */
-  getMetrics(): Promise<MetricsResponse> {
-    return fetchJSON<MetricsResponse>("/api/metrics");
+  /** Fetch aggregate dashboard metrics, optionally filtered by date range. */
+  getMetrics(params: MetricsQueryParams = {}): Promise<MetricsResponse> {
+    return fetchJSON<MetricsResponse>(`/api/metrics${buildQuery(params)}`);
   },
 
   /** Fetch a paginated, filterable list of tickets. */
