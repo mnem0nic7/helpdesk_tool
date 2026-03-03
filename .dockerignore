@@ -1,0 +1,28 @@
+.venv/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+.git/
+.gitignore
+reports/
+docs/
+__pycache__/
+*.pyc
+
+# Large data files
+oit_all_issues.json
+oit_all_issues_full.json
+
+# Scripts not needed in container
+generate_baseline_report.py
+gen_all_reports.py
+gen_full_data_export.py
+pull_all_fields.py
+start.sh
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo

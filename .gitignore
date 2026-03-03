@@ -1,0 +1,39 @@
+# Environment & secrets
+backend/.env
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Node
+frontend/node_modules/
+frontend/dist/
+node_modules/
+
+# Data files (large / sensitive)
+oit_all_issues.json
+oit_all_issues_full.json
+*.xlsx
+reports/
+
+# One-off scripts with hardcoded credentials
+pull_all_fields.py
+
+# Docs containing secrets
+docs/plans/2026-03-03-helpdesk-dashboard-plan.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Playwright MCP logs
+.playwright-mcp/
+
+# OS
+.DS_Store
+Thumbs.db

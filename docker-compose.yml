@@ -1,0 +1,8 @@
+services:
+  dashboard:
+    build: .
+    ports:
+      - "3002:80"
+    env_file:
+      - backend/.env
+    restart: unless-stopped
