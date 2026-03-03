@@ -6,9 +6,6 @@ import type { TicketQueryParams } from "../lib/api.ts";
 import TicketFilters from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 import TicketTable from "../components/TicketTable.tsx";
-import Pagination from "../components/Pagination.tsx";
-
-const PAGE_SIZE = 50;
 
 /** Derive initial filter values from URL search params. */
 function filtersFromParams(sp: URLSearchParams): TicketFilterValues {
@@ -32,25 +29,19 @@ export default function TicketsPage() {
   const initialFilters = filtersFromParams(searchParams);
 
   const [filters, setFilters] = useState<TicketFilterValues>(initialFilters);
-  const [page, setPage] = useState(1);
   // Reset filters when navigating to /tickets with new params
   const [lastParamsKey, setLastParamsKey] = useState(paramsKey);
   if (paramsKey !== lastParamsKey) {
     setFilters(filtersFromParams(searchParams));
-    setPage(1);
     setLastParamsKey(paramsKey);
   }
 
-  // When filters change, reset to page 1
   const handleFilterChange = useCallback((next: TicketFilterValues) => {
     setFilters(next);
-    setPage(1);
   }, []);
 
   // Build query params from state
   const queryParams: TicketQueryParams = {
-    page,
-    page_size: PAGE_SIZE,
     ...(filters.search ? { search: filters.search } : {}),
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.priority ? { priority: filters.priority } : {}),
@@ -67,7 +58,6 @@ export default function TicketsPage() {
   });
 
   const tickets = data?.tickets ?? [];
-  const hasMore = data?.has_more ?? false;
 
   return (
     <div className="space-y-4">
@@ -91,15 +81,6 @@ export default function TicketsPage() {
 
       {/* Table */}
       <TicketTable data={tickets} loading={isLoading} />
-
-      {/* Pagination */}
-      {!isLoading && tickets.length > 0 && (
-        <Pagination
-          page={page}
-          hasMore={hasMore}
-          onPageChange={setPage}
-        />
-      )}
     </div>
   );
 }

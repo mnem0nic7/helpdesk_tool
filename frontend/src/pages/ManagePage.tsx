@@ -7,10 +7,7 @@ import TicketFilters, {
 } from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 import TicketTable from "../components/TicketTable.tsx";
-import Pagination from "../components/Pagination.tsx";
 import BulkActionsToolbar from "../components/BulkActionsToolbar.tsx";
-
-const PAGE_SIZE = 50;
 
 // Quick-filter preset definitions
 type QuickFilter = "triage" | "all_open" | null;
@@ -22,14 +19,12 @@ export default function ManagePage() {
     ...emptyFilters,
     open_only: true,
   });
-  const [page, setPage] = useState(1);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [activeQuickFilter, setActiveQuickFilter] = useState<QuickFilter>("all_open");
 
-  // When filters change, reset page and clear selection
+  // When filters change, clear selection
   const handleFilterChange = useCallback((next: TicketFilterValues) => {
     setFilters(next);
-    setPage(1);
     setSelectedKeys(new Set());
     setActiveQuickFilter(null); // Manual filter change clears quick filter
   }, []);
@@ -39,10 +34,8 @@ export default function ManagePage() {
     const next: TicketFilterValues = {
       ...emptyFilters,
       open_only: true,
-      // Triage queue: open and unassigned (search for unassigned via empty assignee)
     };
     setFilters(next);
-    setPage(1);
     setSelectedKeys(new Set());
     setActiveQuickFilter("triage");
   }
@@ -53,22 +46,18 @@ export default function ManagePage() {
       open_only: true,
     };
     setFilters(next);
-    setPage(1);
     setSelectedKeys(new Set());
     setActiveQuickFilter("all_open");
   }
 
   function handleClearQuickFilter() {
     setFilters({ ...emptyFilters });
-    setPage(1);
     setSelectedKeys(new Set());
     setActiveQuickFilter(null);
   }
 
   // Build query params
   const queryParams: TicketQueryParams = {
-    page,
-    page_size: PAGE_SIZE,
     ...(filters.search ? { search: filters.search } : {}),
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.priority ? { priority: filters.priority } : {}),
@@ -84,7 +73,6 @@ export default function ManagePage() {
   });
 
   const tickets = data?.tickets ?? [];
-  const hasMore = data?.has_more ?? false;
 
   // Bulk action completed: refresh cache, clear selection, refetch
   function handleActionComplete() {
@@ -171,15 +159,6 @@ export default function ManagePage() {
         selectedKeys={selectedKeys}
         onSelectionChange={setSelectedKeys}
       />
-
-      {/* Pagination */}
-      {!isLoading && tickets.length > 0 && (
-        <Pagination
-          page={page}
-          hasMore={hasMore}
-          onPageChange={setPage}
-        />
-      )}
     </div>
   );
 }
