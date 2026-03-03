@@ -300,6 +300,11 @@ export const api = {
   refreshCache(): Promise<CacheStatus> {
     return postJSON<CacheStatus>("/api/cache/refresh", {});
   },
+
+  /** Trigger an incremental cache refresh (last 10 min of changes). */
+  refreshCacheIncremental(): Promise<CacheStatus> {
+    return postJSON<CacheStatus>("/api/cache/refresh/incremental", {});
+  },
 };
 
 export default api;

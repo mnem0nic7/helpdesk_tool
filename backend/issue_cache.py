@@ -259,6 +259,10 @@ class IssueCache:
         """Trigger a full re-fetch (called from the /api/cache/refresh endpoint)."""
         self._full_fetch()
 
+    def trigger_incremental_refresh(self) -> None:
+        """Trigger an incremental refresh (last 10 min of changes)."""
+        self._incremental_refresh()
+
     # ------------------------------------------------------------------
     # Background task lifecycle
     # ------------------------------------------------------------------
