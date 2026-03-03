@@ -1,19 +1,45 @@
 import { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api.ts";
 import type { TicketQueryParams } from "../lib/api.ts";
-import TicketFilters, {
-  emptyFilters,
-} from "../components/TicketFilters.tsx";
+import TicketFilters from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 import TicketTable from "../components/TicketTable.tsx";
 import Pagination from "../components/Pagination.tsx";
 
 const PAGE_SIZE = 50;
 
+/** Derive initial filter values from URL search params. */
+function filtersFromParams(sp: URLSearchParams): TicketFilterValues {
+  return {
+    search: sp.get("search") ?? "",
+    status: sp.get("status") ?? "",
+    priority: sp.get("priority") ?? "",
+    open_only: sp.get("open_only") === "true",
+    stale_only: sp.get("stale_only") === "true",
+    created_after: sp.get("created_after") ?? "",
+    created_before: sp.get("created_before") ?? "",
+    assignee: sp.get("assignee") ?? "",
+  };
+}
+
 export default function TicketsPage() {
-  const [filters, setFilters] = useState<TicketFilterValues>({ ...emptyFilters });
+  const [searchParams] = useSearchParams();
+
+  // Key on the search params string so state reinitializes on navigation
+  const paramsKey = searchParams.toString();
+  const initialFilters = filtersFromParams(searchParams);
+
+  const [filters, setFilters] = useState<TicketFilterValues>(initialFilters);
   const [page, setPage] = useState(1);
+  // Reset filters when navigating to /tickets with new params
+  const [lastParamsKey, setLastParamsKey] = useState(paramsKey);
+  if (paramsKey !== lastParamsKey) {
+    setFilters(filtersFromParams(searchParams));
+    setPage(1);
+    setLastParamsKey(paramsKey);
+  }
 
   // When filters change, reset to page 1
   const handleFilterChange = useCallback((next: TicketFilterValues) => {
@@ -30,6 +56,9 @@ export default function TicketsPage() {
     ...(filters.priority ? { priority: filters.priority } : {}),
     ...(filters.open_only ? { open_only: true } : {}),
     ...(filters.stale_only ? { stale_only: true } : {}),
+    ...(filters.created_after ? { created_after: filters.created_after } : {}),
+    ...(filters.created_before ? { created_before: filters.created_before } : {}),
+    ...(filters.assignee ? { assignee: filters.assignee } : {}),
   };
 
   const { data, isLoading, isError, error } = useQuery({

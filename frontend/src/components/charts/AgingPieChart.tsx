@@ -11,6 +11,7 @@ import type { AgeBucket } from "../../lib/api.ts";
 
 interface Props {
   data: AgeBucket[];
+  onSliceClick?: (bucket: string) => void;
 }
 
 const BUCKET_COLORS: Record<string, string> = {
@@ -36,7 +37,7 @@ function renderLabel(props: PieLabelRenderProps): string {
   return `${name} (${pct}%)`;
 }
 
-export default function AgingPieChart({ data }: Props) {
+export default function AgingPieChart({ data, onSliceClick }: Props) {
   if (!data || data.length === 0) {
     return (
       <div className="flex h-[300px] items-center justify-center text-sm text-gray-400">
@@ -60,6 +61,8 @@ export default function AgingPieChart({ data }: Props) {
             cy="50%"
             outerRadius={100}
             label={renderLabel}
+            onClick={onSliceClick ? (_, idx) => onSliceClick(data[idx].bucket) : undefined}
+            style={onSliceClick ? { cursor: "pointer" } : undefined}
           >
             {data.map((entry, idx) => (
               <Cell key={entry.bucket} fill={getColor(entry.bucket, idx)} />

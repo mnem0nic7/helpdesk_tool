@@ -30,6 +30,8 @@ async def list_tickets(
     search: Optional[str] = Query(None),
     open_only: bool = Query(False),
     stale_only: bool = Query(False),
+    created_after: Optional[str] = Query(None),
+    created_before: Optional[str] = Query(None),
 ) -> dict[str, Any]:
     """Return a paginated, filtered list of OIT tickets."""
     # Build JQL from filters
@@ -53,6 +55,10 @@ async def list_tickets(
         clauses.append('statusCategory != "Done"')
     if stale_only:
         clauses.append("updated <= -7d")
+    if created_after:
+        clauses.append(f'created >= "{created_after}"')
+    if created_before:
+        clauses.append(f'created <= "{created_before}"')
 
     jql = " AND ".join(clauses) + " ORDER BY created DESC"
 

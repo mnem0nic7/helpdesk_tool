@@ -6,6 +6,9 @@ export interface TicketFilterValues {
   priority: string;
   open_only: boolean;
   stale_only: boolean;
+  created_after: string;
+  created_before: string;
+  assignee: string;
 }
 
 export const emptyFilters: TicketFilterValues = {
@@ -14,6 +17,9 @@ export const emptyFilters: TicketFilterValues = {
   priority: "",
   open_only: false,
   stale_only: false,
+  created_after: "",
+  created_before: "",
+  assignee: "",
 };
 
 const STATUSES = [
@@ -66,7 +72,10 @@ export default function TicketFilters({
     filters.status !== "" ||
     filters.priority !== "" ||
     filters.open_only ||
-    filters.stale_only;
+    filters.stale_only ||
+    filters.created_after !== "" ||
+    filters.created_before !== "" ||
+    filters.assignee !== "";
 
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -140,6 +149,30 @@ export default function TicketFilters({
       >
         Stale Only
       </button>
+
+      {/* Created After */}
+      <input
+        type="date"
+        value={filters.created_after}
+        onChange={(e) => handleChange("created_after", e.target.value)}
+        title="Created after"
+        placeholder="From date"
+        className="h-9 rounded-md border border-gray-300 bg-white px-2 text-sm
+                   text-gray-700 shadow-sm
+                   focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+      />
+
+      {/* Created Before */}
+      <input
+        type="date"
+        value={filters.created_before}
+        onChange={(e) => handleChange("created_before", e.target.value)}
+        title="Created before"
+        placeholder="To date"
+        className="h-9 rounded-md border border-gray-300 bg-white px-2 text-sm
+                   text-gray-700 shadow-sm
+                   focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+      />
 
       {/* Clear Filters */}
       {hasActiveFilters && (

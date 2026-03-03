@@ -4,6 +4,7 @@ interface MetricCardProps {
   subtitle?: string;
   trend?: "up" | "down" | "neutral";
   color?: "blue" | "green" | "red" | "yellow";
+  onClick?: () => void;
 }
 
 const colorMap = {
@@ -25,9 +26,22 @@ export default function MetricCard({
   subtitle,
   trend,
   color = "blue",
+  onClick,
 }: MetricCardProps) {
+  const clickable = !!onClick;
   return (
-    <div className="rounded-lg bg-white px-5 py-4 shadow">
+    <div
+      className={[
+        "rounded-lg bg-white px-5 py-4 shadow",
+        clickable
+          ? "cursor-pointer transition-shadow hover:shadow-md hover:ring-1 hover:ring-blue-200"
+          : "",
+      ].join(" ")}
+      onClick={onClick}
+      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+    >
       <p className="text-xs font-medium tracking-wide text-gray-500 uppercase">
         {label}
       </p>
