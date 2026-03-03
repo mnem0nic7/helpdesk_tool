@@ -10,20 +10,27 @@ export default function CacheStatusBar() {
     refetchInterval: 30_000, // poll every 30s
   });
 
-  const refresh = useMutation({
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: ["cache-status"] });
+    queryClient.invalidateQueries({ queryKey: ["metrics"] });
+    queryClient.invalidateQueries({ queryKey: ["sla-summary"] });
+    queryClient.invalidateQueries({ queryKey: ["sla-breaches"] });
+    queryClient.invalidateQueries({ queryKey: ["manage-tickets"] });
+  };
+
+  const incremental = useMutation({
+    mutationFn: () => api.refreshCacheIncremental(),
+    onSuccess: invalidateAll,
+  });
+
+  const full = useMutation({
     mutationFn: () => api.refreshCache(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["cache-status"] });
-      queryClient.invalidateQueries({ queryKey: ["metrics"] });
-      queryClient.invalidateQueries({ queryKey: ["sla-summary"] });
-      queryClient.invalidateQueries({ queryKey: ["sla-breaches"] });
-      queryClient.invalidateQueries({ queryKey: ["manage-tickets"] });
-    },
+    onSuccess: invalidateAll,
   });
 
   if (!status) return null;
 
-  const isWorking = !status.initialized || status.refreshing || refresh.isPending;
+  const isWorking = !status.initialized || status.refreshing || incremental.isPending || full.isPending;
 
   const lastRefresh = status.last_refresh
     ? new Date(status.last_refresh).toLocaleTimeString()
@@ -83,14 +90,23 @@ export default function CacheStatusBar() {
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Refresh button */}
+      {/* Refresh buttons */}
       <button
         type="button"
-        onClick={() => refresh.mutate()}
+        onClick={() => incremental.mutate()}
         disabled={isWorking}
         className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         Refresh
+      </button>
+      <button
+        type="button"
+        onClick={() => full.mutate()}
+        disabled={isWorking}
+        className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        title="Re-fetch all issues from Jira (slow)"
+      >
+        Full Refresh
       </button>
     </div>
   );

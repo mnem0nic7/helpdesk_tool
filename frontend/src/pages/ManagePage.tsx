@@ -89,7 +89,7 @@ export default function ManagePage() {
   // Bulk action completed: refresh cache, clear selection, refetch
   function handleActionComplete() {
     setSelectedKeys(new Set());
-    api.refreshCache().then(() => {
+    api.refreshCacheIncremental().then(() => {
       queryClient.invalidateQueries({ queryKey: ["manage-tickets"] });
       queryClient.invalidateQueries({ queryKey: ["metrics"] });
       queryClient.invalidateQueries({ queryKey: ["sla-summary"] });
