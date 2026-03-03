@@ -38,8 +38,9 @@ _SLA_FIELD_IDS = [
 async def get_metrics() -> dict[str, Any]:
     """Return all dashboard metrics computed from the full OIT issue set."""
     issues = cache.get_filtered_issues()
+    excluded_count = cache.issue_count - cache.filtered_count
     return {
-        "headline": compute_headline_metrics(issues),
+        "headline": compute_headline_metrics(issues, excluded_count),
         "weekly_volumes": compute_weekly_volumes(issues),
         "age_buckets": compute_age_buckets(issues),
         "ttr_distribution": compute_ttr_distribution(issues),

@@ -266,12 +266,14 @@ def _is_open(issue: dict[str, Any]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def compute_headline_metrics(issues: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute headline KPIs from raw Jira issues.
+def compute_headline_metrics(
+    issues: list[dict[str, Any]], excluded_count: int = 0
+) -> dict[str, Any]:
+    """Compute headline KPIs from pre-filtered Jira issues.
 
-    Returns a dict matching :class:`HeadlineMetrics` field names.
+    *excluded_count* should be passed by the caller (from the cache)
+    since the issues list is already filtered.
     """
-    included, excluded_count = _filter_issues(issues)
     now = _now()
 
     open_issues: list[dict[str, Any]] = []
@@ -279,7 +281,7 @@ def compute_headline_metrics(issues: list[dict[str, Any]]) -> dict[str, Any]:
     ttr_values: list[float] = []
     stale_count = 0
 
-    for iss in included:
+    for iss in issues:
         fields = iss.get("fields", {})
         created = parse_dt(fields.get("created"))
         resolved_dt = parse_dt(fields.get("resolutiondate"))
@@ -298,7 +300,7 @@ def compute_headline_metrics(issues: list[dict[str, Any]]) -> dict[str, Any]:
             if ttr is not None:
                 ttr_values.append(ttr)
 
-    total = len(included)
+    total = len(issues)
     resolution_rate = (len(resolved_issues) / total * 100.0) if total else 0.0
 
     return {
@@ -444,12 +446,9 @@ def compute_age_buckets(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     result: list[dict[str, Any]] = []
     for label in bucket_counts:
-        cnt = bucket_counts[label]
-        pct = (cnt / open_count * 100.0) if open_count else 0.0
         result.append({
             "bucket": label,
-            "count": cnt,
-            "percent": round(pct, 1),
+            "count": bucket_counts[label],
         })
 
     return result
