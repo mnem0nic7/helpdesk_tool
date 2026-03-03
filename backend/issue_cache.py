@@ -1,14 +1,17 @@
-"""In-memory issue cache with lazy init and incremental background refresh."""
+"""Issue cache with SQLite persistence and incremental background refresh."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import sqlite3
 import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from config import JIRA_PROJECT
+from config import DATA_DIR, JIRA_PROJECT
 from jira_client import JiraClient
 
 logger = logging.getLogger(__name__)
@@ -31,7 +34,7 @@ class IssueCache:
       - all issues — used by export
     """
 
-    def __init__(self) -> None:
+    def __init__(self, db_path: str | None = None) -> None:
         self._client = JiraClient()
         self._lock = threading.Lock()
         self._init_event = threading.Event()
@@ -44,6 +47,11 @@ class IssueCache:
         self._refreshing = False
         self._last_refresh: datetime | None = None
         self._bg_task: asyncio.Task[None] | None = None
+
+        # SQLite persistence
+        self._db_path = db_path or os.path.join(DATA_DIR, "issues_cache.db")
+        os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
+        self._init_db()
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -93,6 +101,72 @@ class IssueCache:
         }
 
     # ------------------------------------------------------------------
+    # SQLite persistence
+    # ------------------------------------------------------------------
+
+    def _init_db(self) -> None:
+        """Create the SQLite table if it doesn't exist."""
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS issues "
+                "(key TEXT PRIMARY KEY, data TEXT, excluded INTEGER)"
+            )
+
+    def _load_from_db(self) -> bool:
+        """Populate in-memory dicts from SQLite. Returns True if rows existed."""
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute("SELECT key, data, excluded FROM issues").fetchall()
+        if not rows:
+            return False
+        new_all: dict[str, dict[str, Any]] = {}
+        new_filtered: dict[str, dict[str, Any]] = {}
+        for key, data, excluded in rows:
+            issue = json.loads(data)
+            new_all[key] = issue
+            if not excluded:
+                new_filtered[key] = issue
+        with self._lock:
+            self._all_issues = new_all
+            self._issues = new_filtered
+            self._initialized = True
+            self._last_refresh = datetime.now(timezone.utc)
+        logger.info(
+            "Cache: restored %d total, %d filtered from SQLite",
+            len(new_all),
+            len(new_filtered),
+        )
+        return True
+
+    def _save_all_to_db(self) -> None:
+        """Replace entire DB contents with current in-memory state."""
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute("DELETE FROM issues")
+            conn.executemany(
+                "INSERT INTO issues (key, data, excluded) VALUES (?, ?, ?)",
+                [
+                    (key, json.dumps(issue), int(key not in self._issues))
+                    for key, issue in self._all_issues.items()
+                ],
+            )
+        logger.info("Cache: wrote %d issues to SQLite", len(self._all_issues))
+
+    def _upsert_to_db(self, issues: list[dict[str, Any]]) -> None:
+        """Upsert a batch of issues into SQLite."""
+        with sqlite3.connect(self._db_path) as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO issues (key, data, excluded) VALUES (?, ?, ?)",
+                [
+                    (
+                        issue.get("key", ""),
+                        json.dumps(issue),
+                        int(JiraClient.is_excluded(issue)),
+                    )
+                    for issue in issues
+                ],
+            )
+        logger.info("Cache: upserted %d issues to SQLite", len(issues))
+
+    # ------------------------------------------------------------------
     # Initialization
     # ------------------------------------------------------------------
 
@@ -102,6 +176,10 @@ class IssueCache:
             return
         # If nobody started init yet, do it now (first request triggers it)
         if not self._init_event.is_set():
+            # Try loading from SQLite first
+            if self._load_from_db():
+                self._init_event.set()
+                return
             self._full_fetch()
         else:
             # Another thread is doing init — wait for it
@@ -135,6 +213,7 @@ class IssueCache:
                 len(new_all),
                 len(new_filtered),
             )
+            self._save_all_to_db()
         finally:
             self._refreshing = False
             self._init_event.set()
@@ -167,6 +246,8 @@ class IssueCache:
                 len(self._all_issues),
                 len(self._issues),
             )
+            if updated_issues:
+                self._upsert_to_db(updated_issues)
         finally:
             self._refreshing = False
 
