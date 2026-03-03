@@ -1,10 +1,12 @@
 import {
   useReactTable,
   getCoreRowModel,
+  getSortedRowModel,
   flexRender,
   createColumnHelper,
 } from "@tanstack/react-table";
-import { useMemo } from "react";
+import type { SortingState } from "@tanstack/react-table";
+import { useMemo, useState } from "react";
 import type { TicketRow } from "../lib/api.ts";
 
 // ---------------------------------------------------------------------------
@@ -249,6 +251,8 @@ export default function TicketTable({
     }
   }
 
+  const [sorting, setSorting] = useState<SortingState>([]);
+
   const columns = useMemo(
     () => buildColumns(selectable, selectedKeys, handleToggle, handleToggleAll, allKeys),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -258,7 +262,10 @@ export default function TicketTable({
   const table = useReactTable({
     data,
     columns,
+    state: { sorting },
+    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
   });
 
   if (loading) {
@@ -284,17 +291,32 @@ export default function TicketTable({
         <thead className="bg-gray-50">
           {table.getHeaderGroups().map((hg) => (
             <tr key={hg.id}>
-              {hg.headers.map((header) => (
-                <th
-                  key={header.id}
-                  className="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500"
-                  style={{ width: header.getSize() }}
-                >
-                  {header.isPlaceholder
-                    ? null
-                    : flexRender(header.column.columnDef.header, header.getContext())}
-                </th>
-              ))}
+              {hg.headers.map((header) => {
+                const canSort = header.column.getCanSort();
+                const sorted = header.column.getIsSorted();
+                return (
+                  <th
+                    key={header.id}
+                    className={[
+                      "whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500",
+                      canSort ? "cursor-pointer select-none hover:text-gray-700" : "",
+                    ].join(" ")}
+                    style={{ width: header.getSize() }}
+                    onClick={header.column.getToggleSortingHandler()}
+                  >
+                    {header.isPlaceholder ? null : (
+                      <span className="inline-flex items-center gap-1">
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {canSort && (
+                          <span className="text-gray-400">
+                            {sorted === "asc" ? "▲" : sorted === "desc" ? "▼" : "⇅"}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           ))}
         </thead>
