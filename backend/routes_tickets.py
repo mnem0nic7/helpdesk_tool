@@ -21,8 +21,6 @@ _client = JiraClient()
 
 @router.get("/tickets")
 async def list_tickets(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
     status: Optional[str] = Query(None),
     priority: Optional[str] = Query(None),
     assignee: Optional[str] = Query(None),
@@ -33,7 +31,7 @@ async def list_tickets(
     created_after: Optional[str] = Query(None),
     created_before: Optional[str] = Query(None),
 ) -> dict[str, Any]:
-    """Return a paginated, filtered list of OIT tickets."""
+    """Return all filtered OIT tickets."""
     # Build JQL from filters
     clauses: list[str] = [
         f"project = {JIRA_PROJECT}",
@@ -62,17 +60,10 @@ async def list_tickets(
 
     jql = " AND ".join(clauses) + " ORDER BY created DESC"
 
-    start_at = (page - 1) * page_size
-
-    data = _client.search(jql, max_results=page_size, start_at=start_at)
-    issues = data.get("issues", [])
-    is_last = data.get("isLast", True)
+    issues = _client.search_all(jql)
 
     return {
         "tickets": [issue_to_row(iss) for iss in issues],
-        "has_more": not is_last,
-        "page": page,
-        "page_size": page_size,
     }
 
 

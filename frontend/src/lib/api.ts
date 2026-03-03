@@ -122,12 +122,9 @@ export interface TicketRow {
   labels: string[];
 }
 
-/** Paginated tickets response from GET /api/tickets. */
+/** Tickets response from GET /api/tickets. */
 export interface TicketsResponse {
   tickets: TicketRow[];
-  has_more: boolean;
-  page: number;
-  page_size: number;
 }
 
 /** SLA timer summary for a single timer type. */
@@ -198,8 +195,6 @@ export interface CacheStatus {
 // ---------------------------------------------------------------------------
 
 export interface TicketQueryParams {
-  page?: number;
-  page_size?: number;
   status?: string;
   priority?: string;
   assignee?: string;
