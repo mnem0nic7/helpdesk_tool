@@ -35,6 +35,25 @@ function weekEnd(weekStart: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Map an age bucket label to created_after/created_before filters.
+ *  A ticket in "30+d" was created > 30 days ago, so created_before = today - 30. */
+function ageBucketToDateFilters(bucket: string): Record<string, string> {
+  const today = new Date();
+  function daysAgo(n: number): string {
+    const d = new Date(today);
+    d.setDate(d.getDate() - n);
+    return d.toISOString().slice(0, 10);
+  }
+  const map: Record<string, Record<string, string>> = {
+    "0-2d":   { created_after: daysAgo(2) },
+    "3-7d":   { created_after: daysAgo(7),  created_before: daysAgo(3) },
+    "8-14d":  { created_after: daysAgo(14), created_before: daysAgo(8) },
+    "15-30d": { created_after: daysAgo(30), created_before: daysAgo(15) },
+    "30+d":   { created_before: daysAgo(30) },
+  };
+  return map[bucket] ?? {};
+}
+
 // ---------------------------------------------------------------------------
 // Loading skeleton
 // ---------------------------------------------------------------------------
@@ -273,7 +292,11 @@ export default function DashboardPage() {
         />
         <AgingPieChart
           data={age_buckets}
-          onSliceClick={() => drillDown({ open_only: "true" })}
+          onSliceClick={(bucket) => {
+            const dateFilters = ageBucketToDateFilters(bucket);
+            const params = new URLSearchParams({ open_only: "true", ...dateFilters });
+            navigate(`/tickets?${params.toString()}`);
+          }}
         />
         <TTRDistributionChart
           data={ttr_distribution}
