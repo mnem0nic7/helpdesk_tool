@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
+import CacheStatusBar from "./CacheStatusBar.tsx";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: "\u25A3" },
@@ -50,6 +51,7 @@ export default function Layout() {
 
       {/* Main content */}
       <main className="flex-1 overflow-y-auto bg-gray-50 p-6">
+        <CacheStatusBar />
         <Outlet />
       </main>
     </div>

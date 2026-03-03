@@ -1,6 +1,7 @@
 """FastAPI backend for the OIT Helpdesk Dashboard."""
 
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,8 +10,19 @@ from routes_metrics import router as metrics_router
 from routes_tickets import router as tickets_router
 from routes_actions import router as actions_router
 from routes_export import router as export_router
+from routes_cache import router as cache_router
+from issue_cache import cache
 
-app = FastAPI(title="OIT Helpdesk Dashboard API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start background cache refresh on startup, stop on shutdown."""
+    await cache.start_background_refresh()
+    yield
+    await cache.stop_background_refresh()
+
+
+app = FastAPI(title="OIT Helpdesk Dashboard API", version="0.1.0", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
 # CORS – allow the Vite dev-server and the Docker/nginx front-end
@@ -34,6 +46,7 @@ app.include_router(metrics_router)
 app.include_router(tickets_router)
 app.include_router(actions_router)
 app.include_router(export_router)
+app.include_router(cache_router)
 
 # ---------------------------------------------------------------------------
 # Routes
