@@ -28,14 +28,6 @@ function formatHours(hours: number): string {
   return `${days.toFixed(1)}d`;
 }
 
-/** Count stale tickets (those unresolved longer than 30 days). */
-function computeStale(ageBuckets: { bucket: string; count: number }[]): number {
-  const stale = ageBuckets.find(
-    (b) => b.bucket === "30+d" || b.bucket.includes("30+")
-  );
-  return stale?.count ?? 0;
-}
-
 /** Add 7 days to a YYYY-MM-DD string. */
 function weekEnd(weekStart: string): string {
   const d = new Date(weekStart + "T00:00:00");
@@ -212,7 +204,7 @@ export default function DashboardPage() {
   const { headline, weekly_volumes, age_buckets, ttr_distribution, priority_counts, assignee_stats } =
     data;
 
-  const staleCount = computeStale(age_buckets);
+  const staleCount = headline.stale_count;
 
   return (
     <div className="space-y-6">
@@ -266,7 +258,7 @@ export default function DashboardPage() {
           label="Stale Tickets"
           value={staleCount.toLocaleString()}
           color={staleCount > 0 ? "red" : "green"}
-          subtitle="Open > 30 days"
+          subtitle="Not updated in 7d"
           onClick={() => drillDown({ stale_only: "true" })}
         />
       </div>
