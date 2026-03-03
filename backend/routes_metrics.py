@@ -7,8 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from config import JIRA_PROJECT
-from jira_client import JiraClient
+from issue_cache import cache
 from metrics import (
     compute_headline_metrics,
     compute_monthly_volumes,
@@ -26,12 +25,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
-# Shared client instance
-_client = JiraClient()
-
-# Base JQL that excludes oasisdev tickets
-_BASE_JQL = f'project = {JIRA_PROJECT} AND labels not in ("oasisdev")'
-
 # SLA custom-field IDs
 _SLA_FIELD_IDS = [
     "customfield_11266",
@@ -44,7 +37,7 @@ _SLA_FIELD_IDS = [
 @router.get("/metrics")
 async def get_metrics() -> dict[str, Any]:
     """Return all dashboard metrics computed from the full OIT issue set."""
-    issues = _client.search_all(_BASE_JQL)
+    issues = cache.get_filtered_issues()
     return {
         "headline": compute_headline_metrics(issues),
         "weekly_volumes": compute_weekly_volumes(issues),
@@ -58,14 +51,14 @@ async def get_metrics() -> dict[str, Any]:
 @router.get("/sla/summary")
 async def get_sla_summary() -> dict[str, Any]:
     """Return SLA timer summaries for all JSM SLA timers."""
-    issues = _client.search_all(_BASE_JQL)
+    issues = cache.get_filtered_issues()
     return {"timers": compute_sla_summary(issues)}
 
 
 @router.get("/sla/breaches")
 async def get_sla_breaches() -> dict[str, Any]:
     """Return tickets that have any BREACHED SLA timer."""
-    issues = _client.search_all(_BASE_JQL)
+    issues = cache.get_filtered_issues()
 
     breaches: list[dict[str, Any]] = []
     for issue in issues:

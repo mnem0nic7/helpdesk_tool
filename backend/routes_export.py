@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import tempfile
 from datetime import datetime, timezone
 
@@ -12,19 +11,12 @@ from fastapi.responses import FileResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
-from config import JIRA_PROJECT
-from jira_client import JiraClient
+from issue_cache import cache
 from metrics import issue_to_row
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
-
-# Shared client instance
-_client = JiraClient()
-
-# Base JQL for all OIT issues (including excluded so they get the flag)
-_ALL_JQL = f"project = {JIRA_PROJECT} ORDER BY key ASC"
 
 # Column definitions: (header_text, row_dict_key)
 _COLUMNS: list[tuple[str, str]] = [
@@ -54,11 +46,11 @@ _HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center")
 @router.get("/export/excel")
 async def export_excel() -> FileResponse:
     """Generate and return an Excel workbook with all OIT issues."""
-    logger.info("Starting Excel export for project %s", JIRA_PROJECT)
+    logger.info("Starting Excel export from cache")
 
-    # Fetch all issues
-    issues = _client.search_all(_ALL_JQL)
-    logger.info("Fetched %d issues for export", len(issues))
+    # Read from cache (all issues, including excluded)
+    issues = cache.get_all_issues()
+    logger.info("Export: %d issues from cache", len(issues))
 
     # Create workbook
     wb = Workbook()

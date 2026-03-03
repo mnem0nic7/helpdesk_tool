@@ -84,13 +84,18 @@ export default function ManagePage() {
   });
 
   const tickets = data?.tickets ?? [];
-  const total = data?.total ?? 0;
-  const totalPages = data?.total_pages ?? 1;
+  const hasMore = data?.has_more ?? false;
 
-  // Bulk action completed: clear selection, refetch
+  // Bulk action completed: refresh cache, clear selection, refetch
   function handleActionComplete() {
     setSelectedKeys(new Set());
-    queryClient.invalidateQueries({ queryKey: ["manage-tickets"] });
+    api.refreshCache().then(() => {
+      queryClient.invalidateQueries({ queryKey: ["manage-tickets"] });
+      queryClient.invalidateQueries({ queryKey: ["metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["sla-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["sla-breaches"] });
+      queryClient.invalidateQueries({ queryKey: ["cache-status"] });
+    });
   }
 
   // Convert Set to array for the toolbar
@@ -171,8 +176,7 @@ export default function ManagePage() {
       {!isLoading && tickets.length > 0 && (
         <Pagination
           page={page}
-          totalPages={totalPages}
-          total={total}
+          hasMore={hasMore}
           onPageChange={setPage}
         />
       )}

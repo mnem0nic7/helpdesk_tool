@@ -38,8 +38,7 @@ export default function TicketsPage() {
   });
 
   const tickets = data?.tickets ?? [];
-  const total = data?.total ?? 0;
-  const totalPages = data?.total_pages ?? 1;
+  const hasMore = data?.has_more ?? false;
 
   return (
     <div className="space-y-4">
@@ -68,8 +67,7 @@ export default function TicketsPage() {
       {!isLoading && tickets.length > 0 && (
         <Pagination
           page={page}
-          totalPages={totalPages}
-          total={total}
+          hasMore={hasMore}
           onPageChange={setPage}
         />
       )}

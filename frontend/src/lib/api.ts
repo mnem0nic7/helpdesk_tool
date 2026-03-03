@@ -125,10 +125,9 @@ export interface TicketRow {
 /** Paginated tickets response from GET /api/tickets. */
 export interface TicketsResponse {
   tickets: TicketRow[];
-  total: number;
+  has_more: boolean;
   page: number;
   page_size: number;
-  total_pages: number;
 }
 
 /** SLA timer summary for a single timer type. */
@@ -183,6 +182,15 @@ export interface BulkPriorityRequest {
 export interface BulkCommentRequest {
   keys: string[];
   comment: string;
+}
+
+/** Cache status returned by GET /api/cache/status. */
+export interface CacheStatus {
+  initialized: boolean;
+  refreshing: boolean;
+  issue_count: number;
+  filtered_count: number;
+  last_refresh: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +289,16 @@ export const api = {
   /** Return the URL for the Excel export endpoint (browser navigates to it). */
   exportExcel(): string {
     return "/api/export/excel";
+  },
+
+  /** Fetch current cache status. */
+  getCacheStatus(): Promise<CacheStatus> {
+    return fetchJSON<CacheStatus>("/api/cache/status");
+  },
+
+  /** Trigger a full cache refresh (returns when complete). */
+  refreshCache(): Promise<CacheStatus> {
+    return postJSON<CacheStatus>("/api/cache/refresh", {});
   },
 };
 

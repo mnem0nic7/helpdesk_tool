@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -36,7 +35,7 @@ async def list_tickets(
     # Build JQL from filters
     clauses: list[str] = [
         f"project = {JIRA_PROJECT}",
-        'labels not in ("oasisdev")',
+        '(labels is EMPTY OR labels not in ("oasisdev"))',
     ]
 
     if status:
@@ -61,15 +60,13 @@ async def list_tickets(
 
     data = _client.search(jql, max_results=page_size, start_at=start_at)
     issues = data.get("issues", [])
-    total = data.get("total", 0)
-    total_pages = math.ceil(total / page_size) if page_size else 1
+    is_last = data.get("isLast", True)
 
     return {
         "tickets": [issue_to_row(iss) for iss in issues],
-        "total": total,
+        "has_more": not is_last,
         "page": page,
         "page_size": page_size,
-        "total_pages": total_pages,
     }
 
 
