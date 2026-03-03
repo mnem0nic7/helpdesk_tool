@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
 from config import JIRA_PROJECT
+from issue_cache import cache
 from jira_client import JiraClient
 from metrics import issue_to_row
 
@@ -15,8 +17,102 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
-# Shared client instance
+# Shared client instance (still needed for single-ticket detail, assignees, transitions)
 _client = JiraClient()
+
+# Stale threshold — matches metrics.py _STALE_DAYS
+_STALE_DAYS = 7
+
+
+def _match(issue: dict[str, Any], **filters: Any) -> bool:
+    """Return True if the issue matches all provided filters."""
+    fields = issue.get("fields", {})
+
+    if filters.get("status"):
+        status_obj = fields.get("status") or {}
+        if status_obj.get("name", "") != filters["status"]:
+            return False
+
+    if filters.get("priority"):
+        priority_obj = fields.get("priority") or {}
+        if priority_obj.get("name", "") != filters["priority"]:
+            return False
+
+    if filters.get("assignee"):
+        assignee_obj = fields.get("assignee") or {}
+        assignee_name = assignee_obj.get("displayName", "") if isinstance(assignee_obj, dict) else ""
+        if filters["assignee"] == "unassigned":
+            if assignee_name:
+                return False
+        elif assignee_name != filters["assignee"]:
+            return False
+
+    if filters.get("issue_type"):
+        issuetype_obj = fields.get("issuetype") or {}
+        if issuetype_obj.get("name", "") != filters["issue_type"]:
+            return False
+
+    if filters.get("search"):
+        term = filters["search"].lower()
+        summary = (fields.get("summary") or "").lower()
+        desc = ""
+        desc_field = fields.get("description")
+        if isinstance(desc_field, str):
+            desc = desc_field.lower()
+        elif isinstance(desc_field, dict):
+            # ADF format — search the text content
+            import json
+            desc = json.dumps(desc_field).lower()
+        key = issue.get("key", "").lower()
+        if term not in summary and term not in desc and term not in key:
+            return False
+
+    if filters.get("open_only"):
+        status_obj = fields.get("status") or {}
+        sc = status_obj.get("statusCategory") or {}
+        if sc.get("name", "") == "Done":
+            return False
+
+    if filters.get("stale_only"):
+        updated_str = fields.get("updated", "")
+        if updated_str:
+            try:
+                updated = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+                days_since = (datetime.now(timezone.utc) - updated).total_seconds() / 86400.0
+                if days_since < _STALE_DAYS:
+                    return False
+            except (ValueError, TypeError):
+                return False
+        else:
+            return False
+
+    if filters.get("created_after"):
+        created_str = fields.get("created", "")
+        if created_str:
+            try:
+                created = datetime.fromisoformat(created_str.replace("Z", "+00:00")).date()
+                from datetime import date
+                if created < date.fromisoformat(filters["created_after"]):
+                    return False
+            except (ValueError, TypeError):
+                return False
+        else:
+            return False
+
+    if filters.get("created_before"):
+        created_str = fields.get("created", "")
+        if created_str:
+            try:
+                created = datetime.fromisoformat(created_str.replace("Z", "+00:00")).date()
+                from datetime import date
+                if created > date.fromisoformat(filters["created_before"]):
+                    return False
+            except (ValueError, TypeError):
+                return False
+        else:
+            return False
+
+    return True
 
 
 @router.get("/tickets")
@@ -31,39 +127,31 @@ async def list_tickets(
     created_after: Optional[str] = Query(None),
     created_before: Optional[str] = Query(None),
 ) -> dict[str, Any]:
-    """Return all filtered OIT tickets."""
-    # Build JQL from filters
-    clauses: list[str] = [
-        f"project = {JIRA_PROJECT}",
-        '(labels is EMPTY OR labels not in ("oasisdev"))',
-    ]
+    """Return all filtered OIT tickets from cache."""
+    issues = cache.get_filtered_issues()
 
-    if status:
-        clauses.append(f'status = "{status}"')
-    if priority:
-        clauses.append(f'priority = "{priority}"')
-    if assignee:
-        clauses.append(f'assignee = "{assignee}"')
-    if issue_type:
-        clauses.append(f'issuetype = "{issue_type}"')
-    if search:
-        # Jira text search across summary and description
-        clauses.append(f'text ~ "{search}"')
-    if open_only:
-        clauses.append('statusCategory != "Done"')
-    if stale_only:
-        clauses.append("updated <= -7d")
-    if created_after:
-        clauses.append(f'created >= "{created_after}"')
-    if created_before:
-        clauses.append(f'created <= "{created_before}"')
+    filters = {
+        "status": status,
+        "priority": priority,
+        "assignee": assignee,
+        "issue_type": issue_type,
+        "search": search,
+        "open_only": open_only,
+        "stale_only": stale_only,
+        "created_after": created_after,
+        "created_before": created_before,
+    }
 
-    jql = " AND ".join(clauses) + " ORDER BY created DESC"
+    matched = [iss for iss in issues if _match(iss, **filters)]
 
-    issues = _client.search_all(jql)
+    # Sort by created date descending
+    matched.sort(
+        key=lambda iss: iss.get("fields", {}).get("created", ""),
+        reverse=True,
+    )
 
     return {
-        "tickets": [issue_to_row(iss) for iss in issues],
+        "tickets": [issue_to_row(iss) for iss in matched],
     }
 
 
