@@ -37,6 +37,8 @@ COPY nginx.conf /etc/nginx/conf.d/dashboard.conf
 # Copy supervisord config
 COPY supervisord.conf /etc/supervisor/conf.d/dashboard.conf
 
+RUN mkdir -p /app/data
+
 EXPOSE 80
 
 CMD ["supervisord", "-c", "/etc/supervisor/conf.d/dashboard.conf"]

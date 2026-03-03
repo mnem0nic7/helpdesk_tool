@@ -5,4 +5,9 @@ services:
       - "3002:80"
     env_file:
       - backend/.env
+    volumes:
+      - cache_data:/app/data
     restart: unless-stopped
+
+volumes:
+  cache_data:
