@@ -1,0 +1,23 @@
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import Layout from "./components/Layout";
+import DashboardPage from "./pages/DashboardPage";
+import TicketsPage from "./pages/TicketsPage";
+import ManagePage from "./pages/ManagePage";
+import SLAPage from "./pages/SLAPage";
+import ReportsPage from "./pages/ReportsPage";
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route element={<Layout />}>
+          <Route index element={<DashboardPage />} />
+          <Route path="tickets" element={<TicketsPage />} />
+          <Route path="manage" element={<ManagePage />} />
+          <Route path="sla" element={<SLAPage />} />
+          <Route path="reports" element={<ReportsPage />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  );
+}

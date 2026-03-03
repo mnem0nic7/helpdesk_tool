@@ -1,0 +1,145 @@
+"""Pydantic data models for the OIT Helpdesk Dashboard API."""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+# ---------------------------------------------------------------------------
+# Metric response models
+# ---------------------------------------------------------------------------
+
+
+class HeadlineMetrics(BaseModel):
+    """Top-level KPI snapshot returned by /api/metrics/headline."""
+
+    total_tickets: int
+    open_backlog: int
+    resolved: int
+    resolution_rate: float
+    median_ttr_hours: Optional[float] = None
+    p90_ttr_hours: Optional[float] = None
+    p95_ttr_hours: Optional[float] = None
+    stale_count: int
+    excluded_count: int
+
+
+class MonthlyVolume(BaseModel):
+    """Created / resolved counts for a single calendar month."""
+
+    month: str
+    created: int
+    resolved: int
+    net_flow: int
+
+
+class AgeBucket(BaseModel):
+    """One bucket of the open-backlog aging distribution."""
+
+    bucket: str
+    count: int
+    percent: float
+
+
+class TTRBucket(BaseModel):
+    """One bucket of the time-to-resolve distribution."""
+
+    bucket: str
+    count: int
+    percent: float
+    cumulative_percent: float
+
+
+class AssigneeStats(BaseModel):
+    """Per-assignee workload and performance summary."""
+
+    name: str
+    resolved: int
+    open: int
+    median_ttr: Optional[float] = None
+    p90_ttr: Optional[float] = None
+    stale: int
+
+
+class PriorityCount(BaseModel):
+    """Ticket counts by priority level."""
+
+    priority: str
+    total: int
+    open: int
+
+
+class SLATimerSummary(BaseModel):
+    """Summary statistics for one JSM SLA timer."""
+
+    timer_name: str
+    total: int
+    met: int
+    breached: int
+    running: int
+    paused: int
+    met_rate: float
+    breach_rate: float
+
+
+class TicketRow(BaseModel):
+    """Flat representation of a single Jira issue for the tickets table."""
+
+    key: str
+    summary: str
+    issue_type: str
+    status: str
+    status_category: str
+    priority: str
+    resolution: str
+    assignee: str
+    assignee_account_id: str
+    reporter: str
+    created: str
+    updated: str
+    resolved: str
+    request_type: str
+    calendar_ttr_hours: Optional[float] = None
+    age_days: Optional[float] = None
+    days_since_update: Optional[float] = None
+    excluded: bool
+    sla_first_response_status: str = ""
+    sla_resolution_status: str = ""
+    labels: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Bulk action request models
+# ---------------------------------------------------------------------------
+
+
+class BulkActionRequest(BaseModel):
+    """Base model for bulk operations on a set of issue keys."""
+
+    keys: list[str]
+
+
+class BulkStatusRequest(BulkActionRequest):
+    """Transition a batch of issues to a new status."""
+
+    transition_id: str
+
+
+class BulkAssignRequest(BulkActionRequest):
+    """Reassign a batch of issues to a single account."""
+
+    account_id: str
+
+
+class BulkPriorityRequest(BulkActionRequest):
+    """Change the priority of a batch of issues."""
+
+    priority: str
+
+
+class BulkCommentRequest(BulkActionRequest):
+    """Add the same comment to a batch of issues."""
+
+    comment: str
