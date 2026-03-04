@@ -143,7 +143,7 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
                     })
 
             elif field_name == "comment":
-                _client.add_comment(req.key, s.suggested_value)
+                _client.add_comment(req.key, f"[AI Triage] {s.suggested_value}")
                 applied.append(field_name)
 
             else:
@@ -209,7 +209,7 @@ async def apply_single_field(req: TriageFieldAction) -> dict[str, Any]:
             _client.transition_issue(req.key, transition_id)
 
         elif req.field == "comment":
-            _client.add_comment(req.key, s.suggested_value)
+            _client.add_comment(req.key, f"[AI Triage] {s.suggested_value}")
 
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported field: {req.field}")
