@@ -8,32 +8,47 @@ import TicketFilters, {
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 
 // ---------------------------------------------------------------------------
-// Field metadata — all 21 TicketRow fields
+// Field metadata — all 21 TicketRow fields with categories
 // ---------------------------------------------------------------------------
 
-const FIELD_META: Record<string, { label: string; description: string }> = {
-  key: { label: "Key", description: "Jira issue key" },
-  summary: { label: "Summary", description: "Issue title" },
-  issue_type: { label: "Type", description: "Issue type" },
-  status: { label: "Status", description: "Current status" },
-  status_category: { label: "Status Category", description: "Status category" },
-  priority: { label: "Priority", description: "Priority level" },
-  resolution: { label: "Resolution", description: "Resolution type" },
-  assignee: { label: "Assignee", description: "Assigned team member" },
-  assignee_account_id: { label: "Assignee ID", description: "Atlassian account ID" },
-  reporter: { label: "Reporter", description: "Ticket creator" },
-  created: { label: "Created", description: "Creation date" },
-  updated: { label: "Updated", description: "Last update date" },
-  resolved: { label: "Resolved", description: "Resolution date" },
-  request_type: { label: "Request Type", description: "JSM request type" },
-  calendar_ttr_hours: { label: "TTR (h)", description: "Time-to-resolution in hours" },
-  age_days: { label: "Age (d)", description: "Age of open tickets in days" },
-  days_since_update: { label: "Days Since Update", description: "Days since last update" },
-  excluded: { label: "Excluded", description: "Excluded from metrics" },
-  sla_first_response_status: { label: "SLA Response", description: "First-response SLA status" },
-  sla_resolution_status: { label: "SLA Resolution", description: "Resolution SLA status" },
-  labels: { label: "Labels", description: "Issue labels" },
+interface FieldInfo {
+  label: string;
+  description: string;
+  category: "identity" | "workflow" | "people" | "dates" | "metrics" | "sla";
+}
+
+const FIELD_META: Record<string, FieldInfo> = {
+  key:                       { label: "Key",               description: "Jira issue key",                     category: "identity" },
+  summary:                   { label: "Summary",           description: "Issue title",                        category: "identity" },
+  issue_type:                { label: "Type",              description: "Issue type",                         category: "identity" },
+  labels:                    { label: "Labels",            description: "Issue labels",                       category: "identity" },
+  request_type:              { label: "Request Type",      description: "JSM request type",                   category: "identity" },
+  status:                    { label: "Status",            description: "Current status",                     category: "workflow" },
+  status_category:           { label: "Status Category",   description: "To Do / In Progress / Done",         category: "workflow" },
+  priority:                  { label: "Priority",          description: "Priority level",                     category: "workflow" },
+  resolution:                { label: "Resolution",        description: "Resolution type",                    category: "workflow" },
+  excluded:                  { label: "Excluded",          description: "Excluded from metrics",              category: "workflow" },
+  assignee:                  { label: "Assignee",          description: "Assigned team member",               category: "people" },
+  assignee_account_id:       { label: "Assignee ID",       description: "Atlassian account ID",               category: "people" },
+  reporter:                  { label: "Reporter",          description: "Ticket creator",                     category: "people" },
+  created:                   { label: "Created",           description: "Creation date",                      category: "dates" },
+  updated:                   { label: "Updated",           description: "Last update date",                   category: "dates" },
+  resolved:                  { label: "Resolved",          description: "Resolution date",                    category: "dates" },
+  calendar_ttr_hours:        { label: "TTR (h)",           description: "Time-to-resolution in hours",        category: "metrics" },
+  age_days:                  { label: "Age (d)",           description: "Age of open tickets in days",        category: "metrics" },
+  days_since_update:         { label: "Days Since Update", description: "Days since last update",             category: "metrics" },
+  sla_first_response_status: { label: "SLA Response",      description: "First-response SLA status",          category: "sla" },
+  sla_resolution_status:     { label: "SLA Resolution",    description: "Resolution SLA status",              category: "sla" },
 };
+
+const COLUMN_CATEGORIES: { key: string; label: string; icon: string }[] = [
+  { key: "identity", label: "Identification", icon: "tag" },
+  { key: "workflow", label: "Workflow",       icon: "flow" },
+  { key: "people",   label: "People",         icon: "people" },
+  { key: "dates",    label: "Dates",          icon: "calendar" },
+  { key: "metrics",  label: "Metrics",        icon: "chart" },
+  { key: "sla",      label: "SLA",            icon: "clock" },
+];
 
 const ALL_FIELDS = Object.keys(FIELD_META);
 
@@ -42,10 +57,8 @@ const DEFAULT_COLUMNS = [
   "assignee", "created", "resolved", "calendar_ttr_hours",
 ];
 
-// Sortable fields (exclude array fields)
 const SORTABLE_FIELDS = ALL_FIELDS.filter((f) => f !== "labels");
 
-// Groupable fields
 const GROUPABLE_FIELDS = [
   "status", "status_category", "priority", "assignee", "reporter",
   "issue_type", "resolution", "request_type", "excluded",
@@ -53,11 +66,14 @@ const GROUPABLE_FIELDS = [
 ];
 
 // ---------------------------------------------------------------------------
-// Presets
+// Presets with icons & descriptions
 // ---------------------------------------------------------------------------
 
 interface Preset {
   name: string;
+  description: string;
+  icon: string;
+  accent: string;
   filters: Partial<TicketFilterValues>;
   columns: string[];
   sort_field: string;
@@ -69,6 +85,9 @@ interface Preset {
 const PRESETS: Preset[] = [
   {
     name: "Open by Priority",
+    description: "Active tickets grouped by priority level",
+    icon: "priority",
+    accent: "rose",
     filters: { open_only: true },
     columns: ["key", "summary", "priority", "status", "assignee", "age_days", "days_since_update"],
     sort_field: "priority",
@@ -78,6 +97,9 @@ const PRESETS: Preset[] = [
   },
   {
     name: "Resolution by Assignee",
+    description: "Team performance and resolution metrics",
+    icon: "team",
+    accent: "violet",
     filters: {},
     columns: ["key", "summary", "assignee", "status", "resolved", "calendar_ttr_hours"],
     sort_field: "resolved",
@@ -87,6 +109,9 @@ const PRESETS: Preset[] = [
   },
   {
     name: "Last 30 Days",
+    description: "Recent ticket activity and trends",
+    icon: "calendar",
+    accent: "sky",
     filters: {
       created_after: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),
     },
@@ -98,6 +123,9 @@ const PRESETS: Preset[] = [
   },
   {
     name: "SLA Breaches",
+    description: "SLA compliance and breach tracking",
+    icon: "alert",
+    accent: "amber",
     filters: {},
     columns: ["key", "summary", "status", "priority", "assignee", "sla_first_response_status", "sla_resolution_status", "created"],
     sort_field: "created",
@@ -107,6 +135,9 @@ const PRESETS: Preset[] = [
   },
   {
     name: "Stale Open Tickets",
+    description: "Aging tickets needing attention",
+    icon: "stale",
+    accent: "orange",
     filters: { open_only: true, stale_only: true },
     columns: ["key", "summary", "status", "priority", "assignee", "age_days", "days_since_update", "updated"],
     sort_field: "days_since_update",
@@ -134,17 +165,70 @@ function filtersToReport(f: TicketFilterValues): ReportConfig["filters"] {
   };
 }
 
-function formatCellValue(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "—";
+function formatCellValue(value: unknown, field?: string): string {
+  if (value === null || value === undefined || value === "") return "\u2014";
   if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (typeof value === "number") return String(Math.round(value * 10) / 10);
-  if (Array.isArray(value)) return value.join(", ") || "—";
+  if (typeof value === "number") {
+    if (field === "calendar_ttr_hours" || field === "avg_ttr_hours") {
+      if (value < 1) return `${Math.round(value * 60)}m`;
+      if (value < 24) return `${value.toFixed(1)}h`;
+      return `${(value / 24).toFixed(1)}d`;
+    }
+    if (field === "age_days" || field === "days_since_update") {
+      return `${value.toFixed(1)}d`;
+    }
+    return String(Math.round(value * 10) / 10);
+  }
+  if (Array.isArray(value)) return value.join(", ") || "\u2014";
+  // Format date strings
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    const d = new Date(value);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  }
   return String(value);
 }
 
 // ---------------------------------------------------------------------------
-// Icons (inline SVG)
+// Inline SVG Icons
 // ---------------------------------------------------------------------------
+
+function PresetIcon({ type, className }: { type: string; className?: string }) {
+  const cn = className ?? "w-5 h-5";
+  switch (type) {
+    case "priority":
+      return (
+        <svg className={cn} viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M5.05 3.636a1 1 0 010 1.414 7 7 0 000 9.9 1 1 0 11-1.414 1.414 9 9 0 010-12.728 1 1 0 011.414 0zm9.9 0a1 1 0 011.414 0 9 9 0 010 12.728 1 1 0 11-1.414-1.414 7 7 0 000-9.9 1 1 0 010-1.414zM7.879 6.464a1 1 0 010 1.414 3 3 0 000 4.243 1 1 0 01-1.415 1.414 5 5 0 010-7.07 1 1 0 011.415 0zm4.242 0a1 1 0 011.415 0 5 5 0 010 7.072 1 1 0 01-1.415-1.415 3 3 0 000-4.242 1 1 0 010-1.415zM10 9a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" />
+        </svg>
+      );
+    case "team":
+      return (
+        <svg className={cn} viewBox="0 0 20 20" fill="currentColor">
+          <path d="M7 8a3 3 0 100-6 3 3 0 000 6zM14.5 9a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM1.615 16.428a1.224 1.224 0 01-.569-1.175 6.002 6.002 0 0111.908 0c.058.467-.172.92-.57 1.174A9.953 9.953 0 017 18a9.953 9.953 0 01-5.385-1.572zM14.5 16h-.106c.07-.297.088-.611.048-.933a7.47 7.47 0 00-1.588-3.755 4.502 4.502 0 015.874 2.636.818.818 0 01-.36.98A7.465 7.465 0 0114.5 16z" />
+        </svg>
+      );
+    case "calendar":
+      return (
+        <svg className={cn} viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M5.75 2a.75.75 0 01.75.75V4h7V2.75a.75.75 0 011.5 0V4h.25A2.75 2.75 0 0118 6.75v8.5A2.75 2.75 0 0115.25 18H4.75A2.75 2.75 0 012 15.25v-8.5A2.75 2.75 0 014.75 4H5V2.75A.75.75 0 015.75 2zm-1 5.5c-.69 0-1.25.56-1.25 1.25v6.5c0 .69.56 1.25 1.25 1.25h10.5c.69 0 1.25-.56 1.25-1.25v-6.5c0-.69-.56-1.25-1.25-1.25H4.75z" clipRule="evenodd" />
+        </svg>
+      );
+    case "alert":
+      return (
+        <svg className={cn} viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+        </svg>
+      );
+    case "stale":
+      return (
+        <svg className={cn} viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
 
 function DownloadIcon({ className }: { className?: string }) {
   return (
@@ -153,6 +237,221 @@ function DownloadIcon({ className }: { className?: string }) {
     </svg>
   );
 }
+
+function ChevronIcon({ open, className }: { open: boolean; className?: string }) {
+  return (
+    <svg
+      className={`${className ?? "w-4 h-4"} transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+      viewBox="0 0 20 20"
+      fill="currentColor"
+    >
+      <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+    </svg>
+  );
+}
+
+function CategoryIcon({ type, className }: { type: string; className?: string }) {
+  const cn = className ?? "w-3.5 h-3.5";
+  switch (type) {
+    case "tag":
+      return (
+        <svg className={cn} viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M5.5 3A2.5 2.5 0 003 5.5v2.879a2.5 2.5 0 00.732 1.767l6.5 6.5a2.5 2.5 0 003.536 0l2.878-2.878a2.5 2.5 0 000-3.536l-6.5-6.5A2.5 2.5 0 008.38 3H5.5zM6 7a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+        </svg>
+      );
+    case "flow":
+      return (
+        <svg className={cn} viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M2.5 4A1.5 1.5 0 001 5.5v2A1.5 1.5 0 002.5 9h1.382a1.5 1.5 0 001.342.829h2.764A1.5 1.5 0 009.33 9h1.34a1.5 1.5 0 001.342.829h2.764A1.5 1.5 0 0016.118 9h1.382A1.5 1.5 0 0019 7.5v-2A1.5 1.5 0 0017.5 4h-15zm0 7A1.5 1.5 0 001 12.5v2A1.5 1.5 0 002.5 16h15a1.5 1.5 0 001.5-1.5v-2a1.5 1.5 0 00-1.5-1.5h-15z" clipRule="evenodd" />
+        </svg>
+      );
+    case "people":
+      return (
+        <svg className={cn} viewBox="0 0 20 20" fill="currentColor">
+          <path d="M7 8a3 3 0 100-6 3 3 0 000 6zM14.5 9a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM1.615 16.428a1.224 1.224 0 01-.569-1.175 6.002 6.002 0 0111.908 0c.058.467-.172.92-.57 1.174A9.953 9.953 0 017 18a9.953 9.953 0 01-5.385-1.572zM14.5 16h-.106c.07-.297.088-.611.048-.933a7.47 7.47 0 00-1.588-3.755 4.502 4.502 0 015.874 2.636.818.818 0 01-.36.98A7.465 7.465 0 0114.5 16z" />
+        </svg>
+      );
+    case "calendar":
+      return (
+        <svg className={cn} viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M5.75 2a.75.75 0 01.75.75V4h7V2.75a.75.75 0 011.5 0V4h.25A2.75 2.75 0 0118 6.75v8.5A2.75 2.75 0 0115.25 18H4.75A2.75 2.75 0 012 15.25v-8.5A2.75 2.75 0 014.75 4H5V2.75A.75.75 0 015.75 2zm-1 5.5c-.69 0-1.25.56-1.25 1.25v6.5c0 .69.56 1.25 1.25 1.25h10.5c.69 0 1.25-.56 1.25-1.25v-6.5c0-.69-.56-1.25-1.25-1.25H4.75z" clipRule="evenodd" />
+        </svg>
+      );
+    case "chart":
+      return (
+        <svg className={cn} viewBox="0 0 20 20" fill="currentColor">
+          <path d="M15.5 2A1.5 1.5 0 0014 3.5v13a1.5 1.5 0 001.5 1.5h1a1.5 1.5 0 001.5-1.5v-13A1.5 1.5 0 0016.5 2h-1zM9.5 6A1.5 1.5 0 008 7.5v9A1.5 1.5 0 009.5 18h1a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0010.5 6h-1zM3.5 10A1.5 1.5 0 002 11.5v5A1.5 1.5 0 003.5 18h1A1.5 1.5 0 006 16.5v-5A1.5 1.5 0 004.5 10h-1z" />
+        </svg>
+      );
+    case "clock":
+      return (
+        <svg className={cn} viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inline badge renderers for the preview table
+// ---------------------------------------------------------------------------
+
+const PRIORITY_STYLES: Record<string, string> = {
+  Highest: "bg-red-100 text-red-800 border-red-200",
+  High:    "bg-orange-100 text-orange-800 border-orange-200",
+  Medium:  "bg-yellow-100 text-yellow-800 border-yellow-200",
+  Low:     "bg-blue-100 text-blue-800 border-blue-200",
+  Lowest:  "bg-slate-100 text-slate-600 border-slate-200",
+  New:     "bg-purple-100 text-purple-800 border-purple-200",
+};
+
+const SLA_STYLES: Record<string, string> = {
+  Met:      "bg-emerald-100 text-emerald-800",
+  BREACHED: "bg-red-100 text-red-800",
+  Running:  "bg-blue-100 text-blue-800",
+  Paused:   "bg-gray-100 text-gray-600",
+};
+
+const STATUS_CAT_STYLES: Record<string, string> = {
+  "Done":        "bg-emerald-100 text-emerald-800",
+  "In Progress": "bg-blue-100 text-blue-800",
+  "To Do":       "bg-slate-100 text-slate-600",
+};
+
+function CellContent({ value, field }: { value: unknown; field: string }) {
+  const str = String(value ?? "");
+
+  // Priority badge
+  if (field === "priority" && str && str !== "\u2014") {
+    const style = PRIORITY_STYLES[str] ?? "bg-gray-100 text-gray-700 border-gray-200";
+    return (
+      <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${style}`}>
+        {str}
+      </span>
+    );
+  }
+
+  // Status category badge
+  if (field === "status_category" && str && str !== "\u2014") {
+    const style = STATUS_CAT_STYLES[str] ?? "bg-gray-100 text-gray-600";
+    return (
+      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${style}`}>
+        {str}
+      </span>
+    );
+  }
+
+  // SLA badges
+  if ((field === "sla_first_response_status" || field === "sla_resolution_status") && str && str !== "\u2014") {
+    const style = SLA_STYLES[str] ?? "bg-gray-100 text-gray-600";
+    return (
+      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${style}`}>
+        {str === "BREACHED" ? "Breached" : str}
+      </span>
+    );
+  }
+
+  // Excluded boolean
+  if (field === "excluded") {
+    if (value === true) return <span className="inline-flex items-center rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-600">Excluded</span>;
+    return <span className="text-gray-300">\u2014</span>;
+  }
+
+  // Numeric fields — right-aligned, formatted
+  if (field === "calendar_ttr_hours" || field === "age_days" || field === "days_since_update" || field === "avg_ttr_hours" || field === "count" || field === "open") {
+    const formatted = formatCellValue(value, field);
+    // Color code age/stale values
+    if ((field === "age_days" || field === "days_since_update") && typeof value === "number") {
+      const color = value > 30 ? "text-red-600" : value > 7 ? "text-amber-600" : "text-gray-700";
+      return <span className={`tabular-nums ${color}`}>{formatted}</span>;
+    }
+    return <span className="tabular-nums text-gray-700">{formatted}</span>;
+  }
+
+  // Key — monospace
+  if (field === "key") {
+    return <span className="font-mono text-xs font-semibold text-slate-700">{str}</span>;
+  }
+
+  // Summary — truncated
+  if (field === "summary") {
+    return <span className="block max-w-xs truncate text-gray-800" title={str}>{str || "\u2014"}</span>;
+  }
+
+  // Date fields
+  if ((field === "created" || field === "updated" || field === "resolved") && str && /^\d{4}-\d{2}-\d{2}T/.test(str)) {
+    const d = new Date(str);
+    return <span className="tabular-nums text-gray-600 text-xs">{d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>;
+  }
+
+  // Group header in aggregated view
+  if (field === "group") {
+    return <span className="font-semibold text-gray-900">{str || "(none)"}</span>;
+  }
+
+  return <>{formatCellValue(value, field)}</>;
+}
+
+// ---------------------------------------------------------------------------
+// Collapsible section wrapper
+// ---------------------------------------------------------------------------
+
+function Section({
+  title,
+  badge,
+  defaultOpen = true,
+  children,
+  actions,
+}: {
+  title: string;
+  badge?: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+  actions?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="rounded-lg border border-gray-200 bg-white shadow-sm overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center justify-between px-5 py-3 text-left hover:bg-gray-50/60 transition-colors"
+      >
+        <div className="flex items-center gap-2.5">
+          <ChevronIcon open={open} className="w-4 h-4 text-gray-400" />
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+            {title}
+          </h2>
+          {badge && (
+            <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-600">
+              {badge}
+            </span>
+          )}
+        </div>
+        {actions && <div onClick={(e) => e.stopPropagation()}>{actions}</div>}
+      </button>
+      {open && (
+        <div className="border-t border-gray-100 px-5 py-4">
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Accent color map for presets
+// ---------------------------------------------------------------------------
+
+const ACCENT_CLASSES: Record<string, { bg: string; border: string; text: string; icon: string; activeBg: string; activeBorder: string; activeText: string }> = {
+  rose:   { bg: "bg-rose-50/60",   border: "border-rose-200/60",   text: "text-rose-700",   icon: "text-rose-500",   activeBg: "bg-rose-600",   activeBorder: "border-rose-600",   activeText: "text-white" },
+  violet: { bg: "bg-violet-50/60", border: "border-violet-200/60", text: "text-violet-700", icon: "text-violet-500", activeBg: "bg-violet-600", activeBorder: "border-violet-600", activeText: "text-white" },
+  sky:    { bg: "bg-sky-50/60",    border: "border-sky-200/60",    text: "text-sky-700",    icon: "text-sky-500",    activeBg: "bg-sky-600",    activeBorder: "border-sky-600",    activeText: "text-white" },
+  amber:  { bg: "bg-amber-50/60",  border: "border-amber-200/60",  text: "text-amber-700",  icon: "text-amber-500",  activeBg: "bg-amber-600",  activeBorder: "border-amber-600",  activeText: "text-white" },
+  orange: { bg: "bg-orange-50/60", border: "border-orange-200/60", text: "text-orange-700", icon: "text-orange-500", activeBg: "bg-orange-600", activeBorder: "border-orange-600", activeText: "text-white" },
+};
 
 // ---------------------------------------------------------------------------
 // Component
@@ -192,7 +491,7 @@ export default function ReportsPage() {
   }, [config]);
 
   // Preview query
-  const { data: preview, isLoading, isError } = useQuery<ReportPreviewResponse>({
+  const { data: preview, isLoading, isFetching, isError } = useQuery<ReportPreviewResponse>({
     queryKey: ["report-preview", debouncedConfig],
     queryFn: () => api.previewReport(debouncedConfig),
   });
@@ -216,6 +515,18 @@ export default function ReportsPage() {
     );
   }
 
+  // Category toggle
+  function toggleCategory(category: string) {
+    const catFields = ALL_FIELDS.filter((f) => FIELD_META[f].category === category);
+    const allSelected = catFields.every((f) => columns.includes(f));
+    setActivePreset(null);
+    if (allSelected) {
+      setColumns((prev) => prev.filter((c) => !catFields.includes(c) || c === "key"));
+    } else {
+      setColumns((prev) => [...new Set([...prev, ...catFields])]);
+    }
+  }
+
   // Export
   async function handleExport() {
     setExporting(true);
@@ -228,127 +539,193 @@ export default function ReportsPage() {
     }
   }
 
-  // Determine which columns to show in the preview table
+  // Determine preview columns and headers
   const previewColumns = groupBy
     ? ["group", "count", "open", "avg_ttr_hours"]
     : columns;
   const previewHeaders = groupBy
-    ? [
-        FIELD_META[groupBy]?.label ?? groupBy,
-        "Count",
-        "Open",
-        "Avg TTR (h)",
-      ]
+    ? [FIELD_META[groupBy]?.label ?? groupBy, "Count", "Open", "Avg TTR"]
     : columns.map((c) => FIELD_META[c]?.label ?? c);
 
+  // Numeric fields for right-alignment
+  const numericFields = new Set([
+    "calendar_ttr_hours", "age_days", "days_since_update",
+    "count", "open", "avg_ttr_hours",
+  ]);
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Build custom reports with filters, column selection, sorting, and grouping.
-        </p>
+    <div className="space-y-5">
+      {/* Page header */}
+      <div className="flex items-end justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Report Builder</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Configure filters, select columns, and preview before exporting.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <a
+            href={api.exportExcel()}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-600 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-800"
+          >
+            <DownloadIcon className="h-3.5 w-3.5" />
+            Export All (legacy)
+          </a>
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="inline-flex items-center gap-2 rounded-md bg-slate-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-slate-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {exporting ? (
+              <>
+                <svg className="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Exporting...
+              </>
+            ) : (
+              <>
+                <DownloadIcon className="h-4 w-4" />
+                Export to Excel
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Presets */}
-      <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-          Quick Presets
-        </h2>
-        <div className="flex flex-wrap gap-2">
-          {PRESETS.map((p) => (
+      <div className="grid grid-cols-5 gap-3">
+        {PRESETS.map((p) => {
+          const active = activePreset === p.name;
+          const accent = ACCENT_CLASSES[p.accent] ?? ACCENT_CLASSES.sky;
+          return (
             <button
               key={p.name}
               onClick={() => applyPreset(p)}
               className={[
-                "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
-                activePreset === p.name
-                  ? "border-blue-600 bg-blue-600 text-white"
-                  : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50",
+                "group relative flex flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-all",
+                active
+                  ? `${accent.activeBg} ${accent.activeBorder} ${accent.activeText} shadow-md`
+                  : `${accent.bg} ${accent.border} hover:shadow-sm`,
               ].join(" ")}
             >
-              {p.name}
+              <div className={`${active ? accent.activeText : accent.icon} transition-colors`}>
+                <PresetIcon type={p.icon} className="w-5 h-5" />
+              </div>
+              <div>
+                <div className={`text-xs font-semibold leading-tight ${active ? accent.activeText : accent.text}`}>
+                  {p.name}
+                </div>
+                <div className={`mt-0.5 text-[10px] leading-snug ${active ? "text-white/80" : "text-gray-500"}`}>
+                  {p.description}
+                </div>
+              </div>
             </button>
-          ))}
-        </div>
-      </section>
+          );
+        })}
+      </div>
 
       {/* Filters */}
-      <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-          Filters
-        </h2>
+      <Section title="Filters" defaultOpen={true}>
         <div className="flex flex-wrap items-center gap-3">
           <TicketFilters
             filters={filters}
             onFilterChange={(f) => { setFilters(f); setActivePreset(null); }}
           />
-          <label className="ml-2 flex items-center gap-2 text-sm text-gray-600">
+          <label className="ml-2 flex items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 cursor-pointer hover:bg-gray-100 transition-colors select-none">
             <input
               type="checkbox"
               checked={includeExcluded}
               onChange={(e) => { setIncludeExcluded(e.target.checked); setActivePreset(null); }}
-              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              className="h-3.5 w-3.5 rounded border-gray-300 text-slate-700 focus:ring-slate-500"
             />
             Include excluded
           </label>
         </div>
-      </section>
+      </Section>
 
       {/* Columns */}
-      <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-            Columns ({columns.length} selected)
-          </h2>
-          <div className="flex gap-2">
+      <Section
+        title="Columns"
+        badge={`${columns.length} selected`}
+        defaultOpen={true}
+        actions={
+          <div className="flex gap-1.5">
             <button
               onClick={() => { setColumns([...ALL_FIELDS]); setActivePreset(null); }}
-              className="text-xs font-medium text-blue-600 hover:text-blue-800"
+              className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
             >
-              Select All
+              All
+            </button>
+            <button
+              onClick={() => { setColumns([...DEFAULT_COLUMNS]); setActivePreset(null); }}
+              className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+            >
+              Default
             </button>
             <button
               onClick={() => { setColumns(["key"]); setActivePreset(null); }}
-              className="text-xs font-medium text-blue-600 hover:text-blue-800"
+              className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
             >
-              Deselect All
+              None
             </button>
           </div>
+        }
+      >
+        <div className="grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-3">
+          {COLUMN_CATEGORIES.map((cat) => {
+            const catFields = ALL_FIELDS.filter((f) => FIELD_META[f].category === cat.key);
+            const selectedCount = catFields.filter((f) => columns.includes(f)).length;
+            return (
+              <div key={cat.key}>
+                <button
+                  type="button"
+                  onClick={() => toggleCategory(cat.key)}
+                  className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <CategoryIcon type={cat.icon} className="w-3 h-3" />
+                  {cat.label}
+                  <span className="text-[9px] font-normal text-gray-300">
+                    ({selectedCount}/{catFields.length})
+                  </span>
+                </button>
+                <div className="space-y-1">
+                  {catFields.map((field) => (
+                    <label
+                      key={field}
+                      className="flex items-center gap-2 cursor-pointer group"
+                      title={FIELD_META[field].description}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={columns.includes(field)}
+                        onChange={() => toggleColumn(field)}
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-slate-700 focus:ring-slate-500"
+                      />
+                      <span className="text-xs text-gray-600 group-hover:text-gray-900 transition-colors">
+                        {FIELD_META[field].label}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-3 lg:grid-cols-4">
-          {ALL_FIELDS.map((field) => (
-            <label
-              key={field}
-              className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:text-gray-900"
-              title={FIELD_META[field]?.description}
-            >
-              <input
-                type="checkbox"
-                checked={columns.includes(field)}
-                onChange={() => toggleColumn(field)}
-                className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              {FIELD_META[field]?.label ?? field}
-            </label>
-          ))}
-        </div>
-      </section>
+      </Section>
 
       {/* Sort & Group */}
-      <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-          Sort & Group
-        </h2>
-        <div className="flex flex-wrap items-center gap-4">
-          {/* Sort field */}
+      <Section title="Sort & Group" defaultOpen={true}>
+        <div className="flex flex-wrap items-center gap-5">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">Sort by</span>
+            <span className="text-xs font-medium text-gray-500">Sort by</span>
             <select
               value={sortField}
               onChange={(e) => { setSortField(e.target.value); setActivePreset(null); }}
-              className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="h-8 rounded-md border border-gray-200 bg-white px-2.5 text-xs text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
             >
               {SORTABLE_FIELDS.map((f) => (
                 <option key={f} value={f}>{FIELD_META[f]?.label ?? f}</option>
@@ -356,20 +733,24 @@ export default function ReportsPage() {
             </select>
             <button
               onClick={() => { setSortDir((d) => d === "asc" ? "desc" : "asc"); setActivePreset(null); }}
-              className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+              className="flex h-8 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-600 shadow-sm transition-colors hover:bg-gray-50"
               title={sortDir === "asc" ? "Ascending" : "Descending"}
             >
-              {sortDir === "asc" ? "↑ Asc" : "↓ Desc"}
+              <svg className={`w-3 h-3 transition-transform ${sortDir === "desc" ? "rotate-180" : ""}`} viewBox="0 0 12 12" fill="currentColor">
+                <path d="M6 2l4 4H2l4-4z" />
+              </svg>
+              {sortDir === "asc" ? "Ascending" : "Descending"}
             </button>
           </div>
 
-          {/* Group by */}
+          <div className="h-6 w-px bg-gray-200" />
+
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">Group by</span>
+            <span className="text-xs font-medium text-gray-500">Group by</span>
             <select
               value={groupBy ?? ""}
               onChange={(e) => { setGroupBy(e.target.value || null); setActivePreset(null); }}
-              className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="h-8 rounded-md border border-gray-200 bg-white px-2.5 text-xs text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
             >
               <option value="">None</option>
               {GROUPABLE_FIELDS.map((f) => (
@@ -378,66 +759,98 @@ export default function ReportsPage() {
             </select>
           </div>
         </div>
-      </section>
+      </Section>
 
       {/* Preview */}
-      <section className="rounded-lg border border-gray-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-            Preview
-          </h2>
-          {preview && (
-            <span className="text-xs text-gray-400">
-              Showing {Math.min(preview.rows.length, 100)} of{" "}
-              {preview.total_count.toLocaleString()}{" "}
-              {preview.grouped ? "groups" : "tickets"}
-            </span>
-          )}
-        </div>
-        <div className="overflow-x-auto">
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <svg className="h-6 w-6 animate-spin text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+      <section className="rounded-lg border border-gray-200 bg-white shadow-sm overflow-hidden">
+        {/* Preview header with stats */}
+        <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50/80 px-5 py-2.5">
+          <div className="flex items-center gap-3">
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+              Preview
+            </h2>
+            {isFetching && (
+              <svg className="h-3.5 w-3.5 animate-spin text-slate-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
-              <span className="ml-2 text-sm text-gray-500">Loading preview...</span>
+            )}
+          </div>
+          {preview && (
+            <div className="flex items-center gap-4 text-[11px] tabular-nums">
+              <span className="text-gray-400">
+                Showing <span className="font-semibold text-gray-600">{Math.min(preview.rows.length, 100)}</span> of{" "}
+                <span className="font-semibold text-gray-600">{preview.total_count.toLocaleString()}</span>{" "}
+                {preview.grouped ? "groups" : "tickets"}
+              </span>
+              {!preview.grouped && preview.total_count > 100 && (
+                <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 border border-amber-200/60">
+                  Preview limited to 100 rows
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Table */}
+        <div className="overflow-x-auto">
+          {isLoading && !preview ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-3">
+              <svg className="h-8 w-8 animate-spin text-slate-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <span className="text-xs text-gray-400">Loading preview...</span>
             </div>
           ) : isError ? (
-            <div className="py-12 text-center text-sm text-red-500">
-              Failed to load preview. Check your filters and try again.
+            <div className="flex flex-col items-center justify-center py-16 gap-2">
+              <svg className="w-8 h-8 text-red-300" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+              </svg>
+              <span className="text-xs text-red-400">Failed to load preview</span>
             </div>
           ) : preview && preview.rows.length === 0 ? (
-            <div className="py-12 text-center text-sm text-gray-400">
-              No matching tickets found.
+            <div className="flex flex-col items-center justify-center py-16 gap-2">
+              <svg className="w-8 h-8 text-gray-200" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M2 4.75A.75.75 0 012.75 4h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 4.75zM2 10a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 10zm0 5.25a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75a.75.75 0 01-.75-.75z" clipRule="evenodd" />
+              </svg>
+              <span className="text-xs text-gray-400">No matching tickets</span>
             </div>
           ) : preview ? (
-            <table className="w-full text-left text-sm">
+            <table className="w-full text-left text-[13px]">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
+                <tr className="border-b border-gray-200 bg-gray-50/50">
                   {previewHeaders.map((h, i) => (
                     <th
                       key={i}
-                      className="whitespace-nowrap px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500"
+                      className={[
+                        "whitespace-nowrap px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-400",
+                        numericFields.has(previewColumns[i]) ? "text-right" : "",
+                      ].join(" ")}
                     >
                       {h}
                     </th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody>
                 {preview.rows.map((row, ri) => (
-                  <tr key={ri} className="hover:bg-gray-50">
+                  <tr
+                    key={ri}
+                    className={[
+                      "border-b border-gray-50 transition-colors hover:bg-slate-50/60",
+                      ri % 2 === 1 ? "bg-gray-50/30" : "",
+                    ].join(" ")}
+                  >
                     {previewColumns.map((col, ci) => (
                       <td
                         key={ci}
                         className={[
                           "whitespace-nowrap px-4 py-2 text-gray-700",
-                          col === "summary" ? "max-w-xs truncate" : "",
+                          numericFields.has(col) ? "text-right" : "",
                         ].join(" ")}
-                        title={col === "summary" ? String(row[col] ?? "") : undefined}
                       >
-                        {formatCellValue(row[col])}
+                        <CellContent value={row[col]} field={col} />
                       </td>
                     ))}
                   </tr>
@@ -446,38 +859,6 @@ export default function ReportsPage() {
             </table>
           ) : null}
         </div>
-      </section>
-
-      {/* Export buttons */}
-      <section className="flex items-center gap-4">
-        <button
-          onClick={handleExport}
-          disabled={exporting}
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {exporting ? (
-            <>
-              <svg className="h-5 w-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              Exporting...
-            </>
-          ) : (
-            <>
-              <DownloadIcon className="h-5 w-5" />
-              Export to Excel
-            </>
-          )}
-        </button>
-        <a
-          href={api.exportExcel()}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-sm font-medium text-gray-500 underline hover:text-gray-700"
-        >
-          Export All (legacy)
-        </a>
       </section>
     </div>
   );
