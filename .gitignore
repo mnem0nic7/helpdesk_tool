@@ -14,10 +14,14 @@ frontend/dist/
 node_modules/
 
 # Data files (large / sensitive)
+backend/data/
 oit_all_issues.json
 oit_all_issues_full.json
 *.xlsx
 reports/
+
+# Scratch / planning
+plan.md
 
 # One-off scripts with hardcoded credentials
 pull_all_fields.py

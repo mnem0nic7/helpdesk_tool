@@ -1,0 +1,222 @@
+"""Shared fixtures for backend tests."""
+
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+
+# Make backend importable without installing
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Set DATA_DIR to a temp directory BEFORE any backend import touches it
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="altlassian_test_"))
+# Set dummy Jira config so config.py doesn't fail
+os.environ.setdefault("JIRA_EMAIL", "test@example.com")
+os.environ.setdefault("JIRA_API_TOKEN", "test-token")
+os.environ.setdefault("JIRA_BASE_URL", "https://example.atlassian.net")
+
+# Frozen time constant (also used in test_metrics.py)
+FROZEN_NOW = datetime(2026, 3, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Sample Jira-shaped issue dicts
+# ---------------------------------------------------------------------------
+
+def _make_issue(
+    key: str,
+    summary: str,
+    status_name: str,
+    status_category: str,
+    priority: str,
+    assignee: str | None,
+    created: str,
+    updated: str,
+    resolution_date: str | None = None,
+    labels: list[str] | None = None,
+    sla_first_resp: dict | None = None,
+    sla_resolution: dict | None = None,
+) -> dict[str, Any]:
+    """Build a minimal Jira issue dict with realistic field structure."""
+    assignee_obj = (
+        {"displayName": assignee, "accountId": f"acc-{assignee.lower().replace(' ', '-')}"}
+        if assignee
+        else None
+    )
+    resolution_obj = {"name": "Done"} if resolution_date else None
+    status_cat_obj = {"name": status_category}
+
+    fields: dict[str, Any] = {
+        "summary": summary,
+        "status": {"name": status_name, "statusCategory": status_cat_obj},
+        "priority": {"name": priority},
+        "assignee": assignee_obj,
+        "reporter": {"displayName": "Reporter One"},
+        "issuetype": {"name": "[System] Service request"},
+        "resolution": resolution_obj,
+        "created": created,
+        "updated": updated,
+        "resolutiondate": resolution_date,
+        "labels": labels or [],
+        "customfield_10010": None,
+        "customfield_11266": sla_first_resp,
+        "customfield_11264": sla_resolution,
+        "customfield_11267": None,
+        "customfield_11268": None,
+    }
+    return {"key": key, "fields": fields}
+
+
+@pytest.fixture()
+def sample_issues() -> list[dict[str, Any]]:
+    """Six issues covering major categories for testing."""
+    return [
+        # 0: Open / Active — recently updated (not stale)
+        _make_issue(
+            key="OIT-100",
+            summary="Active open ticket",
+            status_name="In Progress",
+            status_category="In Progress",
+            priority="High",
+            assignee="Alice Admin",
+            created="2026-02-01T10:00:00+00:00",
+            updated="2026-03-03T10:00:00+00:00",
+            sla_first_resp={"completedCycles": [{"breached": False}]},
+            sla_resolution={"ongoingCycle": {"breached": False, "paused": False}},
+        ),
+        # 1: Open / Stale — updated > 7 days ago
+        _make_issue(
+            key="OIT-200",
+            summary="Stale open ticket",
+            status_name="Open",
+            status_category="To Do",
+            priority="Medium",
+            assignee="Bob Builder",
+            created="2026-01-10T08:00:00+00:00",
+            updated="2026-02-15T08:00:00+00:00",
+            sla_first_resp={"ongoingCycle": {"breached": True, "paused": False}},
+        ),
+        # 2: Resolved / High priority — 72h TTR
+        _make_issue(
+            key="OIT-300",
+            summary="Resolved high priority",
+            status_name="Resolved",
+            status_category="Done",
+            priority="High",
+            assignee="Alice Admin",
+            created="2026-02-20T12:00:00+00:00",
+            updated="2026-02-23T12:00:00+00:00",
+            resolution_date="2026-02-23T12:00:00+00:00",
+            sla_first_resp={"completedCycles": [{"breached": False}]},
+            sla_resolution={"completedCycles": [{"breached": False}]},
+        ),
+        # 3: Closed / Low priority — 240h TTR
+        _make_issue(
+            key="OIT-400",
+            summary="Closed low priority",
+            status_name="Closed",
+            status_category="Done",
+            priority="Low",
+            assignee=None,
+            created="2026-01-20T09:00:00+00:00",
+            updated="2026-01-30T09:00:00+00:00",
+            resolution_date="2026-01-30T09:00:00+00:00",
+        ),
+        # 4: Excluded by label
+        _make_issue(
+            key="OIT-500",
+            summary="Normal ticket with dev label",
+            status_name="Open",
+            status_category="To Do",
+            priority="Medium",
+            assignee="Charlie Chief",
+            created="2026-02-10T10:00:00+00:00",
+            updated="2026-03-01T10:00:00+00:00",
+            labels=["oasisdev"],
+        ),
+        # 5: Excluded by summary
+        _make_issue(
+            key="OIT-600",
+            summary="oasisdev test ticket",
+            status_name="Open",
+            status_category="To Do",
+            priority="Low",
+            assignee="Charlie Chief",
+            created="2026-02-12T10:00:00+00:00",
+            updated="2026-03-01T10:00:00+00:00",
+        ),
+    ]
+
+
+@pytest.fixture()
+def filtered_issues(sample_issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """First 4 issues (non-excluded) — matches what IssueCache.get_filtered_issues returns."""
+    return sample_issues[:4]
+
+
+# ---------------------------------------------------------------------------
+# Mock cache
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def mock_cache(sample_issues, filtered_issues):
+    """A mock object that satisfies the IssueCache interface used by routes."""
+    m = MagicMock()
+    m.get_filtered_issues.return_value = filtered_issues
+    m.get_all_issues.return_value = sample_issues
+    m.issue_count = len(sample_issues)
+    m.filtered_count = len(filtered_issues)
+    m.initialized = True
+    m.refreshing = False
+    m.last_refresh = "2026-03-04T08:00:00+00:00"
+    m.status.return_value = {
+        "initialized": True,
+        "refreshing": False,
+        "issue_count": len(sample_issues),
+        "filtered_count": len(filtered_issues),
+        "last_refresh": "2026-03-04T08:00:00+00:00",
+    }
+    return m
+
+
+# ---------------------------------------------------------------------------
+# Time freeze
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def freeze_time(monkeypatch):
+    """Freeze metrics._now() to 2026-03-04T12:00:00Z for deterministic tests."""
+    import metrics
+    monkeypatch.setattr(metrics, "_now", lambda: FROZEN_NOW)
+    return FROZEN_NOW
+
+
+# ---------------------------------------------------------------------------
+# FastAPI test client with cache patched
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def test_client(mock_cache, freeze_time, monkeypatch):
+    """FastAPI TestClient with the cache singleton replaced in every route module."""
+    import issue_cache
+    import routes_metrics
+    import routes_tickets
+    import routes_chart
+    import routes_export
+    import routes_cache
+
+    for mod in [issue_cache, routes_metrics, routes_tickets, routes_chart, routes_export, routes_cache]:
+        monkeypatch.setattr(mod, "cache", mock_cache)
+
+    # Import app *after* patching
+    from main import app
+    from starlette.testclient import TestClient
+
+    return TestClient(app)
