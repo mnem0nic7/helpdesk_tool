@@ -56,6 +56,10 @@ class IssueCache:
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._init_db()
 
+        # Eagerly restore from SQLite so tickets are available immediately
+        if self._load_from_db():
+            self._init_event.set()
+
     # ------------------------------------------------------------------
     # Public accessors
     # ------------------------------------------------------------------
