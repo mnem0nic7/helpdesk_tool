@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../lib/api.ts";
+import type { Assignee } from "../lib/api.ts";
 
 export interface TicketFilterValues {
   search: string;
@@ -48,6 +51,15 @@ export default function TicketFilters({
 }: TicketFiltersProps) {
   const [searchInput, setSearchInput] = useState(filters.search);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { data: assignees } = useQuery({
+    queryKey: ["assignees"],
+    queryFn: () => api.getAssignees(),
+    staleTime: Infinity,
+  });
+  const sortedAssignees = (assignees ?? []).slice().sort((a: Assignee, b: Assignee) =>
+    a.display_name.localeCompare(b.display_name)
+  );
 
   // Sync local search input when filters reset externally
   useEffect(() => {
@@ -139,6 +151,22 @@ export default function TicketFilters({
         {ISSUE_TYPES.map((t) => (
           <option key={t} value={t}>
             {t}
+          </option>
+        ))}
+      </select>
+
+      {/* Assignee dropdown */}
+      <select
+        value={filters.assignee}
+        onChange={(e) => handleChange("assignee", e.target.value)}
+        className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm
+                   text-gray-700 shadow-sm
+                   focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+      >
+        <option value="">All Assignees</option>
+        {sortedAssignees.map((a: Assignee) => (
+          <option key={a.account_id} value={a.display_name}>
+            {a.display_name}
           </option>
         ))}
       </select>
