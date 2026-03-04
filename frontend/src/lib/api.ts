@@ -188,6 +188,7 @@ export interface CacheStatus {
   issue_count: number;
   filtered_count: number;
   last_refresh: string | null;
+  jira_base_url?: string;
 }
 
 // ---------------------------------------------------------------------------

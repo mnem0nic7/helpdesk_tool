@@ -61,6 +61,7 @@ export default function ManagePage() {
     ...(filters.search ? { search: filters.search } : {}),
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.priority ? { priority: filters.priority } : {}),
+    ...(filters.issue_type ? { issue_type: filters.issue_type } : {}),
     ...(filters.open_only ? { open_only: true } : {}),
     ...(filters.stale_only ? { stale_only: true } : {}),
     // For triage queue, filter to unassigned tickets

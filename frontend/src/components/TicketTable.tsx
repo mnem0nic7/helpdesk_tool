@@ -6,7 +6,9 @@ import {
   createColumnHelper,
 } from "@tanstack/react-table";
 import type { SortingState } from "@tanstack/react-table";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import api from "../lib/api.ts";
 import type { TicketRow } from "../lib/api.ts";
 
 // ---------------------------------------------------------------------------
@@ -78,6 +80,7 @@ function buildColumns(
   onToggle: (key: string) => void,
   onToggleAll: (allKeys: string[]) => void,
   allKeys: string[],
+  jiraBaseUrl?: string,
 ) {
   const cols = [];
 
@@ -109,11 +112,26 @@ function buildColumns(
   cols.push(
     colHelper.accessor("key", {
       header: "Key",
-      cell: (info) => (
-        <span className="whitespace-nowrap font-mono text-xs text-blue-700">
-          {info.getValue()}
-        </span>
-      ),
+      cell: (info) => {
+        const key = info.getValue();
+        if (jiraBaseUrl) {
+          return (
+            <a
+              href={`${jiraBaseUrl}/browse/${key}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="whitespace-nowrap font-mono text-xs text-blue-700 underline hover:text-blue-900"
+            >
+              {key}
+            </a>
+          );
+        }
+        return (
+          <span className="whitespace-nowrap font-mono text-xs text-blue-700">
+            {key}
+          </span>
+        );
+      },
       size: 100,
     }),
     colHelper.accessor("summary", {
@@ -231,6 +249,13 @@ export default function TicketTable({
   onSelectionChange,
   selectedKeys = new Set(),
 }: TicketTableProps) {
+  const { data: cacheStatus } = useQuery({
+    queryKey: ["cache-status"],
+    queryFn: () => api.getCacheStatus(),
+    staleTime: Infinity,
+  });
+  const jiraBaseUrl = cacheStatus?.jira_base_url;
+
   const allKeys = useMemo(() => data.map((r) => r.key), [data]);
 
   function handleToggle(key: string) {
@@ -254,9 +279,9 @@ export default function TicketTable({
   const [sorting, setSorting] = useState<SortingState>([]);
 
   const columns = useMemo(
-    () => buildColumns(selectable, selectedKeys, handleToggle, handleToggleAll, allKeys),
+    () => buildColumns(selectable, selectedKeys, handleToggle, handleToggleAll, allKeys, jiraBaseUrl),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectable, selectedKeys, allKeys],
+    [selectable, selectedKeys, allKeys, jiraBaseUrl],
   );
 
   const table = useReactTable({
