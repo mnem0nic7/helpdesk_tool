@@ -171,9 +171,9 @@ async def get_assignees() -> list[dict[str, Any]]:
     users = _client.get_users_assignable(JIRA_PROJECT)
     return [
         {
-            "accountId": u.get("accountId", ""),
-            "displayName": u.get("displayName", ""),
-            "emailAddress": u.get("emailAddress", ""),
+            "account_id": u.get("accountId", ""),
+            "display_name": u.get("displayName", ""),
+            "email_address": u.get("emailAddress", ""),
         }
         for u in users
     ]
