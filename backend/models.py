@@ -115,6 +115,31 @@ class TicketRow(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ReportFilters(BaseModel):
+    """Filter criteria for the report builder — mirrors ticket query params."""
+
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    assignee: Optional[str] = None
+    issue_type: Optional[str] = None
+    search: Optional[str] = None
+    open_only: bool = False
+    stale_only: bool = False
+    created_after: Optional[str] = None
+    created_before: Optional[str] = None
+
+
+class ReportConfig(BaseModel):
+    """Full report builder configuration sent by the frontend."""
+
+    filters: ReportFilters = Field(default_factory=ReportFilters)
+    columns: list[str] = Field(default_factory=list)
+    sort_field: str = "created"
+    sort_dir: str = "desc"  # "asc" or "desc"
+    group_by: Optional[str] = None
+    include_excluded: bool = False
+
+
 class BulkActionRequest(BaseModel):
     """Base model for bulk operations on a set of issue keys."""
 
