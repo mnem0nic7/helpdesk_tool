@@ -8,6 +8,10 @@ import type {
   TriageResult,
   TriageSuggestion,
 } from "../lib/api.ts";
+import TicketFilters, {
+  emptyFilters,
+} from "../components/TicketFilters.tsx";
+import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 
 // ---------------------------------------------------------------------------
 // Confidence bar component
@@ -191,8 +195,30 @@ export default function TriagePage() {
     }
   }, [models, selectedModel]);
 
-  // Ticket list
-  const queryParams: TicketQueryParams = { open_only: true };
+  // Filters (default to open only, same as ManagePage)
+  const [filters, setFilters] = useState<TicketFilterValues>({
+    ...emptyFilters,
+    open_only: true,
+  });
+
+  const handleFilterChange = useCallback((next: TicketFilterValues) => {
+    setFilters(next);
+    setSelectedKeys(new Set());
+  }, []);
+
+  // Build query params from filters
+  const queryParams: TicketQueryParams = {
+    ...(filters.search ? { search: filters.search } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.priority ? { priority: filters.priority } : {}),
+    ...(filters.issue_type ? { issue_type: filters.issue_type } : {}),
+    ...(filters.assignee ? { assignee: filters.assignee } : {}),
+    ...(filters.open_only ? { open_only: true } : {}),
+    ...(filters.stale_only ? { stale_only: true } : {}),
+    ...(filters.created_after ? { created_after: filters.created_after } : {}),
+    ...(filters.created_before ? { created_before: filters.created_before } : {}),
+  };
+
   const { data: ticketsData, isLoading: ticketsLoading } = useQuery({
     queryKey: ["triage-tickets", queryParams],
     queryFn: () => api.getTickets(queryParams),
@@ -348,19 +374,6 @@ export default function TriagePage() {
     }
   }
 
-  // Search filter for tickets
-  const [search, setSearch] = useState("");
-  const filteredTickets = useMemo(() => {
-    if (!search) return tickets;
-    const q = search.toLowerCase();
-    return tickets.filter(
-      (t) =>
-        t.key.toLowerCase().includes(q) ||
-        t.summary.toLowerCase().includes(q) ||
-        t.assignee.toLowerCase().includes(q)
-    );
-  }, [tickets, search]);
-
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -472,24 +485,20 @@ export default function TriagePage() {
         </div>
       )}
 
+      {/* Filters */}
+      <TicketFilters filters={filters} onFilterChange={handleFilterChange} />
+
       {/* Two-column layout: tickets left, review right */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         {/* Ticket selection panel */}
         <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
             <h2 className="text-sm font-semibold text-gray-700">
-              Open Tickets{" "}
+              Tickets{" "}
               <span className="font-normal text-gray-400">
-                ({filteredTickets.length})
+                ({tickets.length})
               </span>
             </h2>
-            <input
-              type="text"
-              placeholder="Search tickets…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="h-8 w-48 rounded-md border border-gray-300 px-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
           </div>
 
           <div className="max-h-[60vh] overflow-y-auto">
@@ -500,8 +509,8 @@ export default function TriagePage() {
                     <input
                       type="checkbox"
                       checked={
-                        filteredTickets.length > 0 &&
-                        selectedKeys.size === filteredTickets.length
+                        tickets.length > 0 &&
+                        selectedKeys.size === tickets.length
                       }
                       onChange={toggleAll}
                       className="rounded border-gray-300"
@@ -523,14 +532,14 @@ export default function TriagePage() {
                     </td>
                   </tr>
                 )}
-                {!ticketsLoading && filteredTickets.length === 0 && (
+                {!ticketsLoading && tickets.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-4 py-8 text-center text-gray-400">
                       No open tickets found.
                     </td>
                   </tr>
                 )}
-                {filteredTickets.map((t: TicketRow) => (
+                {tickets.map((t: TicketRow) => (
                   <tr
                     key={t.key}
                     className={`cursor-pointer transition-colors hover:bg-gray-50 ${
