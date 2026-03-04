@@ -178,7 +178,7 @@ export default function TriagePage() {
   const queryClient = useQueryClient();
 
   // Model selection
-  const { data: models } = useQuery({
+  const { data: models, isLoading: modelsLoading } = useQuery({
     queryKey: ["triage-models"],
     queryFn: () => api.getTriageModels(),
   });
@@ -385,18 +385,22 @@ export default function TriagePage() {
               id="model-select"
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
-              className="mt-0.5 h-9 rounded-md border border-gray-300 bg-white px-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              disabled={modelsLoading}
+              className="mt-0.5 h-9 rounded-md border border-gray-300 bg-white px-3 pr-8 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
             >
+              {modelsLoading && (
+                <option value="">Loading models…</option>
+              )}
+              {!modelsLoading && models && models.length === 0 && (
+                <option value="" disabled>
+                  No models available — add API key
+                </option>
+              )}
               {(models ?? []).map((m: AIModel) => (
                 <option key={m.id} value={m.id}>
                   {m.name} ({m.provider})
                 </option>
               ))}
-              {(!models || models.length === 0) && (
-                <option value="" disabled>
-                  No models available — add API key
-                </option>
-              )}
             </select>
           </div>
 
