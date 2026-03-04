@@ -149,21 +149,36 @@ function SuggestionCard({
 
 function TriageReviewPanel({
   result,
+  jiraBaseUrl,
   onFieldAccepted,
   onFieldDeclined,
   onDismissAll,
   dismissing,
 }: {
   result: TriageResult;
+  jiraBaseUrl?: string;
   onFieldAccepted: (key: string, field: string) => void;
   onFieldDeclined: (key: string, field: string) => void;
   onDismissAll: (key: string) => void;
   dismissing: boolean;
 }) {
+  const keyElement = jiraBaseUrl ? (
+    <a
+      href={`${jiraBaseUrl}/browse/${result.key}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-semibold text-blue-600 hover:underline"
+    >
+      {result.key}
+    </a>
+  ) : (
+    <span className="font-semibold text-gray-900">{result.key}</span>
+  );
+
   if (result.suggestions.length === 0) {
     return (
       <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">
-        No changes suggested for <strong>{result.key}</strong> — the ticket
+        No changes suggested for {keyElement} — the ticket
         looks well-triaged.
       </div>
     );
@@ -173,7 +188,7 @@ function TriageReviewPanel({
     <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
         <div>
-          <span className="font-semibold text-gray-900">{result.key}</span>
+          {keyElement}
           <span className="ml-2 text-xs text-gray-400">
             via {result.model_used}
           </span>
@@ -208,6 +223,14 @@ function TriageReviewPanel({
 
 export default function TriagePage() {
   const queryClient = useQueryClient();
+
+  // Jira base URL for ticket links
+  const { data: cacheStatus } = useQuery({
+    queryKey: ["cache-status"],
+    queryFn: () => api.getCacheStatus(),
+    staleTime: Infinity,
+  });
+  const jiraBaseUrl = cacheStatus?.jira_base_url;
 
   // Model selection
   const { data: models, isLoading: modelsLoading } = useQuery({
@@ -277,6 +300,9 @@ export default function TriagePage() {
   // Dismissing state per ticket
   const [dismissingKey, setDismissingKey] = useState<string | null>(null);
 
+  // Hide tickets with no suggested changes
+  const [hideNoChanges, setHideNoChanges] = useState(false);
+
   // Re-analysis confirmation dialog
   const [confirmReeval, setConfirmReeval] = useState<{
     alreadyAnalyzed: string[];
@@ -291,8 +317,12 @@ export default function TriagePage() {
 
   // Tickets with results (for the review panel)
   const reviewResults = useMemo(() => {
-    return Object.values(allResults).filter((r) => !r.error);
-  }, [allResults]);
+    let results = Object.values(allResults).filter((r) => !r.error);
+    if (hideNoChanges) {
+      results = results.filter((r) => r.suggestions.length > 0);
+    }
+    return results;
+  }, [allResults, hideNoChanges]);
 
   // Toggle selection
   function toggleKey(key: string) {
@@ -639,12 +669,23 @@ export default function TriagePage() {
 
         {/* Review panel */}
         <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-gray-700">
-            Triage Suggestions{" "}
-            <span className="font-normal text-gray-400">
-              ({reviewResults.length})
-            </span>
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-700">
+              Triage Suggestions{" "}
+              <span className="font-normal text-gray-400">
+                ({reviewResults.length})
+              </span>
+            </h2>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              <input
+                type="checkbox"
+                checked={hideNoChanges}
+                onChange={(e) => setHideNoChanges(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Hide no-change results
+            </label>
+          </div>
 
           {reviewResults.length === 0 && (
             <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-12 text-center text-sm text-gray-400">
@@ -658,6 +699,7 @@ export default function TriagePage() {
               <TriageReviewPanel
                 key={r.key}
                 result={r}
+                jiraBaseUrl={jiraBaseUrl}
                 onFieldAccepted={handleFieldAccepted}
                 onFieldDeclined={handleFieldDeclined}
                 onDismissAll={handleDismissAll}
