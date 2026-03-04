@@ -23,13 +23,18 @@ router = APIRouter(prefix="/api/tickets/bulk")
 _client = JiraClient()
 
 
-def _bulk_result(success: list[str], failed: list[dict[str, str]]) -> dict[str, Any]:
-    """Return a standard bulk-action response envelope."""
-    return {"success": success, "failed": failed}
+def _bulk_result(success: list[str], failed: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """Return a list of per-ticket results matching the frontend BulkResult type."""
+    results: list[dict[str, Any]] = []
+    for key in success:
+        results.append({"key": key, "success": True})
+    for entry in failed:
+        results.append({"key": entry["key"], "success": False, "error": entry.get("error", "")})
+    return results
 
 
 @router.post("/status")
-async def bulk_status(req: BulkStatusRequest) -> dict[str, Any]:
+async def bulk_status(req: BulkStatusRequest) -> list[dict[str, Any]]:
     """Transition multiple issues to a new status."""
     success: list[str] = []
     failed: list[dict[str, str]] = []
@@ -45,7 +50,7 @@ async def bulk_status(req: BulkStatusRequest) -> dict[str, Any]:
 
 
 @router.post("/assign")
-async def bulk_assign(req: BulkAssignRequest) -> dict[str, Any]:
+async def bulk_assign(req: BulkAssignRequest) -> list[dict[str, Any]]:
     """Reassign multiple issues to a single account."""
     success: list[str] = []
     failed: list[dict[str, str]] = []
@@ -61,7 +66,7 @@ async def bulk_assign(req: BulkAssignRequest) -> dict[str, Any]:
 
 
 @router.post("/priority")
-async def bulk_priority(req: BulkPriorityRequest) -> dict[str, Any]:
+async def bulk_priority(req: BulkPriorityRequest) -> list[dict[str, Any]]:
     """Change the priority of multiple issues."""
     success: list[str] = []
     failed: list[dict[str, str]] = []
@@ -77,7 +82,7 @@ async def bulk_priority(req: BulkPriorityRequest) -> dict[str, Any]:
 
 
 @router.post("/comment")
-async def bulk_comment(req: BulkCommentRequest) -> dict[str, Any]:
+async def bulk_comment(req: BulkCommentRequest) -> list[dict[str, Any]]:
     """Add the same comment to multiple issues."""
     success: list[str] = []
     failed: list[dict[str, str]] = []
