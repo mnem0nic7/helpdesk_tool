@@ -64,8 +64,10 @@ export default function ManagePage() {
     ...(filters.issue_type ? { issue_type: filters.issue_type } : {}),
     ...(filters.open_only ? { open_only: true } : {}),
     ...(filters.stale_only ? { stale_only: true } : {}),
+    ...(filters.created_after ? { created_after: filters.created_after } : {}),
+    ...(filters.created_before ? { created_before: filters.created_before } : {}),
     // For triage queue, filter to unassigned tickets
-    ...(activeQuickFilter === "triage" ? { assignee: "unassigned" } : {}),
+    ...(activeQuickFilter === "triage" ? { assignee: "unassigned" } : filters.assignee ? { assignee: filters.assignee } : {}),
   };
 
   const { data, isLoading, isError, error } = useQuery({
