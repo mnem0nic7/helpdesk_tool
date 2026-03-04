@@ -12,6 +12,7 @@ from routes_actions import router as actions_router
 from routes_export import router as export_router
 from routes_cache import router as cache_router
 from routes_chart import router as chart_router
+from routes_triage import router as triage_router
 from issue_cache import cache
 
 
@@ -49,6 +50,7 @@ app.include_router(actions_router)
 app.include_router(export_router)
 app.include_router(cache_router)
 app.include_router(chart_router)
+app.include_router(triage_router)
 
 # ---------------------------------------------------------------------------
 # Routes
