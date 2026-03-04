@@ -4,6 +4,7 @@ export interface TicketFilterValues {
   search: string;
   status: string;
   priority: string;
+  issue_type: string;
   open_only: boolean;
   stale_only: boolean;
   created_after: string;
@@ -15,6 +16,7 @@ export const emptyFilters: TicketFilterValues = {
   search: "",
   status: "",
   priority: "",
+  issue_type: "",
   open_only: false,
   stale_only: false,
   created_after: "",
@@ -32,6 +34,8 @@ const STATUSES = [
 ];
 
 const PRIORITIES = ["Highest", "High", "Medium", "Low", "Lowest"];
+
+const ISSUE_TYPES = ["[System] Service request", "[System] Change"];
 
 interface TicketFiltersProps {
   filters: TicketFilterValues;
@@ -71,6 +75,7 @@ export default function TicketFilters({
     filters.search !== "" ||
     filters.status !== "" ||
     filters.priority !== "" ||
+    filters.issue_type !== "" ||
     filters.open_only ||
     filters.stale_only ||
     filters.created_after !== "" ||
@@ -118,6 +123,22 @@ export default function TicketFilters({
         {PRIORITIES.map((p) => (
           <option key={p} value={p}>
             {p}
+          </option>
+        ))}
+      </select>
+
+      {/* Issue Type dropdown */}
+      <select
+        value={filters.issue_type}
+        onChange={(e) => handleChange("issue_type", e.target.value)}
+        className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm
+                   text-gray-700 shadow-sm
+                   focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+      >
+        <option value="">All Types</option>
+        {ISSUE_TYPES.map((t) => (
+          <option key={t} value={t}>
+            {t}
           </option>
         ))}
       </select>

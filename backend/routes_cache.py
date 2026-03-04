@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from config import JIRA_BASE_URL
 from issue_cache import cache
 
 router = APIRouter(prefix="/api")
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/api")
 @router.get("/cache/status")
 async def cache_status() -> dict[str, Any]:
     """Return current cache state."""
-    return cache.status()
+    return {**cache.status(), "jira_base_url": JIRA_BASE_URL}
 
 
 @router.post("/cache/refresh")
