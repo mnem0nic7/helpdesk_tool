@@ -241,3 +241,10 @@ class JiraClient:
         resp = self.session.get(url, params=params)
         resp.raise_for_status()
         return resp.json()
+
+    def get_priorities(self) -> list[dict[str, Any]]:
+        """GET /rest/api/3/priority — returns all configured priorities."""
+        url = f"{self.base_url}/rest/api/3/priority"
+        resp = self.session.get(url)
+        resp.raise_for_status()
+        return resp.json()

@@ -470,9 +470,19 @@ export const api = {
     return postJSON<TriageResult[]>("/api/triage/analyze", { keys, model, force });
   },
 
-  /** Apply accepted triage suggestions to a ticket. */
+  /** Apply accepted triage suggestions to a ticket (batch — legacy). */
   applyTriageSuggestion(key: string, acceptedFields: string[]): Promise<{ key: string; applied: string[]; errors: { field: string; error: string }[] }> {
     return postJSON("/api/triage/apply", { key, accepted_fields: acceptedFields });
+  },
+
+  /** Apply a single field suggestion to Jira immediately. */
+  applyTriageField(key: string, field: string): Promise<{ key: string; field: string; applied: boolean; remaining_suggestions: TriageResult | null }> {
+    return postJSON("/api/triage/apply-field", { key, field });
+  },
+
+  /** Dismiss all suggestions for a ticket. */
+  dismissTriageSuggestion(key: string): Promise<{ key: string; dismissed: boolean }> {
+    return postJSON("/api/triage/dismiss", { key });
   },
 };
 
