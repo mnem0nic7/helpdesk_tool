@@ -57,9 +57,12 @@ export default function TicketFilters({
     queryFn: () => api.getAssignees(),
     staleTime: Infinity,
   });
-  const sortedAssignees = (assignees ?? []).slice().sort((a: Assignee, b: Assignee) =>
-    a.display_name.localeCompare(b.display_name)
-  );
+  const sortedAssignees = (assignees ?? [])
+    .filter((a: Assignee) => a.display_name)
+    .slice()
+    .sort((a: Assignee, b: Assignee) =>
+      a.display_name.localeCompare(b.display_name)
+    );
 
   // Sync local search input when filters reset externally
   useEffect(() => {
