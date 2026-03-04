@@ -211,6 +211,48 @@ export interface ReportPreviewResponse {
   grouped: boolean;
 }
 
+/** Request body for grouped chart data. */
+export interface ChartDataRequest {
+  filters?: ReportFilters;
+  group_by: string;
+  metric?: string;
+  include_excluded?: boolean;
+}
+
+/** Request body for time series chart data. */
+export interface ChartTimeseriesRequest {
+  filters?: ReportFilters;
+  bucket?: string;
+  include_excluded?: boolean;
+}
+
+/** A single data point in a grouped chart response. */
+export interface ChartDataPoint {
+  label: string;
+  value: number;
+}
+
+/** Response from POST /api/chart/data. */
+export interface ChartDataResponse {
+  data: ChartDataPoint[];
+  group_by: string;
+  metric: string;
+}
+
+/** A single data point in a time series chart response. */
+export interface ChartTimeseriesPoint {
+  period: string;
+  created: number;
+  resolved: number;
+  net_flow: number;
+}
+
+/** Response from POST /api/chart/timeseries. */
+export interface ChartTimeseriesResponse {
+  data: ChartTimeseriesPoint[];
+  bucket: string;
+}
+
 /** Cache status returned by GET /api/cache/status. */
 export interface CacheStatus {
   initialized: boolean;
@@ -368,6 +410,16 @@ export const api = {
   /** Trigger an incremental cache refresh (last 10 min of changes). */
   refreshCacheIncremental(): Promise<CacheStatus> {
     return postJSON<CacheStatus>("/api/cache/refresh/incremental", {});
+  },
+
+  /** Fetch grouped chart data for bar/pie/donut charts. */
+  getChartData(req: ChartDataRequest): Promise<ChartDataResponse> {
+    return postJSON<ChartDataResponse>("/api/chart/data", req);
+  },
+
+  /** Fetch time series chart data for line/area charts. */
+  getChartTimeseries(req: ChartTimeseriesRequest): Promise<ChartTimeseriesResponse> {
+    return postJSON<ChartTimeseriesResponse>("/api/chart/timeseries", req);
   },
 };
 

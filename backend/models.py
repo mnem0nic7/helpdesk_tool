@@ -140,6 +140,23 @@ class ReportConfig(BaseModel):
     include_excluded: bool = False
 
 
+class ChartDataRequest(BaseModel):
+    """Request body for the grouped chart data endpoint."""
+
+    filters: ReportFilters = Field(default_factory=ReportFilters)
+    group_by: str
+    metric: str = "count"  # count|open|resolved|avg_ttr|median_ttr|avg_age
+    include_excluded: bool = False
+
+
+class ChartTimeseriesRequest(BaseModel):
+    """Request body for the time series chart data endpoint."""
+
+    filters: ReportFilters = Field(default_factory=ReportFilters)
+    bucket: str = "week"  # week|month
+    include_excluded: bool = False
+
+
 class BulkActionRequest(BaseModel):
     """Base model for bulk operations on a set of issue keys."""
 

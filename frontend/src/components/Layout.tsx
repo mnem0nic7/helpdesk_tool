@@ -6,6 +6,7 @@ const navItems = [
   { to: "/tickets", label: "Tickets", icon: "\u25C9" },
   { to: "/manage", label: "Manage", icon: "\u2699" },
   { to: "/sla", label: "SLA Tracker", icon: "\u25C8" },
+  { to: "/visualizations", label: "Visualizations", icon: "\u25E7" },
   { to: "/reports", label: "Reports", icon: "\u25A4" },
 ];
 
