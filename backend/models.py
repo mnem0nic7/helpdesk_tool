@@ -185,3 +185,50 @@ class BulkCommentRequest(BulkActionRequest):
     """Add the same comment to a batch of issues."""
 
     comment: str
+
+
+# ---------------------------------------------------------------------------
+# AI Triage models
+# ---------------------------------------------------------------------------
+
+
+class TriageSuggestion(BaseModel):
+    """AI-generated suggestion for a single field."""
+
+    field: str
+    current_value: str
+    suggested_value: str
+    reasoning: str
+    confidence: float
+
+
+class TriageResult(BaseModel):
+    """Full AI triage result for one ticket."""
+
+    key: str
+    suggestions: list[TriageSuggestion]
+    model_used: str
+    created_at: str
+
+
+class TriageApplyRequest(BaseModel):
+    """Apply accepted suggestions to a ticket."""
+
+    key: str
+    accepted_fields: list[str]
+
+
+class TriageAnalyzeRequest(BaseModel):
+    """Request to analyze one or more tickets."""
+
+    keys: list[str]
+    model: str
+    force: bool = False
+
+
+class AIModel(BaseModel):
+    """Available AI model for triage."""
+
+    id: str
+    name: str
+    provider: str

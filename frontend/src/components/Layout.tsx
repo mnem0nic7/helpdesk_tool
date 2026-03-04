@@ -8,6 +8,7 @@ const navItems = [
   { to: "/sla", label: "SLA Tracker", icon: "\u25C8" },
   { to: "/visualizations", label: "Visualizations", icon: "\u25E7" },
   { to: "/reports", label: "Reports", icon: "\u25A4" },
+  { to: "/triage", label: "AI Triage", icon: "\u25C6" },
 ];
 
 export default function Layout() {

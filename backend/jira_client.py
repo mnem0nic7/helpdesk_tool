@@ -41,6 +41,7 @@ FIELDS: list[str] = [
     "customfield_11267",
     "customfield_11268",
     "customfield_10001",
+    "customfield_10010",  # Request type
     # Metadata
     "labels",
     "components",

@@ -253,6 +253,35 @@ export interface ChartTimeseriesResponse {
   bucket: string;
 }
 
+// ---------------------------------------------------------------------------
+// AI Triage interfaces
+// ---------------------------------------------------------------------------
+
+/** AI-generated suggestion for a single ticket field. */
+export interface TriageSuggestion {
+  field: string;
+  current_value: string;
+  suggested_value: string;
+  reasoning: string;
+  confidence: number;
+}
+
+/** Full AI triage result for one ticket. */
+export interface TriageResult {
+  key: string;
+  suggestions: TriageSuggestion[];
+  model_used: string;
+  created_at: string;
+  error?: string;
+}
+
+/** Available AI model for triage. */
+export interface AIModel {
+  id: string;
+  name: string;
+  provider: string;
+}
+
 /** Cache status returned by GET /api/cache/status. */
 export interface CacheStatus {
   initialized: boolean;
@@ -420,6 +449,30 @@ export const api = {
   /** Fetch time series chart data for line/area charts. */
   getChartTimeseries(req: ChartTimeseriesRequest): Promise<ChartTimeseriesResponse> {
     return postJSON<ChartTimeseriesResponse>("/api/chart/timeseries", req);
+  },
+
+  // -------------------------------------------------------------------------
+  // AI Triage
+  // -------------------------------------------------------------------------
+
+  /** Fetch available AI models for triage. */
+  getTriageModels(): Promise<AIModel[]> {
+    return fetchJSON<AIModel[]>("/api/triage/models");
+  },
+
+  /** Fetch all cached triage suggestions. */
+  getTriageSuggestions(): Promise<TriageResult[]> {
+    return fetchJSON<TriageResult[]>("/api/triage/suggestions");
+  },
+
+  /** Analyze tickets with a selected AI model. Use force=true to re-evaluate cached results. */
+  analyzeTickets(keys: string[], model: string, force = false): Promise<TriageResult[]> {
+    return postJSON<TriageResult[]>("/api/triage/analyze", { keys, model, force });
+  },
+
+  /** Apply accepted triage suggestions to a ticket. */
+  applyTriageSuggestion(key: string, acceptedFields: string[]): Promise<{ key: string; applied: string[]; errors: { field: string; error: string }[] }> {
+    return postJSON("/api/triage/apply", { key, accepted_fields: acceptedFields });
   },
 };
 

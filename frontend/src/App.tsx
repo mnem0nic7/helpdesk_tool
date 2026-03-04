@@ -6,6 +6,7 @@ import ManagePage from "./pages/ManagePage";
 import SLAPage from "./pages/SLAPage";
 import VisualizationsPage from "./pages/VisualizationsPage";
 import ReportsPage from "./pages/ReportsPage";
+import TriagePage from "./pages/TriagePage";
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="sla" element={<SLAPage />} />
           <Route path="visualizations" element={<VisualizationsPage />} />
           <Route path="reports" element={<ReportsPage />} />
+          <Route path="triage" element={<TriagePage />} />
         </Route>
       </Routes>
     </BrowserRouter>
