@@ -181,6 +181,36 @@ export interface BulkCommentRequest {
   comment: string;
 }
 
+/** Filters for the report builder. */
+export interface ReportFilters {
+  status?: string;
+  priority?: string;
+  assignee?: string;
+  issue_type?: string;
+  search?: string;
+  open_only?: boolean;
+  stale_only?: boolean;
+  created_after?: string;
+  created_before?: string;
+}
+
+/** Full report builder configuration. */
+export interface ReportConfig {
+  filters: ReportFilters;
+  columns: string[];
+  sort_field: string;
+  sort_dir: "asc" | "desc";
+  group_by: string | null;
+  include_excluded: boolean;
+}
+
+/** Response from POST /api/report/preview. */
+export interface ReportPreviewResponse {
+  rows: Record<string, unknown>[];
+  total_count: number;
+  grouped: boolean;
+}
+
 /** Cache status returned by GET /api/cache/status. */
 export interface CacheStatus {
   initialized: boolean;
@@ -293,6 +323,36 @@ export const api = {
   /** Return the URL for the Excel export endpoint (browser navigates to it). */
   exportExcel(): string {
     return "/api/export/excel";
+  },
+
+  /** Preview a report with the given config (returns up to 100 rows). */
+  previewReport(config: ReportConfig): Promise<ReportPreviewResponse> {
+    return postJSON<ReportPreviewResponse>("/api/report/preview", config);
+  },
+
+  /** Export a report as Excel — returns a Blob for download. */
+  async exportReport(config: ReportConfig): Promise<void> {
+    const res = await fetch("/api/report/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Export failed (${res.status}): ${text}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    // Extract filename from Content-Disposition or use default
+    const cd = res.headers.get("content-disposition");
+    const match = cd?.match(/filename="?([^"]+)"?/);
+    a.download = match?.[1] ?? "OIT_Report.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   },
 
   /** Fetch current cache status. */
