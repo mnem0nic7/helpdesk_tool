@@ -1,0 +1,61 @@
+"""Tests for metrics and SLA routes (~6 tests)."""
+
+from __future__ import annotations
+
+import pytest
+
+
+class TestMetricsEndpoint:
+    """GET /api/metrics"""
+
+    def test_all_sections_present(self, test_client):
+        resp = test_client.get("/api/metrics")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "headline" in data
+        assert "weekly_volumes" in data
+        assert "age_buckets" in data
+        assert "ttr_distribution" in data
+        assert "priority_counts" in data
+        assert "assignee_stats" in data
+
+    def test_headline_values(self, test_client):
+        resp = test_client.get("/api/metrics")
+        headline = resp.json()["headline"]
+        assert headline["total_tickets"] == 4
+        assert headline["open_backlog"] == 2
+        assert headline["resolved"] == 2
+
+    def test_date_filtering(self, test_client):
+        # Only include issues created after 2026-02-15
+        resp = test_client.get("/api/metrics?date_from=2026-02-15")
+        assert resp.status_code == 200
+        headline = resp.json()["headline"]
+        # OIT-100 created 2026-02-01 excluded; OIT-300 created 2026-02-20 included
+        assert headline["total_tickets"] < 4
+
+
+class TestSLAEndpoints:
+    """GET /api/sla/summary and /api/sla/breaches"""
+
+    def test_sla_summary(self, test_client):
+        resp = test_client.get("/api/sla/summary")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "timers" in data
+        assert len(data["timers"]) == 4  # 4 SLA timer types
+
+    def test_sla_breaches(self, test_client):
+        resp = test_client.get("/api/sla/breaches")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "breaches" in data
+        # OIT-200 has breached SLA first response
+        keys = [b["key"] for b in data["breaches"]]
+        assert "OIT-200" in keys
+
+    def test_sla_summary_timer_names(self, test_client):
+        resp = test_client.get("/api/sla/summary")
+        timer_names = [t["timer_name"] for t in resp.json()["timers"]]
+        assert "First Response" in timer_names
+        assert "Resolution" in timer_names
