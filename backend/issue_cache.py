@@ -48,6 +48,9 @@ class IssueCache:
         self._last_refresh: datetime | None = None
         self._bg_task: asyncio.Task[None] | None = None
 
+        # Auto-triage: keys already processed (lazy-loaded from DB)
+        self._auto_triage_seen: set[str] | None = None
+
         # SQLite persistence
         self._db_path = db_path or os.path.join(DATA_DIR, "issues_cache.db")
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
@@ -222,9 +225,14 @@ class IssueCache:
     # Incremental refresh
     # ------------------------------------------------------------------
 
-    def _incremental_refresh(self) -> None:
-        """Fetch only issues updated in the last refresh interval and merge."""
+    def _incremental_refresh(self) -> list[str]:
+        """Fetch only issues updated in the last refresh interval and merge.
+
+        Returns a list of issue keys that are genuinely new (not previously
+        seen in the cache).
+        """
         self._refreshing = True
+        new_keys: list[str] = []
         try:
             jql = f'project = {JIRA_PROJECT} AND updated >= "-10m" ORDER BY key ASC'
             logger.info("Cache: incremental refresh with JQL: %s", jql)
@@ -234,6 +242,8 @@ class IssueCache:
             with self._lock:
                 for issue in updated_issues:
                     key = issue.get("key", "")
+                    if key not in self._all_issues:
+                        new_keys.append(key)
                     self._all_issues[key] = issue
                     if JiraClient.is_excluded(issue):
                         self._issues.pop(key, None)
@@ -242,14 +252,16 @@ class IssueCache:
                 self._last_refresh = datetime.now(timezone.utc)
 
             logger.info(
-                "Cache: after merge — %d total, %d filtered",
+                "Cache: after merge — %d total, %d filtered (%d new)",
                 len(self._all_issues),
                 len(self._issues),
+                len(new_keys),
             )
             if updated_issues:
                 self._upsert_to_db(updated_issues)
         finally:
             self._refreshing = False
+        return new_keys
 
     # ------------------------------------------------------------------
     # Manual refresh
@@ -262,6 +274,71 @@ class IssueCache:
     def trigger_incremental_refresh(self) -> None:
         """Trigger an incremental refresh (last 10 min of changes)."""
         self._incremental_refresh()
+
+    # ------------------------------------------------------------------
+    # Auto-triage
+    # ------------------------------------------------------------------
+
+    def _load_auto_triage_seen(self) -> set[str]:
+        """Lazy-load the set of already-auto-triaged keys from the DB."""
+        if self._auto_triage_seen is None:
+            from triage_store import store
+            self._auto_triage_seen = store.get_auto_triaged_keys()
+            logger.info("Auto-triage: loaded %d previously processed keys", len(self._auto_triage_seen))
+        return self._auto_triage_seen
+
+    async def _auto_triage_new_tickets(self, new_keys: list[str]) -> None:
+        """Run AI triage on genuinely new tickets and apply high-confidence priority changes."""
+        from config import AUTO_TRIAGE_MODEL
+        from ai_client import analyze_ticket, get_available_models, validate_suggestions
+        from triage_store import store
+        from jira_client import JiraClient
+
+        # Check model is available
+        available_ids = {m.id for m in get_available_models()}
+        if AUTO_TRIAGE_MODEL not in available_ids:
+            logger.warning("Auto-triage: model %s not available (missing API key?), skipping", AUTO_TRIAGE_MODEL)
+            return
+
+        seen = self._load_auto_triage_seen()
+        keys_to_process = [k for k in new_keys if k not in seen]
+        if not keys_to_process:
+            return
+
+        logger.info("Auto-triage: processing %d new tickets", len(keys_to_process))
+        client = JiraClient()
+        loop = asyncio.get_event_loop()
+
+        for key in keys_to_process:
+            try:
+                with self._lock:
+                    issue = self._all_issues.get(key)
+                if not issue:
+                    continue
+
+                result = await loop.run_in_executor(
+                    None, analyze_ticket, issue, AUTO_TRIAGE_MODEL
+                )
+                result.suggestions = validate_suggestions(key, result.suggestions)
+                store.save(result)
+
+                # Auto-apply priority changes with confidence >= 0.7
+                for s in result.suggestions:
+                    if s.field == "priority" and s.confidence >= 0.7:
+                        await loop.run_in_executor(
+                            None, client.update_priority, key, s.suggested_value
+                        )
+                        logger.info(
+                            "Auto-triage: %s priority %s → %s (conf=%.2f)",
+                            key, s.current_value, s.suggested_value, s.confidence,
+                        )
+
+                store.mark_auto_triaged(key)
+                seen.add(key)
+                logger.info("Auto-triage: %s completed (%d suggestions)", key, len(result.suggestions))
+
+            except Exception:
+                logger.exception("Auto-triage: failed for %s", key)
 
     # ------------------------------------------------------------------
     # Background task lifecycle
@@ -286,9 +363,11 @@ class IssueCache:
         while True:
             await asyncio.sleep(_REFRESH_INTERVAL)
             try:
-                await asyncio.get_event_loop().run_in_executor(
+                new_keys = await asyncio.get_event_loop().run_in_executor(
                     None, self._incremental_refresh
                 )
+                if new_keys:
+                    await self._auto_triage_new_tickets(new_keys)
             except Exception:
                 logger.exception("Cache: incremental refresh failed")
 

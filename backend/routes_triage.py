@@ -7,10 +7,10 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from ai_client import analyze_ticket, get_available_models
+from ai_client import analyze_ticket, get_available_models, validate_suggestions
 from issue_cache import cache
 from jira_client import JiraClient
-from models import TriageAnalyzeRequest, TriageApplyRequest
+from models import TriageAnalyzeRequest, TriageApplyRequest, TriageFieldAction, TriageDismissRequest
 from triage_store import store
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,7 @@ async def analyze(req: TriageAnalyzeRequest) -> list[dict[str, Any]]:
 
         try:
             result = analyze_ticket(issue, req.model)
+            result.suggestions = validate_suggestions(key, result.suggestions)
             store.save(result)
             results.append(result.model_dump())
         except Exception as exc:
@@ -100,6 +101,11 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
 
         try:
             if field_name == "priority":
+                from ai_client import _get_valid_priorities
+                valid = _get_valid_priorities()
+                if s.suggested_value not in valid:
+                    errors.append({"field": field_name, "error": f"Invalid priority '{s.suggested_value}'. Valid: {', '.join(sorted(valid))}"})
+                    continue
                 _client.update_priority(req.key, s.suggested_value)
                 applied.append(field_name)
 
@@ -150,3 +156,85 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
     store.delete(req.key)
 
     return {"key": req.key, "applied": applied, "errors": errors}
+
+
+@router.post("/apply-field")
+async def apply_single_field(req: TriageFieldAction) -> dict[str, Any]:
+    """Apply a single suggestion field to Jira and remove it from the stored suggestion."""
+    suggestion = store.get(req.key)
+    if not suggestion:
+        raise HTTPException(status_code=404, detail=f"No suggestion for {req.key}")
+
+    by_field = {s.field: s for s in suggestion.suggestions}
+    s = by_field.get(req.field)
+    if not s:
+        raise HTTPException(status_code=404, detail=f"No suggestion for field '{req.field}' on {req.key}")
+
+    # Apply the field to Jira
+    try:
+        if req.field == "priority":
+            from ai_client import _get_valid_priorities
+            valid = _get_valid_priorities()
+            if s.suggested_value not in valid:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid priority '{s.suggested_value}'. Valid: {', '.join(sorted(valid))}",
+                )
+            _client.update_priority(req.key, s.suggested_value)
+
+        elif req.field == "assignee":
+            from config import JIRA_PROJECT
+            users = _client.get_users_assignable(JIRA_PROJECT)
+            account_id = None
+            for u in users:
+                if u.get("displayName", "").lower() == s.suggested_value.lower():
+                    account_id = u.get("accountId")
+                    break
+            if not account_id:
+                raise HTTPException(status_code=400, detail=f"Could not find user: {s.suggested_value}")
+            _client.assign_issue(req.key, account_id)
+
+        elif req.field == "status":
+            transitions = _client.get_transitions(req.key)
+            transition_id = None
+            for t in transitions:
+                if t.get("name", "").lower() == s.suggested_value.lower():
+                    transition_id = t.get("id")
+                    break
+            if not transition_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No transition to '{s.suggested_value}' available",
+                )
+            _client.transition_issue(req.key, transition_id)
+
+        elif req.field == "comment":
+            _client.add_comment(req.key, s.suggested_value)
+
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported field: {req.field}")
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # Remove the field from the stored suggestion (deletes row if none left)
+    remaining = store.remove_field(req.key, req.field)
+
+    return {
+        "key": req.key,
+        "field": req.field,
+        "applied": True,
+        "remaining_suggestions": remaining.model_dump() if remaining else None,
+    }
+
+
+@router.post("/dismiss")
+async def dismiss_suggestion(req: TriageDismissRequest) -> dict[str, Any]:
+    """Dismiss (delete) all suggestions for a ticket."""
+    existing = store.get(req.key)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"No suggestion for {req.key}")
+    store.delete(req.key)
+    return {"key": req.key, "dismissed": True}

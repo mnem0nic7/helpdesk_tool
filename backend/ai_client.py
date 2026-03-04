@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -69,7 +70,7 @@ def extract_adf_text(adf: dict | None) -> str:
 # Prompt construction
 # ---------------------------------------------------------------------------
 
-KNOWN_PRIORITIES = ["Highest", "High", "Medium", "Low", "Lowest"]
+KNOWN_PRIORITIES = ["Highest", "High", "Medium", "Low", "New"]
 
 KNOWN_STATUSES = [
     "New", "Open", "Assigned", "In Progress", "Work in Progress",
@@ -299,3 +300,137 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
         model_used=model_id,
         created_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Suggestion validation against live Jira data
+# ---------------------------------------------------------------------------
+
+# TTL-cached lookups to avoid hammering the Jira API on every validation.
+_priority_cache: tuple[float, set[str]] = (0.0, set())
+_user_cache: tuple[float, dict[str, str]] = (0.0, {})  # display_name_lower -> accountId
+_CACHE_TTL = 600  # 10 minutes
+
+
+def _get_valid_priorities() -> set[str]:
+    """Return the set of valid priority names, cached with TTL."""
+    global _priority_cache
+    now = time.monotonic()
+    if _priority_cache[1] and now - _priority_cache[0] < _CACHE_TTL:
+        return _priority_cache[1]
+
+    from jira_client import JiraClient
+    try:
+        client = JiraClient()
+        raw = client.get_priorities()
+        names = {p.get("name", "") for p in raw if p.get("name")}
+        _priority_cache = (now, names)
+        logger.info("Validation: cached %d valid priorities: %s", len(names), names)
+        return names
+    except Exception:
+        logger.exception("Validation: failed to fetch priorities from Jira")
+        # Fall back to hardcoded list so we don't block analysis
+        return set(KNOWN_PRIORITIES)
+
+
+def _get_valid_users() -> dict[str, str]:
+    """Return {display_name_lower: accountId} for assignable users, cached with TTL."""
+    global _user_cache
+    now = time.monotonic()
+    if _user_cache[1] and now - _user_cache[0] < _CACHE_TTL:
+        return _user_cache[1]
+
+    from jira_client import JiraClient
+    from config import JIRA_PROJECT
+    try:
+        client = JiraClient()
+        raw = client.get_users_assignable(JIRA_PROJECT)
+        users = {
+            u.get("displayName", "").lower(): u.get("accountId", "")
+            for u in raw
+            if u.get("displayName") and u.get("accountId")
+        }
+        _user_cache = (now, users)
+        logger.info("Validation: cached %d assignable users", len(users))
+        return users
+    except Exception:
+        logger.exception("Validation: failed to fetch assignable users from Jira")
+        return {}
+
+
+def _get_reachable_statuses(key: str) -> set[str]:
+    """Return the set of status names reachable via transitions for an issue."""
+    from jira_client import JiraClient
+    try:
+        client = JiraClient()
+        transitions = client.get_transitions(key)
+        names = set()
+        for t in transitions:
+            # Transition name (e.g. "Start Progress")
+            names.add(t.get("name", "").lower())
+            # Target status name (e.g. "In Progress")
+            to_status = t.get("to", {})
+            if isinstance(to_status, dict):
+                names.add(to_status.get("name", "").lower())
+        return names
+    except Exception:
+        logger.exception("Validation: failed to fetch transitions for %s", key)
+        return set()
+
+
+def validate_suggestions(key: str, suggestions: list[TriageSuggestion]) -> list[TriageSuggestion]:
+    """Filter out suggestions that reference invalid priorities, users, or statuses.
+
+    Returns the subset of suggestions that are valid. Invalid ones are logged
+    and silently dropped so the user only sees actionable suggestions.
+    """
+    if not suggestions:
+        return suggestions
+
+    valid: list[TriageSuggestion] = []
+    priorities: set[str] | None = None
+    users: dict[str, str] | None = None
+    reachable: set[str] | None = None
+
+    for s in suggestions:
+        if s.field == "priority":
+            if priorities is None:
+                priorities = _get_valid_priorities()
+            if s.suggested_value not in priorities:
+                logger.warning(
+                    "Validation: dropping %s priority suggestion '%s' — "
+                    "not in valid priorities %s",
+                    key, s.suggested_value, priorities,
+                )
+                continue
+
+        elif s.field == "assignee":
+            if users is None:
+                users = _get_valid_users()
+            if s.suggested_value.lower() not in users:
+                logger.warning(
+                    "Validation: dropping %s assignee suggestion '%s' — "
+                    "not an assignable user",
+                    key, s.suggested_value,
+                )
+                continue
+
+        elif s.field == "status":
+            if reachable is None:
+                reachable = _get_reachable_statuses(key)
+            if s.suggested_value.lower() not in reachable:
+                logger.warning(
+                    "Validation: dropping %s status suggestion '%s' — "
+                    "not a reachable transition (available: %s)",
+                    key, s.suggested_value, reachable,
+                )
+                continue
+
+        # comment and other fields pass through without validation
+        valid.append(s)
+
+    dropped = len(suggestions) - len(valid)
+    if dropped:
+        logger.info("Validation: %s — kept %d/%d suggestions (%d invalid dropped)",
+                     key, len(valid), len(suggestions), dropped)
+    return valid

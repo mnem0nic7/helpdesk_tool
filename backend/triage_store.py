@@ -29,6 +29,10 @@ class TriageStore:
                 "(key TEXT PRIMARY KEY, data TEXT, model TEXT, "
                 "created_at TEXT, updated_at TEXT)"
             )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS auto_triaged "
+                "(key TEXT PRIMARY KEY, processed_at TEXT)"
+            )
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path)
@@ -76,6 +80,42 @@ class TriageStore:
                 "SELECT data FROM suggestions ORDER BY updated_at DESC"
             ).fetchall()
         return [TriageResult(**json.loads(row[0])) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Auto-triage tracking
+    # ------------------------------------------------------------------
+
+    def mark_auto_triaged(self, key: str) -> None:
+        """Record that a ticket has been auto-triaged."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO auto_triaged (key, processed_at) VALUES (?, ?)",
+                (key, now),
+            )
+
+    def get_auto_triaged_keys(self) -> set[str]:
+        """Return all keys that have been auto-triaged."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT key FROM auto_triaged").fetchall()
+        return {row[0] for row in rows}
+
+    # ------------------------------------------------------------------
+    # Per-field manipulation
+    # ------------------------------------------------------------------
+
+    def remove_field(self, key: str, field: str) -> TriageResult | None:
+        """Remove a single field from a suggestion. Deletes the whole row if no
+        suggestions remain. Returns the updated result or None if deleted."""
+        result = self.get(key)
+        if not result:
+            return None
+        result.suggestions = [s for s in result.suggestions if s.field != field]
+        if not result.suggestions:
+            self.delete(key)
+            return None
+        self.save(result)
+        return result
 
     def __repr__(self) -> str:
         return f"TriageStore(db={self._db_path})"

@@ -35,18 +35,23 @@ function ConfidenceBar({ value }: { value: number }) {
 }
 
 // ---------------------------------------------------------------------------
-// Suggestion card
+// Suggestion card — immediate accept / decline per field
 // ---------------------------------------------------------------------------
 
 function SuggestionCard({
   suggestion,
-  accepted,
-  onToggle,
+  issueKey,
+  onAccepted,
+  onDeclined,
 }: {
   suggestion: TriageSuggestion;
-  accepted: boolean;
-  onToggle: () => void;
+  issueKey: string;
+  onAccepted: (key: string, field: string) => void;
+  onDeclined: (key: string, field: string) => void;
 }) {
+  const [status, setStatus] = useState<"idle" | "applying" | "applied" | "error">("idle");
+  const [errorMsg, setErrorMsg] = useState("");
+
   const fieldLabels: Record<string, string> = {
     priority: "Priority",
     status: "Status",
@@ -55,12 +60,31 @@ function SuggestionCard({
     request_type: "Request Type",
   };
 
+  async function handleAccept() {
+    setStatus("applying");
+    setErrorMsg("");
+    try {
+      await api.applyTriageField(issueKey, suggestion.field);
+      setStatus("applied");
+      onAccepted(issueKey, suggestion.field);
+    } catch (err) {
+      setStatus("error");
+      setErrorMsg(err instanceof Error ? err.message : "Failed to apply");
+    }
+  }
+
+  function handleDecline() {
+    onDeclined(issueKey, suggestion.field);
+  }
+
   return (
     <div
       className={`rounded-lg border p-3 transition-colors ${
-        accepted
-          ? "border-blue-300 bg-blue-50"
-          : "border-gray-200 bg-white"
+        status === "applied"
+          ? "border-green-300 bg-green-50"
+          : status === "error"
+            ? "border-red-300 bg-red-50"
+            : "border-gray-200 bg-white"
       }`}
     >
       <div className="flex items-start justify-between gap-3">
@@ -85,49 +109,57 @@ function SuggestionCard({
             </span>
           </div>
           <p className="mt-1 text-xs text-gray-500">{suggestion.reasoning}</p>
+          {status === "error" && (
+            <p className="mt-1 text-xs text-red-600">{errorMsg}</p>
+          )}
+          {status === "applied" && (
+            <p className="mt-1 text-xs text-green-600">Applied successfully</p>
+          )}
         </div>
-        <button
-          type="button"
-          onClick={onToggle}
-          className={`shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
-            accepted
-              ? "border-blue-500 bg-blue-600 text-white hover:bg-blue-700"
-              : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-          }`}
-        >
-          {accepted ? "Accepted" : "Accept"}
-        </button>
+        <div className="flex shrink-0 gap-1.5">
+          {status !== "applied" && (
+            <>
+              <button
+                type="button"
+                disabled={status === "applying"}
+                onClick={handleAccept}
+                className="rounded-md border border-green-500 bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-700 disabled:opacity-50"
+              >
+                {status === "applying" ? "Applying…" : "Accept"}
+              </button>
+              <button
+                type="button"
+                disabled={status === "applying"}
+                onClick={handleDecline}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+              >
+                Decline
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Ticket triage review panel
+// Ticket triage review panel — per-field actions, no batch apply
 // ---------------------------------------------------------------------------
 
 function TriageReviewPanel({
   result,
-  onApply,
-  applying,
+  onFieldAccepted,
+  onFieldDeclined,
+  onDismissAll,
+  dismissing,
 }: {
   result: TriageResult;
-  onApply: (key: string, fields: string[]) => void;
-  applying: boolean;
+  onFieldAccepted: (key: string, field: string) => void;
+  onFieldDeclined: (key: string, field: string) => void;
+  onDismissAll: (key: string) => void;
+  dismissing: boolean;
 }) {
-  const [acceptedFields, setAcceptedFields] = useState<Set<string>>(
-    () => new Set(result.suggestions.map((s) => s.field))
-  );
-
-  function toggleField(field: string) {
-    setAcceptedFields((prev) => {
-      const next = new Set(prev);
-      if (next.has(field)) next.delete(field);
-      else next.add(field);
-      return next;
-    });
-  }
-
   if (result.suggestions.length === 0) {
     return (
       <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">
@@ -146,27 +178,23 @@ function TriageReviewPanel({
             via {result.model_used}
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500">
-            {acceptedFields.size}/{result.suggestions.length} accepted
-          </span>
-          <button
-            type="button"
-            disabled={acceptedFields.size === 0 || applying}
-            onClick={() => onApply(result.key, Array.from(acceptedFields))}
-            className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {applying ? "Applying…" : "Apply Accepted"}
-          </button>
-        </div>
+        <button
+          type="button"
+          disabled={dismissing}
+          onClick={() => onDismissAll(result.key)}
+          className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50"
+        >
+          {dismissing ? "Dismissing…" : "Dismiss All"}
+        </button>
       </div>
       <div className="space-y-2 p-4">
         {result.suggestions.map((s) => (
           <SuggestionCard
             key={s.field}
             suggestion={s}
-            accepted={acceptedFields.has(s.field)}
-            onToggle={() => toggleField(s.field)}
+            issueKey={result.key}
+            onAccepted={onFieldAccepted}
+            onDeclined={onFieldDeclined}
           />
         ))}
       </div>
@@ -246,8 +274,8 @@ export default function TriagePage() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState("");
 
-  // Applying state per ticket
-  const [applyingKey, setApplyingKey] = useState<string | null>(null);
+  // Dismissing state per ticket
+  const [dismissingKey, setDismissingKey] = useState<string | null>(null);
 
   // Re-analysis confirmation dialog
   const [confirmReeval, setConfirmReeval] = useState<{
@@ -350,27 +378,53 @@ export default function TriagePage() {
     setConfirmReeval(null);
   }
 
-  // Apply suggestions
-  async function handleApply(key: string, fields: string[]) {
-    setApplyingKey(key);
+  // Per-field accept: after the API call succeeds, remove that field from local state
+  function handleFieldAccepted(key: string, field: string) {
+    setLocalResults((prev) => {
+      const result = prev[key];
+      if (!result) return prev;
+      const remaining = result.suggestions.filter((s) => s.field !== field);
+      if (remaining.length === 0) {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      return { ...prev, [key]: { ...result, suggestions: remaining } };
+    });
+    queryClient.invalidateQueries({ queryKey: ["triage-suggestions"] });
+    queryClient.invalidateQueries({ queryKey: ["triage-tickets"] });
+  }
+
+  // Per-field decline: remove that field from local state only (no API call)
+  function handleFieldDeclined(key: string, field: string) {
+    setLocalResults((prev) => {
+      const result = prev[key];
+      if (!result) return prev;
+      const remaining = result.suggestions.filter((s) => s.field !== field);
+      if (remaining.length === 0) {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      return { ...prev, [key]: { ...result, suggestions: remaining } };
+    });
+  }
+
+  // Dismiss all suggestions for a ticket
+  async function handleDismissAll(key: string) {
+    setDismissingKey(key);
     try {
-      await api.applyTriageSuggestion(key, fields);
-      // Remove from local state
+      await api.dismissTriageSuggestion(key);
       setLocalResults((prev) => {
         const next = { ...prev };
         delete next[key];
         return next;
       });
-      // Refresh
       queryClient.invalidateQueries({ queryKey: ["triage-suggestions"] });
-      queryClient.invalidateQueries({ queryKey: ["triage-tickets"] });
-      api.refreshCacheIncremental().then(() => {
-        queryClient.invalidateQueries({ queryKey: ["triage-tickets"] });
-      });
     } catch {
-      // Error handling is visible through the review panel
+      // Error visible in UI
     } finally {
-      setApplyingKey(null);
+      setDismissingKey(null);
     }
   }
 
@@ -604,8 +658,10 @@ export default function TriagePage() {
               <TriageReviewPanel
                 key={r.key}
                 result={r}
-                onApply={handleApply}
-                applying={applyingKey === r.key}
+                onFieldAccepted={handleFieldAccepted}
+                onFieldDeclined={handleFieldDeclined}
+                onDismissAll={handleDismissAll}
+                dismissing={dismissingKey === r.key}
               />
             ))}
           </div>

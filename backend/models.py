@@ -218,6 +218,19 @@ class TriageApplyRequest(BaseModel):
     accepted_fields: list[str]
 
 
+class TriageFieldAction(BaseModel):
+    """Apply a single field suggestion to a ticket."""
+
+    key: str
+    field: str
+
+
+class TriageDismissRequest(BaseModel):
+    """Dismiss (delete) all suggestions for a ticket."""
+
+    key: str
+
+
 class TriageAnalyzeRequest(BaseModel):
     """Request to analyze one or more tickets."""
 
