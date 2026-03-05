@@ -26,6 +26,7 @@ from routes_cache import router as cache_router
 from routes_chart import router as chart_router
 from routes_triage import router as triage_router
 from routes_auth import router as auth_router
+from routes_sla import router as sla_router
 from issue_cache import cache
 
 
@@ -102,6 +103,7 @@ app.include_router(export_router)
 app.include_router(cache_router)
 app.include_router(chart_router)
 app.include_router(triage_router)
+app.include_router(sla_router)
 
 # ---------------------------------------------------------------------------
 # Routes

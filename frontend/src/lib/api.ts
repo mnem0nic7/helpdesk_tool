@@ -314,6 +314,61 @@ export interface AIModel {
   provider: string;
 }
 
+// ---------------------------------------------------------------------------
+// Custom SLA interfaces
+// ---------------------------------------------------------------------------
+
+/** A single SLA computation result per ticket per timer. */
+export interface SLATicketTimer {
+  status: "met" | "breached" | "running";
+  elapsed_minutes: number;
+  target_minutes: number;
+}
+
+/** Per-ticket row with SLA data from GET /api/sla/metrics. */
+export interface SLATicketRow extends TicketRow {
+  sla_first_response: SLATicketTimer | null;
+  sla_resolution: SLATicketTimer | null;
+}
+
+/** Summary stats for a single SLA timer. */
+export interface SLATimerStats {
+  total: number;
+  met: number;
+  breached: number;
+  running: number;
+  compliance_pct: number;
+  avg_elapsed_minutes: number;
+}
+
+/** Full response from GET /api/sla/metrics. */
+export interface SLAMetricsResponse {
+  summary: {
+    first_response: SLATimerStats;
+    resolution: SLATimerStats;
+  };
+  tickets: SLATicketRow[];
+  settings: SLASettings;
+  targets: SLATarget[];
+}
+
+/** SLA target configuration. */
+export interface SLATarget {
+  id: number;
+  sla_type: "first_response" | "resolution";
+  dimension: "default" | "priority" | "request_type";
+  dimension_value: string;
+  target_minutes: number;
+}
+
+/** Business hours settings. */
+export interface SLASettings {
+  business_hours_start: string;
+  business_hours_end: string;
+  business_timezone: string;
+  business_days: string;
+}
+
 /** Cache status returned by GET /api/cache/status. */
 export interface CacheStatus {
   initialized: boolean;
@@ -419,6 +474,49 @@ export const api = {
   /** Fetch list of tickets currently breaching SLA. */
   getSLABreaches(): Promise<TicketRow[]> {
     return fetchJSON<{ breaches: TicketRow[] }>("/api/sla/breaches").then(r => r.breaches);
+  },
+
+  // -------------------------------------------------------------------------
+  // Custom SLA
+  // -------------------------------------------------------------------------
+
+  /** Fetch computed SLA metrics with optional date range filter. */
+  getSLAMetrics(dateFrom?: string, dateTo?: string): Promise<SLAMetricsResponse> {
+    const params: Record<string, string> = {};
+    if (dateFrom) params.date_from = dateFrom;
+    if (dateTo) params.date_to = dateTo;
+    return fetchJSON<SLAMetricsResponse>(`/api/sla/metrics${buildQuery(params)}`);
+  },
+
+  /** Fetch SLA configuration (targets + settings). */
+  getSLAConfig(): Promise<{ settings: SLASettings; targets: SLATarget[] }> {
+    return fetchJSON("/api/sla/config");
+  },
+
+  /** Create or update an SLA target. */
+  setSLATarget(target: { sla_type: string; dimension: string; dimension_value: string; target_minutes: number }): Promise<SLATarget> {
+    return postJSON("/api/sla/config/targets", target);
+  },
+
+  /** Delete an SLA target. */
+  async deleteSLATarget(id: number): Promise<void> {
+    const res = await fetch(`/api/sla/config/targets/${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`DELETE failed (${res.status}): ${text}`);
+    }
+  },
+
+  /** Update business hours settings. */
+  updateSLASettings(settings: Partial<SLASettings>): Promise<SLASettings> {
+    return fetch("/api/sla/config/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    }).then(async (res) => {
+      if (!res.ok) throw new Error(`PUT failed (${res.status})`);
+      return res.json();
+    });
   },
 
   /** Fetch assignable users for the project. */
