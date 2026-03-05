@@ -11,6 +11,10 @@
 
 async function fetchJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
+  if (res.status === 401) {
+    window.location.href = "/api/auth/login";
+    throw new Error("Not authenticated");
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`GET ${url} failed (${res.status}): ${text}`);
@@ -24,6 +28,10 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  if (res.status === 401) {
+    window.location.href = "/api/auth/login";
+    throw new Error("Not authenticated");
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`POST ${url} failed (${res.status}): ${text}`);
@@ -292,6 +300,12 @@ export interface CacheStatus {
   jira_base_url?: string;
 }
 
+/** Current user info from /api/auth/me. */
+export interface UserInfo {
+  email: string;
+  name: string;
+}
+
 // ---------------------------------------------------------------------------
 // Query-parameter helpers
 // ---------------------------------------------------------------------------
@@ -330,6 +344,33 @@ function buildQuery(params: any): string {
 // ---------------------------------------------------------------------------
 
 export const api = {
+  // -------------------------------------------------------------------------
+  // Auth
+  // -------------------------------------------------------------------------
+
+  /** Fetch the current user's info (returns null if not logged in). */
+  async getMe(): Promise<UserInfo | null> {
+    try {
+      return await fetchJSON<UserInfo>("/api/auth/me");
+    } catch {
+      return null;
+    }
+  },
+
+  /** Log out the current user. */
+  async logout(): Promise<void> {
+    const res = await fetch("/api/auth/logout", { method: "POST" });
+    if (res.redirected) {
+      window.location.href = res.url;
+    } else {
+      window.location.href = "/";
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // Metrics
+  // -------------------------------------------------------------------------
+
   /** Fetch aggregate dashboard metrics, optionally filtered by date range. */
   getMetrics(params: MetricsQueryParams = {}): Promise<MetricsResponse> {
     return fetchJSON<MetricsResponse>(`/api/metrics${buildQuery(params)}`);
@@ -408,6 +449,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config),
     });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Export failed (${res.status}): ${text}`);
