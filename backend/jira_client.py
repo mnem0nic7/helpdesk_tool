@@ -181,7 +181,58 @@ class JiraClient:
             )
 
         logger.info("search_all complete: %d issues for JQL: %s", len(all_issues), jql)
+
+        # Fetch full comments for tickets where the search API truncated them
+        self._backfill_comments(all_issues)
+
         return all_issues
+
+    # ------------------------------------------------------------------
+    # Comment backfill
+    # ------------------------------------------------------------------
+
+    def _backfill_comments(self, issues: list[dict[str, Any]]) -> None:
+        """Fetch all comments for issues where the search API truncated them.
+
+        The Jira search API limits comments to ~5 per issue. For tickets
+        with more comments, fetch the full list via the issue comment endpoint.
+        """
+        truncated = []
+        for iss in issues:
+            comment_obj = iss.get("fields", {}).get("comment", {})
+            total = comment_obj.get("total", 0)
+            returned = len(comment_obj.get("comments", []))
+            if total > returned:
+                truncated.append(iss)
+
+        if not truncated:
+            return
+
+        logger.info("Backfilling comments for %d issues (truncated by search API)", len(truncated))
+
+        for iss in truncated:
+            key = iss.get("key", "")
+            try:
+                url = f"{self.base_url}/rest/api/3/issue/{key}/comment"
+                all_comments: list[dict[str, Any]] = []
+                start_at = 0
+                while True:
+                    resp = self.session.get(url, params={"startAt": start_at, "maxResults": 100})
+                    resp.raise_for_status()
+                    data = resp.json()
+                    all_comments.extend(data.get("comments", []))
+                    if start_at + data.get("maxResults", 100) >= data.get("total", 0):
+                        break
+                    start_at += data.get("maxResults", 100)
+
+                iss["fields"]["comment"] = {
+                    "comments": all_comments,
+                    "total": len(all_comments),
+                    "maxResults": len(all_comments),
+                    "startAt": 0,
+                }
+            except Exception:
+                logger.warning("Failed to backfill comments for %s", key, exc_info=True)
 
     # ------------------------------------------------------------------
     # Request type enrichment
