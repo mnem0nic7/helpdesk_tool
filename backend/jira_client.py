@@ -165,49 +165,75 @@ class JiraClient:
             )
 
         logger.info("search_all complete: %d issues for JQL: %s", len(all_issues), jql)
-
-        # Enrich with request type from JSM API (customfield_10010 is null in REST v3)
-        self._enrich_request_types(all_issues)
-
         return all_issues
 
     # ------------------------------------------------------------------
     # Request type enrichment
     # ------------------------------------------------------------------
 
-    def _enrich_request_types(self, issues: list[dict[str, Any]]) -> None:
-        """Fetch request types via JSM API and inject into issue fields.
+    def enrich_request_types(
+        self,
+        issues: list[dict[str, Any]],
+        existing_cache: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        """Fetch request types via JSM per-ticket API and inject into issue fields.
 
         The standard Jira REST API returns null for customfield_10010,
-        so we use GET /rest/servicedeskapi/request to get the data.
+        so we fetch each ticket's request type individually via
+        GET /rest/servicedeskapi/request/{key}?expand=requestType.
+
+        If *existing_cache* is provided, carries forward already-known request
+        types so we only call the JSM API for truly missing tickets.
         """
-        keys = {i.get("key", "") for i in issues if i.get("key")}
-        if not keys:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # First, carry forward known request types from existing cache
+        if existing_cache:
+            carried = 0
+            for issue in issues:
+                key = issue.get("key", "")
+                cached = existing_cache.get(key, {})
+                cached_rt = (cached.get("fields", {}).get("customfield_10010") or {}).get("requestType")
+                if cached_rt:
+                    issue.setdefault("fields", {})["customfield_10010"] = {"requestType": cached_rt}
+                    carried += 1
+            if carried:
+                logger.info("Carried forward %d request types from cache", carried)
+
+        # Find tickets still missing request type
+        keys_to_enrich = [
+            i.get("key", "") for i in issues
+            if i.get("key") and not (
+                i.get("fields", {}).get("customfield_10010") or {}
+            ).get("requestType")
+        ]
+        if not keys_to_enrich:
+            logger.info("All issues already have request type data, no enrichment needed")
             return
 
-        rt_map: dict[str, dict] = {}  # key -> {"name": ..., "id": ...}
-        start = 0
-        try:
-            while True:
-                url = f"{self.base_url}/rest/servicedeskapi/request"
-                resp = self.session.get(url, params={
-                    "requestOwnership": "ALL_REQUESTS",
-                    "start": start,
-                    "limit": 100,
-                })
-                resp.raise_for_status()
-                data = resp.json()
-                for req in data.get("values", []):
-                    ikey = req.get("issueKey", "")
-                    rt = req.get("requestType")
-                    if ikey in keys and rt:
-                        rt_map[ikey] = rt
-                if data.get("isLastPage", True):
-                    break
-                start += len(data.get("values", []))
-        except Exception:
-            logger.exception("Failed to fetch request types from JSM API")
-            return
+        logger.info("Enriching %d issues with request type data via JSM API", len(keys_to_enrich))
+
+        rt_map: dict[str, dict] = {}
+
+        def _fetch_rt(key: str) -> tuple[str, dict | None]:
+            try:
+                url = f"{self.base_url}/rest/servicedeskapi/request/{key}?expand=requestType"
+                resp = self.session.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    rt = data.get("requestType")
+                    if rt and rt.get("name"):
+                        return key, rt
+                return key, None
+            except Exception:
+                return key, None
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_fetch_rt, k): k for k in keys_to_enrich}
+            for future in as_completed(futures):
+                key, rt = future.result()
+                if rt:
+                    rt_map[key] = rt
 
         # Inject into issue fields as customfield_10010
         enriched = 0
@@ -218,7 +244,7 @@ class JiraClient:
                 fields["customfield_10010"] = {"requestType": rt_map[key]}
                 enriched += 1
 
-        logger.info("Enriched %d/%d issues with request type data", enriched, len(issues))
+        logger.info("Enriched %d/%d issues with request type data", enriched, len(keys_to_enrich))
 
     # ------------------------------------------------------------------
     # Single-issue operations

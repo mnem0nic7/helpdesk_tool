@@ -201,6 +201,10 @@ class IssueCache:
             all_issues = self._client.search_all(_ALL_JQL)
             logger.info("Cache: fetched %d total issues", len(all_issues))
 
+            # Enrich request types, carrying forward from existing cache
+            existing = self._all_issues if self._all_issues else None
+            self._client.enrich_request_types(all_issues, existing_cache=existing)
+
             new_all: dict[str, dict[str, Any]] = {}
             new_filtered: dict[str, dict[str, Any]] = {}
             for issue in all_issues:
@@ -242,6 +246,10 @@ class IssueCache:
             logger.info("Cache: incremental refresh with JQL: %s", jql)
             updated_issues = self._client.search_all(jql)
             logger.info("Cache: incremental fetched %d issues", len(updated_issues))
+
+            # Enrich request types for the updated batch
+            if updated_issues:
+                self._client.enrich_request_types(updated_issues, existing_cache=self._all_issues)
 
             with self._lock:
                 for issue in updated_issues:
