@@ -407,7 +407,7 @@ class IssueCache:
                                 "Auto-triage: %s priority %s → %s (conf=%.2f)",
                                 key, s.current_value, s.suggested_value, s.confidence,
                             )
-                        elif s.field == "request_type" and s.confidence >= 0.7:
+                        elif s.field == "request_type" and s.confidence >= 0.9:
                             from ai_client import get_request_type_id
                             rt_id = get_request_type_id(s.suggested_value)
                             if rt_id:

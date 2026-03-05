@@ -566,11 +566,12 @@ export const api = {
   },
 
   /** Run auto-triage on cached tickets (background task). Optionally limit count for testing. */
-  runTriageAll(model?: string, limit?: number, reset?: boolean): Promise<{ started: boolean; total_tickets: number }> {
+  runTriageAll(model?: string, limit?: number, reset?: boolean, reprocess?: boolean): Promise<{ started: boolean; total_tickets: number }> {
     const body: Record<string, unknown> = {};
     if (model) body.model = model;
     if (limit) body.limit = limit;
     if (reset) body.reset = true;
+    if (reprocess) body.reprocess = true;
     return postJSON("/api/triage/run-all", body);
   },
 };

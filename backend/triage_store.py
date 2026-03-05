@@ -134,6 +134,14 @@ class TriageStore:
         with self._conn() as conn:
             conn.execute("DELETE FROM auto_triaged")
 
+    def clear_auto_triaged_keys(self, keys: list[str]) -> None:
+        """Delete specific keys from auto_triaged so they can be re-processed."""
+        if not keys:
+            return
+        placeholders = ",".join("?" for _ in keys)
+        with self._conn() as conn:
+            conn.execute(f"DELETE FROM auto_triaged WHERE key IN ({placeholders})", keys)
+
     def log_change(
         self,
         key: str,

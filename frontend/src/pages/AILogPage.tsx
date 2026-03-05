@@ -35,13 +35,16 @@ export default function AILogPage() {
 
   const isRunning = runStatus?.running ?? false;
 
-  async function handleRun(limit?: number, reset?: boolean) {
+  async function handleRun(limit?: number, reset?: boolean, reprocess?: boolean) {
     setStarting(true);
     setMessage(null);
     try {
-      const res = await api.runTriageAll(undefined, limit, reset);
+      const res = await api.runTriageAll(undefined, limit, reset, reprocess);
       if (res.total_tickets === 0) {
-        setMessage({ text: "All tickets have already been processed. Use \u201cRun on All\u201d to reprocess.", type: "info" });
+        const msg = reprocess
+          ? "No previously processed tickets found."
+          : "All tickets have already been processed. Use \u201cReprocess Done\u201d or \u201cRerun All\u201d.";
+        setMessage({ text: msg, type: "info" });
       }
       queryClient.invalidateQueries({ queryKey: ["triage-run-status"] });
     } catch (err) {
@@ -89,6 +92,13 @@ export default function AILogPage() {
             className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {starting ? "Starting…" : isRunning ? "Running…" : "Run Remaining"}
+          </button>
+          <button
+            onClick={() => handleRun(undefined, false, true)}
+            disabled={starting || isRunning}
+            className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {starting ? "Starting…" : isRunning ? "Running…" : "Reprocess Done"}
           </button>
           <button
             onClick={() => handleRun(undefined, true)}
