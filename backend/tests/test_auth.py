@@ -166,7 +166,7 @@ class TestAuthMiddleware:
         from auth import create_session, get_session
         sid = create_session("test@example.com", "Test User")
         auth_client.cookies.set("session_id", sid)
-        resp = auth_client.post("/api/auth/logout", follow_redirects=False)
-        assert resp.status_code == 302
+        resp = auth_client.post("/api/auth/logout")
+        assert resp.status_code == 200
         # Session should be deleted
         assert get_session(sid) is None
