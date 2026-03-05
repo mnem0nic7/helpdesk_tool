@@ -58,7 +58,7 @@ _SLA_FIELDS: dict[str, str] = {
 _PRIORITY_ORDER: list[str] = ["Highest", "High", "Medium", "Low", "Lowest"]
 
 # Stale threshold in calendar days
-_STALE_DAYS: int = 7
+_STALE_DAYS: int = 1
 
 # Age-bucket boundaries (upper-bound in calendar days, label)
 _AGE_BUCKETS: list[tuple[float, str]] = [

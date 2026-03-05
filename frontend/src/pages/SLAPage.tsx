@@ -153,7 +153,7 @@ function BreachedTicketsTable({
     if (filterStatus) list = list.filter((t) => t.status === filterStatus);
     if (filterAssignee) list = list.filter((t) => t.assignee === filterAssignee);
     if (openOnly) list = list.filter((t) => t.status_category !== "Done");
-    if (staleOnly) list = list.filter((t) => t.status_category !== "Done" && (t.days_since_update ?? 0) >= 7);
+    if (staleOnly) list = list.filter((t) => t.status_category !== "Done" && (t.days_since_update ?? 0) >= 1);
     return [...list].sort((a, b) => compareTickets(a, b, sortField, sortDir));
   }, [tickets, search, filterPriority, filterStatus, filterAssignee, openOnly, staleOnly, sortField, sortDir]);
 
@@ -246,7 +246,7 @@ function BreachedTicketsTable({
               : "border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
           }`}
         >
-          Stale (7d+)
+          Stale (1d+)
         </button>
         {hasFilters && (
           <button
