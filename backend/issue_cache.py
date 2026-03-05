@@ -201,9 +201,14 @@ class IssueCache:
             all_issues = self._client.search_all(_ALL_JQL)
             logger.info("Cache: fetched %d total issues", len(all_issues))
 
-            # Enrich request types, carrying forward from existing cache
-            existing = self._all_issues if self._all_issues else None
-            self._client.enrich_request_types(all_issues, existing_cache=existing)
+            # Carry forward existing request type data (free, no API calls)
+            if self._all_issues:
+                for issue in all_issues:
+                    key = issue.get("key", "")
+                    cached = self._all_issues.get(key, {})
+                    cached_rt = (cached.get("fields", {}).get("customfield_10010") or {}).get("requestType")
+                    if cached_rt:
+                        issue.setdefault("fields", {})["customfield_10010"] = {"requestType": cached_rt}
 
             new_all: dict[str, dict[str, Any]] = {}
             new_filtered: dict[str, dict[str, Any]] = {}
@@ -286,6 +291,40 @@ class IssueCache:
     def trigger_incremental_refresh(self) -> None:
         """Trigger an incremental refresh (last 10 min of changes)."""
         self._incremental_refresh()
+
+    def enrich_missing_request_types(self) -> int:
+        """Enrich all cached issues that are missing request type data.
+
+        Calls the JSM per-ticket API. Returns the number of newly enriched issues.
+        This is intended for one-time backfill or manual trigger.
+        """
+        issues_to_enrich = []
+        with self._lock:
+            for key, issue in self._all_issues.items():
+                rt = (issue.get("fields", {}).get("customfield_10010") or {}).get("requestType")
+                if not rt:
+                    issues_to_enrich.append(issue)
+
+        if not issues_to_enrich:
+            logger.info("All cached issues already have request type data")
+            return 0
+
+        logger.info("Enriching %d issues missing request type data", len(issues_to_enrich))
+        self._client.enrich_request_types(issues_to_enrich)
+
+        # Count how many were actually enriched
+        enriched = 0
+        for issue in issues_to_enrich:
+            rt = (issue.get("fields", {}).get("customfield_10010") or {}).get("requestType")
+            if rt:
+                enriched += 1
+
+        # Persist to DB
+        if enriched:
+            self._save_all_to_db()
+            logger.info("Persisted %d enriched request types to DB", enriched)
+
+        return enriched
 
     # ------------------------------------------------------------------
     # Auto-triage
