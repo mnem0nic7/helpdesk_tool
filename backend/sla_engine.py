@@ -61,10 +61,18 @@ class SLAConfig:
                     "business_hours_end": "20:00",
                     "business_timezone": "America/New_York",
                     "business_days": "0,1,2,3,4",
+                    "integration_reporters": "OSIJIRAOCC",
                 }
                 conn.executemany(
                     "INSERT INTO sla_settings (key, value) VALUES (?, ?)",
                     list(defaults.items()),
+                )
+            # Migrate: add integration_reporters if missing
+            existing_keys = {r[0] for r in conn.execute("SELECT key FROM sla_settings").fetchall()}
+            if "integration_reporters" not in existing_keys:
+                conn.execute(
+                    "INSERT INTO sla_settings (key, value) VALUES (?, ?)",
+                    ("integration_reporters", "OSIJIRAOCC"),
                 )
 
     # -- Targets --
@@ -229,6 +237,13 @@ def compute_sla_for_issues(
     targets = cfg.get_targets()
     now = datetime.now(timezone.utc)
 
+    # Integration reporter names — their comments count as agent responses
+    integration_names = {
+        n.strip().lower()
+        for n in settings.get("integration_reporters", "").split(",")
+        if n.strip()
+    }
+
     # Filter by created date range
     filtered = []
     for issue in issues:
@@ -272,14 +287,26 @@ def compute_sla_for_issues(
         is_open = status_cat != "Done"
 
         # Reporter
-        reporter_id = (fields.get("reporter") or {}).get("accountId", "")
+        reporter_obj = fields.get("reporter") or {}
+        reporter_id = reporter_obj.get("accountId", "")
+        reporter_name = (reporter_obj.get("displayName") or "").lower()
+
+        # If the reporter is an integration account, their comments ARE agent responses
+        reporter_is_integration = reporter_name in integration_names
 
         # --- First Response ---
         comments = (fields.get("comment") or {}).get("comments", [])
         first_response_time = None
         for comment in comments:
             author_id = (comment.get("author") or {}).get("accountId", "")
-            if author_id and author_id != reporter_id:
+            if not author_id:
+                continue
+            if reporter_is_integration:
+                # Integration reporter: any comment counts as first response
+                first_response_time = _parse_dt(comment.get("created"))
+                break
+            elif author_id != reporter_id:
+                # Normal reporter: only non-reporter comments count
                 first_response_time = _parse_dt(comment.get("created"))
                 break
 

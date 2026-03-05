@@ -245,9 +245,16 @@ function SLASettingsModal({ settings, targets, onClose }: {
                 ))}
               </div>
             </div>
+            <label className="mt-3 block">
+              <span className="text-xs text-gray-500">Integration Reporters (comma-separated display names whose comments count as agent responses)</span>
+              <input type="text" value={localSettings.integration_reporters ?? ""}
+                onChange={(e) => setLocalSettings({ ...localSettings, integration_reporters: e.target.value })}
+                placeholder="e.g. OSIJIRAOCC"
+                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
+            </label>
             <button onClick={saveSettings} disabled={saving}
               className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-              {saving ? "Saving..." : "Save Business Hours"}
+              {saving ? "Saving..." : "Save Settings"}
             </button>
           </div>
 

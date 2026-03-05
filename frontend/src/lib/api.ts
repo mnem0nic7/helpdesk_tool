@@ -367,6 +367,7 @@ export interface SLASettings {
   business_hours_end: string;
   business_timezone: string;
   business_days: string;
+  integration_reporters: string;
 }
 
 /** Cache status returned by GET /api/cache/status. */
