@@ -393,6 +393,8 @@ export interface AlertRule {
   schedule_days: string;
   recipients: string;
   cc: string;
+  custom_subject: string;
+  custom_message: string;
   filters: Record<string, unknown>;
   last_run: string | null;
   last_sent: string | null;

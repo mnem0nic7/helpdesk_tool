@@ -273,10 +273,42 @@ TRIGGER_LABELS = {
 }
 
 
+def _apply_template(template: str, variables: dict[str, str]) -> str:
+    """Replace {var_name} placeholders with values."""
+    result = template
+    for key, val in variables.items():
+        result = result.replace(f"{{{key}}}", val)
+    return result
+
+
 def _render_email(rule: dict, tickets: list[dict]) -> tuple[str, str]:
-    """Render email subject and HTML body for an alert."""
+    """Render email subject and HTML body for an alert.
+
+    Custom templates support these variables:
+      {rule_name}, {trigger_label}, {ticket_count}
+    """
     trigger_label = TRIGGER_LABELS.get(rule["trigger_type"], rule["trigger_type"])
-    subject = f"[OIT Alert] {rule['name']}: {len(tickets)} {trigger_label}"
+    template_vars = {
+        "rule_name": rule["name"],
+        "trigger_label": trigger_label,
+        "ticket_count": str(len(tickets)),
+    }
+
+    # Subject — use custom or default
+    custom_subject = (rule.get("custom_subject") or "").strip()
+    if custom_subject:
+        subject = _apply_template(custom_subject, template_vars)
+    else:
+        subject = f"[OIT Alert] {rule['name']}: {len(tickets)} {trigger_label}"
+
+    # Custom message — inserted above the ticket table
+    custom_message = (rule.get("custom_message") or "").strip()
+    message_html = ""
+    if custom_message:
+        # Convert newlines to <br> for plain-text messages
+        escaped = _apply_template(custom_message, template_vars)
+        escaped = escaped.replace("\n", "<br>")
+        message_html = f'<div style="margin-bottom:16px;font-size:14px;color:#374151;line-height:1.6">{escaped}</div>'
 
     rows_html = ""
     for iss in tickets[:100]:
@@ -306,6 +338,7 @@ def _render_email(rule: dict, tickets: list[dict]) -> tuple[str, str]:
             <p style="margin:4px 0 0;font-size:13px;color:#94a3b8">Alert: {rule['name']} &bull; {len(tickets)} ticket(s)</p>
         </div>
         <div style="border:1px solid #e5e7eb;border-top:none;padding:20px 24px;border-radius:0 0 8px 8px">
+            {message_html}
             <table style="width:100%;border-collapse:collapse;font-size:13px">
                 <thead>
                     <tr style="background:#f9fafb">

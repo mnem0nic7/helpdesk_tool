@@ -48,6 +48,13 @@ class AlertStore:
                     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
                 )
             """)
+            # Migrate: add custom_subject and custom_message if missing
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(alert_rules)").fetchall()}
+            if "custom_subject" not in cols:
+                conn.execute("ALTER TABLE alert_rules ADD COLUMN custom_subject TEXT NOT NULL DEFAULT ''")
+            if "custom_message" not in cols:
+                conn.execute("ALTER TABLE alert_rules ADD COLUMN custom_message TEXT NOT NULL DEFAULT ''")
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS alert_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,8 +101,9 @@ class AlertStore:
             cur = conn.execute(
                 """INSERT INTO alert_rules
                    (name, enabled, trigger_type, trigger_config, frequency,
-                    schedule_time, schedule_days, recipients, cc, filters)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    schedule_time, schedule_days, recipients, cc, filters,
+                    custom_subject, custom_message)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     data["name"],
                     1 if data.get("enabled", True) else 0,
@@ -107,6 +115,8 @@ class AlertStore:
                     data["recipients"],
                     data.get("cc", ""),
                     json.dumps(data.get("filters", {})),
+                    data.get("custom_subject", ""),
+                    data.get("custom_message", ""),
                 ),
             )
             return self.get_rule(cur.lastrowid)  # type: ignore[return-value]
@@ -121,7 +131,9 @@ class AlertStore:
                 """UPDATE alert_rules SET
                    name=?, enabled=?, trigger_type=?, trigger_config=?,
                    frequency=?, schedule_time=?, schedule_days=?,
-                   recipients=?, cc=?, filters=?, updated_at=datetime('now')
+                   recipients=?, cc=?, filters=?,
+                   custom_subject=?, custom_message=?,
+                   updated_at=datetime('now')
                    WHERE id=?""",
                 (
                     data.get("name", existing["name"]),
@@ -134,6 +146,8 @@ class AlertStore:
                     data.get("recipients", existing["recipients"]),
                     data.get("cc", existing.get("cc", "")),
                     json.dumps(data.get("filters", existing["filters"])),
+                    data.get("custom_subject", existing.get("custom_subject", "")),
+                    data.get("custom_message", existing.get("custom_message", "")),
                     rule_id,
                 ),
             )
