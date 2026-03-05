@@ -284,56 +284,44 @@ def compute_sla_for_issues(
                 break
 
         fr_target = cfg.get_target_for_ticket("first_response", priority, request_type)
-        fr_result = None
         if first_response_time:
             elapsed = business_minutes_between(created, first_response_time, settings)
-            status = "breached" if elapsed > fr_target else "met"
-            fr_result = {
-                "status": status,
-                "elapsed_minutes": round(elapsed, 1),
-                "target_minutes": fr_target,
-            }
-            fr_stats["total"] += 1
-            fr_stats[status] += 1
-            fr_stats["elapsed_sum"] += elapsed
+            fr_status = "breached" if elapsed > fr_target else "met"
         elif is_open:
             elapsed = business_minutes_between(created, now, settings)
-            status = "breached" if elapsed > fr_target else "running"
-            fr_result = {
-                "status": status,
-                "elapsed_minutes": round(elapsed, 1),
-                "target_minutes": fr_target,
-            }
-            fr_stats["total"] += 1
-            fr_stats[status] += 1
-            fr_stats["elapsed_sum"] += elapsed
+            fr_status = "breached" if elapsed > fr_target else "running"
+        else:
+            # Resolved without any agent response — breached
+            end_time = _parse_dt(fields.get("resolutiondate")) or now
+            elapsed = business_minutes_between(created, end_time, settings)
+            fr_status = "breached"
+        fr_result = {
+            "status": fr_status,
+            "elapsed_minutes": round(elapsed, 1),
+            "target_minutes": fr_target,
+        }
+        fr_stats["total"] += 1
+        fr_stats[fr_status] += 1
+        fr_stats["elapsed_sum"] += elapsed
 
         # --- Resolution ---
         resolution_time = _parse_dt(fields.get("resolutiondate"))
         res_target = cfg.get_target_for_ticket("resolution", priority, request_type)
-        res_result = None
         if resolution_time:
             elapsed = business_minutes_between(created, resolution_time, settings)
-            status = "breached" if elapsed > res_target else "met"
-            res_result = {
-                "status": status,
-                "elapsed_minutes": round(elapsed, 1),
-                "target_minutes": res_target,
-            }
-            res_stats["total"] += 1
-            res_stats[status] += 1
-            res_stats["elapsed_sum"] += elapsed
-        elif is_open:
+            res_status = "breached" if elapsed > res_target else "met"
+        else:
+            # Open ticket — still running
             elapsed = business_minutes_between(created, now, settings)
-            status = "breached" if elapsed > res_target else "running"
-            res_result = {
-                "status": status,
-                "elapsed_minutes": round(elapsed, 1),
-                "target_minutes": res_target,
-            }
-            res_stats["total"] += 1
-            res_stats[status] += 1
-            res_stats["elapsed_sum"] += elapsed
+            res_status = "breached" if elapsed > res_target else "running"
+        res_result = {
+            "status": res_status,
+            "elapsed_minutes": round(elapsed, 1),
+            "target_minutes": res_target,
+        }
+        res_stats["total"] += 1
+        res_stats[res_status] += 1
+        res_stats["elapsed_sum"] += elapsed
 
         row["sla_first_response"] = fr_result
         row["sla_resolution"] = res_result
