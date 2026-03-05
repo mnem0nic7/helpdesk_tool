@@ -116,6 +116,8 @@ function BreachedTicketsTable({
   const [filterPriority, setFilterPriority] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterAssignee, setFilterAssignee] = useState("");
+  const [openOnly, setOpenOnly] = useState(false);
+  const [staleOnly, setStaleOnly] = useState(false);
 
   // Sorting
   const [sortField, setSortField] = useState<SortField>("key");
@@ -150,8 +152,10 @@ function BreachedTicketsTable({
     if (filterPriority) list = list.filter((t) => t.priority === filterPriority);
     if (filterStatus) list = list.filter((t) => t.status === filterStatus);
     if (filterAssignee) list = list.filter((t) => t.assignee === filterAssignee);
+    if (openOnly) list = list.filter((t) => t.status_category !== "Done");
+    if (staleOnly) list = list.filter((t) => t.status_category !== "Done" && (t.days_since_update ?? 0) >= 7);
     return [...list].sort((a, b) => compareTickets(a, b, sortField, sortDir));
-  }, [tickets, search, filterPriority, filterStatus, filterAssignee, sortField, sortDir]);
+  }, [tickets, search, filterPriority, filterStatus, filterAssignee, openOnly, staleOnly, sortField, sortDir]);
 
   // Infinite scroll
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -159,7 +163,7 @@ function BreachedTicketsTable({
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [processed.length, search, filterPriority, filterStatus, filterAssignee]);
+  }, [processed.length, search, filterPriority, filterStatus, filterAssignee, openOnly, staleOnly]);
 
   const loadMore = useCallback(() => {
     setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, processed.length));
@@ -181,7 +185,7 @@ function BreachedTicketsTable({
   const visible = processed.slice(0, visibleCount);
   const hasMore = visibleCount < processed.length;
 
-  const hasFilters = !!(search || filterPriority || filterStatus || filterAssignee);
+  const hasFilters = !!(search || filterPriority || filterStatus || filterAssignee || openOnly || staleOnly);
 
   return (
     <div>
@@ -224,9 +228,29 @@ function BreachedTicketsTable({
             <option key={a} value={a}>{a}</option>
           ))}
         </select>
+        <button
+          onClick={() => setOpenOnly((v) => !v)}
+          className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+            openOnly
+              ? "border-blue-500 bg-blue-50 text-blue-700"
+              : "border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          }`}
+        >
+          Open Only
+        </button>
+        <button
+          onClick={() => setStaleOnly((v) => !v)}
+          className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+            staleOnly
+              ? "border-amber-500 bg-amber-50 text-amber-700"
+              : "border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+          }`}
+        >
+          Stale (7d+)
+        </button>
         {hasFilters && (
           <button
-            onClick={() => { setSearch(""); setFilterPriority(""); setFilterStatus(""); setFilterAssignee(""); }}
+            onClick={() => { setSearch(""); setFilterPriority(""); setFilterStatus(""); setFilterAssignee(""); setOpenOnly(false); setStaleOnly(false); }}
             className="text-xs text-gray-500 hover:text-gray-700 underline"
           >
             Clear filters
