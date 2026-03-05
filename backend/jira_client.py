@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import requests
 from requests.auth import HTTPBasicAuth
 
 from config import JIRA_EMAIL, JIRA_API_TOKEN, JIRA_BASE_URL
+
+# Validate Jira issue keys to prevent path traversal / SSRF
+_JIRA_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
+
+
+def validate_jira_key(key: str) -> str:
+    """Validate that a string looks like a Jira issue key (e.g. OIT-1234)."""
+    if not _JIRA_KEY_RE.match(key):
+        raise ValueError(f"Invalid Jira key format: {key!r}")
+    return key
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +297,7 @@ class JiraClient:
 
     def get_issue(self, key: str) -> dict[str, Any]:
         """GET /rest/api/3/issue/{key}"""
+        validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}"
         resp = self.session.get(url)
         resp.raise_for_status()
@@ -293,6 +305,7 @@ class JiraClient:
 
     def get_transitions(self, key: str) -> list[dict[str, Any]]:
         """GET /rest/api/3/issue/{key}/transitions"""
+        validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}/transitions"
         resp = self.session.get(url)
         resp.raise_for_status()
@@ -300,6 +313,7 @@ class JiraClient:
 
     def transition_issue(self, key: str, transition_id: str) -> None:
         """POST /rest/api/3/issue/{key}/transitions"""
+        validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}/transitions"
         payload = {"transition": {"id": transition_id}}
         resp = self.session.post(url, json=payload)
@@ -307,6 +321,7 @@ class JiraClient:
 
     def assign_issue(self, key: str, account_id: str) -> None:
         """PUT /rest/api/3/issue/{key}/assignee"""
+        validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}/assignee"
         payload = {"accountId": account_id}
         resp = self.session.put(url, json=payload)
@@ -314,6 +329,7 @@ class JiraClient:
 
     def update_priority(self, key: str, priority_name: str) -> None:
         """PUT /rest/api/3/issue/{key} to change priority."""
+        validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}"
         payload = {"fields": {"priority": {"name": priority_name}}}
         resp = self.session.put(url, json=payload)
@@ -321,6 +337,7 @@ class JiraClient:
 
     def add_comment(self, key: str, body_text: str) -> dict[str, Any]:
         """POST /rest/api/3/issue/{key}/comment using ADF format."""
+        validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}/comment"
         payload = {
             "body": {
@@ -367,6 +384,7 @@ class JiraClient:
 
         The value must be the request type ID as a string (e.g. "122").
         """
+        validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}"
         payload = {"fields": {"customfield_11102": str(request_type_id)}}
         resp = self.session.put(url, json=payload)
