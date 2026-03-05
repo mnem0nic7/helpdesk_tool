@@ -86,7 +86,7 @@ Your job is to analyze tickets and suggest improvements for: priority, request_t
 Rules:
 - Only suggest changes where you see a clear improvement. If a field looks correct, omit it.
 - Priority must be one of: {priorities}
-- Request type: ONLY suggest a change when the current request type is "Emailed request".
+- Request type: ONLY suggest a change when the current request type is "Emailed request" or "Email request".
   Choose from: {request_types}
   Pick the request type that best matches the ticket content.
 - Status must be one of: {statuses}
@@ -341,17 +341,24 @@ def _get_service_desk_id() -> str:
         return _service_desk_id
 
     from jira_client import JiraClient
-    from config import JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN
+    from config import JIRA_PROJECT
     client = JiraClient()
     url = f"{client.base_url}/rest/servicedeskapi/servicedesk"
     resp = client.session.get(url)
     resp.raise_for_status()
     desks = resp.json().get("values", [])
+    # Prefer the desk matching the configured project key (e.g. OIT)
+    for d in desks:
+        if d.get("projectKey", "").upper() == JIRA_PROJECT.upper():
+            _service_desk_id = str(d.get("id", "1"))
+            logger.info("Auto-detected service desk ID: %s (project %s)", _service_desk_id, JIRA_PROJECT)
+            return _service_desk_id
+    # Fallback to first desk
     if desks:
         _service_desk_id = str(desks[0].get("id", "1"))
     else:
         _service_desk_id = "1"
-    logger.info("Auto-detected service desk ID: %s", _service_desk_id)
+    logger.info("Auto-detected service desk ID: %s (fallback)", _service_desk_id)
     return _service_desk_id
 
 
@@ -367,11 +374,16 @@ def _get_request_types() -> dict[str, str]:
         client = JiraClient()
         sd_id = _get_service_desk_id()
         raw = client.get_request_types(sd_id)
-        rt_map = {
-            rt.get("name", ""): str(rt.get("id", ""))
-            for rt in raw
-            if rt.get("name") and rt.get("id")
-        }
+        # Exclude the default "Emailed request" — no point suggesting it
+        rt_map = {}
+        for rt in raw:
+            name = rt.get("name", "")
+            rid = rt.get("id")
+            if not name or not rid:
+                continue
+            if name.lower() in ("emailed request", "email request"):
+                continue
+            rt_map[name] = str(rid)
         _rt_cache = (now, rt_map)
         logger.info("Validation: cached %d request types: %s", len(rt_map), list(rt_map.keys()))
         return rt_map

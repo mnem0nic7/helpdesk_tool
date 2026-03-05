@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type { TriageLogEntry, CacheStatus } from "../lib/api.ts";
 
@@ -21,6 +22,25 @@ function formatTimestamp(iso: string): string {
 }
 
 export default function AILogPage() {
+  const queryClient = useQueryClient();
+  const [running, setRunning] = useState(false);
+  const [runResult, setRunResult] = useState<string | null>(null);
+
+  async function handleRunAll() {
+    setRunning(true);
+    setRunResult(null);
+    try {
+      const res = await api.runTriageAll();
+      setRunResult(`Started triage on ${res.total_tickets} tickets. Changes will appear below as they complete.`);
+    } catch (err) {
+      setRunResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setRunning(false);
+      // Trigger a refetch of the log so new entries appear
+      queryClient.invalidateQueries({ queryKey: ["triage-log"] });
+    }
+  }
+
   const { data: log, isLoading } = useQuery({
     queryKey: ["triage-log"],
     queryFn: () => api.getTriageLog(),
@@ -38,12 +58,26 @@ export default function AILogPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">AI Change Log</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          All changes made by AI triage — both automatic and user-approved.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">AI Change Log</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            All changes made by AI triage — both automatic and user-approved.
+          </p>
+        </div>
+        <button
+          onClick={handleRunAll}
+          disabled={running}
+          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {running ? "Starting…" : "Run on All Tickets"}
+        </button>
       </div>
+      {runResult && (
+        <div className={`rounded-lg px-4 py-3 text-sm ${runResult.startsWith("Error") ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700"}`}>
+          {runResult}
+        </div>
+      )}
 
       <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
         <div className="max-h-[75vh] overflow-y-auto">
