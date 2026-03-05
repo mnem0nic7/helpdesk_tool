@@ -15,12 +15,27 @@ const navItems = [
 ];
 
 export default function Layout() {
-  const { data: user } = useQuery({
+  const { data: user, isLoading } = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => api.getMe(),
     retry: false,
     staleTime: 5 * 60 * 1000,
   });
+
+  // While checking auth, show nothing to avoid layout flash
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-50">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent" />
+      </div>
+    );
+  }
+
+  // Not authenticated — redirect to login
+  if (!user) {
+    window.location.href = "/api/auth/login";
+    return null;
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
