@@ -165,7 +165,60 @@ class JiraClient:
             )
 
         logger.info("search_all complete: %d issues for JQL: %s", len(all_issues), jql)
+
+        # Enrich with request type from JSM API (customfield_10010 is null in REST v3)
+        self._enrich_request_types(all_issues)
+
         return all_issues
+
+    # ------------------------------------------------------------------
+    # Request type enrichment
+    # ------------------------------------------------------------------
+
+    def _enrich_request_types(self, issues: list[dict[str, Any]]) -> None:
+        """Fetch request types via JSM API and inject into issue fields.
+
+        The standard Jira REST API returns null for customfield_10010,
+        so we use GET /rest/servicedeskapi/request to get the data.
+        """
+        keys = {i.get("key", "") for i in issues if i.get("key")}
+        if not keys:
+            return
+
+        rt_map: dict[str, dict] = {}  # key -> {"name": ..., "id": ...}
+        start = 0
+        try:
+            while True:
+                url = f"{self.base_url}/rest/servicedeskapi/request"
+                resp = self.session.get(url, params={
+                    "requestOwnership": "ALL_REQUESTS",
+                    "start": start,
+                    "limit": 100,
+                })
+                resp.raise_for_status()
+                data = resp.json()
+                for req in data.get("values", []):
+                    ikey = req.get("issueKey", "")
+                    rt = req.get("requestType")
+                    if ikey in keys and rt:
+                        rt_map[ikey] = rt
+                if data.get("isLastPage", True):
+                    break
+                start += len(data.get("values", []))
+        except Exception:
+            logger.exception("Failed to fetch request types from JSM API")
+            return
+
+        # Inject into issue fields as customfield_10010
+        enriched = 0
+        for issue in issues:
+            key = issue.get("key", "")
+            if key in rt_map:
+                fields = issue.setdefault("fields", {})
+                fields["customfield_10010"] = {"requestType": rt_map[key]}
+                enriched += 1
+
+        logger.info("Enriched %d/%d issues with request type data", enriched, len(issues))
 
     # ------------------------------------------------------------------
     # Single-issue operations
