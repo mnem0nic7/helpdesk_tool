@@ -265,12 +265,12 @@ class IssueCache:
                         self._issues[key] = issue
                 self._last_refresh = datetime.now(timezone.utc)
 
-            # Return keys not yet auto-triaged (covers both brand-new tickets
-            # and tickets restored from SQLite that were never processed)
+            # Return keys not yet auto-triaged, excluding oasisdev tickets
             seen = self._load_auto_triage_seen()
             untriaged_keys = [
                 issue.get("key", "") for issue in updated_issues
                 if issue.get("key") and issue.get("key") not in seen
+                and not JiraClient.is_excluded(issue)
             ]
 
             logger.info(
@@ -377,6 +377,10 @@ class IssueCache:
                 with self._lock:
                     issue = self._all_issues.get(key)
                 if not issue:
+                    continue
+                # Skip excluded (oasisdev) tickets
+                if JiraClient.is_excluded(issue):
+                    seen.add(key)
                     continue
 
                 result = await loop.run_in_executor(
