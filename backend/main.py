@@ -27,15 +27,20 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OIT Helpdesk Dashboard API", version="0.1.0", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
-# CORS – allow the Vite dev-server and the Docker/nginx front-end
+# CORS – allow the Vite dev-server, Docker/nginx, and production origin
 # ---------------------------------------------------------------------------
+_cors_origins = [
+    "http://localhost:5173",  # Vite dev server
+    "http://localhost:3000",  # Docker (nginx)
+    "http://localhost:3002",  # Docker (nginx, alternate port)
+]
+_extra_origin = os.getenv("CORS_ORIGIN", "")
+if _extra_origin:
+    _cors_origins.append(_extra_origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:3000",  # Docker (nginx)
-        "http://localhost:3002",  # Docker (nginx, alternate port)
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
