@@ -51,6 +51,11 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     all_issues = cache.get_all_issues()
     all_keys = [issue.get("key", "") for issue in all_issues if issue.get("key")]
 
+    # Optional limit for testing
+    limit = (body or {}).get("limit")
+    if limit and isinstance(limit, int) and limit > 0:
+        all_keys = all_keys[:limit]
+
     # Reset tracking so every ticket gets re-processed
     store.clear_auto_triaged()
     cache.reset_auto_triage_seen()

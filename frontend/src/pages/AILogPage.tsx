@@ -26,17 +26,16 @@ export default function AILogPage() {
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<string | null>(null);
 
-  async function handleRunAll() {
+  async function handleRun(limit?: number) {
     setRunning(true);
     setRunResult(null);
     try {
-      const res = await api.runTriageAll();
+      const res = await api.runTriageAll(undefined, limit);
       setRunResult(`Started triage on ${res.total_tickets} tickets. Changes will appear below as they complete.`);
     } catch (err) {
       setRunResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setRunning(false);
-      // Trigger a refetch of the log so new entries appear
       queryClient.invalidateQueries({ queryKey: ["triage-log"] });
     }
   }
@@ -65,13 +64,22 @@ export default function AILogPage() {
             All changes made by AI triage — both automatic and user-approved.
           </p>
         </div>
-        <button
-          onClick={handleRunAll}
-          disabled={running}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {running ? "Starting…" : "Run on All Tickets"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => handleRun(10)}
+            disabled={running}
+            className="rounded-lg bg-gray-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {running ? "Starting…" : "Test (10 Tickets)"}
+          </button>
+          <button
+            onClick={() => handleRun()}
+            disabled={running}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {running ? "Starting…" : "Run on All Tickets"}
+          </button>
+        </div>
       </div>
       {runResult && (
         <div className={`rounded-lg px-4 py-3 text-sm ${runResult.startsWith("Error") ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700"}`}>
