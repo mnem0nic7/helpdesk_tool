@@ -97,15 +97,16 @@ class IssueCache:
             return list(self._all_issues.values())
 
     def status(self) -> dict[str, Any]:
-        return {
-            "initialized": self._initialized,
-            "refreshing": self._refreshing,
-            "issue_count": len(self._all_issues),
-            "filtered_count": len(self._issues),
-            "last_refresh": (
-                self._last_refresh.isoformat() if self._last_refresh else None
-            ),
-        }
+        with self._lock:
+            return {
+                "initialized": self._initialized,
+                "refreshing": self._refreshing,
+                "issue_count": len(self._all_issues),
+                "filtered_count": len(self._issues),
+                "last_refresh": (
+                    self._last_refresh.isoformat() if self._last_refresh else None
+                ),
+            }
 
     # ------------------------------------------------------------------
     # SQLite persistence
@@ -366,7 +367,7 @@ class IssueCache:
 
         logger.info("Auto-triage: processing %d new tickets", len(keys_to_process))
         client = JiraClient()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         for i, key in enumerate(keys_to_process):
             try:
@@ -454,7 +455,7 @@ class IssueCache:
         while True:
             await asyncio.sleep(_REFRESH_INTERVAL)
             try:
-                new_keys = await asyncio.get_event_loop().run_in_executor(
+                new_keys = await asyncio.get_running_loop().run_in_executor(
                     None, self._incremental_refresh
                 )
                 if new_keys:

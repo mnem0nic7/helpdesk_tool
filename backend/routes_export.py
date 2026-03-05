@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import statistics
 import tempfile
 from collections import defaultdict
@@ -11,6 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
@@ -281,7 +283,7 @@ async def report_export(config: ReportConfig) -> FileResponse:
         path=tmp_path,
         filename=filename,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        background=None,
+        background=BackgroundTask(os.unlink, tmp_path),
     )
 
 
@@ -368,5 +370,5 @@ async def export_excel() -> FileResponse:
         path=tmp_path,
         filename=filename,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        background=None,
+        background=BackgroundTask(os.unlink, tmp_path),
     )

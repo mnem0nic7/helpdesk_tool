@@ -327,11 +327,13 @@ function exportChartAsPng(containerId: string) {
     canvas.toBlob((blob) => {
       if (!blob) return;
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
+      const blobUrl = URL.createObjectURL(blob);
+      a.href = blobUrl;
       a.download = "chart.png";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
     }, "image/png");
     URL.revokeObjectURL(url);
   };

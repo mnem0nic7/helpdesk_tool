@@ -95,12 +95,18 @@ async def logout(request: Request):
     if sid:
         delete_session(sid)
     # Build the post-logout redirect back to the app
-    proto = request.headers.get("x-forwarded-proto", "http")
-    host = request.headers.get("host", "localhost")
-    post_logout_uri = f"{proto}://{host}/"
+    # Use configured CORS_ORIGIN or a safe default — never trust Host header
+    from urllib.parse import quote
+    from config import JIRA_BASE_URL
+    import os
+    app_origin = os.getenv("CORS_ORIGIN", "").rstrip("/")
+    if not app_origin:
+        proto = request.headers.get("x-forwarded-proto", "https")
+        app_origin = f"{proto}://it-app.movedocs.com"
+    post_logout_uri = f"{app_origin}/"
     entra_logout = (
         f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/oauth2/v2.0/logout"
-        f"?post_logout_redirect_uri={post_logout_uri}"
+        f"?post_logout_redirect_uri={quote(post_logout_uri, safe='')}"
     )
     response = JSONResponse(content={"logged_out": True, "redirect": entra_logout})
     response.delete_cookie(key=_COOKIE_NAME, path="/", secure=True, samesite="lax")

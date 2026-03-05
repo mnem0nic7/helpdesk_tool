@@ -22,14 +22,14 @@ async def cache_status() -> dict[str, Any]:
 @router.post("/cache/refresh")
 async def cache_refresh() -> dict[str, Any]:
     """Trigger a full cache refresh (blocking)."""
-    await asyncio.get_event_loop().run_in_executor(None, cache.trigger_refresh)
+    await asyncio.get_running_loop().run_in_executor(None, cache.trigger_refresh)
     return cache.status()
 
 
 @router.post("/cache/refresh/incremental")
 async def cache_refresh_incremental() -> dict[str, Any]:
     """Trigger an incremental cache refresh — only issues updated in last 10 min."""
-    await asyncio.get_event_loop().run_in_executor(
+    await asyncio.get_running_loop().run_in_executor(
         None, cache.trigger_incremental_refresh
     )
     return cache.status()
@@ -52,7 +52,10 @@ async def enrich_request_types(background_tasks: BackgroundTasks) -> dict[str, A
         finally:
             _enrich_status["running"] = False
 
-    background_tasks.add_task(asyncio.get_event_loop().run_in_executor, None, _run)
+    async def _run_bg() -> None:
+        await asyncio.get_running_loop().run_in_executor(None, _run)
+
+    background_tasks.add_task(_run_bg)
     return {"started": True, "message": "Request type enrichment started in background"}
 
 
