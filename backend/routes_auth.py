@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from auth import oauth, create_session, get_session, delete_session, is_allowed_user
+from config import ENTRA_TENANT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -89,10 +90,18 @@ async def me(request: Request):
 
 @router.post("/logout")
 async def logout(request: Request):
-    """Log out — clear session and cookie."""
+    """Log out — clear local session, return Entra logout URL."""
     sid = request.cookies.get(_COOKIE_NAME)
     if sid:
         delete_session(sid)
-    response = JSONResponse(content={"logged_out": True})
+    # Build the post-logout redirect back to the app
+    proto = request.headers.get("x-forwarded-proto", "http")
+    host = request.headers.get("host", "localhost")
+    post_logout_uri = f"{proto}://{host}/"
+    entra_logout = (
+        f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/oauth2/v2.0/logout"
+        f"?post_logout_redirect_uri={post_logout_uri}"
+    )
+    response = JSONResponse(content={"logged_out": True, "redirect": entra_logout})
     response.delete_cookie(key=_COOKIE_NAME, path="/", secure=True, samesite="lax")
     return response
