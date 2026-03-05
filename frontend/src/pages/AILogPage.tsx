@@ -24,7 +24,7 @@ function formatTimestamp(iso: string): string {
 export default function AILogPage() {
   const queryClient = useQueryClient();
   const [starting, setStarting] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ text: string; type: "error" | "info" } | null>(null);
 
   // Always poll run status so progress survives navigation
   const { data: runStatus } = useQuery({
@@ -35,15 +35,17 @@ export default function AILogPage() {
 
   const isRunning = runStatus?.running ?? false;
 
-  async function handleRun(limit?: number) {
+  async function handleRun(limit?: number, reset?: boolean) {
     setStarting(true);
-    setErrorMsg(null);
+    setMessage(null);
     try {
-      await api.runTriageAll(undefined, limit);
-      // Status will be picked up by the polling query
+      const res = await api.runTriageAll(undefined, limit, reset);
+      if (res.total_tickets === 0) {
+        setMessage({ text: "All tickets have already been processed. Use \u201cRun on All\u201d to reprocess.", type: "info" });
+      }
       queryClient.invalidateQueries({ queryKey: ["triage-run-status"] });
     } catch (err) {
-      setErrorMsg(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setMessage({ text: `Error: ${err instanceof Error ? err.message : String(err)}`, type: "error" });
     } finally {
       setStarting(false);
     }
@@ -75,14 +77,14 @@ export default function AILogPage() {
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() => handleRun(10)}
+            onClick={() => handleRun(10, false)}
             disabled={starting || isRunning}
             className="rounded-lg bg-gray-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {starting ? "Starting…" : isRunning ? "Running…" : "Test (10 Tickets)"}
           </button>
           <button
-            onClick={() => handleRun()}
+            onClick={() => handleRun(undefined, true)}
             disabled={starting || isRunning}
             className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -90,9 +92,9 @@ export default function AILogPage() {
           </button>
         </div>
       </div>
-      {errorMsg && (
-        <div className="rounded-lg px-4 py-3 text-sm bg-red-50 text-red-700">
-          {errorMsg}
+      {message && (
+        <div className={`rounded-lg px-4 py-3 text-sm ${message.type === "error" ? "bg-red-50 text-red-700" : "bg-yellow-50 text-yellow-700"}`}>
+          {message.text}
         </div>
       )}
       {isRunning && runStatus && runStatus.total > 0 && (
