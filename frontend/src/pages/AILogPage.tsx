@@ -40,10 +40,18 @@ export default function AILogPage() {
     }
   }
 
+  const { data: runStatus } = useQuery({
+    queryKey: ["triage-run-status"],
+    queryFn: () => api.getTriageRunStatus(),
+    refetchInterval: runResult ? 2_000 : false,
+  });
+
+  const isRunning = runStatus?.running ?? false;
+
   const { data: log, isLoading } = useQuery({
     queryKey: ["triage-log"],
     queryFn: () => api.getTriageLog(),
-    refetchInterval: 30_000,
+    refetchInterval: isRunning ? 5_000 : 30_000,
   });
 
   const { data: cacheStatus } = useQuery<CacheStatus>({
@@ -67,23 +75,37 @@ export default function AILogPage() {
         <div className="flex gap-2">
           <button
             onClick={() => handleRun(10)}
-            disabled={running}
+            disabled={running || isRunning}
             className="rounded-lg bg-gray-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {running ? "Starting…" : "Test (10 Tickets)"}
+            {running ? "Starting…" : isRunning ? "Running…" : "Test (10 Tickets)"}
           </button>
           <button
             onClick={() => handleRun()}
-            disabled={running}
+            disabled={running || isRunning}
             className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {running ? "Starting…" : "Run on All Tickets"}
+            {running ? "Starting…" : isRunning ? "Running…" : "Run on All Tickets"}
           </button>
         </div>
       </div>
       {runResult && (
         <div className={`rounded-lg px-4 py-3 text-sm ${runResult.startsWith("Error") ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700"}`}>
           {runResult}
+          {isRunning && runStatus && runStatus.total > 0 && (
+            <div className="mt-2">
+              <div className="flex items-center justify-between text-xs mb-1">
+                <span>Processing {runStatus.current_key ?? "..."}  ({runStatus.processed}/{runStatus.total})</span>
+                <span>{Math.round((runStatus.processed / runStatus.total) * 100)}%</span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-blue-200">
+                <div
+                  className="h-2 rounded-full bg-blue-600 transition-all duration-500"
+                  style={{ width: `${(runStatus.processed / runStatus.total) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       )}
 

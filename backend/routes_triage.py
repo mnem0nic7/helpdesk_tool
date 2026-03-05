@@ -20,6 +20,9 @@ router = APIRouter(prefix="/api/triage")
 
 _client = JiraClient()
 
+# Progress tracking for run-all background task
+_run_progress: dict[str, Any] = {"running": False, "processed": 0, "total": 0, "current_key": None}
+
 
 @router.get("/models")
 async def list_models() -> list[dict[str, Any]]:
@@ -31,6 +34,12 @@ async def list_models() -> list[dict[str, Any]]:
 async def get_triage_log() -> list[dict[str, Any]]:
     """Return all AI triage changes applied to Jira (auto and user-approved)."""
     return store.get_triage_log(limit=500)
+
+
+@router.get("/run-status")
+async def get_run_status() -> dict[str, Any]:
+    """Return progress of the current run-all background task."""
+    return dict(_run_progress)
 
 
 @router.post("/run-all")
@@ -60,11 +69,15 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     store.clear_auto_triaged()
     cache.reset_auto_triage_seen()
 
+    _run_progress.update(running=True, processed=0, total=len(all_keys), current_key=None)
+
     async def _run() -> None:
         try:
-            await cache._auto_triage_new_tickets(all_keys)
+            await cache._auto_triage_new_tickets(all_keys, progress=_run_progress)
         except Exception:
             logger.exception("run-all: background triage failed")
+        finally:
+            _run_progress.update(running=False, current_key=None)
 
     background_tasks.add_task(_run)
 

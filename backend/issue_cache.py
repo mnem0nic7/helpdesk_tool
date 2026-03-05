@@ -295,7 +295,7 @@ class IssueCache:
             logger.info("Auto-triage: loaded %d previously processed keys", len(self._auto_triage_seen))
         return self._auto_triage_seen
 
-    async def _auto_triage_new_tickets(self, new_keys: list[str]) -> None:
+    async def _auto_triage_new_tickets(self, new_keys: list[str], progress: dict | None = None) -> None:
         """Run AI triage on genuinely new tickets and apply high-confidence priority changes."""
         from config import AUTO_TRIAGE_MODEL
         from ai_client import analyze_ticket, get_available_models, validate_suggestions
@@ -317,8 +317,11 @@ class IssueCache:
         client = JiraClient()
         loop = asyncio.get_event_loop()
 
-        for key in keys_to_process:
+        for i, key in enumerate(keys_to_process):
             try:
+                if progress is not None:
+                    progress.update(processed=i, current_key=key)
+
                 with self._lock:
                     issue = self._all_issues.get(key)
                 if not issue:
@@ -369,6 +372,9 @@ class IssueCache:
 
             except Exception:
                 logger.exception("Auto-triage: failed for %s", key)
+
+        if progress is not None:
+            progress.update(processed=len(keys_to_process))
 
     # ------------------------------------------------------------------
     # Background task lifecycle
