@@ -1,3 +1,4 @@
 it-app.movedocs.com {
+	tls internal
 	reverse_proxy dashboard:80
 }
