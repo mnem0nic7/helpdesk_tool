@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from auth import oauth, create_session, get_session, delete_session, is_allowed_user
 
@@ -93,6 +93,6 @@ async def logout(request: Request):
     sid = request.cookies.get(_COOKIE_NAME)
     if sid:
         delete_session(sid)
-    response = RedirectResponse(url="/", status_code=302)
+    response = JSONResponse(content={"logged_out": True})
     response.delete_cookie(key=_COOKIE_NAME, path="/", secure=True, samesite="lax")
     return response
