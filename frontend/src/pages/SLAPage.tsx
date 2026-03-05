@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { api } from "../lib/api.ts";
 import type {
   SLAMetricsResponse, SLATicketRow, SLATimerStats, SLATarget,
@@ -140,41 +140,6 @@ function SLADistributionChart({ title, stats }: { title: string; stats: SLATimer
               ))}
             </Bar>
           </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Status Pie Chart
-// ---------------------------------------------------------------------------
-
-const STATUS_COLORS: Record<string, string> = { Met: "#22c55e", Breached: "#ef4444", Running: "#3b82f6" };
-
-function SLAStatusPie({ title, stats }: { title: string; stats: SLATimerStats }) {
-  const data = [
-    { name: "Met", value: stats.met },
-    { name: "Breached", value: stats.breached },
-    { name: "Running", value: stats.running },
-  ].filter((d) => d.value > 0);
-  if (!data.length) return null;
-  return (
-    <div className="rounded-lg bg-white px-5 py-5 shadow">
-      <h3 className="text-sm font-semibold tracking-wide text-gray-700 uppercase">{title}</h3>
-      <div className="mt-3 h-48">
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70}
-              label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
-              labelLine={{ strokeWidth: 1 }}>
-              {data.map((d) => (
-                <Cell key={d.name} fill={STATUS_COLORS[d.name] ?? "#9ca3af"} />
-              ))}
-            </Pie>
-            <Tooltip formatter={(v) => [String(v), "Tickets"]} />
-            <Legend />
-          </PieChart>
         </ResponsiveContainer>
       </div>
     </div>
@@ -585,12 +550,6 @@ export default function SLAPage() {
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <SLADistributionChart title="First Response Distribution" stats={summary.first_response} />
         <SLADistributionChart title="Resolution Distribution" stats={summary.resolution} />
-      </div>
-
-      {/* Status breakdown */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-        <SLAStatusPie title="First Response Status" stats={summary.first_response} />
-        <SLAStatusPie title="Resolution Status" stats={summary.resolution} />
       </div>
 
       {/* Tickets table */}
