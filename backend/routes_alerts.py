@@ -107,7 +107,7 @@ async def send_rule_now(rule_id: int) -> dict[str, Any]:
     if not evaluator:
         raise HTTPException(400, f"Unknown trigger type: {rule['trigger_type']}")
 
-    from alert_engine import _matches_filters, _render_email, set_jira_base_url
+    from alert_engine import _matches_filters, _render_email, _refresh_tickets, set_jira_base_url
     from email_service import send_email
     from config import JIRA_BASE_URL
     set_jira_base_url(JIRA_BASE_URL)
@@ -118,6 +118,14 @@ async def send_rule_now(rule_id: int) -> dict[str, Any]:
 
     if not matching:
         return {"sent": False, "matching_count": 0, "reason": "No matching tickets"}
+
+    # Refresh from Jira and re-evaluate to avoid sending stale data
+    matching = _refresh_tickets(matching)
+    matching = evaluator(matching, rule["trigger_config"])
+    matching = [iss for iss in matching if _matches_filters(iss, rule["filters"])]
+
+    if not matching:
+        return {"sent": False, "matching_count": 0, "reason": "No matching tickets after refresh"}
 
     subject, html = _render_email(rule, matching)
     recipients = [r.strip() for r in rule["recipients"].split(",") if r.strip()]

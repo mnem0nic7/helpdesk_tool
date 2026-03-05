@@ -362,6 +362,55 @@ def _render_email(rule: dict, tickets: list[dict]) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Ticket refresh before send
+# ---------------------------------------------------------------------------
+
+def _refresh_tickets(tickets: list[dict]) -> list[dict]:
+    """Re-fetch tickets from Jira to ensure data is current before sending alerts."""
+    if not tickets:
+        return tickets
+
+    keys = [iss.get("key", "") for iss in tickets if iss.get("key")]
+    if not keys:
+        return tickets
+
+    try:
+        from jira_client import JiraClient
+        from config import JIRA_EMAIL, JIRA_API_TOKEN, JIRA_BASE_URL
+        from issue_cache import cache
+
+        client = JiraClient(JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN)
+
+        # Fetch in batches of 50 using JQL key in (...)
+        refreshed: dict[str, dict] = {}
+        for i in range(0, len(keys), 50):
+            batch = keys[i:i + 50]
+            jql = f"key in ({','.join(batch)})"
+            fresh_issues = client.search_all(jql)
+            for iss in fresh_issues:
+                k = iss.get("key", "")
+                if k:
+                    refreshed[k] = iss
+                    # Also update the cache so dashboard reflects current data
+                    cache._all_issues[k] = iss
+                    if not JiraClient.is_excluded(iss):
+                        cache._issues[k] = iss
+
+        logger.info("Alert refresh: re-fetched %d/%d tickets from Jira", len(refreshed), len(keys))
+
+        # Return refreshed versions, fall back to cached if fetch failed
+        result = []
+        for iss in tickets:
+            k = iss.get("key", "")
+            result.append(refreshed.get(k, iss))
+        return result
+
+    except Exception:
+        logger.exception("Failed to refresh tickets before alert send")
+        return tickets
+
+
+# ---------------------------------------------------------------------------
 # Main evaluation loop
 # ---------------------------------------------------------------------------
 
@@ -387,6 +436,17 @@ async def run_alert_checks(issues: list[dict]) -> int:
         filtered = [iss for iss in issues if _matches_filters(iss, rule["filters"])]
 
         matching = evaluator(filtered, rule["trigger_config"])
+
+        if not matching:
+            alert_store.update_last_run(rule["id"], sent=False)
+            continue
+
+        # Refresh matching tickets from Jira before sending
+        matching = _refresh_tickets(matching)
+
+        # Re-evaluate after refresh — some may no longer match
+        matching = evaluator(matching, rule["trigger_config"])
+        matching = [iss for iss in matching if _matches_filters(iss, rule["filters"])]
 
         if not matching:
             alert_store.update_last_run(rule["id"], sent=False)
