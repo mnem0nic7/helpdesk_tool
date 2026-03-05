@@ -236,6 +236,53 @@ function RuleModal({
 // Main Page
 // ---------------------------------------------------------------------------
 
+function TestResultModal({
+  testResult,
+  onClose,
+  onSend,
+}: {
+  testResult: AlertTestResult;
+  onClose: () => void;
+  onSend: () => Promise<void>;
+}) {
+  const [sending, setSending] = useState(false);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-lg font-bold text-gray-900">Test Result</h3>
+        <p className="mt-2 text-sm text-gray-600">
+          <span className="text-2xl font-bold text-blue-600">{testResult.matching_count}</span> tickets would trigger this alert.
+        </p>
+        {testResult.sample_keys.length > 0 && (
+          <div className="mt-3">
+            <p className="text-xs font-medium text-gray-500 mb-1">Sample tickets:</p>
+            <div className="flex flex-wrap gap-1">
+              {testResult.sample_keys.map((k) => (
+                <span key={k} className="rounded bg-gray-100 px-2 py-0.5 text-xs font-mono text-gray-700">{k}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="mt-4 flex gap-2">
+          {testResult.matching_count > 0 && (
+            <button
+              onClick={async () => { setSending(true); await onSend(); setSending(false); }}
+              disabled={sending}
+              className="flex-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+              {sending ? "Sending..." : "Send Now"}
+            </button>
+          )}
+          <button onClick={onClose}
+            className="flex-1 rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 export default function AlertsPage() {
   const qc = useQueryClient();
   const [showModal, setShowModal] = useState(false);
@@ -439,29 +486,21 @@ export default function AlertsPage() {
 
       {/* Test Result Modal */}
       {testResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={() => setTestResult(null)}>
-          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-gray-900">Test Result</h3>
-            <p className="mt-2 text-sm text-gray-600">
-              <span className="text-2xl font-bold text-blue-600">{testResult.matching_count}</span> tickets would trigger this alert.
-            </p>
-            {testResult.sample_keys.length > 0 && (
-              <div className="mt-3">
-                <p className="text-xs font-medium text-gray-500 mb-1">Sample tickets:</p>
-                <div className="flex flex-wrap gap-1">
-                  {testResult.sample_keys.map((k) => (
-                    <span key={k} className="rounded bg-gray-100 px-2 py-0.5 text-xs font-mono text-gray-700">{k}</span>
-                  ))}
-                </div>
-              </div>
-            )}
-            <button onClick={() => setTestResult(null)}
-              className="mt-4 w-full rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200">
-              Close
-            </button>
-          </div>
-        </div>
+        <TestResultModal
+          testResult={testResult}
+          onClose={() => setTestResult(null)}
+          onSend={async () => {
+            const result = await api.sendAlertRule(testResult.rule.id);
+            if (result.sent) {
+              alert(`Email sent successfully to ${testResult.rule.recipients} (${result.matching_count} tickets)`);
+              qc.invalidateQueries({ queryKey: ["alert-rules"] });
+              qc.invalidateQueries({ queryKey: ["alert-history"] });
+            } else {
+              alert(`Send failed: ${result.reason || "Email delivery failed"}`);
+            }
+            setTestResult(null);
+          }}
+        />
       )}
 
       {/* Create/Edit Modal */}

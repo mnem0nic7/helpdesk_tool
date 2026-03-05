@@ -770,6 +770,10 @@ export const api = {
     return postJSON<AlertTestResult>(`/api/alerts/rules/${id}/test`, {});
   },
 
+  sendAlertRule(id: number): Promise<{ sent: boolean; matching_count: number; ticket_count?: number; reason?: string }> {
+    return postJSON(`/api/alerts/rules/${id}/send`, {});
+  },
+
   runAlerts(): Promise<{ sent_count: number }> {
     return postJSON("/api/alerts/run", {});
   },
