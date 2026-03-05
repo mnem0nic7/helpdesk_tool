@@ -158,10 +158,14 @@ async def list_tickets(
 @router.get("/tickets/{key}")
 async def get_ticket(key: str) -> dict[str, Any]:
     """Return detail for a single ticket."""
+    from jira_client import validate_jira_key
     try:
+        validate_jira_key(key)
         issue = _client.get_issue(key)
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail=f"Issue {key} not found: {exc}")
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Issue {key} not found")
     return issue_to_row(issue)
 
 
@@ -182,12 +186,16 @@ async def get_assignees() -> list[dict[str, Any]]:
 @router.get("/statuses/{key}")
 async def get_statuses(key: str) -> list[dict[str, Any]]:
     """Return available transitions for a given issue."""
+    from jira_client import validate_jira_key
     try:
+        validate_jira_key(key)
         transitions = _client.get_transitions(key)
-    except Exception as exc:
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
+    except Exception:
         raise HTTPException(
             status_code=404,
-            detail=f"Could not get transitions for {key}: {exc}",
+            detail=f"Could not get transitions for {key}",
         )
     return [
         {"id": t.get("id", ""), "name": t.get("name", "")}

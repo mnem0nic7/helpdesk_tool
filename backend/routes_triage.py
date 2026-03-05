@@ -47,6 +47,10 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     """Run auto-triage on ALL existing cached tickets as a background task."""
     from config import AUTO_TRIAGE_MODEL
 
+    # Prevent concurrent runs
+    if _run_progress["running"]:
+        return {"started": False, "total_tickets": _run_progress["total"], "message": "Triage run already in progress"}
+
     model = (body or {}).get("model") or AUTO_TRIAGE_MODEL
 
     # Validate model
@@ -226,8 +230,9 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
         except Exception as exc:
             errors.append({"field": field_name, "error": str(exc)})
 
-    # Delete suggestion from store after applying
-    store.delete(req.key)
+    # Only delete suggestion if at least one field was successfully applied
+    if applied:
+        store.delete(req.key)
 
     return {"key": req.key, "applied": applied, "errors": errors}
 
@@ -303,7 +308,8 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("Failed to apply %s for %s", req.field, req.key)
+        raise HTTPException(status_code=500, detail=f"Failed to apply {req.field} for {req.key}") from exc
 
     # Log the user-approved change
     store.log_change(

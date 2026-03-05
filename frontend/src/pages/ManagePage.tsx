@@ -86,6 +86,9 @@ export default function ManagePage() {
       queryClient.invalidateQueries({ queryKey: ["sla-summary"] });
       queryClient.invalidateQueries({ queryKey: ["sla-breaches"] });
       queryClient.invalidateQueries({ queryKey: ["cache-status"] });
+    }).catch(() => {
+      // Still invalidate queries so UI reflects whatever state exists
+      queryClient.invalidateQueries({ queryKey: ["manage-tickets"] });
     });
   }
 

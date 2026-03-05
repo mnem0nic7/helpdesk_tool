@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 _sessions: dict[str, dict[str, Any]] = {}
 _SESSION_TTL = timedelta(hours=8)
+_last_cleanup: datetime = datetime.now(timezone.utc)
+_CLEANUP_INTERVAL = timedelta(minutes=30)
 
 
 def create_session(email: str, name: str) -> str:
@@ -38,8 +40,23 @@ def create_session(email: str, name: str) -> str:
     return sid
 
 
+def _cleanup_expired() -> None:
+    """Remove all expired sessions periodically to prevent memory leaks."""
+    global _last_cleanup
+    now = datetime.now(timezone.utc)
+    if now - _last_cleanup < _CLEANUP_INTERVAL:
+        return
+    _last_cleanup = now
+    expired = [sid for sid, s in _sessions.items() if now > s["expires_at"]]
+    for sid in expired:
+        del _sessions[sid]
+    if expired:
+        logger.info("Cleaned up %d expired sessions", len(expired))
+
+
 def get_session(session_id: str) -> dict[str, Any] | None:
     """Return session data if valid and not expired, else None."""
+    _cleanup_expired()
     session = _sessions.get(session_id)
     if not session:
         return None

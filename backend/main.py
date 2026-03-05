@@ -53,9 +53,9 @@ _PUBLIC_PATHS = {
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path
+        path = request.url.path.rstrip("/")
         # Only protect /api/* paths (let frontend assets through)
-        if path.startswith("/api/") and path not in _PUBLIC_PATHS:
+        if path.startswith("/api") and path not in _PUBLIC_PATHS:
             sid = request.cookies.get("session_id")
             if not sid or not get_session(sid):
                 return JSONResponse(
