@@ -413,12 +413,12 @@ export const api = {
 
   /** Fetch SLA timer summary across all timers. */
   getSLASummary(): Promise<SLATimerSummary[]> {
-    return fetchJSON<SLATimerSummary[]>("/api/sla/summary");
+    return fetchJSON<{ timers: SLATimerSummary[] }>("/api/sla/summary").then(r => r.timers);
   },
 
   /** Fetch list of tickets currently breaching SLA. */
   getSLABreaches(): Promise<TicketRow[]> {
-    return fetchJSON<TicketRow[]>("/api/sla/breaches");
+    return fetchJSON<{ breaches: TicketRow[] }>("/api/sla/breaches").then(r => r.breaches);
   },
 
   /** Fetch assignable users for the project. */
