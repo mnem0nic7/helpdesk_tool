@@ -108,6 +108,29 @@ class IssueCache:
                 ),
             }
 
+    def _update_cached_field(self, key: str, field: str, value: str) -> None:
+        """Update a field in the cached issue data (in-memory + SQLite).
+
+        Supports 'priority' and 'request_type' fields.
+        """
+        with self._lock:
+            for store_dict in (self._all_issues, self._issues):
+                issue = store_dict.get(key)
+                if not issue:
+                    continue
+                fields = issue.setdefault("fields", {})
+                if field == "priority":
+                    fields["priority"] = {"name": value}
+                elif field == "request_type":
+                    fields["customfield_10010"] = {
+                        "requestType": {"name": value}
+                    }
+        # Persist the updated issue to SQLite
+        with self._lock:
+            issue = self._all_issues.get(key)
+        if issue:
+            self._upsert_to_db([issue])
+
     # ------------------------------------------------------------------
     # SQLite persistence
     # ------------------------------------------------------------------
@@ -402,6 +425,8 @@ class IssueCache:
                                 key, "priority", s.current_value, s.suggested_value,
                                 s.confidence, AUTO_TRIAGE_MODEL,
                             )
+                            # Update local cache
+                            self._update_cached_field(key, "priority", s.suggested_value)
                             priority_updated = True
                             logger.info(
                                 "Auto-triage: %s priority %s → %s (conf=%.2f)",
@@ -418,6 +443,8 @@ class IssueCache:
                                     key, "request_type", s.current_value, s.suggested_value,
                                     s.confidence, AUTO_TRIAGE_MODEL,
                                 )
+                                # Update local cache
+                                self._update_cached_field(key, "request_type", s.suggested_value)
                                 request_type_updated = True
                                 logger.info(
                                     "Auto-triage: %s request_type %s → %s (conf=%.2f)",
