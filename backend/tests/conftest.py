@@ -218,5 +218,10 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     # Import app *after* patching
     from main import app
     from starlette.testclient import TestClient
+    from auth import create_session
 
-    return TestClient(app)
+    client = TestClient(app)
+    # Create a session so tests pass through the auth middleware
+    sid = create_session("test@example.com", "Test User")
+    client.cookies.set("session_id", sid)
+    return client
