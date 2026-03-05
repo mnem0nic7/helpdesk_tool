@@ -96,6 +96,49 @@ async def test_rule(rule_id: int) -> dict[str, Any]:
     }
 
 
+@router.post("/rules/{rule_id}/send")
+async def send_rule_now(rule_id: int) -> dict[str, Any]:
+    """Immediately evaluate and send a single rule's alert."""
+    rule = alert_store.get_rule(rule_id)
+    if not rule:
+        raise HTTPException(404, f"Rule {rule_id} not found")
+
+    evaluator = EVALUATORS.get(rule["trigger_type"])
+    if not evaluator:
+        raise HTTPException(400, f"Unknown trigger type: {rule['trigger_type']}")
+
+    from alert_engine import _matches_filters, _render_email, set_jira_base_url
+    from email_service import send_email
+    from config import JIRA_BASE_URL
+    set_jira_base_url(JIRA_BASE_URL)
+
+    issues = cache.get_filtered_issues()
+    filtered = [iss for iss in issues if _matches_filters(iss, rule["filters"])]
+    matching = evaluator(filtered, rule["trigger_config"])
+
+    if not matching:
+        return {"sent": False, "matching_count": 0, "reason": "No matching tickets"}
+
+    subject, html = _render_email(rule, matching)
+    recipients = [r.strip() for r in rule["recipients"].split(",") if r.strip()]
+    cc = [c.strip() for c in (rule.get("cc") or "").split(",") if c.strip()] or None
+
+    if not recipients:
+        raise HTTPException(400, "Rule has no recipients")
+
+    success = await send_email(recipients, subject, html, cc=cc)
+    ticket_keys = [iss.get("key", "") for iss in matching]
+
+    alert_store.record_send(
+        rule, ticket_keys,
+        status="sent" if success else "failed",
+        error=None if success else "Email delivery failed",
+    )
+    alert_store.update_last_run(rule["id"], sent=success)
+
+    return {"sent": success, "matching_count": len(matching), "ticket_count": len(ticket_keys)}
+
+
 @router.post("/run")
 async def run_alerts_now() -> dict[str, Any]:
     """Manually trigger all enabled alert rules."""
