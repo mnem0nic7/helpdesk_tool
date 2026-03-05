@@ -603,6 +603,7 @@ export default function TriagePage() {
                   <th className="px-2 py-2">Key</th>
                   <th className="px-2 py-2">Summary</th>
                   <th className="px-2 py-2">Priority</th>
+                  <th className="px-2 py-2">Request Type</th>
                   <th className="px-2 py-2">Status</th>
                   <th className="px-2 py-2">Assignee</th>
                   <th className="px-2 py-2 text-center">AI</th>
@@ -611,14 +612,14 @@ export default function TriagePage() {
               <tbody className="divide-y divide-gray-100">
                 {ticketsLoading && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-gray-400">
+                    <td colSpan={8} className="px-4 py-8 text-center text-gray-400">
                       Loading tickets…
                     </td>
                   </tr>
                 )}
                 {!ticketsLoading && tickets.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-gray-400">
+                    <td colSpan={8} className="px-4 py-8 text-center text-gray-400">
                       No open tickets found.
                     </td>
                   </tr>
@@ -648,6 +649,9 @@ export default function TriagePage() {
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-gray-600">
                       {t.priority}
+                    </td>
+                    <td className="max-w-[140px] truncate px-2 py-2 text-gray-600">
+                      {t.request_type || "—"}
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-gray-600">
                       {t.status}
