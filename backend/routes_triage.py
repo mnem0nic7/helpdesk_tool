@@ -60,14 +60,20 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     all_issues = cache.get_all_issues()
     all_keys = [issue.get("key", "") for issue in all_issues if issue.get("key")]
 
+    # Only reset tracking when explicitly requested (e.g. "Run on All")
+    reset = (body or {}).get("reset", False)
+    if reset:
+        store.clear_auto_triaged()
+        cache.reset_auto_triage_seen()
+
+    # Filter out already-processed tickets
+    already_done = store.get_auto_triaged_keys()
+    all_keys = [k for k in all_keys if k not in already_done]
+
     # Optional limit for testing
     limit = (body or {}).get("limit")
     if limit and isinstance(limit, int) and limit > 0:
         all_keys = all_keys[:limit]
-
-    # Reset tracking so every ticket gets re-processed
-    store.clear_auto_triaged()
-    cache.reset_auto_triage_seen()
 
     _run_progress.update(running=True, processed=0, total=len(all_keys), current_key=None)
 
