@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type { TriageLogEntry, CacheStatus } from "../lib/api.ts";
+
+const PAGE_SIZE = 100;
 
 const fieldLabels: Record<string, string> = {
   priority: "Priority",
@@ -68,6 +70,31 @@ export default function AILogPage() {
   const jiraBaseUrl = cacheStatus?.jira_base_url;
 
   const entries = log ?? [];
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // Reset visible count when data changes
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [entries.length]);
+
+  const loadMore = useCallback(() => {
+    setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, entries.length));
+  }, [entries.length]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadMore(); },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadMore, visibleCount]);
+
+  const visibleEntries = entries.slice(0, visibleCount);
+  const hasMore = visibleCount < entries.length;
 
   return (
     <div className="space-y-4">
@@ -158,7 +185,7 @@ export default function AILogPage() {
                   </td>
                 </tr>
               )}
-              {entries.map((e: TriageLogEntry, i: number) => (
+              {visibleEntries.map((e: TriageLogEntry, i: number) => (
                 <tr key={`${e.key}-${e.field}-${i}`} className="hover:bg-gray-50">
                   <td className="whitespace-nowrap px-4 py-2.5 text-gray-500">
                     {formatTimestamp(e.timestamp)}
@@ -216,6 +243,11 @@ export default function AILogPage() {
               ))}
             </tbody>
           </table>
+          {hasMore && (
+            <div ref={sentinelRef} className="px-4 py-3 text-center text-xs text-gray-400">
+              Showing {visibleCount} of {entries.length} entries — scroll for more
+            </div>
+          )}
         </div>
       </div>
     </div>
