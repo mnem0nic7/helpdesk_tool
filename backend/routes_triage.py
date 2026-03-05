@@ -142,6 +142,15 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
                         "error": f"No transition to '{s.suggested_value}' available",
                     })
 
+            elif field_name == "request_type":
+                from ai_client import get_request_type_id
+                rt_id = get_request_type_id(s.suggested_value)
+                if rt_id:
+                    _client.set_request_type(req.key, rt_id)
+                    applied.append(field_name)
+                else:
+                    errors.append({"field": field_name, "error": f"Unknown request type: {s.suggested_value}"})
+
             elif field_name == "comment":
                 _client.add_comment(req.key, f"[AI-Suggestion] {s.suggested_value}")
                 applied.append(field_name)
@@ -207,6 +216,13 @@ async def apply_single_field(req: TriageFieldAction) -> dict[str, Any]:
                     detail=f"No transition to '{s.suggested_value}' available",
                 )
             _client.transition_issue(req.key, transition_id)
+
+        elif req.field == "request_type":
+            from ai_client import get_request_type_id
+            rt_id = get_request_type_id(s.suggested_value)
+            if not rt_id:
+                raise HTTPException(status_code=400, detail=f"Unknown request type: {s.suggested_value}")
+            _client.set_request_type(req.key, rt_id)
 
         elif req.field == "comment":
             _client.add_comment(req.key, f"[AI-Suggestion] {s.suggested_value}")

@@ -326,7 +326,7 @@ class IssueCache:
                 result.suggestions = validate_suggestions(key, result.suggestions)
                 store.save(result)
 
-                # Auto-apply priority changes with confidence >= 0.7
+                # Auto-apply priority and request_type with confidence >= 0.7
                 for s in result.suggestions:
                     if s.field == "priority" and s.confidence >= 0.7:
                         await loop.run_in_executor(
@@ -336,6 +336,17 @@ class IssueCache:
                             "Auto-triage: %s priority %s → %s (conf=%.2f)",
                             key, s.current_value, s.suggested_value, s.confidence,
                         )
+                    elif s.field == "request_type" and s.confidence >= 0.7:
+                        from ai_client import get_request_type_id
+                        rt_id = get_request_type_id(s.suggested_value)
+                        if rt_id:
+                            await loop.run_in_executor(
+                                None, client.set_request_type, key, rt_id
+                            )
+                            logger.info(
+                                "Auto-triage: %s request_type %s → %s (conf=%.2f)",
+                                key, s.current_value, s.suggested_value, s.confidence,
+                            )
 
                 store.mark_auto_triaged(key)
                 seen.add(key)
