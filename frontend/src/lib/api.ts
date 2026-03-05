@@ -378,6 +378,52 @@ export interface SLASettings {
   integration_reporters: string;
 }
 
+// ---------------------------------------------------------------------------
+// Email Alert types
+// ---------------------------------------------------------------------------
+
+export interface AlertRule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  trigger_type: string;
+  trigger_config: Record<string, unknown>;
+  frequency: string;
+  schedule_time: string;
+  schedule_days: string;
+  recipients: string;
+  cc: string;
+  filters: Record<string, unknown>;
+  last_run: string | null;
+  last_sent: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertHistoryEntry {
+  id: number;
+  rule_id: number;
+  rule_name: string;
+  trigger_type: string;
+  sent_at: string;
+  recipients: string;
+  ticket_count: number;
+  ticket_keys: string[];
+  status: string;
+  error: string | null;
+}
+
+export interface AlertTestResult {
+  rule: AlertRule;
+  matching_count: number;
+  sample_keys: string[];
+}
+
+export interface AlertTriggerType {
+  value: string;
+  label: string;
+}
+
 /** Cache status returned by GET /api/cache/status. */
 export interface CacheStatus {
   initialized: boolean;
@@ -680,6 +726,64 @@ export const api = {
     if (reset) body.reset = true;
     if (reprocess) body.reprocess = true;
     return postJSON("/api/triage/run-all", body);
+  },
+
+  // -------------------------------------------------------------------------
+  // Email Alerts
+  // -------------------------------------------------------------------------
+
+  getAlertRules(): Promise<AlertRule[]> {
+    return fetchJSON<AlertRule[]>("/api/alerts/rules");
+  },
+
+  getAlertRule(id: number): Promise<AlertRule> {
+    return fetchJSON<AlertRule>(`/api/alerts/rules/${id}`);
+  },
+
+  createAlertRule(data: Partial<AlertRule>): Promise<AlertRule> {
+    return postJSON<AlertRule>("/api/alerts/rules", data);
+  },
+
+  updateAlertRule(id: number, data: Partial<AlertRule>): Promise<AlertRule> {
+    return fetch(`/api/alerts/rules/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }).then(async (res) => {
+      if (!res.ok) throw new Error(`PUT failed (${res.status})`);
+      return res.json();
+    });
+  },
+
+  deleteAlertRule(id: number): Promise<{ deleted: boolean }> {
+    return fetch(`/api/alerts/rules/${id}`, { method: "DELETE" }).then(async (res) => {
+      if (!res.ok) throw new Error(`DELETE failed (${res.status})`);
+      return res.json();
+    });
+  },
+
+  toggleAlertRule(id: number): Promise<AlertRule> {
+    return postJSON<AlertRule>(`/api/alerts/rules/${id}/toggle`, {});
+  },
+
+  testAlertRule(id: number): Promise<AlertTestResult> {
+    return postJSON<AlertTestResult>(`/api/alerts/rules/${id}/test`, {});
+  },
+
+  runAlerts(): Promise<{ sent_count: number }> {
+    return postJSON("/api/alerts/run", {});
+  },
+
+  getAlertHistory(limit?: number, ruleId?: number): Promise<AlertHistoryEntry[]> {
+    const params = new URLSearchParams();
+    if (limit) params.set("limit", String(limit));
+    if (ruleId) params.set("rule_id", String(ruleId));
+    const qs = params.toString();
+    return fetchJSON<AlertHistoryEntry[]>(`/api/alerts/history${qs ? `?${qs}` : ""}`);
+  },
+
+  getAlertTriggerTypes(): Promise<AlertTriggerType[]> {
+    return fetchJSON<AlertTriggerType[]>("/api/alerts/trigger-types");
   },
 };
 

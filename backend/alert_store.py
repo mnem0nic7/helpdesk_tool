@@ -1,0 +1,224 @@
+"""SQLite store for alert rules and alert history."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import sqlite3
+from datetime import datetime, timezone
+from typing import Any
+
+from config import DATA_DIR
+
+logger = logging.getLogger(__name__)
+
+
+class AlertStore:
+    """Manages alert rules and send history in SQLite."""
+
+    def __init__(self, db_path: str | None = None) -> None:
+        self._db_path = db_path or os.path.join(DATA_DIR, "alerts.db")
+        os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
+        self._init_db()
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self) -> None:
+        with self._conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS alert_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    trigger_type TEXT NOT NULL,
+                    trigger_config TEXT NOT NULL DEFAULT '{}',
+                    frequency TEXT NOT NULL DEFAULT 'daily',
+                    schedule_time TEXT NOT NULL DEFAULT '08:00',
+                    schedule_days TEXT NOT NULL DEFAULT '0,1,2,3,4',
+                    recipients TEXT NOT NULL,
+                    cc TEXT NOT NULL DEFAULT '',
+                    filters TEXT NOT NULL DEFAULT '{}',
+                    last_run TEXT,
+                    last_sent TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS alert_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id INTEGER NOT NULL,
+                    rule_name TEXT NOT NULL,
+                    trigger_type TEXT NOT NULL,
+                    sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    recipients TEXT NOT NULL,
+                    ticket_count INTEGER NOT NULL DEFAULT 0,
+                    ticket_keys TEXT NOT NULL DEFAULT '[]',
+                    status TEXT NOT NULL DEFAULT 'sent',
+                    error TEXT,
+                    FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
+                )
+            """)
+
+    # -----------------------------------------------------------------------
+    # Alert Rules CRUD
+    # -----------------------------------------------------------------------
+
+    def get_rules(self) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM alert_rules ORDER BY created_at DESC"
+            ).fetchall()
+        return [self._row_to_rule(r) for r in rows]
+
+    def get_rule(self, rule_id: int) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM alert_rules WHERE id = ?", (rule_id,)
+            ).fetchone()
+        return self._row_to_rule(row) if row else None
+
+    def get_enabled_rules(self) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM alert_rules WHERE enabled = 1 ORDER BY id"
+            ).fetchall()
+        return [self._row_to_rule(r) for r in rows]
+
+    def create_rule(self, data: dict[str, Any]) -> dict[str, Any]:
+        with self._conn() as conn:
+            cur = conn.execute(
+                """INSERT INTO alert_rules
+                   (name, enabled, trigger_type, trigger_config, frequency,
+                    schedule_time, schedule_days, recipients, cc, filters)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    data["name"],
+                    1 if data.get("enabled", True) else 0,
+                    data["trigger_type"],
+                    json.dumps(data.get("trigger_config", {})),
+                    data.get("frequency", "daily"),
+                    data.get("schedule_time", "08:00"),
+                    data.get("schedule_days", "0,1,2,3,4"),
+                    data["recipients"],
+                    data.get("cc", ""),
+                    json.dumps(data.get("filters", {})),
+                ),
+            )
+            return self.get_rule(cur.lastrowid)  # type: ignore[return-value]
+
+    def update_rule(self, rule_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
+        existing = self.get_rule(rule_id)
+        if not existing:
+            return None
+
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE alert_rules SET
+                   name=?, enabled=?, trigger_type=?, trigger_config=?,
+                   frequency=?, schedule_time=?, schedule_days=?,
+                   recipients=?, cc=?, filters=?, updated_at=datetime('now')
+                   WHERE id=?""",
+                (
+                    data.get("name", existing["name"]),
+                    1 if data.get("enabled", existing["enabled"]) else 0,
+                    data.get("trigger_type", existing["trigger_type"]),
+                    json.dumps(data.get("trigger_config", existing["trigger_config"])),
+                    data.get("frequency", existing["frequency"]),
+                    data.get("schedule_time", existing["schedule_time"]),
+                    data.get("schedule_days", existing["schedule_days"]),
+                    data.get("recipients", existing["recipients"]),
+                    data.get("cc", existing.get("cc", "")),
+                    json.dumps(data.get("filters", existing["filters"])),
+                    rule_id,
+                ),
+            )
+        return self.get_rule(rule_id)
+
+    def delete_rule(self, rule_id: int) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))
+        return cur.rowcount > 0
+
+    def update_last_run(self, rule_id: int, sent: bool = False) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._conn() as conn:
+            if sent:
+                conn.execute(
+                    "UPDATE alert_rules SET last_run=?, last_sent=? WHERE id=?",
+                    (now, now, rule_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE alert_rules SET last_run=? WHERE id=?",
+                    (now, rule_id),
+                )
+
+    # -----------------------------------------------------------------------
+    # Alert History
+    # -----------------------------------------------------------------------
+
+    def record_send(
+        self,
+        rule: dict[str, Any],
+        ticket_keys: list[str],
+        status: str = "sent",
+        error: str | None = None,
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO alert_history
+                   (rule_id, rule_name, trigger_type, recipients,
+                    ticket_count, ticket_keys, status, error)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    rule["id"],
+                    rule["name"],
+                    rule["trigger_type"],
+                    rule["recipients"],
+                    len(ticket_keys),
+                    json.dumps(ticket_keys),
+                    status,
+                    error,
+                ),
+            )
+
+    def get_history(self, limit: int = 50, rule_id: int | None = None) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            if rule_id is not None:
+                rows = conn.execute(
+                    "SELECT * FROM alert_history WHERE rule_id = ? ORDER BY sent_at DESC LIMIT ?",
+                    (rule_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM alert_history ORDER BY sent_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        return [self._row_to_history(r) for r in rows]
+
+    # -----------------------------------------------------------------------
+    # Helpers
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _row_to_rule(row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        d["enabled"] = bool(d["enabled"])
+        d["trigger_config"] = json.loads(d.get("trigger_config") or "{}")
+        d["filters"] = json.loads(d.get("filters") or "{}")
+        return d
+
+    @staticmethod
+    def _row_to_history(row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        d["ticket_keys"] = json.loads(d.get("ticket_keys") or "[]")
+        return d
+
+
+# Module singleton
+alert_store = AlertStore()

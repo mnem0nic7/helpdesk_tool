@@ -491,8 +491,23 @@ class IssueCache:
                 )
                 if new_keys:
                     await self._auto_triage_new_tickets(new_keys)
+                # Run alert checks after each refresh
+                await self._run_alert_checks()
             except Exception:
                 logger.exception("Cache: incremental refresh failed")
+
+    async def _run_alert_checks(self) -> None:
+        """Evaluate alert rules and send emails if triggered."""
+        try:
+            from alert_engine import run_alert_checks, set_jira_base_url
+            from config import JIRA_BASE_URL
+            set_jira_base_url(JIRA_BASE_URL)
+            issues = self.get_filtered_issues()
+            sent = await run_alert_checks(issues)
+            if sent:
+                logger.info("Alerts: sent %d email(s)", sent)
+        except Exception:
+            logger.exception("Alert check failed")
 
 
 # ---------------------------------------------------------------------------

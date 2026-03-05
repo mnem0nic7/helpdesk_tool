@@ -1,0 +1,420 @@
+"""Alert engine — evaluates rules against tickets and sends email alerts."""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+from alert_store import alert_store
+from email_service import send_email
+from sla_engine import sla_config, business_minutes_between, _parse_dt
+
+logger = logging.getLogger(__name__)
+
+# Jira base URL for ticket links — set at startup
+_jira_base_url: str = ""
+
+
+def set_jira_base_url(url: str) -> None:
+    global _jira_base_url
+    _jira_base_url = url.rstrip("/")
+
+
+# ---------------------------------------------------------------------------
+# Ticket evaluation per trigger type
+# ---------------------------------------------------------------------------
+
+def _get_status_category(issue: dict) -> str:
+    return (
+        (issue.get("fields", {}).get("status") or {})
+        .get("statusCategory", {})
+        .get("name", "")
+    )
+
+
+def _is_open(issue: dict) -> bool:
+    return _get_status_category(issue) != "Done"
+
+
+def _get_priority(issue: dict) -> str:
+    return (issue.get("fields", {}).get("priority") or {}).get("name", "")
+
+
+def _get_assignee(issue: dict) -> str:
+    return (issue.get("fields", {}).get("assignee") or {}).get("displayName", "Unassigned")
+
+
+def _get_request_type(issue: dict) -> str:
+    rt = (issue.get("fields", {}).get("customfield_10010") or {}).get("requestType") or {}
+    return rt.get("name", "")
+
+
+def _updated_minutes_ago(issue: dict, now: datetime) -> float:
+    updated_str = issue.get("fields", {}).get("updated")
+    if not updated_str:
+        return float("inf")
+    updated = _parse_dt(updated_str)
+    if not updated:
+        return float("inf")
+    return (now - updated).total_seconds() / 60.0
+
+
+def _matches_filters(issue: dict, filters: dict) -> bool:
+    """Check if an issue matches the rule's optional filters."""
+    if not filters:
+        return True
+
+    priority = _get_priority(issue).lower()
+    if filters.get("priorities"):
+        allowed = [p.lower() for p in filters["priorities"]]
+        if priority and priority not in allowed:
+            return False
+
+    assignee = _get_assignee(issue).lower()
+    if filters.get("assignees"):
+        allowed = [a.lower() for a in filters["assignees"]]
+        if assignee.lower() not in allowed and "unassigned" not in allowed:
+            return False
+
+    request_type = _get_request_type(issue).lower()
+    if filters.get("request_types"):
+        allowed = [r.lower() for r in filters["request_types"]]
+        if request_type and request_type not in allowed:
+            return False
+
+    return True
+
+
+def evaluate_stale(issues: list[dict], config: dict) -> list[dict]:
+    """Find open tickets not updated within stale_hours (default 24)."""
+    stale_hours = config.get("stale_hours", 24)
+    stale_minutes = stale_hours * 60
+    now = datetime.now(timezone.utc)
+    return [
+        iss for iss in issues
+        if _is_open(iss) and _updated_minutes_ago(iss, now) > stale_minutes
+    ]
+
+
+def evaluate_fr_breach(issues: list[dict], config: dict) -> list[dict]:
+    """Find tickets that have breached first response SLA."""
+    settings = sla_config.get_settings()
+    now = datetime.now(timezone.utc)
+    integration_names = {
+        n.strip().lower()
+        for n in settings.get("integration_reporters", "").split(",")
+        if n.strip()
+    }
+    result = []
+    for iss in issues:
+        fields = iss.get("fields", {})
+        created = _parse_dt(fields.get("created"))
+        if not created:
+            continue
+
+        priority = _get_priority(iss)
+        request_type = _get_request_type(iss)
+        target = sla_config.get_target_for_ticket("first_response", priority, request_type)
+
+        reporter_obj = fields.get("reporter") or {}
+        reporter_id = reporter_obj.get("accountId", "")
+        reporter_name = (reporter_obj.get("displayName") or "").lower()
+        reporter_is_integration = reporter_name in integration_names
+
+        comments = (fields.get("comment") or {}).get("comments", [])
+        first_response_time = None
+        for comment in comments:
+            author_id = (comment.get("author") or {}).get("accountId", "")
+            if not author_id:
+                continue
+            if reporter_is_integration:
+                first_response_time = _parse_dt(comment.get("created"))
+                break
+            elif author_id != reporter_id:
+                first_response_time = _parse_dt(comment.get("created"))
+                break
+
+        if first_response_time:
+            elapsed = business_minutes_between(created, first_response_time, settings)
+        elif _is_open(iss):
+            elapsed = business_minutes_between(created, now, settings)
+        else:
+            end_time = _parse_dt(fields.get("resolutiondate")) or now
+            elapsed = business_minutes_between(created, end_time, settings)
+
+        if elapsed > target:
+            result.append(iss)
+    return result
+
+
+def evaluate_res_breach(issues: list[dict], config: dict) -> list[dict]:
+    """Find tickets that have breached resolution SLA."""
+    settings = sla_config.get_settings()
+    now = datetime.now(timezone.utc)
+    result = []
+    for iss in issues:
+        fields = iss.get("fields", {})
+        created = _parse_dt(fields.get("created"))
+        if not created:
+            continue
+
+        priority = _get_priority(iss)
+        request_type = _get_request_type(iss)
+        target = sla_config.get_target_for_ticket("resolution", priority, request_type)
+
+        resolution_time = _parse_dt(fields.get("resolutiondate"))
+        if resolution_time:
+            elapsed = business_minutes_between(created, resolution_time, settings)
+        else:
+            elapsed = business_minutes_between(created, now, settings)
+
+        if elapsed > target:
+            result.append(iss)
+    return result
+
+
+def evaluate_fr_approaching(issues: list[dict], config: dict) -> list[dict]:
+    """Find open tickets approaching first response SLA (default 80% of target)."""
+    threshold_pct = config.get("threshold_pct", 80) / 100.0
+    settings = sla_config.get_settings()
+    now = datetime.now(timezone.utc)
+    integration_names = {
+        n.strip().lower()
+        for n in settings.get("integration_reporters", "").split(",")
+        if n.strip()
+    }
+    result = []
+    for iss in issues:
+        if not _is_open(iss):
+            continue
+        fields = iss.get("fields", {})
+        created = _parse_dt(fields.get("created"))
+        if not created:
+            continue
+
+        priority = _get_priority(iss)
+        request_type = _get_request_type(iss)
+        target = sla_config.get_target_for_ticket("first_response", priority, request_type)
+
+        reporter_obj = fields.get("reporter") or {}
+        reporter_id = reporter_obj.get("accountId", "")
+        reporter_name = (reporter_obj.get("displayName") or "").lower()
+        reporter_is_integration = reporter_name in integration_names
+
+        comments = (fields.get("comment") or {}).get("comments", [])
+        has_response = False
+        for comment in comments:
+            author_id = (comment.get("author") or {}).get("accountId", "")
+            if not author_id:
+                continue
+            if reporter_is_integration or author_id != reporter_id:
+                has_response = True
+                break
+
+        if has_response:
+            continue
+
+        elapsed = business_minutes_between(created, now, settings)
+        if target * threshold_pct <= elapsed <= target:
+            result.append(iss)
+    return result
+
+
+def evaluate_res_approaching(issues: list[dict], config: dict) -> list[dict]:
+    """Find open tickets approaching resolution SLA."""
+    threshold_pct = config.get("threshold_pct", 80) / 100.0
+    settings = sla_config.get_settings()
+    now = datetime.now(timezone.utc)
+    result = []
+    for iss in issues:
+        if not _is_open(iss):
+            continue
+        fields = iss.get("fields", {})
+        created = _parse_dt(fields.get("created"))
+        if not created:
+            continue
+
+        priority = _get_priority(iss)
+        request_type = _get_request_type(iss)
+        target = sla_config.get_target_for_ticket("resolution", priority, request_type)
+
+        elapsed = business_minutes_between(created, now, settings)
+        if target * threshold_pct <= elapsed <= target:
+            result.append(iss)
+    return result
+
+
+EVALUATORS = {
+    "stale": evaluate_stale,
+    "fr_breach": evaluate_fr_breach,
+    "res_breach": evaluate_res_breach,
+    "fr_approaching": evaluate_fr_approaching,
+    "res_approaching": evaluate_res_approaching,
+}
+
+
+# ---------------------------------------------------------------------------
+# Email rendering
+# ---------------------------------------------------------------------------
+
+def _ticket_url(key: str) -> str:
+    if _jira_base_url:
+        return f"{_jira_base_url}/browse/{key}"
+    return key
+
+
+TRIGGER_LABELS = {
+    "stale": "Stale Tickets",
+    "fr_breach": "First Response SLA Breaches",
+    "res_breach": "Resolution SLA Breaches",
+    "fr_approaching": "Approaching First Response SLA",
+    "res_approaching": "Approaching Resolution SLA",
+}
+
+
+def _render_email(rule: dict, tickets: list[dict]) -> tuple[str, str]:
+    """Render email subject and HTML body for an alert."""
+    trigger_label = TRIGGER_LABELS.get(rule["trigger_type"], rule["trigger_type"])
+    subject = f"[OIT Alert] {rule['name']}: {len(tickets)} {trigger_label}"
+
+    rows_html = ""
+    for iss in tickets[:100]:
+        key = iss.get("key", "?")
+        fields = iss.get("fields", {})
+        summary = fields.get("summary", "")[:80]
+        priority = _get_priority(iss)
+        assignee = _get_assignee(iss)
+        status = (fields.get("status") or {}).get("name", "")
+        url = _ticket_url(key)
+        rows_html += f"""<tr>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee"><a href="{url}" style="color:#2563eb;text-decoration:none">{key}</a></td>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee">{summary}</td>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee">{priority}</td>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee">{assignee}</td>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee">{status}</td>
+        </tr>"""
+
+    overflow = ""
+    if len(tickets) > 100:
+        overflow = f"<p style='color:#6b7280;font-size:13px'>...and {len(tickets) - 100} more tickets.</p>"
+
+    html = f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:800px;margin:0 auto">
+        <div style="background:#1e293b;color:white;padding:16px 24px;border-radius:8px 8px 0 0">
+            <h2 style="margin:0;font-size:18px">{trigger_label}</h2>
+            <p style="margin:4px 0 0;font-size:13px;color:#94a3b8">Alert: {rule['name']} &bull; {len(tickets)} ticket(s)</p>
+        </div>
+        <div style="border:1px solid #e5e7eb;border-top:none;padding:20px 24px;border-radius:0 0 8px 8px">
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+                <thead>
+                    <tr style="background:#f9fafb">
+                        <th style="padding:8px 10px;text-align:left;color:#6b7280;font-weight:600">Key</th>
+                        <th style="padding:8px 10px;text-align:left;color:#6b7280;font-weight:600">Summary</th>
+                        <th style="padding:8px 10px;text-align:left;color:#6b7280;font-weight:600">Priority</th>
+                        <th style="padding:8px 10px;text-align:left;color:#6b7280;font-weight:600">Assignee</th>
+                        <th style="padding:8px 10px;text-align:left;color:#6b7280;font-weight:600">Status</th>
+                    </tr>
+                </thead>
+                <tbody>{rows_html}</tbody>
+            </table>
+            {overflow}
+            <p style="margin-top:20px;font-size:12px;color:#9ca3af">
+                Sent from OIT Helpdesk Dashboard &bull; <a href="https://it-app.movedocs.com/alerts" style="color:#2563eb">Manage Alerts</a>
+            </p>
+        </div>
+    </div>
+    """
+    return subject, html
+
+
+# ---------------------------------------------------------------------------
+# Main evaluation loop
+# ---------------------------------------------------------------------------
+
+async def run_alert_checks(issues: list[dict]) -> int:
+    """Evaluate all enabled rules and send alerts. Returns number of emails sent."""
+    rules = alert_store.get_enabled_rules()
+    if not rules:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    sent_count = 0
+
+    for rule in rules:
+        if not _should_run(rule, now):
+            continue
+
+        evaluator = EVALUATORS.get(rule["trigger_type"])
+        if not evaluator:
+            logger.warning("Unknown trigger type: %s", rule["trigger_type"])
+            continue
+
+        # Filter issues through rule filters
+        filtered = [iss for iss in issues if _matches_filters(iss, rule["filters"])]
+
+        matching = evaluator(filtered, rule["trigger_config"])
+
+        if not matching:
+            alert_store.update_last_run(rule["id"], sent=False)
+            continue
+
+        # Render and send
+        subject, html = _render_email(rule, matching)
+        recipients = [r.strip() for r in rule["recipients"].split(",") if r.strip()]
+        cc = [c.strip() for c in (rule.get("cc") or "").split(",") if c.strip()] or None
+
+        if not recipients:
+            logger.warning("Rule %s has no recipients", rule["name"])
+            continue
+
+        success = await send_email(recipients, subject, html, cc=cc)
+        ticket_keys = [iss.get("key", "") for iss in matching]
+
+        alert_store.record_send(
+            rule, ticket_keys,
+            status="sent" if success else "failed",
+            error=None if success else "Email delivery failed",
+        )
+        alert_store.update_last_run(rule["id"], sent=success)
+
+        if success:
+            sent_count += 1
+
+    return sent_count
+
+
+def _should_run(rule: dict, now: datetime) -> bool:
+    """Determine if a rule should run based on frequency and schedule."""
+    frequency = rule["frequency"]
+
+    if frequency == "immediate":
+        # Run every check cycle (~10 min) but only send if there are new matches
+        return True
+
+    last_run_str = rule.get("last_run")
+    if not last_run_str:
+        return True
+
+    last_run = _parse_dt(last_run_str)
+    if not last_run:
+        return True
+
+    elapsed_hours = (now - last_run).total_seconds() / 3600.0
+
+    if frequency == "hourly":
+        return elapsed_hours >= 1.0
+
+    if frequency == "daily":
+        # Check if we've passed the schedule time today
+        schedule_days = {int(d) for d in rule.get("schedule_days", "0,1,2,3,4").split(",") if d.strip()}
+        if now.weekday() not in schedule_days:
+            return False
+        if elapsed_hours < 20:  # Don't re-run within 20 hours
+            return False
+        return True
+
+    if frequency == "weekly":
+        return elapsed_hours >= 7 * 20  # Roughly weekly
+
+    return elapsed_hours >= 24
