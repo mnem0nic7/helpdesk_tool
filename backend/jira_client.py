@@ -215,10 +215,23 @@ class JiraClient:
 
         rt_map: dict[str, dict] = {}
 
+        import threading
+        _thread_local = threading.local()
+
+        def _get_session() -> requests.Session:
+            """Thread-local session to avoid sharing a Session across threads."""
+            if not hasattr(_thread_local, "session"):
+                s = requests.Session()
+                s.auth = self.session.auth
+                s.headers.update(dict(self.session.headers))
+                _thread_local.session = s
+            return _thread_local.session
+
         def _fetch_rt(key: str) -> tuple[str, dict | None]:
             try:
+                sess = _get_session()
                 url = f"{self.base_url}/rest/servicedeskapi/request/{key}?expand=requestType"
-                resp = self.session.get(url)
+                resp = sess.get(url, timeout=30)
                 if resp.status_code == 200:
                     data = resp.json()
                     rt = data.get("requestType")
@@ -230,10 +243,17 @@ class JiraClient:
 
         with ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(_fetch_rt, k): k for k in keys_to_enrich}
+            done_count = 0
             for future in as_completed(futures):
                 key, rt = future.result()
                 if rt:
                     rt_map[key] = rt
+                done_count += 1
+                if done_count % 500 == 0:
+                    logger.info(
+                        "Enrichment progress: %d/%d done (%d found)",
+                        done_count, len(keys_to_enrich), len(rt_map),
+                    )
 
         # Inject into issue fields as customfield_10010
         enriched = 0
