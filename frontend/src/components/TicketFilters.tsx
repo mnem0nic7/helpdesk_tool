@@ -20,7 +20,7 @@ export const emptyFilters: TicketFilterValues = {
   status: "",
   priority: "",
   issue_type: "",
-  open_only: false,
+  open_only: true,
   stale_only: false,
   created_after: "",
   created_before: "",

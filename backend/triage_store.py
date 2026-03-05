@@ -31,8 +31,19 @@ class TriageStore:
             )
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS auto_triaged "
-                "(key TEXT PRIMARY KEY, processed_at TEXT)"
+                "(key TEXT PRIMARY KEY, processed_at TEXT, "
+                "priority_updated INTEGER DEFAULT 0, "
+                "request_type_updated INTEGER DEFAULT 0)"
             )
+            # Migrate: add columns if they don't exist (idempotent)
+            try:
+                conn.execute("ALTER TABLE auto_triaged ADD COLUMN priority_updated INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE auto_triaged ADD COLUMN request_type_updated INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS auto_triage_log "
                 "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -93,13 +104,23 @@ class TriageStore:
     # Auto-triage tracking
     # ------------------------------------------------------------------
 
-    def mark_auto_triaged(self, key: str) -> None:
-        """Record that a ticket has been auto-triaged."""
+    def mark_auto_triaged(
+        self,
+        key: str,
+        priority_updated: bool = False,
+        request_type_updated: bool = False,
+    ) -> None:
+        """Record that a ticket has been auto-triaged with which fields were updated."""
         now = datetime.now(timezone.utc).isoformat()
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO auto_triaged (key, processed_at) VALUES (?, ?)",
-                (key, now),
+                "INSERT INTO auto_triaged (key, processed_at, priority_updated, request_type_updated) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "processed_at = excluded.processed_at, "
+                "priority_updated = MAX(priority_updated, excluded.priority_updated), "
+                "request_type_updated = MAX(request_type_updated, excluded.request_type_updated)",
+                (key, now, int(priority_updated), int(request_type_updated)),
             )
 
     def get_auto_triaged_keys(self) -> set[str]:

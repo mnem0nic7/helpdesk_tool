@@ -14,7 +14,7 @@ function filtersFromParams(sp: URLSearchParams): TicketFilterValues {
     status: sp.get("status") ?? "",
     priority: sp.get("priority") ?? "",
     issue_type: sp.get("issue_type") ?? "",
-    open_only: sp.get("open_only") === "true",
+    open_only: sp.get("open_only") !== "false",
     stale_only: sp.get("stale_only") === "true",
     created_after: sp.get("created_after") ?? "",
     created_before: sp.get("created_before") ?? "",
