@@ -65,15 +65,29 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     all_issues = cache.get_filtered_issues()
     all_keys = [issue.get("key", "") for issue in all_issues if issue.get("key")]
 
-    # Only reset tracking when explicitly requested (e.g. "Run on All")
+    # Mode flags:
+    #   reset=true  → clear tracking, reprocess everything
+    #   reprocess=true → only process already-done tickets (re-analyze them)
+    #   default → only process unprocessed tickets
     reset = (body or {}).get("reset", False)
+    reprocess = (body or {}).get("reprocess", False)
+
+    already_done = store.get_auto_triaged_keys()
+
     if reset:
         store.clear_auto_triaged()
         cache.reset_auto_triage_seen()
+        # Process all keys (tracking cleared)
+    elif reprocess:
+        # Only re-process previously done tickets
+        all_keys = [k for k in all_keys if k in already_done]
+        # Clear their tracking so they get re-processed
+        store.clear_auto_triaged_keys(all_keys)
+        cache.reset_auto_triage_seen()
+    else:
+        # Default: only unprocessed tickets
+        all_keys = [k for k in all_keys if k not in already_done]
 
-    # Filter out already-processed tickets, newest first
-    already_done = store.get_auto_triaged_keys()
-    all_keys = [k for k in all_keys if k not in already_done]
     all_keys.reverse()
 
     # Optional limit for testing
