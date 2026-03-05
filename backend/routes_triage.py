@@ -66,9 +66,10 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
         store.clear_auto_triaged()
         cache.reset_auto_triage_seen()
 
-    # Filter out already-processed tickets
+    # Filter out already-processed tickets, newest first
     already_done = store.get_auto_triaged_keys()
     all_keys = [k for k in all_keys if k not in already_done]
+    all_keys.reverse()
 
     # Optional limit for testing
     limit = (body or {}).get("limit")
