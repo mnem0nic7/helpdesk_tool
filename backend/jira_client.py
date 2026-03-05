@@ -228,18 +228,27 @@ class JiraClient:
             return _thread_local.session
 
         def _fetch_rt(key: str) -> tuple[str, dict | None]:
-            try:
-                sess = _get_session()
-                url = f"{self.base_url}/rest/servicedeskapi/request/{key}?expand=requestType"
-                resp = sess.get(url, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    rt = data.get("requestType")
-                    if rt and rt.get("name"):
-                        return key, rt
-                return key, None
-            except Exception:
-                return key, None
+            for attempt in range(3):
+                try:
+                    sess = _get_session()
+                    url = f"{self.base_url}/rest/servicedeskapi/request/{key}?expand=requestType"
+                    resp = sess.get(url, timeout=30)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        rt = data.get("requestType")
+                        if rt and rt.get("name"):
+                            return key, rt
+                    return key, None
+                except Exception:
+                    if attempt < 2:
+                        import time
+                        time.sleep(1)
+                        # Reset session on connection errors
+                        _thread_local.session = requests.Session()
+                        _thread_local.session.auth = self.session.auth
+                        _thread_local.session.headers.update(dict(self.session.headers))
+                    continue
+            return key, None
 
         with ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(_fetch_rt, k): k for k in keys_to_enrich}
