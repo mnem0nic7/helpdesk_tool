@@ -352,7 +352,7 @@ export interface MetricsQueryParams {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function buildQuery(params: any): string {
+function buildQuery(params: Record<string, any>): string {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") {
