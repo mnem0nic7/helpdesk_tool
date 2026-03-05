@@ -331,8 +331,6 @@ function SLASettingsModal({ settings, targets, onClose }: {
 // ---------------------------------------------------------------------------
 
 export default function SLAPage() {
-  const queryClient = useQueryClient();
-
   // Date range state
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
