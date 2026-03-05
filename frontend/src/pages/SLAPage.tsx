@@ -68,6 +68,9 @@ function BreachedTicketsTable({ tickets }: { tickets: TicketRow[] }) {
               Priority
             </th>
             <th className="px-4 py-3 text-left text-xs font-semibold tracking-wider text-gray-600 uppercase">
+              Request Type
+            </th>
+            <th className="px-4 py-3 text-left text-xs font-semibold tracking-wider text-gray-600 uppercase">
               Assignee
             </th>
             <th className="px-4 py-3 text-left text-xs font-semibold tracking-wider text-gray-600 uppercase">
@@ -96,6 +99,9 @@ function BreachedTicketsTable({ tickets }: { tickets: TicketRow[] }) {
                 >
                   {ticket.priority}
                 </span>
+              </td>
+              <td className="whitespace-nowrap px-4 py-3 text-gray-600">
+                {ticket.request_type || "—"}
               </td>
               <td className="whitespace-nowrap px-4 py-3 text-gray-700">
                 {ticket.assignee || "Unassigned"}

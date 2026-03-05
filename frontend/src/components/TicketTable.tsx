@@ -151,6 +151,11 @@ function buildColumns(
       cell: (info) => <span className="text-gray-600">{info.getValue()}</span>,
       size: 100,
     }),
+    colHelper.accessor("request_type", {
+      header: "Request Type",
+      cell: (info) => <span className="text-gray-600">{info.getValue() || "—"}</span>,
+      size: 160,
+    }),
     colHelper.accessor("status", {
       header: "Status",
       cell: (info) => {
