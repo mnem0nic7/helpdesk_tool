@@ -21,6 +21,11 @@ gen_full_data_export.py
 pull_all_fields.py
 start.sh
 
+# Secrets — never bake into image (injected at runtime via env_file)
+backend/.env
+backend/.env.*
+!backend/.env.example
+
 # IDE / editor
 .vscode/
 .idea/
