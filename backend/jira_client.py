@@ -231,6 +231,32 @@ class JiraClient:
         return resp.json()
 
     # ------------------------------------------------------------------
+    # Request types (JSM)
+    # ------------------------------------------------------------------
+
+    def get_request_types(self, service_desk_id: str) -> list[dict[str, Any]]:
+        """GET /rest/servicedeskapi/servicedesk/{id}/requesttype"""
+        url = f"{self.base_url}/rest/servicedeskapi/servicedesk/{service_desk_id}/requesttype"
+        all_types: list[dict[str, Any]] = []
+        start = 0
+        while True:
+            resp = self.session.get(url, params={"start": start, "limit": 100})
+            resp.raise_for_status()
+            data = resp.json()
+            all_types.extend(data.get("values", []))
+            if data.get("isLastPage", True):
+                break
+            start += len(data.get("values", []))
+        return all_types
+
+    def set_request_type(self, key: str, request_type_id: str) -> None:
+        """PUT /rest/api/3/issue/{key} to change the request type."""
+        url = f"{self.base_url}/rest/api/3/issue/{key}"
+        payload = {"fields": {"customfield_10010": {"id": request_type_id}}}
+        resp = self.session.put(url, json=payload)
+        resp.raise_for_status()
+
+    # ------------------------------------------------------------------
     # Users
     # ------------------------------------------------------------------
 

@@ -80,13 +80,15 @@ KNOWN_STATUSES = [
     "Resolved", "Closed", "Done", "Cancelled", "Declined",
 ]
 
-SYSTEM_PROMPT = """\
-You are an IT helpdesk triage assistant for a Jira Service Management project (OIT).
-Your job is to analyze tickets and suggest improvements for: priority, status, assignee, and an optional comment.
+SYSTEM_PROMPT = """You are an IT helpdesk triage assistant for a Jira Service Management project (OIT).
+Your job is to analyze tickets and suggest improvements for: priority, request_type, status, assignee, and an optional comment.
 
 Rules:
 - Only suggest changes where you see a clear improvement. If a field looks correct, omit it.
 - Priority must be one of: {priorities}
+- Request type: ONLY suggest a change when the current request type is "Emailed request".
+  Choose from: {request_types}
+  Pick the request type that best matches the ticket content.
 - Status must be one of: {statuses}
 - For assignee, suggest a name only if you can identify the right person from context. Otherwise omit.
 - For comments, suggest a brief triage note only if it would help the agent handling the ticket.
@@ -100,6 +102,12 @@ Respond with ONLY valid JSON (no markdown fences) in this format:
       "suggested_value": "High",
       "reasoning": "Customer reports complete service outage",
       "confidence": 0.85
+    }},
+    {{
+      "field": "request_type",
+      "suggested_value": "Hardware Support",
+      "reasoning": "Ticket describes a broken monitor",
+      "confidence": 0.9
     }}
   ]
 }}
@@ -237,8 +245,18 @@ def _parse_suggestions(raw: str, issue: dict[str, Any]) -> list[TriageSuggestion
         return []
 
     fields_data = issue.get("fields", {})
+
+    # Extract current request type name
+    crf = fields_data.get("customfield_10010")
+    current_rt = ""
+    if crf and isinstance(crf, dict):
+        rt_obj = crf.get("requestType")
+        if isinstance(rt_obj, dict):
+            current_rt = rt_obj.get("name", "")
+
     current_values = {
         "priority": (fields_data.get("priority") or {}).get("name", ""),
+        "request_type": current_rt,
         "status": (fields_data.get("status") or {}).get("name", ""),
         "assignee": (
             (fields_data.get("assignee") or {}).get("displayName", "Unassigned")
@@ -246,7 +264,6 @@ def _parse_suggestions(raw: str, issue: dict[str, Any]) -> list[TriageSuggestion
             else "Unassigned"
         ),
         "comment": "",
-        "request_type": "",
     }
 
     suggestions: list[TriageSuggestion] = []
@@ -279,6 +296,7 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
 
     system = SYSTEM_PROMPT.format(
         priorities=", ".join(KNOWN_PRIORITIES),
+        request_types=", ".join(get_request_type_names()),
         statuses=", ".join(KNOWN_STATUSES),
     )
     user_msg = _build_ticket_context(issue)
@@ -309,7 +327,67 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
 # TTL-cached lookups to avoid hammering the Jira API on every validation.
 _priority_cache: tuple[float, set[str]] = (0.0, set())
 _user_cache: tuple[float, dict[str, str]] = (0.0, {})  # display_name_lower -> accountId
+_rt_cache: tuple[float, dict[str, str]] = (0.0, {})  # name -> requestTypeId
 _CACHE_TTL = 600  # 10 minutes
+
+# Service desk ID (auto-detected on first call)
+_service_desk_id: str | None = None
+
+
+def _get_service_desk_id() -> str:
+    """Auto-detect the service desk ID for the configured project."""
+    global _service_desk_id
+    if _service_desk_id:
+        return _service_desk_id
+
+    from jira_client import JiraClient
+    from config import JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN
+    client = JiraClient()
+    url = f"{client.base_url}/rest/servicedeskapi/servicedesk"
+    resp = client.session.get(url)
+    resp.raise_for_status()
+    desks = resp.json().get("values", [])
+    if desks:
+        _service_desk_id = str(desks[0].get("id", "1"))
+    else:
+        _service_desk_id = "1"
+    logger.info("Auto-detected service desk ID: %s", _service_desk_id)
+    return _service_desk_id
+
+
+def _get_request_types() -> dict[str, str]:
+    """Return {name: requestTypeId} for all request types, cached with TTL."""
+    global _rt_cache
+    now = time.monotonic()
+    if _rt_cache[1] and now - _rt_cache[0] < _CACHE_TTL:
+        return _rt_cache[1]
+
+    from jira_client import JiraClient
+    try:
+        client = JiraClient()
+        sd_id = _get_service_desk_id()
+        raw = client.get_request_types(sd_id)
+        rt_map = {
+            rt.get("name", ""): str(rt.get("id", ""))
+            for rt in raw
+            if rt.get("name") and rt.get("id")
+        }
+        _rt_cache = (now, rt_map)
+        logger.info("Validation: cached %d request types: %s", len(rt_map), list(rt_map.keys()))
+        return rt_map
+    except Exception:
+        logger.exception("Validation: failed to fetch request types")
+        return {}
+
+
+def get_request_type_names() -> list[str]:
+    """Return list of valid request type names."""
+    return list(_get_request_types().keys())
+
+
+def get_request_type_id(name: str) -> str | None:
+    """Return the request type ID for a given name, or None."""
+    return _get_request_types().get(name)
 
 
 def _get_valid_priorities() -> set[str]:
@@ -401,6 +479,16 @@ def validate_suggestions(key: str, suggestions: list[TriageSuggestion]) -> list[
                     "Validation: dropping %s priority suggestion '%s' — "
                     "not in valid priorities %s",
                     key, s.suggested_value, priorities,
+                )
+                continue
+
+        elif s.field == "request_type":
+            valid_rts = get_request_type_names()
+            if s.suggested_value not in valid_rts:
+                logger.warning(
+                    "Validation: dropping %s request_type suggestion '%s' — "
+                    "not a valid request type",
+                    key, s.suggested_value,
                 )
                 continue
 
