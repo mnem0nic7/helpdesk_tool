@@ -67,6 +67,7 @@ async def callback(request: Request):
         value=sid,
         max_age=_COOKIE_MAX_AGE,
         httponly=True,
+        secure=True,
         samesite="lax",
         path="/",
     )
@@ -93,5 +94,5 @@ async def logout(request: Request):
     if sid:
         delete_session(sid)
     response = RedirectResponse(url="/", status_code=302)
-    response.delete_cookie(key=_COOKIE_NAME, path="/")
+    response.delete_cookie(key=_COOKIE_NAME, path="/", secure=True, samesite="lax")
     return response
