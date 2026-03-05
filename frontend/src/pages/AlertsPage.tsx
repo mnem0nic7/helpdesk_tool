@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { AlertRule, AlertHistoryEntry, AlertTriggerType, AlertTestResult } from "../lib/api.ts";
+import type { AlertRule, AlertTriggerType, AlertTestResult } from "../lib/api.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
