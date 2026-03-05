@@ -4,7 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieCha
 import { api } from "../lib/api.ts";
 import type {
   SLAMetricsResponse, SLATicketRow, SLATimerStats, SLATarget,
-  SLASettings, SLADistributionBucket, CacheStatus,
+  SLASettings, CacheStatus,
 } from "../lib/api.ts";
 
 const PAGE_SIZE = 100;
@@ -133,7 +133,7 @@ function SLADistributionChart({ title, stats }: { title: string; stats: SLATimer
           <BarChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
             <XAxis dataKey="label" tick={{ fontSize: 11 }} />
             <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-            <Tooltip formatter={(v: number) => [v, "Tickets"]} />
+            <Tooltip formatter={(v) => [String(v), "Tickets"]} />
             <Bar dataKey="count" radius={[4, 4, 0, 0]}>
               {data.map((_entry, i) => (
                 <Cell key={i} fill={DIST_COLORS[i % DIST_COLORS.length]} />
@@ -166,13 +166,13 @@ function SLAStatusPie({ title, stats }: { title: string; stats: SLATimerStats })
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70}
-              label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+              label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
               labelLine={{ strokeWidth: 1 }}>
               {data.map((d) => (
                 <Cell key={d.name} fill={STATUS_COLORS[d.name] ?? "#9ca3af"} />
               ))}
             </Pie>
-            <Tooltip formatter={(v: number) => [v, "Tickets"]} />
+            <Tooltip formatter={(v) => [String(v), "Tickets"]} />
             <Legend />
           </PieChart>
         </ResponsiveContainer>
