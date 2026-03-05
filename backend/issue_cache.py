@@ -241,11 +241,9 @@ class IssueCache:
     def _incremental_refresh(self) -> list[str]:
         """Fetch only issues updated in the last refresh interval and merge.
 
-        Returns a list of issue keys that are genuinely new (not previously
-        seen in the cache).
+        Returns a list of issue keys that need auto-triage (not yet processed).
         """
         self._refreshing = True
-        new_keys: list[str] = []
         try:
             jql = f'project = {JIRA_PROJECT} AND updated >= "-10m" ORDER BY key ASC'
             logger.info("Cache: incremental refresh with JQL: %s", jql)
@@ -259,8 +257,6 @@ class IssueCache:
             with self._lock:
                 for issue in updated_issues:
                     key = issue.get("key", "")
-                    if key not in self._all_issues:
-                        new_keys.append(key)
                     self._all_issues[key] = issue
                     if JiraClient.is_excluded(issue):
                         self._issues.pop(key, None)
@@ -268,17 +264,25 @@ class IssueCache:
                         self._issues[key] = issue
                 self._last_refresh = datetime.now(timezone.utc)
 
+            # Return keys not yet auto-triaged (covers both brand-new tickets
+            # and tickets restored from SQLite that were never processed)
+            seen = self._load_auto_triage_seen()
+            untriaged_keys = [
+                issue.get("key", "") for issue in updated_issues
+                if issue.get("key") and issue.get("key") not in seen
+            ]
+
             logger.info(
-                "Cache: after merge — %d total, %d filtered (%d new)",
+                "Cache: after merge — %d total, %d filtered (%d untriaged)",
                 len(self._all_issues),
                 len(self._issues),
-                len(new_keys),
+                len(untriaged_keys),
             )
             if updated_issues:
                 self._upsert_to_db(updated_issues)
         finally:
             self._refreshing = False
-        return new_keys
+        return untriaged_keys
 
     # ------------------------------------------------------------------
     # Manual refresh
