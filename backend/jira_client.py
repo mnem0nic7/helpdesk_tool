@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 # Default fields to request on search queries
 # ---------------------------------------------------------------------------
 FIELDS: list[str] = [
+    # Core fields
     "summary",
     "description",
     "issuetype",
@@ -30,21 +31,25 @@ FIELDS: list[str] = [
     "reporter",
     "assignee",
     "comment",
-    # Custom fields
-    "customfield_11102",
-    "customfield_11239",
-    "customfield_11117",
-    "customfield_11301",
-    "customfield_11249",
-    "customfield_11264",
-    "customfield_11266",
-    "customfield_11267",
-    "customfield_11268",
-    "customfield_10001",
-    "customfield_10010",  # Request type
+    # SLA timers (JSM)
+    "customfield_11264",   # Time to resolution
+    "customfield_11266",   # Time to first response
+    "customfield_11267",   # Time to close after resolution
+    "customfield_11268",   # Time to review normal change
+    # Custom fields with data
+    "customfield_11102",   # Request Type (JSM widget — also enriched via JSM API)
+    "customfield_11239",   # Work category
+    "customfield_11117",   # SLT Projects
+    "customfield_10010",   # Epic Color (null — RT comes from JSM enrichment)
+    "customfield_11121",   # Steps To Re-Create The Issue (ADF, useful for AI triage)
+    "customfield_10200",   # Business Priority
+    "customfield_10700",   # Organizations (customer org)
+    "customfield_11217",   # Request language
     # Metadata
     "labels",
     "components",
+    "attachment",
+    "issuelinks",
     "statuscategorychangedate",
 ]
 

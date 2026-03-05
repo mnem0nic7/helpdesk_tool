@@ -105,9 +105,20 @@ class TicketRow(BaseModel):
     age_days: Optional[float] = None
     days_since_update: Optional[float] = None
     excluded: bool
+    # SLA first response
     sla_first_response_status: str = ""
+    sla_first_response_breach_time: str = ""
+    sla_first_response_remaining_millis: Optional[int] = None
+    # SLA resolution
     sla_resolution_status: str = ""
+    sla_resolution_breach_time: str = ""
+    sla_resolution_remaining_millis: Optional[int] = None
+    # Additional fields
     labels: list[str] = Field(default_factory=list)
+    components: list[str] = Field(default_factory=list)
+    work_category: str = ""
+    organizations: list[str] = Field(default_factory=list)
+    attachment_count: int = 0
 
 
 # ---------------------------------------------------------------------------

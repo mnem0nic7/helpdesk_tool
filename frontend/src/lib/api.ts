@@ -125,9 +125,20 @@ export interface TicketRow {
   age_days: number | null;
   days_since_update: number | null;
   excluded: boolean;
+  // SLA first response
   sla_first_response_status: string;
+  sla_first_response_breach_time: string;
+  sla_first_response_remaining_millis: number | null;
+  // SLA resolution
   sla_resolution_status: string;
+  sla_resolution_breach_time: string;
+  sla_resolution_remaining_millis: number | null;
+  // Additional fields
   labels: string[];
+  components: string[];
+  work_category: string;
+  organizations: string[];
+  attachment_count: number;
 }
 
 /** Tickets response from GET /api/tickets. */
