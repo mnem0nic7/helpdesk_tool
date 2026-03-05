@@ -1,8 +1,21 @@
 services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - dashboard
+    restart: unless-stopped
+
   dashboard:
     build: .
-    ports:
-      - "3002:80"
+    expose:
+      - "80"
     env_file:
       - backend/.env
     environment:
@@ -13,3 +26,5 @@ services:
 
 volumes:
   cache_data:
+  caddy_data:
+  caddy_config:
