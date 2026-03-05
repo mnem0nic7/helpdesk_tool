@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from ai_client import analyze_ticket, get_available_models, validate_suggestions
 from auth import get_session
@@ -31,6 +31,39 @@ async def list_models() -> list[dict[str, Any]]:
 async def get_triage_log() -> list[dict[str, Any]]:
     """Return all AI triage changes applied to Jira (auto and user-approved)."""
     return store.get_triage_log(limit=500)
+
+
+@router.post("/run-all")
+async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Run auto-triage on ALL existing cached tickets as a background task."""
+    from config import AUTO_TRIAGE_MODEL
+
+    model = (body or {}).get("model") or AUTO_TRIAGE_MODEL
+
+    # Validate model
+    available_ids = {m.id for m in get_available_models()}
+    if model not in available_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{model}' not available. Configure the API key or choose another model.",
+        )
+
+    all_issues = cache.get_all_issues()
+    all_keys = [issue.get("key", "") for issue in all_issues if issue.get("key")]
+
+    # Reset tracking so every ticket gets re-processed
+    store.clear_auto_triaged()
+    cache.reset_auto_triage_seen()
+
+    async def _run() -> None:
+        try:
+            await cache._auto_triage_new_tickets(all_keys)
+        except Exception:
+            logger.exception("run-all: background triage failed")
+
+    background_tasks.add_task(_run)
+
+    return {"started": True, "total_tickets": len(all_keys)}
 
 
 @router.get("/suggestions")

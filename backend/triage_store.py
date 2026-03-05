@@ -108,6 +108,11 @@ class TriageStore:
             rows = conn.execute("SELECT key FROM auto_triaged").fetchall()
         return {row[0] for row in rows}
 
+    def clear_auto_triaged(self) -> None:
+        """Delete all rows from auto_triaged so tickets can be re-processed."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM auto_triaged")
+
     def log_change(
         self,
         key: str,

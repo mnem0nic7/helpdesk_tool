@@ -283,6 +283,10 @@ class IssueCache:
     # Auto-triage
     # ------------------------------------------------------------------
 
+    def reset_auto_triage_seen(self) -> None:
+        """Clear the in-memory set of auto-triaged keys so all tickets can be re-processed."""
+        self._auto_triage_seen = None
+
     def _load_auto_triage_seen(self) -> set[str]:
         """Lazy-load the set of already-auto-triaged keys from the DB."""
         if self._auto_triage_seen is None:

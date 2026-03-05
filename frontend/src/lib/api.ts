@@ -548,6 +548,11 @@ export const api = {
   dismissTriageSuggestion(key: string): Promise<{ key: string; dismissed: boolean }> {
     return postJSON("/api/triage/dismiss", { key });
   },
+
+  /** Run auto-triage on all existing cached tickets (background task). */
+  runTriageAll(model?: string): Promise<{ started: boolean; total_tickets: number }> {
+    return postJSON("/api/triage/run-all", model ? { model } : {});
+  },
 };
 
 export default api;
