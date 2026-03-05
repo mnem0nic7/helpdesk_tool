@@ -27,3 +27,9 @@ ENTRA_CLIENT_ID: str = os.getenv("ENTRA_CLIENT_ID", "")
 ENTRA_CLIENT_SECRET: str = os.getenv("ENTRA_CLIENT_SECRET", "")
 ALLOWED_USERS: str = os.getenv("ALLOWED_USERS", "")  # comma-separated emails, empty = all
 APP_SECRET_KEY: str = os.getenv("APP_SECRET_KEY", "change-me-in-production")
+if APP_SECRET_KEY == "change-me-in-production":
+    import warnings
+    warnings.warn(
+        "APP_SECRET_KEY is using the insecure default. Set it in .env for production.",
+        stacklevel=1,
+    )
