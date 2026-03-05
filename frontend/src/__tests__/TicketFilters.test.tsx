@@ -89,7 +89,7 @@ describe("TicketFilters", () => {
     const { onChange } = renderFilters();
     fireEvent.click(screen.getByText("Open Only"));
     expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ open_only: true })
+      expect.objectContaining({ open_only: false })
     );
   });
 

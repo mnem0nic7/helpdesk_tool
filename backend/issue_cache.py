@@ -381,6 +381,8 @@ class IssueCache:
                 store.save(result)
 
                 # Auto-apply priority and request_type with confidence >= 0.7
+                priority_updated = False
+                request_type_updated = False
                 for s in result.suggestions:
                     try:
                         if s.field == "priority" and s.confidence >= 0.7:
@@ -391,6 +393,7 @@ class IssueCache:
                                 key, "priority", s.current_value, s.suggested_value,
                                 s.confidence, AUTO_TRIAGE_MODEL,
                             )
+                            priority_updated = True
                             logger.info(
                                 "Auto-triage: %s priority %s → %s (conf=%.2f)",
                                 key, s.current_value, s.suggested_value, s.confidence,
@@ -406,6 +409,7 @@ class IssueCache:
                                     key, "request_type", s.current_value, s.suggested_value,
                                     s.confidence, AUTO_TRIAGE_MODEL,
                                 )
+                                request_type_updated = True
                                 logger.info(
                                     "Auto-triage: %s request_type %s → %s (conf=%.2f)",
                                     key, s.current_value, s.suggested_value, s.confidence,
@@ -413,7 +417,7 @@ class IssueCache:
                     except Exception:
                         logger.exception("Auto-triage: failed to apply %s for %s", s.field, key)
 
-                store.mark_auto_triaged(key)
+                store.mark_auto_triaged(key, priority_updated=priority_updated, request_type_updated=request_type_updated)
                 seen.add(key)
                 logger.info("Auto-triage: %s completed (%d suggestions)", key, len(result.suggestions))
 

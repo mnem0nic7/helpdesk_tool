@@ -352,7 +352,7 @@ export default function VisualizationsPage() {
   const [timeBucket, setTimeBucket] = useState("week");
 
   // Filter state
-  const [filters, setFilters] = useState<TicketFilterValues>({ ...emptyFilters });
+  const [filters, setFilters] = useState<TicketFilterValues>({ ...emptyFilters, open_only: true });
   const [includeExcluded, setIncludeExcluded] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
 

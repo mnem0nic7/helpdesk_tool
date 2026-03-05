@@ -23,30 +23,31 @@ function formatTimestamp(iso: string): string {
 
 export default function AILogPage() {
   const queryClient = useQueryClient();
-  const [running, setRunning] = useState(false);
-  const [runResult, setRunResult] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  async function handleRun(limit?: number) {
-    setRunning(true);
-    setRunResult(null);
-    try {
-      const res = await api.runTriageAll(undefined, limit);
-      setRunResult(`Started triage on ${res.total_tickets} tickets. Changes will appear below as they complete.`);
-    } catch (err) {
-      setRunResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setRunning(false);
-      queryClient.invalidateQueries({ queryKey: ["triage-log"] });
-    }
-  }
-
+  // Always poll run status so progress survives navigation
   const { data: runStatus } = useQuery({
     queryKey: ["triage-run-status"],
     queryFn: () => api.getTriageRunStatus(),
-    refetchInterval: runResult ? 2_000 : false,
+    refetchInterval: 2_000,
   });
 
   const isRunning = runStatus?.running ?? false;
+
+  async function handleRun(limit?: number) {
+    setStarting(true);
+    setErrorMsg(null);
+    try {
+      await api.runTriageAll(undefined, limit);
+      // Status will be picked up by the polling query
+      queryClient.invalidateQueries({ queryKey: ["triage-run-status"] });
+    } catch (err) {
+      setErrorMsg(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setStarting(false);
+    }
+  }
 
   const { data: log, isLoading } = useQuery({
     queryKey: ["triage-log"],
@@ -75,37 +76,37 @@ export default function AILogPage() {
         <div className="flex gap-2">
           <button
             onClick={() => handleRun(10)}
-            disabled={running || isRunning}
+            disabled={starting || isRunning}
             className="rounded-lg bg-gray-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {running ? "Starting…" : isRunning ? "Running…" : "Test (10 Tickets)"}
+            {starting ? "Starting…" : isRunning ? "Running…" : "Test (10 Tickets)"}
           </button>
           <button
             onClick={() => handleRun()}
-            disabled={running || isRunning}
+            disabled={starting || isRunning}
             className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {running ? "Starting…" : isRunning ? "Running…" : "Run on All Tickets"}
+            {starting ? "Starting…" : isRunning ? "Running…" : "Run on All Tickets"}
           </button>
         </div>
       </div>
-      {runResult && (
-        <div className={`rounded-lg px-4 py-3 text-sm ${runResult.startsWith("Error") ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700"}`}>
-          {runResult}
-          {isRunning && runStatus && runStatus.total > 0 && (
-            <div className="mt-2">
-              <div className="flex items-center justify-between text-xs mb-1">
-                <span>Processing {runStatus.current_key ?? "..."}  ({runStatus.processed}/{runStatus.total})</span>
-                <span>{Math.round((runStatus.processed / runStatus.total) * 100)}%</span>
-              </div>
-              <div className="h-2 w-full rounded-full bg-blue-200">
-                <div
-                  className="h-2 rounded-full bg-blue-600 transition-all duration-500"
-                  style={{ width: `${(runStatus.processed / runStatus.total) * 100}%` }}
-                />
-              </div>
-            </div>
-          )}
+      {errorMsg && (
+        <div className="rounded-lg px-4 py-3 text-sm bg-red-50 text-red-700">
+          {errorMsg}
+        </div>
+      )}
+      {isRunning && runStatus && runStatus.total > 0 && (
+        <div className="rounded-lg px-4 py-3 text-sm bg-blue-50 text-blue-700">
+          <div className="flex items-center justify-between text-xs mb-1">
+            <span>Processing {runStatus.current_key ?? "…"} ({runStatus.processed}/{runStatus.total})</span>
+            <span>{Math.round((runStatus.processed / runStatus.total) * 100)}%</span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-blue-200">
+            <div
+              className="h-2 rounded-full bg-blue-600 transition-all duration-500"
+              style={{ width: `${(runStatus.processed / runStatus.total) * 100}%` }}
+            />
+          </div>
         </div>
       )}
 
