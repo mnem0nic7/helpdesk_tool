@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend } from "recharts";
 import { api } from "../lib/api.ts";
 import type {
   SLAMetricsResponse, SLATicketRow, SLATimerStats, SLATarget,
-  SLASettings, CacheStatus,
+  SLASettings, SLADistributionBucket, CacheStatus,
 } from "../lib/api.ts";
 
 const PAGE_SIZE = 100;
@@ -93,6 +94,12 @@ function SLASummaryCard({ title, stats }: { title: string; stats: SLATimerStats 
             <span className="ml-1 text-xs text-gray-500">Avg</span>
           </div>
         )}
+        {stats.p95_elapsed_minutes > 0 && (
+          <div>
+            <span className="text-lg font-semibold text-amber-600">{formatMinutes(stats.p95_elapsed_minutes)}</span>
+            <span className="ml-1 text-xs text-gray-500">P95</span>
+          </div>
+        )}
       </div>
       <div className="mt-4 flex h-4 w-full overflow-hidden rounded-full bg-gray-100">
         {metPct > 0 && <div className="bg-green-500 transition-all" style={{ width: `${metPct}%` }} title={`Met: ${stats.met}`} />}
@@ -104,6 +111,71 @@ function SLASummaryCard({ title, stats }: { title: string; stats: SLATimerStats 
         <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-red-500" />Breached: {stats.breached}</span>
         <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-blue-500" />Running: {stats.running}</span>
         <span className="text-gray-400">Total: {stats.total}</span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Distribution Bar Chart
+// ---------------------------------------------------------------------------
+
+const DIST_COLORS = ["#10b981", "#34d399", "#6ee7b7", "#fbbf24", "#f97316", "#ef4444", "#dc2626"];
+
+function SLADistributionChart({ title, stats }: { title: string; stats: SLATimerStats }) {
+  const data = stats.distribution ?? [];
+  if (!data.length) return null;
+  return (
+    <div className="rounded-lg bg-white px-5 py-5 shadow">
+      <h3 className="text-sm font-semibold tracking-wide text-gray-700 uppercase">{title}</h3>
+      <div className="mt-3 h-48">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+            <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+            <Tooltip formatter={(v: number) => [v, "Tickets"]} />
+            <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+              {data.map((_entry, i) => (
+                <Cell key={i} fill={DIST_COLORS[i % DIST_COLORS.length]} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Status Pie Chart
+// ---------------------------------------------------------------------------
+
+const STATUS_COLORS: Record<string, string> = { Met: "#22c55e", Breached: "#ef4444", Running: "#3b82f6" };
+
+function SLAStatusPie({ title, stats }: { title: string; stats: SLATimerStats }) {
+  const data = [
+    { name: "Met", value: stats.met },
+    { name: "Breached", value: stats.breached },
+    { name: "Running", value: stats.running },
+  ].filter((d) => d.value > 0);
+  if (!data.length) return null;
+  return (
+    <div className="rounded-lg bg-white px-5 py-5 shadow">
+      <h3 className="text-sm font-semibold tracking-wide text-gray-700 uppercase">{title}</h3>
+      <div className="mt-3 h-48">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70}
+              label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+              labelLine={{ strokeWidth: 1 }}>
+              {data.map((d) => (
+                <Cell key={d.name} fill={STATUS_COLORS[d.name] ?? "#9ca3af"} />
+              ))}
+            </Pie>
+            <Tooltip formatter={(v: number) => [v, "Tickets"]} />
+            <Legend />
+          </PieChart>
+        </ResponsiveContainer>
       </div>
     </div>
   );
@@ -350,9 +422,10 @@ export default function SLAPage() {
   });
   const jiraBaseUrl = cacheStatus?.jira_base_url;
 
-  const { data, isLoading, error } = useQuery<SLAMetricsResponse>({
+  const { data, isLoading, isFetching, error } = useQuery<SLAMetricsResponse>({
     queryKey: ["sla-metrics", dateFrom, dateTo],
     queryFn: () => api.getSLAMetrics(dateFrom || undefined, dateTo || undefined),
+    placeholderData: (prev) => prev,
   });
 
   // Filter / sort state
@@ -450,7 +523,12 @@ export default function SLAPage() {
       {/* Header row */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">SLA Tracker</h1>
+          <h1 className="text-2xl font-bold text-gray-900">
+            SLA Tracker
+            {isFetching && !isLoading && (
+              <span className="ml-3 inline-block h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent align-middle" />
+            )}
+          </h1>
           <p className="mt-1 text-sm text-gray-500">
             Custom SLA compliance based on business hours.
           </p>
@@ -482,6 +560,18 @@ export default function SLAPage() {
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <SLASummaryCard title="First Response" stats={summary.first_response} />
         <SLASummaryCard title="Resolution" stats={summary.resolution} />
+      </div>
+
+      {/* Distribution charts */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+        <SLADistributionChart title="First Response Distribution" stats={summary.first_response} />
+        <SLADistributionChart title="Resolution Distribution" stats={summary.resolution} />
+      </div>
+
+      {/* Status breakdown */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+        <SLAStatusPie title="First Response Status" stats={summary.first_response} />
+        <SLAStatusPie title="Resolution Status" stats={summary.resolution} />
       </div>
 
       {/* Tickets table */}

@@ -331,6 +331,12 @@ export interface SLATicketRow extends TicketRow {
   sla_resolution: SLATicketTimer | null;
 }
 
+/** A single bucket in the elapsed-time distribution. */
+export interface SLADistributionBucket {
+  label: string;
+  count: number;
+}
+
 /** Summary stats for a single SLA timer. */
 export interface SLATimerStats {
   total: number;
@@ -339,6 +345,8 @@ export interface SLATimerStats {
   running: number;
   compliance_pct: number;
   avg_elapsed_minutes: number;
+  p95_elapsed_minutes: number;
+  distribution: SLADistributionBucket[];
 }
 
 /** Full response from GET /api/sla/metrics. */

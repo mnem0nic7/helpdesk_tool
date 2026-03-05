@@ -266,6 +266,8 @@ def compute_sla_for_issues(
     # Compute per-ticket SLA
     fr_stats = {"met": 0, "breached": 0, "running": 0, "total": 0, "elapsed_sum": 0.0}
     res_stats = {"met": 0, "breached": 0, "running": 0, "total": 0, "elapsed_sum": 0.0}
+    fr_elapsed_list: list[float] = []
+    res_elapsed_list: list[float] = []
     ticket_rows: list[dict[str, Any]] = []
 
     for issue in filtered:
@@ -330,6 +332,7 @@ def compute_sla_for_issues(
         fr_stats["total"] += 1
         fr_stats[fr_status] += 1
         fr_stats["elapsed_sum"] += elapsed
+        fr_elapsed_list.append(elapsed)
 
         # --- Resolution ---
         resolution_time = _parse_dt(fields.get("resolutiondate"))
@@ -349,12 +352,40 @@ def compute_sla_for_issues(
         res_stats["total"] += 1
         res_stats[res_status] += 1
         res_stats["elapsed_sum"] += elapsed
+        res_elapsed_list.append(elapsed)
 
         row["sla_first_response"] = fr_result
         row["sla_resolution"] = res_result
         ticket_rows.append(row)
 
-    def _make_summary(stats: dict) -> dict[str, Any]:
+    import math
+
+    def _percentile(values: list[float], pct: float) -> float:
+        if not values:
+            return 0.0
+        s = sorted(values)
+        idx = math.ceil(pct / 100.0 * len(s)) - 1
+        return round(s[max(idx, 0)], 1)
+
+    def _distribution(values: list[float], buckets: list[tuple[str, float, float]]) -> list[dict[str, Any]]:
+        result = []
+        for label, lo, hi in buckets:
+            count = sum(1 for v in values if lo <= v < hi)
+            result.append({"label": label, "count": count})
+        return result
+
+    FR_BUCKETS: list[tuple[str, float, float]] = [
+        ("<30m", 0, 30), ("30m–1h", 30, 60), ("1–2h", 60, 120),
+        ("2–4h", 120, 240), ("4–8h", 240, 480), ("8h+", 480, float("inf")),
+    ]
+    RES_BUCKETS: list[tuple[str, float, float]] = [
+        ("<2h", 0, 120), ("2–4h", 120, 240), ("4–8h", 240, 480),
+        ("1 day", 480, 540), ("1–2d", 540, 1080), ("2–5d", 1080, 2700),
+        ("5d+", 2700, float("inf")),
+    ]
+
+    def _make_summary(stats: dict, elapsed_list: list[float],
+                      buckets: list[tuple[str, float, float]]) -> dict[str, Any]:
         total = stats["total"]
         completed = stats["met"] + stats["breached"]
         return {
@@ -364,12 +395,14 @@ def compute_sla_for_issues(
             "running": stats["running"],
             "compliance_pct": round(stats["met"] / completed * 100, 1) if completed else 0.0,
             "avg_elapsed_minutes": round(stats["elapsed_sum"] / total, 1) if total else 0.0,
+            "p95_elapsed_minutes": _percentile(elapsed_list, 95),
+            "distribution": _distribution(elapsed_list, buckets),
         }
 
     return {
         "summary": {
-            "first_response": _make_summary(fr_stats),
-            "resolution": _make_summary(res_stats),
+            "first_response": _make_summary(fr_stats, fr_elapsed_list, FR_BUCKETS),
+            "resolution": _make_summary(res_stats, res_elapsed_list, RES_BUCKETS),
         },
         "tickets": ticket_rows,
         "settings": settings,
