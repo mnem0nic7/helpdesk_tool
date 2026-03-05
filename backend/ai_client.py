@@ -86,9 +86,9 @@ Your job is to analyze tickets and suggest improvements for: priority, request_t
 Rules:
 - Only suggest changes where you see a clear improvement. If a field looks correct, omit it.
 - Priority must be one of: {priorities}
-- Request type: ONLY suggest a change when the current request type is "Emailed request" or "Email request".
+- Request type: ALWAYS suggest a change when the current request type is "Emailed request" or "Email request".
   Choose from: {request_types}
-  Pick the request type that best matches the ticket content.
+  Pick the request type that best matches the ticket content. If unsure, use "Get IT help" as the default.
 - Status must be one of: {statuses}
 - For assignee, suggest a name only if you can identify the right person from context. Otherwise omit.
 - For comments, suggest a brief triage note only if it would help the agent handling the ticket.
