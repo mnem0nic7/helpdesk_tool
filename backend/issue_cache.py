@@ -332,33 +332,36 @@ class IssueCache:
 
                 # Auto-apply priority and request_type with confidence >= 0.7
                 for s in result.suggestions:
-                    if s.field == "priority" and s.confidence >= 0.7:
-                        await loop.run_in_executor(
-                            None, client.update_priority, key, s.suggested_value
-                        )
-                        store.log_change(
-                            key, "priority", s.current_value, s.suggested_value,
-                            s.confidence, AUTO_TRIAGE_MODEL,
-                        )
-                        logger.info(
-                            "Auto-triage: %s priority %s → %s (conf=%.2f)",
-                            key, s.current_value, s.suggested_value, s.confidence,
-                        )
-                    elif s.field == "request_type" and s.confidence >= 0.7:
-                        from ai_client import get_request_type_id
-                        rt_id = get_request_type_id(s.suggested_value)
-                        if rt_id:
+                    try:
+                        if s.field == "priority" and s.confidence >= 0.7:
                             await loop.run_in_executor(
-                                None, client.set_request_type, key, rt_id
+                                None, client.update_priority, key, s.suggested_value
                             )
                             store.log_change(
-                                key, "request_type", s.current_value, s.suggested_value,
+                                key, "priority", s.current_value, s.suggested_value,
                                 s.confidence, AUTO_TRIAGE_MODEL,
                             )
                             logger.info(
-                                "Auto-triage: %s request_type %s → %s (conf=%.2f)",
+                                "Auto-triage: %s priority %s → %s (conf=%.2f)",
                                 key, s.current_value, s.suggested_value, s.confidence,
                             )
+                        elif s.field == "request_type" and s.confidence >= 0.7:
+                            from ai_client import get_request_type_id
+                            rt_id = get_request_type_id(s.suggested_value)
+                            if rt_id:
+                                await loop.run_in_executor(
+                                    None, client.set_request_type, key, rt_id
+                                )
+                                store.log_change(
+                                    key, "request_type", s.current_value, s.suggested_value,
+                                    s.confidence, AUTO_TRIAGE_MODEL,
+                                )
+                                logger.info(
+                                    "Auto-triage: %s request_type %s → %s (conf=%.2f)",
+                                    key, s.current_value, s.suggested_value, s.confidence,
+                                )
+                    except Exception:
+                        logger.exception("Auto-triage: failed to apply %s for %s", s.field, key)
 
                 store.mark_auto_triaged(key)
                 seen.add(key)
