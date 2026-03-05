@@ -549,6 +549,11 @@ export const api = {
     return postJSON("/api/triage/dismiss", { key });
   },
 
+  /** Get progress of the current run-all background task. */
+  getTriageRunStatus(): Promise<{ running: boolean; processed: number; total: number; current_key: string | null }> {
+    return fetchJSON("/api/triage/run-status");
+  },
+
   /** Run auto-triage on cached tickets (background task). Optionally limit count for testing. */
   runTriageAll(model?: string, limit?: number): Promise<{ started: boolean; total_tickets: number }> {
     const body: Record<string, unknown> = {};
