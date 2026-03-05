@@ -534,7 +534,30 @@ export default function SLAPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {/* Date controls */}
+          {/* Quick date presets */}
+          <div className="flex gap-1 mt-5">
+            {[
+              { label: "7d", days: 7 },
+              { label: "30d", days: 30 },
+              { label: "All", days: 0 },
+            ].map(({ label, days }) => {
+              const isActive = days === 0
+                ? !dateFrom && !dateTo
+                : dateFrom === new Date(Date.now() - days * 86400000).toISOString().slice(0, 10) && !dateTo;
+              return (
+                <button key={label} onClick={() => {
+                  if (days === 0) { setDateFrom(""); setDateTo(""); }
+                  else { setDateFrom(new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)); setDateTo(""); }
+                }}
+                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                    isActive ? "bg-blue-100 text-blue-700 border border-blue-300" : "bg-white text-gray-600 border border-gray-300 hover:bg-gray-50"
+                  }`}>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          {/* Custom date inputs */}
           <label className="block">
             <span className="text-xs text-gray-500">From</span>
             <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
@@ -545,10 +568,6 @@ export default function SLAPage() {
             <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
               className="mt-1 block rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
           </label>
-          {(dateFrom || dateTo) && (
-            <button onClick={() => { setDateFrom(""); setDateTo(""); }}
-              className="mt-5 text-xs text-gray-500 hover:text-gray-700 underline">Clear</button>
-          )}
           <button onClick={() => setShowSettings(true)}
             className="mt-5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 shadow-sm">
             Settings
