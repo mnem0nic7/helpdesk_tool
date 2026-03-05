@@ -20,3 +20,10 @@ ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
 # Auto-triage model (runs automatically on new tickets during cache refresh)
 AUTO_TRIAGE_MODEL: str = os.getenv("AUTO_TRIAGE_MODEL", "gpt-4o-mini")
+
+# Microsoft Entra ID (Azure AD) authentication
+ENTRA_TENANT_ID: str = os.getenv("ENTRA_TENANT_ID", "")
+ENTRA_CLIENT_ID: str = os.getenv("ENTRA_CLIENT_ID", "")
+ENTRA_CLIENT_SECRET: str = os.getenv("ENTRA_CLIENT_SECRET", "")
+ALLOWED_USERS: str = os.getenv("ALLOWED_USERS", "")  # comma-separated emails, empty = all
+APP_SECRET_KEY: str = os.getenv("APP_SECRET_KEY", "change-me-in-production")

@@ -1,5 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import CacheStatusBar from "./CacheStatusBar.tsx";
+import { api } from "../lib/api.ts";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: "\u25A3" },
@@ -12,6 +14,13 @@ const navItems = [
 ];
 
 export default function Layout() {
+  const { data: user } = useQuery({
+    queryKey: ["auth", "me"],
+    queryFn: () => api.getMe(),
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Sidebar */}
@@ -45,9 +54,26 @@ export default function Layout() {
           ))}
         </nav>
 
-        {/* Footer */}
-        <div className="border-t border-slate-700 px-6 py-3 text-xs text-slate-500">
-          OIT Dashboard v0.1
+        {/* Footer — user info or version */}
+        <div className="border-t border-slate-700 px-4 py-3">
+          {user ? (
+            <div className="space-y-1">
+              <div className="truncate text-sm font-medium text-slate-200">
+                {user.name}
+              </div>
+              <div className="truncate text-xs text-slate-400">
+                {user.email}
+              </div>
+              <button
+                onClick={() => api.logout()}
+                className="mt-1 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500">OIT Dashboard v0.1</div>
+          )}
         </div>
       </aside>
 

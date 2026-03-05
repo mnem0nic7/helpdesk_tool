@@ -3,9 +3,14 @@
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 
+from auth import get_session
+from config import APP_SECRET_KEY
 from routes_metrics import router as metrics_router
 from routes_tickets import router as tickets_router
 from routes_actions import router as actions_router
@@ -13,6 +18,7 @@ from routes_export import router as export_router
 from routes_cache import router as cache_router
 from routes_chart import router as chart_router
 from routes_triage import router as triage_router
+from routes_auth import router as auth_router
 from issue_cache import cache
 
 
@@ -25,6 +31,38 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="OIT Helpdesk Dashboard API", version="0.1.0", lifespan=lifespan)
+
+# ---------------------------------------------------------------------------
+# Auth middleware — protects /api/* except public endpoints
+# ---------------------------------------------------------------------------
+_PUBLIC_PATHS = {
+    "/api/health",
+    "/api/auth/login",
+    "/api/auth/callback",
+    "/api/auth/me",
+    "/api/auth/logout",
+}
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        # Only protect /api/* paths (let frontend assets through)
+        if path.startswith("/api/") and path not in _PUBLIC_PATHS:
+            sid = request.cookies.get("session_id")
+            if not sid or not get_session(sid):
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Not authenticated"},
+                )
+        return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# Middleware stack (applied in reverse order — CORS outermost)
+# ---------------------------------------------------------------------------
+app.add_middleware(AuthMiddleware)
+app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY)
 
 # ---------------------------------------------------------------------------
 # CORS – allow the Vite dev-server, Docker/nginx, and production origin
@@ -49,6 +87,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
+app.include_router(auth_router)
 app.include_router(metrics_router)
 app.include_router(tickets_router)
 app.include_router(actions_router)
