@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-table";
 import type { SortingState } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "../lib/api.ts";
 import type { TicketRow } from "../lib/api.ts";
 
@@ -282,6 +282,33 @@ export default function TicketTable({
   }
 
   const [sorting, setSorting] = useState<SortingState>([]);
+  const PAGE_SIZE = 100;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  // Reset visible count when data changes (e.g. new filters applied)
+  const dataLen = data.length;
+  const [lastDataLen, setLastDataLen] = useState(dataLen);
+  if (dataLen !== lastDataLen) {
+    setVisibleCount(PAGE_SIZE);
+    setLastDataLen(dataLen);
+  }
+
+  // IntersectionObserver to load more rows on scroll
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadMore = useCallback(() => {
+    setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, dataLen));
+  }, [dataLen]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadMore(); },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadMore, visibleCount]);
 
   const columns = useMemo(
     () => buildColumns(selectable, selectedKeys, handleToggle, handleToggleAll, allKeys, jiraBaseUrl),
@@ -315,59 +342,70 @@ export default function TicketTable({
     );
   }
 
+  const allRows = table.getRowModel().rows;
+  const visibleRows = allRows.slice(0, visibleCount);
+  const hasMore = visibleCount < allRows.length;
+
   return (
-    <div className="overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
-      <table className="min-w-full divide-y divide-gray-200 text-sm">
-        <thead className="bg-gray-50">
-          {table.getHeaderGroups().map((hg) => (
-            <tr key={hg.id}>
-              {hg.headers.map((header) => {
-                const canSort = header.column.getCanSort();
-                const sorted = header.column.getIsSorted();
-                return (
-                  <th
-                    key={header.id}
-                    className={[
-                      "whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500",
-                      canSort ? "cursor-pointer select-none hover:text-gray-700" : "",
-                    ].join(" ")}
-                    style={{ width: header.getSize() }}
-                    onClick={header.column.getToggleSortingHandler()}
-                  >
-                    {header.isPlaceholder ? null : (
-                      <span className="inline-flex items-center gap-1">
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                        {canSort && (
-                          <span className="text-gray-400">
-                            {sorted === "asc" ? "▲" : sorted === "desc" ? "▼" : "⇅"}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                  </th>
-                );
-              })}
-            </tr>
-          ))}
-        </thead>
-        <tbody className="divide-y divide-gray-100 bg-white">
-          {table.getRowModel().rows.map((row, idx) => (
-            <tr
-              key={row.id}
-              className={[
-                "transition-colors hover:bg-blue-50",
-                idx % 2 === 1 ? "bg-gray-50/50" : "",
-              ].join(" ")}
-            >
-              {row.getVisibleCells().map((cell) => (
-                <td key={cell.id} className="px-3 py-2">
-                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div>
+      <div className="overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
+        <table className="min-w-full divide-y divide-gray-200 text-sm">
+          <thead className="bg-gray-50">
+            {table.getHeaderGroups().map((hg) => (
+              <tr key={hg.id}>
+                {hg.headers.map((header) => {
+                  const canSort = header.column.getCanSort();
+                  const sorted = header.column.getIsSorted();
+                  return (
+                    <th
+                      key={header.id}
+                      className={[
+                        "whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500",
+                        canSort ? "cursor-pointer select-none hover:text-gray-700" : "",
+                      ].join(" ")}
+                      style={{ width: header.getSize() }}
+                      onClick={header.column.getToggleSortingHandler()}
+                    >
+                      {header.isPlaceholder ? null : (
+                        <span className="inline-flex items-center gap-1">
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          {canSort && (
+                            <span className="text-gray-400">
+                              {sorted === "asc" ? "▲" : sorted === "desc" ? "▼" : "⇅"}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </th>
+                  );
+                })}
+              </tr>
+            ))}
+          </thead>
+          <tbody className="divide-y divide-gray-100 bg-white">
+            {visibleRows.map((row, idx) => (
+              <tr
+                key={row.id}
+                className={[
+                  "transition-colors hover:bg-blue-50",
+                  idx % 2 === 1 ? "bg-gray-50/50" : "",
+                ].join(" ")}
+              >
+                {row.getVisibleCells().map((cell) => (
+                  <td key={cell.id} className="px-3 py-2">
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {hasMore && (
+        <div ref={sentinelRef} className="py-4 text-center text-sm text-gray-400">
+          Showing {visibleRows.length} of {allRows.length} tickets — scroll for more
+        </div>
+      )}
     </div>
   );
 }
