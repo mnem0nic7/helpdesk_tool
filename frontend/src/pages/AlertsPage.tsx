@@ -47,6 +47,8 @@ function RuleModal({
     schedule_days: rule?.schedule_days ?? "0,1,2,3,4",
     recipients: rule?.recipients ?? "",
     cc: rule?.cc ?? "",
+    custom_subject: rule?.custom_subject ?? "",
+    custom_message: rule?.custom_message ?? "",
     filters: rule?.filters ?? {},
     enabled: rule?.enabled ?? true,
   });
@@ -177,6 +179,31 @@ function RuleModal({
               placeholder="manager@example.com"
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
           </label>
+
+          {/* Email Customization */}
+          <div>
+            <span className="text-sm font-medium text-gray-700">Email Customization (optional)</span>
+            <p className="text-xs text-gray-400 mb-2">
+              Use variables: <code className="bg-gray-100 px-1 rounded">{"{rule_name}"}</code>{" "}
+              <code className="bg-gray-100 px-1 rounded">{"{trigger_label}"}</code>{" "}
+              <code className="bg-gray-100 px-1 rounded">{"{ticket_count}"}</code>
+            </p>
+            <label className="block">
+              <span className="text-xs text-gray-500">Subject Line</span>
+              <input type="text" value={(form.custom_subject as string) ?? ""}
+                onChange={(e) => setForm({ ...form, custom_subject: e.target.value })}
+                placeholder="Default: [OIT Alert] {rule_name}: {ticket_count} {trigger_label}"
+                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
+            </label>
+            <label className="mt-2 block">
+              <span className="text-xs text-gray-500">Message Body (appears above ticket table)</span>
+              <textarea value={(form.custom_message as string) ?? ""}
+                onChange={(e) => setForm({ ...form, custom_message: e.target.value })}
+                placeholder="e.g. The following {ticket_count} tickets need attention..."
+                rows={3}
+                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
+            </label>
+          </div>
 
           {/* Filters */}
           <div>
