@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 
 from config import JIRA_BASE_URL
 from issue_cache import cache
@@ -33,3 +33,30 @@ async def cache_refresh_incremental() -> dict[str, Any]:
         None, cache.trigger_incremental_refresh
     )
     return cache.status()
+
+
+_enrich_status: dict[str, Any] = {"running": False, "enriched": 0}
+
+
+@router.post("/cache/enrich-request-types")
+async def enrich_request_types(background_tasks: BackgroundTasks) -> dict[str, Any]:
+    """Enrich all cached issues missing request type data (runs in background)."""
+    if _enrich_status["running"]:
+        return {"started": False, "message": "Enrichment already running", **_enrich_status}
+
+    def _run() -> None:
+        _enrich_status.update(running=True, enriched=0)
+        try:
+            enriched = cache.enrich_missing_request_types()
+            _enrich_status["enriched"] = enriched
+        finally:
+            _enrich_status["running"] = False
+
+    background_tasks.add_task(asyncio.get_event_loop().run_in_executor, None, _run)
+    return {"started": True, "message": "Request type enrichment started in background"}
+
+
+@router.get("/cache/enrich-status")
+async def enrich_status() -> dict[str, Any]:
+    """Check enrichment progress."""
+    return dict(_enrich_status)
