@@ -61,7 +61,8 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
             detail=f"Model '{model}' not available. Configure the API key or choose another model.",
         )
 
-    all_issues = cache.get_all_issues()
+    # Use filtered issues to exclude oasisdev tickets from triage
+    all_issues = cache.get_filtered_issues()
     all_keys = [issue.get("key", "") for issue in all_issues if issue.get("key")]
 
     # Only reset tracking when explicitly requested (e.g. "Run on All")
@@ -126,7 +127,7 @@ async def analyze(req: TriageAnalyzeRequest) -> list[dict[str, Any]]:
     cached = store.get_many(req.keys) if not req.force else {}
     results: list[dict[str, Any]] = []
 
-    all_issues = {i.get("key", ""): i for i in cache.get_all_issues()}
+    all_issues = {i.get("key", ""): i for i in cache.get_filtered_issues()}
 
     for key in req.keys:
         if key in cached:
