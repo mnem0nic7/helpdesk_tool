@@ -7,6 +7,7 @@ import SLAPage from "./pages/SLAPage";
 import VisualizationsPage from "./pages/VisualizationsPage";
 import ReportsPage from "./pages/ReportsPage";
 import TriagePage from "./pages/TriagePage";
+import AILogPage from "./pages/AILogPage";
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="visualizations" element={<VisualizationsPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="triage" element={<TriagePage />} />
+          <Route path="ai-log" element={<AILogPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

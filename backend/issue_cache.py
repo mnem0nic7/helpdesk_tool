@@ -332,6 +332,10 @@ class IssueCache:
                         await loop.run_in_executor(
                             None, client.update_priority, key, s.suggested_value
                         )
+                        store.log_change(
+                            key, "priority", s.current_value, s.suggested_value,
+                            s.confidence, AUTO_TRIAGE_MODEL,
+                        )
                         logger.info(
                             "Auto-triage: %s priority %s → %s (conf=%.2f)",
                             key, s.current_value, s.suggested_value, s.confidence,
@@ -342,6 +346,10 @@ class IssueCache:
                         if rt_id:
                             await loop.run_in_executor(
                                 None, client.set_request_type, key, rt_id
+                            )
+                            store.log_change(
+                                key, "request_type", s.current_value, s.suggested_value,
+                                s.confidence, AUTO_TRIAGE_MODEL,
                             )
                             logger.info(
                                 "Auto-triage: %s request_type %s → %s (conf=%.2f)",
