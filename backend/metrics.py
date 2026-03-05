@@ -176,42 +176,66 @@ def percentile(data: list[float], p: float) -> Optional[float]:
 def extract_sla_status(sla_field: Any) -> str:
     """Extract a human-readable SLA status from a JSM SLA timer field value.
 
-    JSM SLA fields are typically structured as::
-
-        {
-            "completedCycles": [...],
-            "ongoingCycle": {
-                "breached": true/false,
-                "paused": true/false,
-                ...
-            }
-        }
-
     Returns one of ``"Met"``, ``"BREACHED"``, ``"Running"``, ``"Paused"``,
     or ``""`` (empty string) when the field is absent / unparseable.
     """
+    info = extract_sla_info(sla_field)
+    return info["status"]
+
+
+def extract_sla_info(sla_field: Any) -> dict[str, Any]:
+    """Extract rich SLA data from a JSM SLA timer field.
+
+    Returns a dict with:
+      - ``status``: "Met", "BREACHED", "Running", "Paused", or ""
+      - ``breach_time``: ISO-8601 string of when the SLA breaches/breached, or ""
+      - ``remaining_millis``: milliseconds remaining (negative if breached), or None
+      - ``elapsed_millis``: milliseconds elapsed on the timer, or None
+    """
+    empty: dict[str, Any] = {
+        "status": "",
+        "breach_time": "",
+        "remaining_millis": None,
+        "elapsed_millis": None,
+    }
     if not sla_field or not isinstance(sla_field, dict):
-        return ""
+        return empty
 
     # Check completed cycles first
     completed: list[dict[str, Any]] = sla_field.get("completedCycles") or []
     if completed:
-        # Use the last completed cycle
         last = completed[-1]
-        if last.get("breached"):
-            return "BREACHED"
-        return "Met"
+        status = "BREACHED" if last.get("breached") else "Met"
+        breach_time = (last.get("breachTime") or {}).get("iso8601", "")
+        elapsed = last.get("elapsedTime", {}).get("millis")
+        remaining = last.get("remainingTime", {}).get("millis")
+        return {
+            "status": status,
+            "breach_time": breach_time,
+            "remaining_millis": remaining,
+            "elapsed_millis": elapsed,
+        }
 
     # Ongoing cycle
     ongoing: dict[str, Any] | None = sla_field.get("ongoingCycle")
     if ongoing:
         if ongoing.get("breached"):
-            return "BREACHED"
-        if ongoing.get("paused"):
-            return "Paused"
-        return "Running"
+            status = "BREACHED"
+        elif ongoing.get("paused"):
+            status = "Paused"
+        else:
+            status = "Running"
+        breach_time = (ongoing.get("breachTime") or {}).get("iso8601", "")
+        elapsed = (ongoing.get("elapsedTime") or {}).get("millis")
+        remaining = (ongoing.get("remainingTime") or {}).get("millis")
+        return {
+            "status": status,
+            "breach_time": breach_time,
+            "remaining_millis": remaining,
+            "elapsed_millis": elapsed,
+        }
 
-    return ""
+    return empty
 
 
 # ---------------------------------------------------------------------------
@@ -715,12 +739,29 @@ def issue_to_row(issue: dict[str, Any]) -> dict[str, Any]:
     if updated_dt:
         days_since_update = round((now - updated_dt).total_seconds() / 86400.0, 1)
 
-    # SLA statuses
-    sla_first_response = extract_sla_status(fields.get("customfield_11266"))
-    sla_resolution = extract_sla_status(fields.get("customfield_11264"))
+    # SLA — rich data (status, breach time, remaining)
+    sla_fr = extract_sla_info(fields.get("customfield_11266"))
+    sla_res = extract_sla_info(fields.get("customfield_11264"))
 
-    # Labels
+    # Labels & components
     labels: list[str] = fields.get("labels") or []
+    components: list[str] = [
+        c.get("name", "") for c in (fields.get("components") or [])
+        if isinstance(c, dict)
+    ]
+
+    # Work category
+    work_category: str = fields.get("customfield_11239") or ""
+
+    # Organizations
+    orgs_raw = fields.get("customfield_10700") or []
+    organizations: list[str] = [
+        o.get("name", "") for o in orgs_raw if isinstance(o, dict)
+    ]
+
+    # Attachment count
+    attachments = fields.get("attachment") or []
+    attachment_count: int = len(attachments) if isinstance(attachments, list) else 0
 
     return {
         "key": issue.get("key", ""),
@@ -741,9 +782,20 @@ def issue_to_row(issue: dict[str, Any]) -> dict[str, Any]:
         "age_days": age_days,
         "days_since_update": days_since_update,
         "excluded": is_excluded(issue),
-        "sla_first_response_status": sla_first_response,
-        "sla_resolution_status": sla_resolution,
+        # SLA first response
+        "sla_first_response_status": sla_fr["status"],
+        "sla_first_response_breach_time": sla_fr["breach_time"],
+        "sla_first_response_remaining_millis": sla_fr["remaining_millis"],
+        # SLA resolution
+        "sla_resolution_status": sla_res["status"],
+        "sla_resolution_breach_time": sla_res["breach_time"],
+        "sla_resolution_remaining_millis": sla_res["remaining_millis"],
+        # Additional fields
         "labels": labels,
+        "components": components,
+        "work_category": work_category,
+        "organizations": organizations,
+        "attachment_count": attachment_count,
     }
 
 

@@ -171,6 +171,12 @@ def _build_ticket_context(issue: dict[str, Any]) -> str:
         if body:
             comment_texts.append(f"  [{author}]: {body[:300]}")
 
+    # Steps to re-create (customfield_11121)
+    steps = extract_adf_text(fields.get("customfield_11121"))
+
+    # Work category
+    work_category = fields.get("customfield_11239") or ""
+
     lines = [
         f"Ticket: {key}",
         f"Type: {issue_type}",
@@ -180,11 +186,14 @@ def _build_ticket_context(issue: dict[str, Any]) -> str:
         f"Priority: {priority}",
         f"Assignee: {assignee}",
         f"Labels: {', '.join(labels) if labels else 'None'}",
+        f"Work Category: {work_category or 'Not set'}",
         f"Created: {created}",
         f"Updated: {updated}",
     ]
     if description:
         lines.append(f"Description:\n{description[:1000]}")
+    if steps:
+        lines.append(f"Steps to Re-Create:\n{steps[:500]}")
     if comment_texts:
         lines.append("Recent Comments:\n" + "\n".join(comment_texts))
 
