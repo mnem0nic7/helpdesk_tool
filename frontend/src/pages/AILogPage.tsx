@@ -84,11 +84,18 @@ export default function AILogPage() {
             {starting ? "Starting…" : isRunning ? "Running…" : "Test (10 Tickets)"}
           </button>
           <button
+            onClick={() => handleRun(undefined, false)}
+            disabled={starting || isRunning}
+            className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {starting ? "Starting…" : isRunning ? "Running…" : "Run Remaining"}
+          </button>
+          <button
             onClick={() => handleRun(undefined, true)}
             disabled={starting || isRunning}
             className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {starting ? "Starting…" : isRunning ? "Running…" : "Run on All Tickets"}
+            {starting ? "Starting…" : isRunning ? "Running…" : "Rerun All Tickets"}
           </button>
         </div>
       </div>
