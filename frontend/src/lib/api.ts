@@ -359,8 +359,13 @@ export const api = {
 
   /** Log out the current user. */
   async logout(): Promise<void> {
-    await fetch("/api/auth/logout", { method: "POST" });
-    window.location.href = "/";
+    const res = await fetch("/api/auth/logout", { method: "POST" });
+    const data = await res.json();
+    if (data.redirect) {
+      window.location.href = data.redirect;
+    } else {
+      window.location.href = "/";
+    }
   },
 
   // -------------------------------------------------------------------------
