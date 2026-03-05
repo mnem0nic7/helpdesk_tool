@@ -12,6 +12,7 @@ const navItems = [
   { to: "/reports", label: "Reports", icon: "\u25A4" },
   { to: "/triage", label: "AI Triage", icon: "\u25C6" },
   { to: "/ai-log", label: "AI Log", icon: "\u25CB" },
+  { to: "/alerts", label: "Alerts", icon: "\u25B3" },
 ];
 
 export default function Layout() {

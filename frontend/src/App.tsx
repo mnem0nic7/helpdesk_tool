@@ -8,6 +8,7 @@ import VisualizationsPage from "./pages/VisualizationsPage";
 import ReportsPage from "./pages/ReportsPage";
 import TriagePage from "./pages/TriagePage";
 import AILogPage from "./pages/AILogPage";
+import AlertsPage from "./pages/AlertsPage";
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
           <Route path="reports" element={<ReportsPage />} />
           <Route path="triage" element={<TriagePage />} />
           <Route path="ai-log" element={<AILogPage />} />
+          <Route path="alerts" element={<AlertsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
