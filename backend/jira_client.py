@@ -250,9 +250,9 @@ class JiraClient:
         return all_types
 
     def set_request_type(self, key: str, request_type_id: str) -> None:
-        """PUT /rest/api/3/issue/{key} to change the request type."""
-        url = f"{self.base_url}/rest/api/3/issue/{key}"
-        payload = {"fields": {"customfield_10010": {"id": request_type_id}}}
+        """Change request type via the JSM API."""
+        url = f"{self.base_url}/rest/servicedeskapi/request/{key}"
+        payload = {"requestTypeId": request_type_id}
         resp = self.session.put(url, json=payload)
         resp.raise_for_status()
 
