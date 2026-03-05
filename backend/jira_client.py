@@ -250,18 +250,11 @@ class JiraClient:
         return all_types
 
     def set_request_type(self, key: str, request_type_id: str) -> None:
-        """Change request type via the JSM customer request API."""
+        """Change request type via JSM: POST /rest/servicedeskapi/request/{key}/requesttype"""
         url = f"{self.base_url}/rest/servicedeskapi/request/{key}/requesttype"
-        payload = {"id": request_type_id}
-        resp = self.session.put(url, json=payload)
-        if resp.status_code == 404 or resp.status_code == 405:
-            # Fallback: try standard API with customfield_10010
-            url2 = f"{self.base_url}/rest/api/3/issue/{key}"
-            payload2 = {"fields": {"customfield_10010": request_type_id}}
-            resp2 = self.session.put(url2, json=payload2)
-            resp2.raise_for_status()
-        else:
-            resp.raise_for_status()
+        payload = {"requestTypeId": request_type_id}
+        resp = self.session.post(url, json=payload)
+        resp.raise_for_status()
 
     # ------------------------------------------------------------------
     # Users
