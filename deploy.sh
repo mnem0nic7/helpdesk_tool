@@ -21,24 +21,30 @@ if [ ! -f backend/.env ]; then
     exit 1
 fi
 
+if ! command -v docker &> /dev/null; then
+    echo "ERROR: Docker is not installed."
+    echo "  curl -fsSL https://get.docker.com | sh"
+    exit 1
+fi
+
 # Build and restart
 echo ">>> Building Docker image..."
 docker compose build $BUILD_FLAGS
 
-echo ">>> Stopping old container (if running)..."
+echo ">>> Stopping old containers (if running)..."
 docker compose down
 
-echo ">>> Starting new container..."
+echo ">>> Starting containers..."
 docker compose up -d
 
-# Health check — wait up to 30 seconds
+# Health check — wait up to 60 seconds (Caddy needs time for TLS cert)
 echo ">>> Waiting for health check..."
-for i in $(seq 1 30); do
-    if curl -sf http://localhost:3002/api/health > /dev/null 2>&1; then
+for i in $(seq 1 60); do
+    if curl -sf http://localhost:80/api/health > /dev/null 2>&1; then
         echo ""
         echo "=== DEPLOYED SUCCESSFULLY ==="
-        echo "  Dashboard: http://localhost:3002"
-        echo "  Health:    http://localhost:3002/api/health"
+        echo "  Dashboard: https://it-app.movedocs.com"
+        echo "  Health:    https://it-app.movedocs.com/api/health"
         echo ""
         docker compose ps
         exit 0
