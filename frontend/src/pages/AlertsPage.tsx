@@ -34,7 +34,7 @@ function RuleModal({
 }: {
   rule: Partial<AlertRule> | null;
   triggerTypes: AlertTriggerType[];
-  onSave: (data: Partial<AlertRule>) => void;
+  onSave: (data: Partial<AlertRule>) => Promise<void>;
   onClose: () => void;
 }) {
   const isEdit = rule?.id != null;
@@ -72,10 +72,19 @@ function RuleModal({
 
   const filterObj = (form.filters as Record<string, unknown>) ?? {};
 
-  function handleSubmit() {
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit() {
     if (!(form.name as string)?.trim()) return alert("Name is required");
     if (!(form.recipients as string)?.trim()) return alert("Recipients are required");
-    onSave(form as Partial<AlertRule>);
+    setSaving(true);
+    try {
+      await onSave(form as Partial<AlertRule>);
+    } catch (err) {
+      alert(`Failed to save: ${err}`);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -212,9 +221,9 @@ function RuleModal({
             className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
             Cancel
           </button>
-          <button onClick={handleSubmit}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
-            {isEdit ? "Save Changes" : "Create Rule"}
+          <button onClick={handleSubmit} disabled={saving}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+            {saving ? "Saving..." : isEdit ? "Save Changes" : "Create Rule"}
           </button>
         </div>
       </div>
