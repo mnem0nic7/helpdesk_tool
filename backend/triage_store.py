@@ -33,6 +33,14 @@ class TriageStore:
                 "CREATE TABLE IF NOT EXISTS auto_triaged "
                 "(key TEXT PRIMARY KEY, processed_at TEXT)"
             )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS auto_triage_log "
+                "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "key TEXT NOT NULL, field TEXT NOT NULL, "
+                "old_value TEXT, new_value TEXT, confidence REAL, "
+                "model TEXT, source TEXT NOT NULL DEFAULT 'auto', "
+                "approved_by TEXT, timestamp TEXT NOT NULL)"
+            )
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path)
@@ -99,6 +107,54 @@ class TriageStore:
         with self._conn() as conn:
             rows = conn.execute("SELECT key FROM auto_triaged").fetchall()
         return {row[0] for row in rows}
+
+    def log_change(
+        self,
+        key: str,
+        field: str,
+        old_value: str,
+        new_value: str,
+        confidence: float,
+        model: str,
+        source: str = "auto",
+        approved_by: str | None = None,
+    ) -> None:
+        """Record an AI triage change applied to Jira.
+
+        source: 'auto' for auto-triage, 'user' for manually approved.
+        approved_by: email of the user who approved (for source='user').
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO auto_triage_log "
+                "(key, field, old_value, new_value, confidence, model, source, approved_by, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (key, field, old_value, new_value, confidence, model, source, approved_by, now),
+            )
+
+    def get_triage_log(self, limit: int = 500) -> list[dict]:
+        """Return recent triage changes, newest first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT key, field, old_value, new_value, confidence, model, source, approved_by, timestamp "
+                "FROM auto_triage_log ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "key": r[0],
+                "field": r[1],
+                "old_value": r[2],
+                "new_value": r[3],
+                "confidence": r[4],
+                "model": r[5],
+                "source": r[6],
+                "approved_by": r[7],
+                "timestamp": r[8],
+            }
+            for r in rows
+        ]
 
     # ------------------------------------------------------------------
     # Per-field manipulation

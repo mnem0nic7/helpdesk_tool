@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from ai_client import analyze_ticket, get_available_models, validate_suggestions
+from auth import get_session
 from issue_cache import cache
 from jira_client import JiraClient
 from models import TriageAnalyzeRequest, TriageApplyRequest, TriageFieldAction, TriageDismissRequest
@@ -24,6 +25,12 @@ _client = JiraClient()
 async def list_models() -> list[dict[str, Any]]:
     """Return available AI models (filtered by configured API keys)."""
     return [m.model_dump() for m in get_available_models()]
+
+
+@router.get("/log")
+async def get_triage_log() -> list[dict[str, Any]]:
+    """Return all AI triage changes applied to Jira (auto and user-approved)."""
+    return store.get_triage_log(limit=500)
 
 
 @router.get("/suggestions")
@@ -168,7 +175,7 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
 
 
 @router.post("/apply-field")
-async def apply_single_field(req: TriageFieldAction) -> dict[str, Any]:
+async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[str, Any]:
     """Apply a single suggestion field to Jira and remove it from the stored suggestion."""
     suggestion = store.get(req.key)
     if not suggestion:
@@ -178,6 +185,11 @@ async def apply_single_field(req: TriageFieldAction) -> dict[str, Any]:
     s = by_field.get(req.field)
     if not s:
         raise HTTPException(status_code=404, detail=f"No suggestion for field '{req.field}' on {req.key}")
+
+    # Identify the approving user
+    sid = request.cookies.get("session_id", "")
+    session = get_session(sid) if sid else None
+    approved_by = session["email"] if session else None
 
     # Apply the field to Jira
     try:
@@ -234,6 +246,18 @@ async def apply_single_field(req: TriageFieldAction) -> dict[str, Any]:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # Log the user-approved change
+    store.log_change(
+        key=req.key,
+        field=req.field,
+        old_value=s.current_value,
+        new_value=s.suggested_value,
+        confidence=s.confidence,
+        model=suggestion.model_used,
+        source="user",
+        approved_by=approved_by,
+    )
 
     # Remove the field from the stored suggestion (deletes row if none left)
     remaining = store.remove_field(req.key, req.field)

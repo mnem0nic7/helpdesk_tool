@@ -283,6 +283,19 @@ export interface TriageResult {
   error?: string;
 }
 
+/** A single AI triage log entry (auto or user-approved). */
+export interface TriageLogEntry {
+  key: string;
+  field: string;
+  old_value: string;
+  new_value: string;
+  confidence: number;
+  model: string;
+  source: "auto" | "user";
+  approved_by: string | null;
+  timestamp: string;
+}
+
 /** Available AI model for triage. */
 export interface AIModel {
   id: string;
@@ -504,6 +517,11 @@ export const api = {
   /** Fetch available AI models for triage. */
   getTriageModels(): Promise<AIModel[]> {
     return fetchJSON<AIModel[]>("/api/triage/models");
+  },
+
+  /** Fetch AI triage change log. */
+  getTriageLog(): Promise<TriageLogEntry[]> {
+    return fetchJSON<TriageLogEntry[]>("/api/triage/log");
   },
 
   /** Fetch all cached triage suggestions. */
