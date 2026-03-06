@@ -844,7 +844,67 @@ def issue_to_row(issue: dict[str, Any]) -> dict[str, Any]:
         "work_category": work_category,
         "organizations": organizations,
         "attachment_count": attachment_count,
+        # Comment data
+        "comment_count": _comment_count(fields),
+        "last_comment_date": _last_comment_date(fields),
+        "last_comment_author": _last_comment_author(fields),
+        # Description (plain text extract)
+        "description": _extract_description(fields),
     }
+
+
+# ---------------------------------------------------------------------------
+# Comment / description helpers
+# ---------------------------------------------------------------------------
+
+
+def _comment_count(fields: dict[str, Any]) -> int:
+    comment_obj = fields.get("comment", {})
+    if isinstance(comment_obj, dict):
+        return comment_obj.get("total", len(comment_obj.get("comments", [])))
+    return 0
+
+
+def _last_comment_date(fields: dict[str, Any]) -> str:
+    comment_obj = fields.get("comment", {})
+    comments = comment_obj.get("comments", []) if isinstance(comment_obj, dict) else []
+    if not comments:
+        return ""
+    last = comments[-1]
+    return last.get("updated") or last.get("created") or ""
+
+
+def _last_comment_author(fields: dict[str, Any]) -> str:
+    comment_obj = fields.get("comment", {})
+    comments = comment_obj.get("comments", []) if isinstance(comment_obj, dict) else []
+    if not comments:
+        return ""
+    author = comments[-1].get("author") or {}
+    return author.get("displayName", "")
+
+
+def _extract_description(fields: dict[str, Any]) -> str:
+    """Extract plain text from ADF or string description, truncated to 500 chars."""
+    desc = fields.get("description")
+    if not desc:
+        return ""
+    if isinstance(desc, str):
+        return desc[:500]
+    # ADF format — extract text nodes
+    if isinstance(desc, dict):
+        texts: list[str] = []
+        _walk_adf(desc, texts)
+        return " ".join(texts)[:500]
+    return ""
+
+
+def _walk_adf(node: dict[str, Any], texts: list[str]) -> None:
+    """Recursively extract text from Atlassian Document Format."""
+    if node.get("type") == "text":
+        texts.append(node.get("text", ""))
+    for child in node.get("content", []):
+        if isinstance(child, dict):
+            _walk_adf(child, texts)
 
 
 # ---------------------------------------------------------------------------

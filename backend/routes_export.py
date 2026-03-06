@@ -33,6 +33,7 @@ router = APIRouter(prefix="/api")
 FIELD_META: dict[str, dict[str, str]] = {
     "key": {"label": "Key", "description": "Jira issue key"},
     "summary": {"label": "Summary", "description": "Issue title"},
+    "description": {"label": "Description", "description": "Issue description (first 500 chars)"},
     "issue_type": {"label": "Type", "description": "Issue type"},
     "status": {"label": "Status", "description": "Current status"},
     "status_category": {"label": "Status Category", "description": "Status category (To Do / In Progress / Done)"},
@@ -45,13 +46,20 @@ FIELD_META: dict[str, dict[str, str]] = {
     "updated": {"label": "Updated", "description": "Date ticket was last updated"},
     "resolved": {"label": "Resolved", "description": "Date ticket was resolved"},
     "request_type": {"label": "Request Type", "description": "JSM request type"},
+    "work_category": {"label": "Work Category", "description": "Work category classification"},
     "calendar_ttr_hours": {"label": "TTR (h)", "description": "Calendar time-to-resolution in hours"},
     "age_days": {"label": "Age (d)", "description": "Age of open tickets in days"},
     "days_since_update": {"label": "Days Since Update", "description": "Days since last update"},
+    "comment_count": {"label": "Comments", "description": "Number of comments"},
+    "last_comment_date": {"label": "Last Comment", "description": "Date of last comment"},
+    "last_comment_author": {"label": "Last Commenter", "description": "Author of last comment"},
     "excluded": {"label": "Excluded", "description": "Excluded from metrics"},
     "sla_first_response_status": {"label": "SLA Response", "description": "First-response SLA status"},
     "sla_resolution_status": {"label": "SLA Resolution", "description": "Resolution SLA status"},
     "labels": {"label": "Labels", "description": "Issue labels"},
+    "components": {"label": "Components", "description": "Issue components"},
+    "organizations": {"label": "Organizations", "description": "Customer organizations"},
+    "attachment_count": {"label": "Attachments", "description": "Number of attachments"},
 }
 
 # All TicketRow field keys in display order
@@ -278,6 +286,71 @@ async def report_export(config: ReportConfig) -> FileResponse:
     tmp.close()
     wb.save(tmp_path)
     logger.info("Report export saved to %s (%d rows)", tmp_path, len(rows))
+
+    return FileResponse(
+        path=tmp_path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        background=BackgroundTask(os.unlink, tmp_path),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Full data export — all fields for all tickets
+# ---------------------------------------------------------------------------
+
+# All columns in display order for full export
+_FULL_COLUMNS: list[str] = list(FIELD_META.keys())
+
+
+@router.get("/export/all")
+async def export_all_data(include_excluded: bool = False) -> FileResponse:
+    """Export ALL ticket data with every available field as Excel."""
+    issues = cache.get_all_issues() if include_excluded else cache.get_filtered_issues()
+    rows = [issue_to_row(iss) for iss in issues]
+    rows.sort(key=lambda r: r.get("created", ""), reverse=True)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "All Tickets"
+
+    columns = _FULL_COLUMNS
+    headers = [FIELD_META.get(c, {}).get("label", c) for c in columns]
+    for col_idx, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=h)
+        cell.font = _HEADER_FONT
+        cell.fill = _HEADER_FILL
+        cell.alignment = _HEADER_ALIGNMENT
+
+    for row_idx, row in enumerate(rows, 2):
+        for col_idx, col_key in enumerate(columns, 1):
+            ws.cell(row=row_idx, column=col_idx, value=_cell_value(row.get(col_key)))
+
+    # Auto-filter & freeze
+    last_col = get_column_letter(len(columns))
+    ws.auto_filter.ref = f"A1:{last_col}{len(rows) + 1}"
+    ws.freeze_panes = "A2"
+
+    # Column widths
+    _WIDTH_MAP: dict[str, int] = {
+        "key": 12, "summary": 50, "description": 60, "issue_type": 18,
+        "status": 22, "priority": 12, "assignee": 25, "reporter": 25,
+        "created": 22, "updated": 22, "resolved": 22, "request_type": 25,
+        "work_category": 20, "calendar_ttr_hours": 12, "age_days": 10,
+        "comment_count": 10, "last_comment_date": 22, "last_comment_author": 25,
+        "labels": 30, "components": 25, "organizations": 30,
+    }
+    for col_idx, col_key in enumerate(columns, 1):
+        col_letter = get_column_letter(col_idx)
+        ws.column_dimensions[col_letter].width = _WIDTH_MAP.get(col_key, 15)
+
+    now = datetime.now(timezone.utc)
+    filename = f"OIT_All_Data_{now.strftime('%Y%m%d_%H%M')}.xlsx"
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    wb.save(tmp_path)
+    logger.info("Full data export: %d tickets, %d columns to %s", len(rows), len(columns), tmp_path)
 
     return FileResponse(
         path=tmp_path,
