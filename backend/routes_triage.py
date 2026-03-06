@@ -38,8 +38,14 @@ async def get_triage_log() -> list[dict[str, Any]]:
 
 @router.get("/run-status")
 async def get_run_status() -> dict[str, Any]:
-    """Return progress of the current run-all background task."""
-    return dict(_run_progress)
+    """Return progress of the current run-all background task, plus ticket counts."""
+    result = dict(_run_progress)
+    # Add counts for button labels
+    already_done = store.get_auto_triaged_keys()
+    all_keys = [iss.get("key", "") for iss in cache.get_filtered_issues() if iss.get("key")]
+    result["remaining_count"] = len([k for k in all_keys if k not in already_done])
+    result["processed_count"] = len([k for k in all_keys if k in already_done])
+    return result
 
 
 @router.post("/run-cancel")

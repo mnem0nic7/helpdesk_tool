@@ -733,7 +733,7 @@ export const api = {
   },
 
   /** Get progress of the current run-all background task. */
-  getTriageRunStatus(): Promise<{ running: boolean; processed: number; total: number; current_key: string | null }> {
+  getTriageRunStatus(): Promise<{ running: boolean; processed: number; total: number; current_key: string | null; remaining_count?: number; processed_count?: number }> {
     return fetchJSON("/api/triage/run-status");
   },
 
