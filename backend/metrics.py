@@ -379,36 +379,69 @@ def compute_monthly_volumes(issues: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 def compute_weekly_volumes(
-    issues: list[dict[str, Any]], num_weeks: int = 8
+    issues: list[dict[str, Any]], num_weeks: int = 8, span_days: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Compute weekly created/resolved volumes for the last *num_weeks* weeks.
+    """Compute ticket volumes grouped adaptively by time range.
 
-    Each week starts on Monday. Returns a chronologically sorted list of dicts
-    with keys ``week`` (Monday date as ``YYYY-MM-DD``), ``created``,
-    ``resolved``, and ``net_flow``.
+    Grouping adapts to selected date range:
+      - ≤14 days → daily
+      - ≤90 days → weekly (default)
+      - >90 days → monthly
+
+    Returns a chronologically sorted list of dicts with keys:
+      ``period`` (date string), ``created``, ``resolved``, ``net_flow``, ``grouping``.
     """
     from datetime import timedelta
 
     included, _ = _filter_issues(issues)
     now = _now()
-
-    # Find the Monday of the current week
     today = now.date()
-    current_monday = today - timedelta(days=today.weekday())
 
-    # Build the list of week-start Mondays (oldest first)
-    week_starts: list[Any] = []
-    for i in range(num_weeks - 1, -1, -1):
-        week_starts.append(current_monday - timedelta(weeks=i))
+    # Determine grouping
+    if span_days is not None and span_days <= 14:
+        grouping = "daily"
+        num_periods = max(span_days, 1)
+        period_starts = [today - timedelta(days=num_periods - 1 - i) for i in range(num_periods)]
+    elif span_days is not None and span_days > 90:
+        grouping = "monthly"
+        # Build list of month starts covering the span
+        period_starts = []
+        d = today.replace(day=1)
+        months = (span_days // 30) + 1
+        for i in range(months - 1, -1, -1):
+            m = d.month - i
+            y = d.year
+            while m <= 0:
+                m += 12
+                y -= 1
+            period_starts.append(d.replace(year=y, month=m, day=1))
+    else:
+        grouping = "weekly"
+        current_monday = today - timedelta(days=today.weekday())
+        actual_weeks = (span_days // 7 + 1) if span_days else num_weeks
+        actual_weeks = max(actual_weeks, 2)
+        period_starts = [current_monday - timedelta(weeks=actual_weeks - 1 - i) for i in range(actual_weeks)]
 
-    # Initialise counters
-    weekly_created: dict[str, int] = {ws.isoformat(): 0 for ws in week_starts}
-    weekly_resolved: dict[str, int] = {ws.isoformat(): 0 for ws in week_starts}
+    # Build period keys
+    period_keys = [p.isoformat() for p in period_starts]
+    period_created: dict[str, int] = {k: 0 for k in period_keys}
+    period_resolved: dict[str, int] = {k: 0 for k in period_keys}
 
-    # Cutoff: beginning of the earliest week
-    cutoff = datetime.combine(week_starts[0], datetime.min.time()).replace(
+    cutoff = datetime.combine(period_starts[0], datetime.min.time()).replace(
         tzinfo=timezone.utc
     )
+
+    def _bucket_date(d: Any) -> str | None:
+        """Map a date to its period key."""
+        if grouping == "daily":
+            key = d.isoformat()
+            return key if key in period_created else None
+        elif grouping == "monthly":
+            key = d.replace(day=1).isoformat()
+            return key if key in period_created else None
+        else:  # weekly
+            monday = (d - timedelta(days=d.weekday())).isoformat()
+            return monday if monday in period_created else None
 
     for iss in included:
         fields = iss.get("fields", {})
@@ -416,72 +449,87 @@ def compute_weekly_volumes(
         resolved_dt = parse_dt(fields.get("resolutiondate"))
 
         if created and created >= cutoff:
-            d = created.date()
-            monday = (d - timedelta(days=d.weekday())).isoformat()
-            if monday in weekly_created:
-                weekly_created[monday] += 1
+            key = _bucket_date(created.date())
+            if key:
+                period_created[key] += 1
 
         if resolved_dt and resolved_dt >= cutoff and not _is_open(iss):
-            d = resolved_dt.date()
-            monday = (d - timedelta(days=d.weekday())).isoformat()
-            if monday in weekly_resolved:
-                weekly_resolved[monday] += 1
+            key = _bucket_date(resolved_dt.date())
+            if key:
+                period_resolved[key] += 1
 
     result: list[dict[str, Any]] = []
-    for ws in week_starts:
-        key = ws.isoformat()
-        c = weekly_created[key]
-        r = weekly_resolved[key]
+    for pk in period_keys:
+        c = period_created[pk]
+        r = period_resolved[pk]
         result.append({
-            "week": key,
+            "week": pk,  # keep "week" key for backward compat
             "created": c,
             "resolved": r,
             "net_flow": c - r,
+            "grouping": grouping,
         })
 
     return result
 
 
-def compute_age_buckets(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _age_buckets_for_span(span_days: int | None) -> list[tuple[float, str]]:
+    """Return age bucket definitions appropriate for the date range."""
+    if span_days is not None and span_days <= 7:
+        return [(1, "0-1d"), (2, "1-2d"), (3, "2-3d"), (5, "3-5d"), (float("inf"), "5d+")]
+    if span_days is not None and span_days <= 30:
+        return [(2, "0-2d"), (7, "3-7d"), (14, "8-14d"), (float("inf"), "14d+")]
+    if span_days is not None and span_days <= 90:
+        return [(7, "0-7d"), (14, "8-14d"), (30, "15-30d"), (60, "31-60d"), (float("inf"), "60d+")]
+    return _AGE_BUCKETS
+
+
+def compute_age_buckets(issues: list[dict[str, Any]], span_days: int | None = None) -> list[dict[str, Any]]:
     """Compute age-distribution buckets for open tickets.
 
-    Returns a list of dicts matching :class:`AgeBucket` field names.
+    Bucket boundaries adapt to the selected date range.
     """
     included, _ = _filter_issues(issues)
     now = _now()
+    buckets = _age_buckets_for_span(span_days)
 
-    # Initialise buckets preserving order
-    bucket_counts: dict[str, int] = {label: 0 for _, label in _AGE_BUCKETS}
+    bucket_counts: dict[str, int] = {label: 0 for _, label in buckets}
 
-    open_count = 0
     for iss in included:
         if not _is_open(iss):
             continue
-        open_count += 1
         fields = iss.get("fields", {})
         created = parse_dt(fields.get("created"))
         if not created:
             continue
         age_days = (now - created).total_seconds() / 86400.0
-        for upper, label in _AGE_BUCKETS:
+        for upper, label in buckets:
             if age_days <= upper:
                 bucket_counts[label] += 1
                 break
 
-    result: list[dict[str, Any]] = []
-    for label in bucket_counts:
-        result.append({
-            "bucket": label,
-            "count": bucket_counts[label],
-        })
-
-    return result
+    return [{"bucket": label, "count": bucket_counts[label]} for label in bucket_counts]
 
 
-def compute_ttr_distribution(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _ttr_buckets_for_span(span_days: int | None) -> list[tuple[float, str]]:
+    """Return TTR bucket definitions appropriate for the date range."""
+    if span_days is not None and span_days <= 7:
+        return [
+            (0.5, "<30m"), (1, "30m-1h"), (2, "1-2h"), (4, "2-4h"),
+            (8, "4-8h"), (24, "8-24h"), (float("inf"), "24h+"),
+        ]
+    if span_days is not None and span_days <= 30:
+        return [
+            (1, "<1h"), (4, "1-4h"), (8, "4-8h"), (24, "8-24h"),
+            (72, "1-3d"), (float("inf"), "3d+"),
+        ]
+    return _TTR_BUCKETS
+
+
+def compute_ttr_distribution(issues: list[dict[str, Any]], span_days: int | None = None) -> list[dict[str, Any]]:
     """Compute time-to-resolve distribution buckets.
 
-    Returns a list of dicts matching :class:`TTRBucket` field names.
+    Bucket boundaries adapt to the selected date range.
     """
     included, _ = _filter_issues(issues)
 
@@ -496,15 +544,15 @@ def compute_ttr_distribution(issues: list[dict[str, Any]]) -> list[dict[str, Any
         if ttr is not None:
             ttr_values.append(ttr)
 
-    # Initialise buckets preserving order
-    bucket_counts: dict[str, int] = {label: 0 for _, label in _TTR_BUCKETS}
+    buckets = _ttr_buckets_for_span(span_days)
+    bucket_counts: dict[str, int] = {label: 0 for _, label in buckets}
     for h in ttr_values:
-        for upper, label in _TTR_BUCKETS:
+        for upper, label in buckets:
             if h < upper:
                 bucket_counts[label] += 1
                 break
 
-    total = len(ttr_values) or 1  # avoid division by zero
+    total = len(ttr_values) or 1
     cumulative = 0
     result: list[dict[str, Any]] = []
     for label in bucket_counts:

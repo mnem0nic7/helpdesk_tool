@@ -8,6 +8,7 @@ from typing import Any
 
 from alert_store import alert_store
 from email_service import send_email
+from metrics import _is_open
 from sla_engine import sla_config, business_minutes_between, _parse_dt
 
 logger = logging.getLogger(__name__)
@@ -31,10 +32,6 @@ def _get_status_category(issue: dict) -> str:
         .get("statusCategory", {})
         .get("name", "")
     )
-
-
-def _is_open(issue: dict) -> bool:
-    return _get_status_category(issue) != "Done"
 
 
 def _get_priority(issue: dict) -> str:

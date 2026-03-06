@@ -277,7 +277,7 @@ export default function DashboardPage() {
           label="Stale Tickets"
           value={staleCount.toLocaleString()}
           color={staleCount > 0 ? "red" : "green"}
-          subtitle="Not updated in 7d"
+          subtitle="Not updated in 1+ day"
           onClick={() => drillDown({ stale_only: "true" })}
         />
       </div>

@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/triage")
 _client = JiraClient()
 
 # Progress tracking for run-all background task
-_run_progress: dict[str, Any] = {"running": False, "processed": 0, "total": 0, "current_key": None}
+_run_progress: dict[str, Any] = {"running": False, "processed": 0, "total": 0, "current_key": None, "cancel": False}
 
 
 @router.get("/models")
@@ -40,6 +40,15 @@ async def get_triage_log() -> list[dict[str, Any]]:
 async def get_run_status() -> dict[str, Any]:
     """Return progress of the current run-all background task."""
     return dict(_run_progress)
+
+
+@router.post("/run-cancel")
+async def cancel_triage_run() -> dict[str, Any]:
+    """Cancel the current triage run."""
+    if not _run_progress["running"]:
+        return {"cancelled": False, "message": "No triage run in progress"}
+    _run_progress["cancel"] = True
+    return {"cancelled": True}
 
 
 @router.post("/run-all")
@@ -95,7 +104,7 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     if limit and isinstance(limit, int) and limit > 0:
         all_keys = all_keys[:limit]
 
-    _run_progress.update(running=True, processed=0, total=len(all_keys), current_key=None)
+    _run_progress.update(running=True, processed=0, total=len(all_keys), current_key=None, cancel=False)
 
     async def _run() -> None:
         try:
@@ -103,7 +112,7 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
         except Exception:
             logger.exception("run-all: background triage failed")
         finally:
-            _run_progress.update(running=False, current_key=None)
+            _run_progress.update(running=False, current_key=None, cancel=False)
 
     background_tasks.add_task(_run)
 

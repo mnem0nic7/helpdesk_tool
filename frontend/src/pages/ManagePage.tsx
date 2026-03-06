@@ -105,11 +105,18 @@ export default function ManagePage() {
   return (
     <div className="space-y-4">
       {/* Page header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Manage Tickets</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Select tickets and apply bulk operations.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Manage Tickets</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Select tickets and apply bulk operations.
+          </p>
+        </div>
+        {!isLoading && (
+          <span className="text-sm text-slate-500">
+            <span className="font-semibold text-slate-800">{tickets.length.toLocaleString()}</span> tickets
+          </span>
+        )}
       </div>
 
       {/* Bulk actions toolbar */}

@@ -14,18 +14,12 @@ interface Props {
   onSliceClick?: (bucket: string) => void;
 }
 
-const BUCKET_COLORS: Record<string, string> = {
-  "0-2d": "#22c55e",
-  "3-7d": "#eab308",
-  "8-14d": "#f97316",
-  "15-30d": "#ef4444",
-  "30+d": "#991b1b",
-};
+/** Gradient from green (newest) to red (oldest) based on position. */
+const GRADIENT_COLORS = ["#22c55e", "#84cc16", "#eab308", "#f97316", "#ef4444", "#dc2626", "#991b1b"];
 
-const FALLBACK_COLORS = ["#22c55e", "#eab308", "#f97316", "#ef4444", "#991b1b"];
-
-function getColor(bucket: string, index: number): string {
-  return BUCKET_COLORS[bucket] ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length];
+function getColor(_bucket: string, index: number, total: number): string {
+  const i = Math.round((index / Math.max(total - 1, 1)) * (GRADIENT_COLORS.length - 1));
+  return GRADIENT_COLORS[i];
 }
 
 function renderLabel(props: PieLabelRenderProps): string {
@@ -65,7 +59,7 @@ export default function AgingPieChart({ data, onSliceClick }: Props) {
             style={onSliceClick ? { cursor: "pointer" } : undefined}
           >
             {data.map((entry, idx) => (
-              <Cell key={entry.bucket} fill={getColor(entry.bucket, idx)} />
+              <Cell key={entry.bucket} fill={getColor(entry.bucket, idx, data.length)} />
             ))}
           </Pie>
           <Tooltip

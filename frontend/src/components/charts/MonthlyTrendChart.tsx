@@ -15,30 +15,43 @@ interface Props {
   onPointClick?: (weekStart: string) => void;
 }
 
-/** Format a week-start date (YYYY-MM-DD) as a short label like "Jan 20". */
-function formatWeekLabel(iso: string): string {
+function formatLabel(iso: string, grouping?: string): string {
   const d = new Date(iso + "T00:00:00");
+  if (grouping === "monthly") {
+    return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+  }
+  if (grouping === "daily") {
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function trendTitle(grouping?: string): string {
+  if (grouping === "daily") return "Daily Ticket Trend";
+  if (grouping === "monthly") return "Monthly Ticket Trend";
+  return "Weekly Ticket Trend";
 }
 
 export default function MonthlyTrendChart({ data, onPointClick }: Props) {
   if (!data || data.length === 0) {
     return (
       <div className="flex h-[300px] items-center justify-center text-sm text-gray-400">
-        No weekly data available
+        No trend data available
       </div>
     );
   }
 
+  const grouping = data[0]?.grouping;
+
   const chartData = data.map((d) => ({
     ...d,
-    label: formatWeekLabel(d.week),
+    label: formatLabel(d.week, grouping),
   }));
 
   return (
     <div className="rounded-lg bg-white p-4 shadow">
       <h3 className="mb-3 text-sm font-semibold text-gray-700">
-        Weekly Ticket Trend (Last 8 Weeks)
+        {trendTitle(grouping)}
       </h3>
       <ResponsiveContainer width="100%" height={300}>
         <LineChart
@@ -63,10 +76,12 @@ export default function MonthlyTrendChart({ data, onPointClick }: Props) {
           />
           <Tooltip
             labelFormatter={(_label, payload) => {
-              if (payload?.[0]?.payload?.week) {
-                return `Week of ${payload[0].payload.week}`;
-              }
-              return String(_label);
+              const w = payload?.[0]?.payload?.week;
+              if (!w) return String(_label);
+              const g = payload?.[0]?.payload?.grouping;
+              if (g === "daily") return w;
+              if (g === "monthly") return w.slice(0, 7);
+              return `Week of ${w}`;
             }}
             contentStyle={{
               fontSize: 12,
