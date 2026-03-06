@@ -18,7 +18,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
 from issue_cache import cache
-from metrics import issue_to_row
+from metrics import issue_to_row, _extract_description, _all_comments_text
 from models import ReportConfig
 from routes_tickets import _match
 
@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api")
 FIELD_META: dict[str, dict[str, str]] = {
     "key": {"label": "Key", "description": "Jira issue key"},
     "summary": {"label": "Summary", "description": "Issue title"},
-    "description": {"label": "Description", "description": "Issue description (first 500 chars)"},
+    "description": {"label": "Description", "description": "Issue description text"},
     "issue_type": {"label": "Type", "description": "Issue type"},
     "status": {"label": "Status", "description": "Current status"},
     "status_category": {"label": "Status Category", "description": "Status category (To Do / In Progress / Done)"},
@@ -60,6 +60,7 @@ FIELD_META: dict[str, dict[str, str]] = {
     "components": {"label": "Components", "description": "Issue components"},
     "organizations": {"label": "Organizations", "description": "Customer organizations"},
     "attachment_count": {"label": "Attachments", "description": "Number of attachments"},
+    "comments_text": {"label": "All Comments", "description": "Full text of all comments"},
 }
 
 # All TicketRow field keys in display order
@@ -307,7 +308,15 @@ _FULL_COLUMNS: list[str] = list(FIELD_META.keys())
 async def export_all_data(include_excluded: bool = False) -> FileResponse:
     """Export ALL ticket data with every available field as Excel."""
     issues = cache.get_all_issues() if include_excluded else cache.get_filtered_issues()
-    rows = [issue_to_row(iss) for iss in issues]
+    rows = []
+    for iss in issues:
+        row = issue_to_row(iss)
+        fields = iss.get("fields", {})
+        # Override description with full untruncated text
+        row["description"] = _extract_description(fields, max_len=0)
+        # Add full comment text
+        row["comments_text"] = _all_comments_text(fields)
+        rows.append(row)
     rows.sort(key=lambda r: r.get("created", ""), reverse=True)
 
     wb = Workbook()
@@ -339,6 +348,7 @@ async def export_all_data(include_excluded: bool = False) -> FileResponse:
         "work_category": 20, "calendar_ttr_hours": 12, "age_days": 10,
         "comment_count": 10, "last_comment_date": 22, "last_comment_author": 25,
         "labels": 30, "components": 25, "organizations": 30,
+        "comments_text": 60,
     }
     for col_idx, col_key in enumerate(columns, 1):
         col_letter = get_column_letter(col_idx)
