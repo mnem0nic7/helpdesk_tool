@@ -325,12 +325,11 @@ class IssueCache:
                         self._issues[key] = issue
                 self._last_refresh = datetime.now(timezone.utc)
 
-            # Return keys not yet auto-triaged, excluding oasisdev tickets
+            # Return ALL keys not yet auto-triaged (not just updated ones)
             seen = self._load_auto_triage_seen()
             untriaged_keys = [
-                issue.get("key", "") for issue in updated_issues
-                if issue.get("key") and issue.get("key") not in seen
-                and not JiraClient.is_excluded(issue)
+                key for key, issue in self._issues.items()
+                if key not in seen
             ]
 
             logger.info(
