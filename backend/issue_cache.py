@@ -459,6 +459,7 @@ class IssueCache:
                 # Auto-apply priority and request_type with confidence >= 0.7
                 priority_updated = False
                 request_type_updated = False
+                applied_fields: list[str] = []
                 for s in result.suggestions:
                     try:
                         if s.field == "priority" and s.confidence >= 0.7:
@@ -472,6 +473,7 @@ class IssueCache:
                             # Update local cache
                             self._update_cached_field(key, "priority", s.suggested_value)
                             priority_updated = True
+                            applied_fields.append("priority")
                             logger.info(
                                 "Auto-triage: %s priority %s → %s (conf=%.2f)",
                                 key, s.current_value, s.suggested_value, s.confidence,
@@ -490,12 +492,17 @@ class IssueCache:
                                 # Update local cache
                                 self._update_cached_field(key, "request_type", s.suggested_value)
                                 request_type_updated = True
+                                applied_fields.append("request_type")
                                 logger.info(
                                     "Auto-triage: %s request_type %s → %s (conf=%.2f)",
                                     key, s.current_value, s.suggested_value, s.confidence,
                                 )
                     except Exception:
                         logger.exception("Auto-triage: failed to apply %s for %s", s.field, key)
+
+                # Remove applied suggestions so they don't appear in the AI Triage tab
+                for field in applied_fields:
+                    store.remove_field(key, field)
 
                 store.mark_auto_triaged(key, priority_updated=priority_updated, request_type_updated=request_type_updated)
                 seen.add(key)
