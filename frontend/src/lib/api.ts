@@ -624,6 +624,11 @@ export const api = {
     return "/api/export/excel";
   },
 
+  /** Return the URL for the full-data export endpoint. */
+  exportAll(): string {
+    return "/api/export/all";
+  },
+
   /** Preview a report with the given config (returns up to 100 rows). */
   previewReport(config: ReportConfig): Promise<ReportPreviewResponse> {
     return postJSON<ReportPreviewResponse>("/api/report/preview", config);
