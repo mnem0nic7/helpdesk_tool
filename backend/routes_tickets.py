@@ -126,8 +126,10 @@ async def list_tickets(
     stale_only: bool = Query(False),
     created_after: Optional[str] = Query(None),
     created_before: Optional[str] = Query(None),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(5000, ge=1, le=10000),
 ) -> dict[str, Any]:
-    """Return all filtered OIT tickets from cache."""
+    """Return filtered OIT tickets from cache with pagination."""
     issues = cache.get_filtered_issues()
 
     filters = {
@@ -150,8 +152,11 @@ async def list_tickets(
         reverse=True,
     )
 
+    page = matched[offset : offset + limit]
+
     return {
-        "tickets": [issue_to_row(iss) for iss in matched],
+        "tickets": [issue_to_row(iss) for iss in page],
+        "matched_count": len(matched),
         "total_count": len(issues),
     }
 
@@ -168,6 +173,33 @@ async def get_ticket(key: str) -> dict[str, Any]:
     except Exception:
         raise HTTPException(status_code=404, detail=f"Issue {key} not found")
     return issue_to_row(issue)
+
+
+@router.get("/filter-options")
+async def get_filter_options() -> dict[str, list[str]]:
+    """Return distinct statuses, priorities, and issue types from cached tickets."""
+    issues = cache.get_filtered_issues()
+    statuses: set[str] = set()
+    priorities: set[str] = set()
+    issue_types: set[str] = set()
+    for iss in issues:
+        fields = iss.get("fields", {})
+        s = (fields.get("status") or {}).get("name")
+        if s:
+            statuses.add(s)
+        p = (fields.get("priority") or {}).get("name")
+        if p:
+            priorities.add(p)
+        t = (fields.get("issuetype") or {}).get("name")
+        if t:
+            issue_types.add(t)
+    priority_order = ["Highest", "High", "Medium", "Low", "Lowest"]
+    sorted_priorities = [p for p in priority_order if p in priorities] + sorted(priorities - set(priority_order))
+    return {
+        "statuses": sorted(statuses),
+        "priorities": sorted_priorities,
+        "issue_types": sorted(issue_types),
+    }
 
 
 @router.get("/assignees")

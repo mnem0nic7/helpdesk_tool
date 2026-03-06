@@ -7,6 +7,8 @@ import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from starlette.requests import Request
+
 from authlib.integrations.starlette_client import OAuth
 
 from config import (
@@ -14,6 +16,7 @@ from config import (
     ENTRA_CLIENT_ID,
     ENTRA_CLIENT_SECRET,
     ALLOWED_USERS,
+    ADMIN_USERS,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +85,26 @@ def is_allowed_user(email: str) -> bool:
         return True
     allowed = {e.strip().lower() for e in ALLOWED_USERS.split(",") if e.strip()}
     return email.lower() in allowed
+
+
+def is_admin_user(email: str) -> bool:
+    """Check if email is in the ADMIN_USERS list. Empty = all authenticated users are admin."""
+    if not ADMIN_USERS:
+        return True
+    admins = {e.strip().lower() for e in ADMIN_USERS.split(",") if e.strip()}
+    return email.lower() in admins
+
+
+def require_admin(request: Request) -> dict[str, Any]:
+    """FastAPI dependency: require admin role. Raises 403 if not admin."""
+    from fastapi import HTTPException as _HTTPException
+    sid = request.cookies.get("session_id", "")
+    session = get_session(sid) if sid else None
+    if not session:
+        raise _HTTPException(status_code=401, detail="Not authenticated")
+    if not is_admin_user(session["email"]):
+        raise _HTTPException(status_code=403, detail="Admin access required")
+    return session
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,7 @@ ENTRA_TENANT_ID: str = os.getenv("ENTRA_TENANT_ID", "")
 ENTRA_CLIENT_ID: str = os.getenv("ENTRA_CLIENT_ID", "")
 ENTRA_CLIENT_SECRET: str = os.getenv("ENTRA_CLIENT_SECRET", "")
 ALLOWED_USERS: str = os.getenv("ALLOWED_USERS", "")  # comma-separated emails, empty = all
+ADMIN_USERS: str = os.getenv("ADMIN_USERS", "")  # comma-separated emails for write operations, empty = all authenticated
 APP_SECRET_KEY: str = os.getenv("APP_SECRET_KEY", "change-me-in-production")
 if APP_SECRET_KEY == "change-me-in-production":
     import warnings

@@ -230,19 +230,25 @@ class IssueCache:
     # ------------------------------------------------------------------
 
     def _ensure_initialized(self) -> None:
-        """Block until the cache has been populated at least once."""
+        """Block until the cache has been populated at least once.
+
+        If DB is empty and a full Jira fetch is needed, this blocks on the
+        first request. Subsequent requests served from SQLite are fast.
+        """
         if self._initialized:
             return
         # If nobody started init yet, do it now (first request triggers it)
         if not self._init_event.is_set():
-            # Try loading from SQLite first
+            # Try loading from SQLite first (fast path)
             if self._load_from_db():
                 self._init_event.set()
                 return
+            # DB empty — must do a full fetch (slow path, first time only)
+            logger.info("Cache: cold start — fetching all issues from Jira (first request will be slow)")
             self._full_fetch()
         else:
             # Another thread is doing init — wait for it
-            self._init_event.wait()
+            self._init_event.wait(timeout=120)
 
     def _progress_callback(self, phase: str, current: int, total: int) -> None:
         """Update refresh progress state for the status endpoint."""
@@ -517,8 +523,10 @@ class IssueCache:
                     except Exception:
                         logger.exception("Auto-triage: failed to apply %s for %s", s.field, key)
 
-                # Remove applied suggestions so they don't appear in the AI Triage tab
-                for field in applied_fields:
+                # Remove priority and request_type suggestions entirely — auto-triage owns these fields.
+                # Applied ones are already written to Jira; unapplied ones (low confidence) should not
+                # clutter the manual Triage tab since auto-triage has already made a decision.
+                for field in ("priority", "request_type"):
                     store.remove_field(key, field)
 
                 store.mark_auto_triaged(key, priority_updated=priority_updated, request_type_updated=request_type_updated)

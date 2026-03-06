@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends
 
+from auth import require_admin
 from config import JIRA_BASE_URL
 from issue_cache import cache
 
@@ -20,7 +21,7 @@ async def cache_status() -> dict[str, Any]:
 
 
 @router.post("/cache/refresh")
-async def cache_refresh(background_tasks: BackgroundTasks) -> dict[str, Any]:
+async def cache_refresh(background_tasks: BackgroundTasks, _admin: dict = Depends(require_admin)) -> dict[str, Any]:
     """Trigger a full cache refresh (non-blocking — poll /cache/status for progress)."""
     if cache.refreshing:
         return {**cache.status(), "jira_base_url": JIRA_BASE_URL, "message": "Refresh already in progress"}
@@ -33,7 +34,7 @@ async def cache_refresh(background_tasks: BackgroundTasks) -> dict[str, Any]:
 
 
 @router.post("/cache/refresh/incremental")
-async def cache_refresh_incremental(background_tasks: BackgroundTasks) -> dict[str, Any]:
+async def cache_refresh_incremental(background_tasks: BackgroundTasks, _admin: dict = Depends(require_admin)) -> dict[str, Any]:
     """Trigger an incremental cache refresh (non-blocking — poll /cache/status for progress)."""
     if cache.refreshing:
         return {**cache.status(), "jira_base_url": JIRA_BASE_URL, "message": "Refresh already in progress"}

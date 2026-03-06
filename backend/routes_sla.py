@@ -21,6 +21,13 @@ async def get_sla_metrics(
     date_to: str | None = None,
 ) -> dict[str, Any]:
     """Compute custom SLA metrics for all filtered issues, optionally narrowed by date range."""
+    from datetime import date
+    for label, val in [("date_from", date_from), ("date_to", date_to)]:
+        if val is not None:
+            try:
+                date.fromisoformat(val)
+            except ValueError:
+                raise HTTPException(400, f"Invalid {label} format: expected YYYY-MM-DD")
     issues = cache.get_filtered_issues()
     return compute_sla_for_issues(issues, date_from=date_from, date_to=date_to)
 
