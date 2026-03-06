@@ -565,13 +565,13 @@ export default function ReportsPage() {
         </div>
         <div className="flex items-center gap-3">
           <a
-            href={api.exportExcel()}
+            href={api.exportAll()}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-600 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-800"
           >
             <DownloadIcon className="h-3.5 w-3.5" />
-            Export All (legacy)
+            Export All Data
           </a>
           <button
             onClick={handleExport}
