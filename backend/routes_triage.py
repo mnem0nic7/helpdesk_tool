@@ -127,8 +127,8 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
 
 @router.get("/suggestions")
 async def list_suggestions() -> list[dict[str, Any]]:
-    """Return all cached triage suggestions."""
-    return [r.model_dump() for r in store.list_all()]
+    """Return cached triage suggestions, excluding auto-triage-owned fields."""
+    return [r.model_dump() for r in store.list_all(strip_auto_fields=True)]
 
 
 @router.get("/suggestions/{key}")
@@ -137,6 +137,13 @@ async def get_suggestion(key: str) -> dict[str, Any]:
     result = store.get(key)
     if not result:
         raise HTTPException(status_code=404, detail=f"No suggestion for {key}")
+    # Strip auto-triage-owned fields for tickets that were auto-processed
+    triaged = store.get_auto_triaged_keys()
+    if key in triaged:
+        result.suggestions = [
+            s for s in result.suggestions
+            if s.field not in ("priority", "request_type")
+        ]
     return result.model_dump()
 
 

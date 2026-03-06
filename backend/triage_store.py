@@ -93,12 +93,31 @@ class TriageStore:
         with self._conn() as conn:
             conn.execute("DELETE FROM suggestions WHERE key = ?", (key,))
 
-    def list_all(self) -> list[TriageResult]:
+    def list_all(self, strip_auto_fields: bool = False) -> list[TriageResult]:
+        """Return all stored suggestions.
+
+        If *strip_auto_fields* is True, remove priority and request_type
+        suggestions for tickets that have been auto-triaged (those fields are
+        handled by the auto-triage pipeline).
+        """
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT data FROM suggestions ORDER BY updated_at DESC"
             ).fetchall()
-        return [TriageResult(**json.loads(row[0])) for row in rows]
+        results = [TriageResult(**json.loads(row[0])) for row in rows]
+        if strip_auto_fields:
+            triaged = self.get_auto_triaged_keys()
+            cleaned: list[TriageResult] = []
+            for r in results:
+                if r.key in triaged:
+                    r.suggestions = [
+                        s for s in r.suggestions
+                        if s.field not in ("priority", "request_type")
+                    ]
+                if r.suggestions:
+                    cleaned.append(r)
+            return cleaned
+        return results
 
     # ------------------------------------------------------------------
     # Auto-triage tracking

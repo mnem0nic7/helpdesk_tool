@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type {
@@ -440,6 +440,61 @@ export default function TriagePage() {
     });
   }
 
+  // Incremental rendering for ticket table
+  const TICKET_PAGE = 100;
+  const [visibleTicketCount, setVisibleTicketCount] = useState(TICKET_PAGE);
+  const ticketSentinelRef = useRef<HTMLDivElement>(null);
+
+  // Reset visible count when tickets change
+  useEffect(() => {
+    setVisibleTicketCount(TICKET_PAGE);
+  }, [tickets.length]);
+
+  const loadMoreTickets = useCallback(() => {
+    setVisibleTicketCount((prev) => Math.min(prev + TICKET_PAGE, tickets.length));
+  }, [tickets.length]);
+
+  useEffect(() => {
+    const el = ticketSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadMoreTickets(); },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadMoreTickets, visibleTicketCount]);
+
+  const visibleTickets = tickets.slice(0, visibleTicketCount);
+  const hasMoreTickets = visibleTicketCount < tickets.length;
+
+  // Incremental rendering for review panel
+  const REVIEW_PAGE = 50;
+  const [visibleReviewCount, setVisibleReviewCount] = useState(REVIEW_PAGE);
+  const reviewSentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setVisibleReviewCount(REVIEW_PAGE);
+  }, [reviewResults.length]);
+
+  const loadMoreReviews = useCallback(() => {
+    setVisibleReviewCount((prev) => Math.min(prev + REVIEW_PAGE, reviewResults.length));
+  }, [reviewResults.length]);
+
+  useEffect(() => {
+    const el = reviewSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadMoreReviews(); },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadMoreReviews, visibleReviewCount]);
+
+  const visibleReviews = reviewResults.slice(0, visibleReviewCount);
+  const hasMoreReviews = visibleReviewCount < reviewResults.length;
+
   // Dismiss all suggestions for a ticket
   async function handleDismissAll(key: string) {
     setDismissingKey(key);
@@ -624,7 +679,7 @@ export default function TriagePage() {
                     </td>
                   </tr>
                 )}
-                {tickets.map((t: TicketRow) => (
+                {visibleTickets.map((t: TicketRow) => (
                   <tr
                     key={t.key}
                     className={`cursor-pointer transition-colors hover:bg-gray-50 ${
@@ -668,6 +723,11 @@ export default function TriagePage() {
                 ))}
               </tbody>
             </table>
+            {hasMoreTickets && (
+              <div ref={ticketSentinelRef} className="px-4 py-2 text-center text-xs text-gray-400">
+                Showing {visibleTicketCount} of {tickets.length} — scroll for more
+              </div>
+            )}
           </div>
         </div>
 
@@ -699,7 +759,7 @@ export default function TriagePage() {
           )}
 
           <div className="max-h-[60vh] space-y-3 overflow-y-auto">
-            {reviewResults.map((r) => (
+            {visibleReviews.map((r) => (
               <TriageReviewPanel
                 key={r.key}
                 result={r}
@@ -710,6 +770,11 @@ export default function TriagePage() {
                 dismissing={dismissingKey === r.key}
               />
             ))}
+            {hasMoreReviews && (
+              <div ref={reviewSentinelRef} className="py-2 text-center text-xs text-gray-400">
+                Showing {visibleReviewCount} of {reviewResults.length} — scroll for more
+              </div>
+            )}
           </div>
         </div>
       </div>
