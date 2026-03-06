@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render as rtlRender, screen, fireEvent, act } from "@testing-library/react";
+import { screen, fireEvent, act } from "@testing-library/react";
+import { render } from "../test-utils.tsx";
 import TicketFilters, { emptyFilters } from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 
@@ -14,7 +15,7 @@ function renderFilters(
   const filters = { ...emptyFilters, ...overrides };
   return {
     onChange,
-    ...rtlRender(
+    ...render(
       <TicketFilters filters={filters} onFilterChange={onChange} />
     ),
   };

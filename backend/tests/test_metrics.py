@@ -153,9 +153,10 @@ class TestComputeHeadlineMetrics:
 
     def test_stale_count(self, filtered_issues, freeze_time):
         result = compute_headline_metrics(filtered_issues)
-        # OIT-200 updated 2026-02-15, frozen now is 2026-03-04 => ~17 days > 7 stale
-        # OIT-100 updated 2026-03-03, frozen now is 2026-03-04 => 1 day, not stale
-        assert result["stale_count"] == 1
+        # _STALE_DAYS = 1 (tickets need daily updates)
+        # OIT-200 updated 2026-02-15, frozen now 2026-03-04 => ~17 days >= 1 => stale
+        # OIT-100 updated 2026-03-03T10:00, frozen 2026-03-04T12:00 => ~1.08 days >= 1 => stale
+        assert result["stale_count"] == 2
 
     def test_empty_list(self, freeze_time):
         result = compute_headline_metrics([])

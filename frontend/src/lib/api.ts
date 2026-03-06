@@ -145,6 +145,7 @@ export interface TicketRow {
 /** Tickets response from GET /api/tickets. */
 export interface TicketsResponse {
   tickets: TicketRow[];
+  matched_count?: number;
   total_count?: number;
 }
 
@@ -523,6 +524,11 @@ export const api = {
   /** Fetch a paginated, filterable list of tickets. */
   getTickets(params: TicketQueryParams = {}): Promise<TicketsResponse> {
     return fetchJSON<TicketsResponse>(`/api/tickets${buildQuery(params)}`);
+  },
+
+  /** Fetch distinct filter options (statuses, priorities, issue types) from cached data. */
+  getFilterOptions(): Promise<{ statuses: string[]; priorities: string[]; issue_types: string[] }> {
+    return fetchJSON("/api/filter-options");
   },
 
   /** Fetch a single ticket by its Jira key (e.g. "OIT-1234"). */

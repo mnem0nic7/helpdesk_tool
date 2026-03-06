@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from alert_store import alert_store
+from auth import require_admin
 from alert_engine import run_alert_checks, EVALUATORS, TRIGGER_LABELS
 from issue_cache import cache
 
@@ -97,7 +98,7 @@ async def test_rule(rule_id: int) -> dict[str, Any]:
 
 
 @router.post("/rules/{rule_id}/send")
-async def send_rule_now(rule_id: int) -> dict[str, Any]:
+async def send_rule_now(rule_id: int, _admin: dict = Depends(require_admin)) -> dict[str, Any]:
     """Immediately evaluate and send a single rule's alert."""
     rule = alert_store.get_rule(rule_id)
     if not rule:
@@ -148,7 +149,7 @@ async def send_rule_now(rule_id: int) -> dict[str, Any]:
 
 
 @router.post("/run")
-async def run_alerts_now() -> dict[str, Any]:
+async def run_alerts_now(_admin: dict = Depends(require_admin)) -> dict[str, Any]:
     """Manually trigger all enabled alert rules."""
     issues = cache.get_filtered_issues()
     sent = await run_alert_checks(issues)

@@ -248,7 +248,7 @@ async def report_export(config: ReportConfig) -> FileResponse:
             cell.fill = _HEADER_FILL
             cell.alignment = _HEADER_ALIGNMENT
         for row_idx, agg_row in enumerate(agg, 2):
-            ws.cell(row=row_idx, column=1, value=agg_row["group"])
+            ws.cell(row=row_idx, column=1, value=_cell_value(agg_row["group"]))
             ws.cell(row=row_idx, column=2, value=agg_row["count"])
             ws.cell(row=row_idx, column=3, value=agg_row["open"])
             ws.cell(row=row_idx, column=4, value=agg_row["avg_ttr_hours"] or "")
@@ -409,14 +409,7 @@ async def export_excel() -> FileResponse:
     for row_idx, issue in enumerate(issues, start=2):
         row_data = issue_to_row(issue)
         for col_idx, (_, dict_key) in enumerate(_COLUMNS, start=1):
-            value = row_data.get(dict_key, "")
-            # Convert booleans to Yes/No for readability
-            if isinstance(value, bool):
-                value = "Yes" if value else "No"
-            # Convert None to empty string
-            if value is None:
-                value = ""
-            ws.cell(row=row_idx, column=col_idx, value=value)
+            ws.cell(row=row_idx, column=col_idx, value=_cell_value(row_data.get(dict_key)))
 
     # Auto-filter on all columns
     last_col_letter = chr(ord("A") + len(_COLUMNS) - 1)

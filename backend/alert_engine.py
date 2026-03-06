@@ -331,11 +331,11 @@ def _render_email(rule: dict, tickets: list[dict]) -> tuple[str, str]:
     if len(tickets) > 100:
         overflow = f"<p style='color:#6b7280;font-size:13px'>...and {len(tickets) - 100} more tickets.</p>"
 
-    html = f"""
+    html_body = f"""
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:800px;margin:0 auto">
         <div style="background:#1e293b;color:white;padding:16px 24px;border-radius:8px 8px 0 0">
-            <h2 style="margin:0;font-size:18px">{trigger_label}</h2>
-            <p style="margin:4px 0 0;font-size:13px;color:#94a3b8">Alert: {rule['name']} &bull; {len(tickets)} ticket(s)</p>
+            <h2 style="margin:0;font-size:18px">{html.escape(trigger_label)}</h2>
+            <p style="margin:4px 0 0;font-size:13px;color:#94a3b8">Alert: {html.escape(rule['name'])} &bull; {len(tickets)} ticket(s)</p>
         </div>
         <div style="border:1px solid #e5e7eb;border-top:none;padding:20px 24px;border-radius:0 0 8px 8px">
             {message_html}
@@ -358,7 +358,7 @@ def _render_email(rule: dict, tickets: list[dict]) -> tuple[str, str]:
         </div>
     </div>
     """
-    return subject, html
+    return subject, html_body
 
 
 # ---------------------------------------------------------------------------

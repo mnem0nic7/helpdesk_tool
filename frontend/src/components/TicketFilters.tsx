@@ -27,7 +27,7 @@ export const emptyFilters: TicketFilterValues = {
   assignee: "",
 };
 
-const STATUSES = [
+const FALLBACK_STATUSES = [
   "Acknowledged",
   "In Progress",
   "Waiting for support",
@@ -36,9 +36,9 @@ const STATUSES = [
   "Closed",
 ];
 
-const PRIORITIES = ["Highest", "High", "Medium", "Low", "Lowest"];
+const FALLBACK_PRIORITIES = ["Highest", "High", "Medium", "Low", "Lowest"];
 
-const ISSUE_TYPES = ["[System] Service request", "[System] Change"];
+const FALLBACK_ISSUE_TYPES = ["[System] Service request", "[System] Change"];
 
 interface TicketFiltersProps {
   filters: TicketFilterValues;
@@ -51,6 +51,15 @@ export default function TicketFilters({
 }: TicketFiltersProps) {
   const [searchInput, setSearchInput] = useState(filters.search);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { data: filterOptions } = useQuery({
+    queryKey: ["filter-options"],
+    queryFn: () => api.getFilterOptions(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const STATUSES = filterOptions?.statuses ?? FALLBACK_STATUSES;
+  const PRIORITIES = filterOptions?.priorities ?? FALLBACK_PRIORITIES;
+  const ISSUE_TYPES = filterOptions?.issue_types ?? FALLBACK_ISSUE_TYPES;
 
   const { data: assignees } = useQuery({
     queryKey: ["assignees"],
