@@ -516,6 +516,9 @@ def _should_run(rule: dict, now: datetime) -> bool:
         return True
 
     if frequency == "weekly":
+        schedule_days = {int(d) for d in rule.get("schedule_days", "0,1,2,3,4").split(",") if d.strip()}
+        if now.weekday() not in schedule_days:
+            return False
         if elapsed_hours < 7 * 20:
             return False
         # Also respect schedule_time for weekly

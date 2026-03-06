@@ -16,7 +16,8 @@ import PriorityBarChart from "../components/charts/PriorityBarChart.tsx";
 // ---------------------------------------------------------------------------
 
 /** Format hours into a human-friendly duration string. */
-function formatHours(hours: number): string {
+function formatHours(hours: number | null | undefined): string {
+  if (hours == null) return "—";
   if (hours < 1) {
     const minutes = Math.round(hours * 60);
     return `${minutes}m`;
@@ -250,7 +251,7 @@ export default function DashboardPage() {
           label="Open Backlog"
           value={headline.open_backlog.toLocaleString()}
           color="yellow"
-          subtitle={`${((headline.open_backlog / headline.total_tickets) * 100).toFixed(1)}% of total`}
+          subtitle={headline.total_tickets > 0 ? `${((headline.open_backlog / headline.total_tickets) * 100).toFixed(1)}% of total` : undefined}
           onClick={() => drillDown({ open_only: "true" })}
         />
         <MetricCard
