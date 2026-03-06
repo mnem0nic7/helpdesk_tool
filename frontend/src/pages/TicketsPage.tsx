@@ -70,7 +70,7 @@ export default function TicketsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Tickets</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Browse and search all OIT helpdesk tickets.
+            Browse and search OIT helpdesk tickets. Showing open tickets by default.
           </p>
         </div>
         <div className="flex items-center gap-4">

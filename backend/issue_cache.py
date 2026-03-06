@@ -119,11 +119,12 @@ class IssueCache:
                 result["refresh_progress"] = dict(self._refresh_progress)
             return result
 
-    def _update_cached_field(self, key: str, field: str, value: str) -> None:
+    def update_cached_field(self, key: str, field: str, value: str) -> None:
         """Update a field in the cached issue data (in-memory + SQLite).
 
-        Supports 'priority' and 'request_type' fields.
+        Supports: priority, request_type, status, assignee, updated.
         """
+        from datetime import datetime, timezone
         with self._lock:
             for store_dict in (self._all_issues, self._issues):
                 issue = store_dict.get(key)
@@ -136,6 +137,22 @@ class IssueCache:
                     fields["customfield_10010"] = {
                         "requestType": {"name": value}
                     }
+                elif field == "status":
+                    status_obj = fields.get("status") or {}
+                    status_obj["name"] = value
+                    fields["status"] = status_obj
+                elif field == "assignee":
+                    if value:
+                        assignee_obj = fields.get("assignee") or {}
+                        if isinstance(assignee_obj, dict):
+                            assignee_obj["displayName"] = value
+                        else:
+                            assignee_obj = {"displayName": value}
+                        fields["assignee"] = assignee_obj
+                    else:
+                        fields["assignee"] = None
+                # Always bump updated timestamp
+                fields["updated"] = datetime.now(timezone.utc).isoformat()
         # Persist the updated issue to SQLite
         with self._lock:
             issue = self._all_issues.get(key)
@@ -471,7 +488,7 @@ class IssueCache:
                                 s.confidence, AUTO_TRIAGE_MODEL,
                             )
                             # Update local cache
-                            self._update_cached_field(key, "priority", s.suggested_value)
+                            self.update_cached_field(key, "priority", s.suggested_value)
                             priority_updated = True
                             applied_fields.append("priority")
                             logger.info(
@@ -490,7 +507,7 @@ class IssueCache:
                                     s.confidence, AUTO_TRIAGE_MODEL,
                                 )
                                 # Update local cache
-                                self._update_cached_field(key, "request_type", s.suggested_value)
+                                self.update_cached_field(key, "request_type", s.suggested_value)
                                 request_type_updated = True
                                 applied_fields.append("request_type")
                                 logger.info(

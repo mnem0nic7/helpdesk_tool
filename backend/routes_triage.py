@@ -200,11 +200,10 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
                     errors.append({"field": field_name, "error": f"Invalid priority '{s.suggested_value}'. Valid: {', '.join(sorted(valid))}"})
                     continue
                 _client.update_priority(req.key, s.suggested_value)
+                cache.update_cached_field(req.key, "priority", s.suggested_value)
                 applied.append(field_name)
 
             elif field_name == "assignee":
-                # Need to look up account ID from display name
-                # For now, try the suggested value as-is (could be account ID or name)
                 from config import JIRA_PROJECT
                 users = _client.get_users_assignable(JIRA_PROJECT)
                 account_id = None
@@ -214,12 +213,12 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
                         break
                 if account_id:
                     _client.assign_issue(req.key, account_id)
+                    cache.update_cached_field(req.key, "assignee", s.suggested_value)
                     applied.append(field_name)
                 else:
                     errors.append({"field": field_name, "error": f"Could not find user: {s.suggested_value}"})
 
             elif field_name == "status":
-                # Look up the transition ID for the target status
                 transitions = _client.get_transitions(req.key)
                 transition_id = None
                 for t in transitions:
@@ -228,6 +227,7 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
                         break
                 if transition_id:
                     _client.transition_issue(req.key, transition_id)
+                    cache.update_cached_field(req.key, "status", s.suggested_value)
                     applied.append(field_name)
                 else:
                     errors.append({
@@ -240,6 +240,7 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
                 rt_id = get_request_type_id(s.suggested_value)
                 if rt_id:
                     _client.set_request_type(req.key, rt_id)
+                    cache.update_cached_field(req.key, "request_type", s.suggested_value)
                     applied.append(field_name)
                 else:
                     errors.append({"field": field_name, "error": f"Unknown request type: {s.suggested_value}"})
@@ -289,6 +290,7 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
                     detail=f"Invalid priority '{s.suggested_value}'. Valid: {', '.join(sorted(valid))}",
                 )
             _client.update_priority(req.key, s.suggested_value)
+            cache.update_cached_field(req.key, "priority", s.suggested_value)
 
         elif req.field == "assignee":
             from config import JIRA_PROJECT
@@ -301,6 +303,7 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
             if not account_id:
                 raise HTTPException(status_code=400, detail=f"Could not find user: {s.suggested_value}")
             _client.assign_issue(req.key, account_id)
+            cache.update_cached_field(req.key, "assignee", s.suggested_value)
 
         elif req.field == "status":
             transitions = _client.get_transitions(req.key)
@@ -315,6 +318,7 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
                     detail=f"No transition to '{s.suggested_value}' available",
                 )
             _client.transition_issue(req.key, transition_id)
+            cache.update_cached_field(req.key, "status", s.suggested_value)
 
         elif req.field == "request_type":
             from ai_client import get_request_type_id
@@ -322,6 +326,7 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
             if not rt_id:
                 raise HTTPException(status_code=400, detail=f"Unknown request type: {s.suggested_value}")
             _client.set_request_type(req.key, rt_id)
+            cache.update_cached_field(req.key, "request_type", s.suggested_value)
 
         elif req.field == "comment":
             _client.add_comment(req.key, f"[AI-Suggestion] {s.suggested_value}")
