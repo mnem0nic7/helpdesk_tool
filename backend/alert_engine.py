@@ -72,7 +72,9 @@ def _matches_filters(issue: dict, filters: dict) -> bool:
     assignee = _get_assignee(issue).lower()
     if filters.get("assignees"):
         allowed = [a.lower() for a in filters["assignees"]]
-        if assignee.lower() not in allowed and "unassigned" not in allowed:
+        # Treat empty/missing assignee as "unassigned"
+        effective = assignee if assignee else "unassigned"
+        if effective not in allowed:
             return False
 
     request_type = _get_request_type(issue).lower()
@@ -498,15 +500,32 @@ def _should_run(rule: dict, now: datetime) -> bool:
         return elapsed_hours >= 1.0
 
     if frequency == "daily":
-        # Check if we've passed the schedule time today
         schedule_days = {int(d) for d in rule.get("schedule_days", "0,1,2,3,4").split(",") if d.strip()}
         if now.weekday() not in schedule_days:
             return False
         if elapsed_hours < 20:  # Don't re-run within 20 hours
             return False
+        # Check if we've reached the scheduled send time today
+        schedule_time = rule.get("schedule_time", "08:00")
+        try:
+            hour, minute = (int(x) for x in schedule_time.split(":"))
+        except (ValueError, AttributeError):
+            hour, minute = 8, 0
+        if now.hour < hour or (now.hour == hour and now.minute < minute):
+            return False
         return True
 
     if frequency == "weekly":
-        return elapsed_hours >= 7 * 20  # Roughly weekly
+        if elapsed_hours < 7 * 20:
+            return False
+        # Also respect schedule_time for weekly
+        schedule_time = rule.get("schedule_time", "08:00")
+        try:
+            hour, minute = (int(x) for x in schedule_time.split(":"))
+        except (ValueError, AttributeError):
+            hour, minute = 8, 0
+        if now.hour < hour or (now.hour == hour and now.minute < minute):
+            return False
+        return True
 
     return elapsed_hours >= 24
