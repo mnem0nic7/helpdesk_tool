@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type { TriageLogEntry, CacheStatus } from "../lib/api.ts";
 
@@ -36,6 +36,13 @@ export default function AILogPage() {
   });
 
   const isRunning = runStatus?.running ?? false;
+
+  const cancelRun = useMutation({
+    mutationFn: () => api.cancelTriageRun(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["triage-run-status"] });
+    },
+  });
 
   async function handleRun(limit?: number, reset?: boolean, reprocess?: boolean) {
     setStarting(true);
@@ -106,34 +113,46 @@ export default function AILogPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={() => handleRun(10, false)}
-            disabled={starting || isRunning}
-            className="rounded-lg bg-gray-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {starting ? "Starting…" : isRunning ? "Running…" : "Test (10 Tickets)"}
-          </button>
-          <button
-            onClick={() => handleRun(undefined, false)}
-            disabled={starting || isRunning}
-            className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {starting ? "Starting…" : isRunning ? "Running…" : "Run Remaining"}
-          </button>
-          <button
-            onClick={() => handleRun(undefined, false, true)}
-            disabled={starting || isRunning}
-            className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {starting ? "Starting…" : isRunning ? "Running…" : "Reprocess Done"}
-          </button>
-          <button
-            onClick={() => handleRun(undefined, true)}
-            disabled={starting || isRunning}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {starting ? "Starting…" : isRunning ? "Running…" : "Rerun All Tickets"}
-          </button>
+          {isRunning ? (
+            <button
+              onClick={() => cancelRun.mutate()}
+              disabled={cancelRun.isPending}
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {cancelRun.isPending ? "Stopping…" : "Stop"}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => handleRun(10, false)}
+                disabled={starting}
+                className="rounded-lg bg-gray-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {starting ? "Starting…" : "Test (10 Tickets)"}
+              </button>
+              <button
+                onClick={() => handleRun(undefined, false)}
+                disabled={starting}
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {starting ? "Starting…" : "Run Remaining"}
+              </button>
+              <button
+                onClick={() => handleRun(undefined, false, true)}
+                disabled={starting}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {starting ? "Starting…" : "Reprocess Done"}
+              </button>
+              <button
+                onClick={() => handleRun(undefined, true)}
+                disabled={starting}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {starting ? "Starting…" : "Rerun All Tickets"}
+              </button>
+            </>
+          )}
         </div>
       </div>
       {message && (

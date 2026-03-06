@@ -144,6 +144,7 @@ class JiraClient:
         self,
         jql: str,
         fields: list[str] | None = None,
+        progress_callback: Any | None = None,
     ) -> list[dict[str, Any]]:
         """Paginate through ALL results for a JQL query using nextPageToken.
 
@@ -153,6 +154,7 @@ class JiraClient:
         all_issues: list[dict[str, Any]] = []
         next_page_token: str | None = None
         request_fields = fields or FIELDS
+        known_total: int | None = None  # Cache total from first response
 
         while True:
             payload: dict[str, Any] = {
@@ -170,6 +172,13 @@ class JiraClient:
             issues = data.get("issues", [])
             all_issues.extend(issues)
 
+            # Report progress if callback provided
+            if "total" in data:
+                known_total = data["total"]
+            if progress_callback:
+                total = known_total if known_total is not None else len(all_issues)
+                progress_callback("fetching", len(all_issues), total)
+
             next_page_token = data.get("nextPageToken")
             if not next_page_token:
                 break
@@ -183,7 +192,7 @@ class JiraClient:
         logger.info("search_all complete: %d issues for JQL: %s", len(all_issues), jql)
 
         # Fetch full comments for tickets where the search API truncated them
-        self._backfill_comments(all_issues)
+        self._backfill_comments(all_issues, progress_callback=progress_callback)
 
         return all_issues
 
@@ -191,7 +200,7 @@ class JiraClient:
     # Comment backfill
     # ------------------------------------------------------------------
 
-    def _backfill_comments(self, issues: list[dict[str, Any]]) -> None:
+    def _backfill_comments(self, issues: list[dict[str, Any]], progress_callback: Any | None = None) -> None:
         """Fetch all comments for issues where the search API truncated them.
 
         The Jira search API limits comments to ~5 per issue. For tickets
@@ -209,8 +218,10 @@ class JiraClient:
             return
 
         logger.info("Backfilling comments for %d issues (truncated by search API)", len(truncated))
+        if progress_callback:
+            progress_callback("backfilling", 0, len(truncated))
 
-        for iss in truncated:
+        for idx, iss in enumerate(truncated):
             key = iss.get("key", "")
             try:
                 url = f"{self.base_url}/rest/api/3/issue/{key}/comment"
@@ -233,6 +244,8 @@ class JiraClient:
                 }
             except Exception:
                 logger.warning("Failed to backfill comments for %s", key, exc_info=True)
+            if progress_callback:
+                progress_callback("backfilling", idx + 1, len(truncated))
 
     # ------------------------------------------------------------------
     # Request type enrichment

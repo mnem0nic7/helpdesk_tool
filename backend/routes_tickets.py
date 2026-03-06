@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api")
 _client = JiraClient()
 
 # Stale threshold — matches metrics.py _STALE_DAYS
-_STALE_DAYS = 7
+_STALE_DAYS = 1
 
 
 def _match(issue: dict[str, Any], **filters: Any) -> bool:
@@ -152,6 +152,7 @@ async def list_tickets(
 
     return {
         "tickets": [issue_to_row(iss) for iss in matched],
+        "total_count": len(issues),
     }
 
 

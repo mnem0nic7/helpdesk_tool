@@ -74,11 +74,17 @@ async def get_metrics(
     dt = date.fromisoformat(date_to) if date_to else None
     issues = _filter_by_date(issues, df, dt)
 
+    # Compute span in days for adaptive chart grouping
+    span_days: int | None = None
+    if df:
+        end = dt or date.today()
+        span_days = (end - df).days
+
     return {
         "headline": compute_headline_metrics(issues, excluded_count),
-        "weekly_volumes": compute_weekly_volumes(issues),
-        "age_buckets": compute_age_buckets(issues),
-        "ttr_distribution": compute_ttr_distribution(issues),
+        "weekly_volumes": compute_weekly_volumes(issues, span_days=span_days),
+        "age_buckets": compute_age_buckets(issues, span_days=span_days),
+        "ttr_distribution": compute_ttr_distribution(issues, span_days=span_days),
         "priority_counts": compute_priority_counts(issues),
         "assignee_stats": compute_assignee_stats(issues),
     }

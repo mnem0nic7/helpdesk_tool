@@ -20,19 +20,36 @@ async def cache_status() -> dict[str, Any]:
 
 
 @router.post("/cache/refresh")
-async def cache_refresh() -> dict[str, Any]:
-    """Trigger a full cache refresh (blocking)."""
-    await asyncio.get_running_loop().run_in_executor(None, cache.trigger_refresh)
-    return cache.status()
+async def cache_refresh(background_tasks: BackgroundTasks) -> dict[str, Any]:
+    """Trigger a full cache refresh (non-blocking — poll /cache/status for progress)."""
+    if cache.refreshing:
+        return {**cache.status(), "jira_base_url": JIRA_BASE_URL, "message": "Refresh already in progress"}
+
+    async def _run() -> None:
+        await asyncio.get_running_loop().run_in_executor(None, cache.trigger_refresh)
+
+    background_tasks.add_task(_run)
+    return {**cache.status(), "jira_base_url": JIRA_BASE_URL, "started": True}
 
 
 @router.post("/cache/refresh/incremental")
-async def cache_refresh_incremental() -> dict[str, Any]:
-    """Trigger an incremental cache refresh — only issues updated in last 10 min."""
-    await asyncio.get_running_loop().run_in_executor(
-        None, cache.trigger_incremental_refresh
-    )
-    return cache.status()
+async def cache_refresh_incremental(background_tasks: BackgroundTasks) -> dict[str, Any]:
+    """Trigger an incremental cache refresh (non-blocking — poll /cache/status for progress)."""
+    if cache.refreshing:
+        return {**cache.status(), "jira_base_url": JIRA_BASE_URL, "message": "Refresh already in progress"}
+
+    async def _run() -> None:
+        await asyncio.get_running_loop().run_in_executor(None, cache.trigger_incremental_refresh)
+
+    background_tasks.add_task(_run)
+    return {**cache.status(), "jira_base_url": JIRA_BASE_URL, "started": True}
+
+
+@router.post("/cache/refresh/cancel")
+async def cancel_refresh() -> dict[str, Any]:
+    """Cancel an in-progress cache refresh."""
+    cancelled = cache.cancel_refresh()
+    return {"cancelled": cancelled}
 
 
 _enrich_status: dict[str, Any] = {"running": False, "enriched": 0}

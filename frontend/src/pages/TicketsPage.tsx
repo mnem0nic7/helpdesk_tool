@@ -60,15 +60,34 @@ export default function TicketsPage() {
   });
 
   const tickets = data?.tickets ?? [];
+  const totalCount = data?.total_count;
+  const hasFilters = !!(filters.search || filters.status || filters.priority || filters.issue_type || filters.stale_only || filters.assignee || filters.created_after || filters.created_before);
 
   return (
     <div className="space-y-4">
       {/* Page header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Tickets</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Browse and search all OIT helpdesk tickets.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Tickets</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Browse and search all OIT helpdesk tickets.
+          </p>
+        </div>
+        {!isLoading && (
+          <div className="text-sm text-slate-500">
+            {hasFilters && totalCount !== undefined ? (
+              <span>
+                <span className="font-semibold text-slate-800">{tickets.length.toLocaleString()}</span>
+                {" "}of {totalCount.toLocaleString()} tickets
+              </span>
+            ) : (
+              <span>
+                <span className="font-semibold text-slate-800">{tickets.length.toLocaleString()}</span>
+                {" "}tickets
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Filters */}

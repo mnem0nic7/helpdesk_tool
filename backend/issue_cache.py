@@ -16,6 +16,10 @@ from jira_client import JiraClient
 
 logger = logging.getLogger(__name__)
 
+
+class _RefreshCancelled(Exception):
+    """Raised when a refresh is cancelled via cancel_refresh()."""
+
 # JQL filters
 _ALL_JQL = f"project = {JIRA_PROJECT} ORDER BY key ASC"
 _FILTERED_JQL = (
@@ -50,6 +54,10 @@ class IssueCache:
 
         # Auto-triage: keys already processed (lazy-loaded from DB)
         self._auto_triage_seen: set[str] | None = None
+
+        # Refresh progress tracking
+        self._refresh_progress: dict[str, Any] = {}
+        self._cancel_refresh = False
 
         # SQLite persistence
         self._db_path = db_path or os.path.join(DATA_DIR, "issues_cache.db")
@@ -98,7 +106,7 @@ class IssueCache:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
-            return {
+            result: dict[str, Any] = {
                 "initialized": self._initialized,
                 "refreshing": self._refreshing,
                 "issue_count": len(self._all_issues),
@@ -107,6 +115,9 @@ class IssueCache:
                     self._last_refresh.isoformat() if self._last_refresh else None
                 ),
             }
+            if self._refresh_progress:
+                result["refresh_progress"] = dict(self._refresh_progress)
+            return result
 
     def _update_cached_field(self, key: str, field: str, value: str) -> None:
         """Update a field in the cached issue data (in-memory + SQLite).
@@ -216,13 +227,32 @@ class IssueCache:
             # Another thread is doing init — wait for it
             self._init_event.wait()
 
+    def _progress_callback(self, phase: str, current: int, total: int) -> None:
+        """Update refresh progress state for the status endpoint."""
+        if self._cancel_refresh:
+            raise _RefreshCancelled()
+        self._refresh_progress = {
+            "phase": phase,
+            "current": current,
+            "total": total,
+        }
+
+    def cancel_refresh(self) -> bool:
+        """Request cancellation of the current refresh. Returns True if a refresh was running."""
+        if not self._refreshing:
+            return False
+        self._cancel_refresh = True
+        return True
+
     def _full_fetch(self) -> None:
         """Fetch ALL issues from Jira and populate both dicts."""
         self._init_event.clear()
         self._refreshing = True
+        self._cancel_refresh = False
+        self._refresh_progress = {"phase": "starting", "current": 0, "total": len(self._all_issues) or 0}
         try:
             logger.info("Cache: starting full fetch …")
-            all_issues = self._client.search_all(_ALL_JQL)
+            all_issues = self._client.search_all(_ALL_JQL, progress_callback=self._progress_callback)
             logger.info("Cache: fetched %d total issues", len(all_issues))
 
             # Carry forward existing request type data (free, no API calls)
@@ -253,9 +283,14 @@ class IssueCache:
                 len(new_all),
                 len(new_filtered),
             )
+            self._refresh_progress = {"phase": "saving", "current": 0, "total": 0}
             self._save_all_to_db()
+        except _RefreshCancelled:
+            logger.info("Cache: full refresh cancelled by user")
         finally:
             self._refreshing = False
+            self._cancel_refresh = False
+            self._refresh_progress = {}
             self._init_event.set()
 
     # ------------------------------------------------------------------
@@ -268,10 +303,12 @@ class IssueCache:
         Returns a list of issue keys that need auto-triage (not yet processed).
         """
         self._refreshing = True
+        self._cancel_refresh = False
+        self._refresh_progress = {"phase": "starting", "current": 0, "total": 0}
         try:
             jql = f'project = {JIRA_PROJECT} AND updated >= "-10m" ORDER BY key ASC'
             logger.info("Cache: incremental refresh with JQL: %s", jql)
-            updated_issues = self._client.search_all(jql)
+            updated_issues = self._client.search_all(jql, progress_callback=self._progress_callback)
             logger.info("Cache: incremental fetched %d issues", len(updated_issues))
 
             # Enrich request types for the updated batch
@@ -304,8 +341,13 @@ class IssueCache:
             )
             if updated_issues:
                 self._upsert_to_db(updated_issues)
+        except _RefreshCancelled:
+            logger.info("Cache: incremental refresh cancelled by user")
+            return []
         finally:
             self._refreshing = False
+            self._cancel_refresh = False
+            self._refresh_progress = {}
         return untriaged_keys
 
     # ------------------------------------------------------------------
@@ -395,6 +437,9 @@ class IssueCache:
         for i, key in enumerate(keys_to_process):
             try:
                 if progress is not None:
+                    if progress.get("cancel"):
+                        logger.info("Auto-triage: cancelled by user after %d/%d", i, len(keys_to_process))
+                        break
                     progress.update(processed=i, current_key=key)
 
                 with self._lock:

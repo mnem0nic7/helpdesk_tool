@@ -56,12 +56,13 @@ export interface HeadlineMetrics {
   excluded_count: number;
 }
 
-/** Weekly volume data point for the trend chart. */
+/** Volume data point for the trend chart (daily/weekly/monthly). */
 export interface WeeklyVolume {
   week: string;
   created: number;
   resolved: number;
   net_flow: number;
+  grouping?: string;
 }
 
 /** Bucket for the ticket-age distribution chart. */
@@ -144,6 +145,7 @@ export interface TicketRow {
 /** Tickets response from GET /api/tickets. */
 export interface TicketsResponse {
   tickets: TicketRow[];
+  total_count?: number;
 }
 
 /** SLA timer summary for a single timer type. */
@@ -434,6 +436,11 @@ export interface CacheStatus {
   filtered_count: number;
   last_refresh: string | null;
   jira_base_url?: string;
+  refresh_progress?: {
+    phase: string;
+    current: number;
+    total: number;
+  };
 }
 
 /** Current user info from /api/auth/me. */
@@ -666,6 +673,11 @@ export const api = {
     return postJSON<CacheStatus>("/api/cache/refresh/incremental", {});
   },
 
+  /** Cancel an in-progress cache refresh. */
+  cancelRefresh(): Promise<{ cancelled: boolean }> {
+    return postJSON("/api/cache/refresh/cancel", {});
+  },
+
   /** Fetch grouped chart data for bar/pie/donut charts. */
   getChartData(req: ChartDataRequest): Promise<ChartDataResponse> {
     return postJSON<ChartDataResponse>("/api/chart/data", req);
@@ -718,6 +730,11 @@ export const api = {
   /** Get progress of the current run-all background task. */
   getTriageRunStatus(): Promise<{ running: boolean; processed: number; total: number; current_key: string | null }> {
     return fetchJSON("/api/triage/run-status");
+  },
+
+  /** Cancel the current triage run. */
+  cancelTriageRun(): Promise<{ cancelled: boolean }> {
+    return postJSON("/api/triage/run-cancel", {});
   },
 
   /** Run auto-triage on cached tickets (background task). Optionally limit count for testing. */
