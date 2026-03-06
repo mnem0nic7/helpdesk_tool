@@ -86,9 +86,10 @@ Your job is to analyze tickets and suggest improvements for: priority, request_t
 Rules:
 - Only suggest changes where you see a clear improvement. If a field looks correct, omit it.
 - Priority must be one of: {priorities}
-- Request type: ALWAYS suggest a change when the current request type is "Emailed request" or "Email request".
-  Choose from: {request_types}
+- Request type: ALWAYS suggest a request_type change. You MUST assign every ticket to one of these categories:
+  {request_types}
   Pick the request type that best matches the ticket content. If unsure, use "Get IT help" as the default.
+  Do NOT use any request type not in this list.
 - Status must be one of: {statuses}
 - For assignee, suggest a name only if you can identify the right person from context. Otherwise omit.
 - For comments, suggest a brief triage note only if it would help the agent handling the ticket.
@@ -396,8 +397,28 @@ def _get_service_desk_id() -> str:
     return _service_desk_id
 
 
+# Approved request types — only these should be assigned during triage
+_APPROVED_REQUEST_TYPES: set[str] = {
+    "Security Alert",
+    "Get IT help",
+    "Email or Outlook",
+    "Password MFA Authentication",
+    "Server Infrastructure Database",
+    "Business Application Support",
+    "VPN",
+    "Backup and Storage",
+    "Report a computer equipment problem",
+    "Request a new user account",
+    "Offboard employees",
+    "Onboard new employees",
+    "Phone RingCentral",
+    "Virtual Desktop",
+    "Request new PC software",
+}
+
+
 def _get_request_types() -> dict[str, str]:
-    """Return {name: requestTypeId} for all request types, cached with TTL."""
+    """Return {name: requestTypeId} for approved request types, cached with TTL."""
     global _rt_cache
     now = time.monotonic()
     if _rt_cache[1] and now - _rt_cache[0] < _CACHE_TTL:
@@ -408,16 +429,15 @@ def _get_request_types() -> dict[str, str]:
         client = JiraClient()
         sd_id = _get_service_desk_id()
         raw = client.get_request_types(sd_id)
-        # Exclude the default "Emailed request" — no point suggesting it
+        # Only include approved request types
         rt_map = {}
         for rt in raw:
             name = rt.get("name", "")
             rid = rt.get("id")
             if not name or not rid:
                 continue
-            if name.lower() in ("emailed request", "email request"):
-                continue
-            rt_map[name] = str(rid)
+            if name in _APPROVED_REQUEST_TYPES:
+                rt_map[name] = str(rid)
         _rt_cache = (now, rt_map)
         logger.info("Validation: cached %d request types: %s", len(rt_map), list(rt_map.keys()))
         return rt_map
