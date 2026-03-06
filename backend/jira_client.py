@@ -68,6 +68,9 @@ FIELDS: list[str] = [
 class JiraClient:
     """Thin wrapper around the Jira Cloud REST API v3."""
 
+    # Default timeout for all Jira API requests (connect, read) in seconds
+    _TIMEOUT = (10, 30)
+
     def __init__(
         self,
         base_url: str = JIRA_BASE_URL,
@@ -136,7 +139,7 @@ class JiraClient:
         if start_at:
             payload["startAt"] = start_at
 
-        resp = self.session.post(url, json=payload)
+        resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
@@ -165,7 +168,7 @@ class JiraClient:
             if next_page_token:
                 payload["nextPageToken"] = next_page_token
 
-            resp = self.session.post(url, json=payload)
+            resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
 
@@ -228,7 +231,7 @@ class JiraClient:
                 all_comments: list[dict[str, Any]] = []
                 start_at = 0
                 while True:
-                    resp = self.session.get(url, params={"startAt": start_at, "maxResults": 100})
+                    resp = self.session.get(url, params={"startAt": start_at, "maxResults": 100}, timeout=self._TIMEOUT)
                     resp.raise_for_status()
                     data = resp.json()
                     all_comments.extend(data.get("comments", []))
@@ -363,7 +366,7 @@ class JiraClient:
         """GET /rest/api/3/issue/{key}"""
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}"
-        resp = self.session.get(url)
+        resp = self.session.get(url, timeout=self._TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
@@ -371,7 +374,7 @@ class JiraClient:
         """GET /rest/api/3/issue/{key}/transitions"""
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}/transitions"
-        resp = self.session.get(url)
+        resp = self.session.get(url, timeout=self._TIMEOUT)
         resp.raise_for_status()
         return resp.json().get("transitions", [])
 
@@ -380,7 +383,7 @@ class JiraClient:
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}/transitions"
         payload = {"transition": {"id": transition_id}}
-        resp = self.session.post(url, json=payload)
+        resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
         resp.raise_for_status()
 
     def assign_issue(self, key: str, account_id: str) -> None:
@@ -388,7 +391,7 @@ class JiraClient:
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}/assignee"
         payload = {"accountId": account_id}
-        resp = self.session.put(url, json=payload)
+        resp = self.session.put(url, json=payload, timeout=self._TIMEOUT)
         resp.raise_for_status()
 
     def update_priority(self, key: str, priority_name: str) -> None:
@@ -396,7 +399,7 @@ class JiraClient:
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}"
         payload = {"fields": {"priority": {"name": priority_name}}}
-        resp = self.session.put(url, json=payload)
+        resp = self.session.put(url, json=payload, timeout=self._TIMEOUT)
         resp.raise_for_status()
 
     def add_comment(self, key: str, body_text: str) -> dict[str, Any]:
@@ -420,7 +423,7 @@ class JiraClient:
                 ],
             }
         }
-        resp = self.session.post(url, json=payload)
+        resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
@@ -434,7 +437,7 @@ class JiraClient:
         all_types: list[dict[str, Any]] = []
         start = 0
         while True:
-            resp = self.session.get(url, params={"start": start, "limit": 100})
+            resp = self.session.get(url, params={"start": start, "limit": 100}, timeout=self._TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
             all_types.extend(data.get("values", []))
@@ -451,7 +454,7 @@ class JiraClient:
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}"
         payload = {"fields": {"customfield_11102": str(request_type_id)}}
-        resp = self.session.put(url, json=payload)
+        resp = self.session.put(url, json=payload, timeout=self._TIMEOUT)
         resp.raise_for_status()
 
     # ------------------------------------------------------------------
@@ -462,13 +465,13 @@ class JiraClient:
         """GET /rest/api/3/user/assignable/search?project={project}"""
         url = f"{self.base_url}/rest/api/3/user/assignable/search"
         params = {"project": project}
-        resp = self.session.get(url, params=params)
+        resp = self.session.get(url, params=params, timeout=self._TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
     def get_priorities(self) -> list[dict[str, Any]]:
         """GET /rest/api/3/priority — returns all configured priorities."""
         url = f"{self.base_url}/rest/api/3/priority"
-        resp = self.session.get(url)
+        resp = self.session.get(url, timeout=self._TIMEOUT)
         resp.raise_for_status()
         return resp.json()

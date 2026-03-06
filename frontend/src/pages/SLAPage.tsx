@@ -506,13 +506,16 @@ export default function SLAPage() {
               { label: "30d", days: 30 },
               { label: "All", days: 0 },
             ].map(({ label, days }) => {
+              const dAgo = new Date();
+              dAgo.setDate(dAgo.getDate() - days);
+              const dAgoStr = `${dAgo.getFullYear()}-${String(dAgo.getMonth() + 1).padStart(2, "0")}-${String(dAgo.getDate()).padStart(2, "0")}`;
               const isActive = days === 0
                 ? !dateFrom && !dateTo
-                : dateFrom === new Date(Date.now() - days * 86400000).toISOString().slice(0, 10) && !dateTo;
+                : dateFrom === dAgoStr && !dateTo;
               return (
                 <button key={label} onClick={() => {
                   if (days === 0) { setDateFrom(""); setDateTo(""); }
-                  else { setDateFrom(new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)); setDateTo(""); }
+                  else { setDateFrom(dAgoStr); setDateTo(""); }
                 }}
                   className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                     isActive ? "bg-blue-100 text-blue-700 border border-blue-300" : "bg-white text-gray-600 border border-gray-300 hover:bg-gray-50"

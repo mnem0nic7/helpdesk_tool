@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -302,19 +303,19 @@ def _render_email(rule: dict, tickets: list[dict]) -> tuple[str, str]:
     custom_message = (rule.get("custom_message") or "").strip()
     message_html = ""
     if custom_message:
-        # Convert newlines to <br> for plain-text messages
-        escaped = _apply_template(custom_message, template_vars)
+        # Convert newlines to <br> for plain-text messages, escape HTML
+        escaped = html.escape(_apply_template(custom_message, template_vars))
         escaped = escaped.replace("\n", "<br>")
         message_html = f'<div style="margin-bottom:16px;font-size:14px;color:#374151;line-height:1.6">{escaped}</div>'
 
     rows_html = ""
     for iss in tickets[:100]:
-        key = iss.get("key", "?")
+        key = html.escape(iss.get("key", "?"))
         fields = iss.get("fields", {})
-        summary = fields.get("summary", "")[:80]
-        priority = _get_priority(iss)
-        assignee = _get_assignee(iss)
-        status = (fields.get("status") or {}).get("name", "")
+        summary = html.escape(fields.get("summary", "")[:80])
+        priority = html.escape(_get_priority(iss))
+        assignee = html.escape(_get_assignee(iss))
+        status = html.escape((fields.get("status") or {}).get("name", ""))
         url = _ticket_url(key)
         rows_html += f"""<tr>
             <td style="padding:6px 10px;border-bottom:1px solid #eee"><a href="{url}" style="color:#2563eb;text-decoration:none">{key}</a></td>
@@ -389,9 +390,10 @@ def _refresh_tickets(tickets: list[dict]) -> list[dict]:
                 if k:
                     refreshed[k] = iss
                     # Also update the cache so dashboard reflects current data
-                    cache._all_issues[k] = iss
-                    if not JiraClient.is_excluded(iss):
-                        cache._issues[k] = iss
+                    with cache._lock:
+                        cache._all_issues[k] = iss
+                        if not JiraClient.is_excluded(iss):
+                            cache._issues[k] = iss
 
         logger.info("Alert refresh: re-fetched %d/%d tickets from Jira", len(refreshed), len(keys))
 

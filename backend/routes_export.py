@@ -178,14 +178,23 @@ def _aggregate(rows: list[dict[str, Any]], group_by: str) -> list[dict[str, Any]
     return summary
 
 
+def _sanitize_for_excel(val: str) -> str:
+    """Prevent Excel formula injection by prefixing dangerous strings with a tab."""
+    if val and val[0] in ("=", "+", "-", "@"):
+        return "\t" + val
+    return val
+
+
 def _cell_value(value: Any) -> Any:
-    """Convert a value for Excel output."""
+    """Convert a value for Excel output, with formula injection protection."""
     if isinstance(value, bool):
         return "Yes" if value else "No"
     if isinstance(value, list):
-        return ", ".join(str(v) for v in value)
+        return _sanitize_for_excel(", ".join(str(v) for v in value))
     if value is None:
         return ""
+    if isinstance(value, str):
+        return _sanitize_for_excel(value)
     return value
 
 

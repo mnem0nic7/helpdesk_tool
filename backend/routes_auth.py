@@ -33,7 +33,7 @@ async def login(request: Request):
         return await entra.authorize_redirect(request, redirect_uri)
     except Exception as exc:
         logger.exception("Failed to initiate OAuth login")
-        raise HTTPException(status_code=500, detail=f"OAuth login failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="OAuth login failed. Please try again.") from exc
 
 
 @router.get("/callback", name="auth_callback")

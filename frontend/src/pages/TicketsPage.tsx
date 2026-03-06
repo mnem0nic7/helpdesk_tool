@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api.ts";
@@ -31,11 +31,9 @@ export default function TicketsPage() {
 
   const [filters, setFilters] = useState<TicketFilterValues>(initialFilters);
   // Reset filters when navigating to /tickets with new params
-  const [lastParamsKey, setLastParamsKey] = useState(paramsKey);
-  if (paramsKey !== lastParamsKey) {
+  useEffect(() => {
     setFilters(filtersFromParams(searchParams));
-    setLastParamsKey(paramsKey);
-  }
+  }, [paramsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFilterChange = useCallback((next: TicketFilterValues) => {
     setFilters(next);
