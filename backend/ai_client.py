@@ -153,23 +153,44 @@ def _build_ticket_context(issue: dict[str, Any]) -> str:
         if isinstance(rt_obj, dict):
             request_type = rt_obj.get("name", "")
 
+    # Reporter
+    reporter_obj = fields.get("reporter") or {}
+    reporter = (
+        reporter_obj.get("displayName", "Unknown")
+        if isinstance(reporter_obj, dict)
+        else "Unknown"
+    )
+
     # Dates
     created = fields.get("created", "")
     updated = fields.get("updated", "")
+    resolved = fields.get("resolutiondate") or ""
 
     # Labels
     labels = fields.get("labels") or []
 
-    # Comments (last 5)
+    # Components
+    components = [
+        c.get("name", "") for c in (fields.get("components") or [])
+        if isinstance(c, dict)
+    ]
+
+    # Organizations
+    orgs_raw = fields.get("customfield_10700") or []
+    organizations = [
+        o.get("name", "") for o in orgs_raw if isinstance(o, dict)
+    ]
+
+    # Comments (all)
     comment_data = fields.get("comment") or {}
     comments = comment_data.get("comments", []) if isinstance(comment_data, dict) else []
-    recent_comments = comments[-5:]
     comment_texts: list[str] = []
-    for c in recent_comments:
+    for c in comments:
         author = (c.get("author") or {}).get("displayName", "Unknown")
+        date = (c.get("created") or "")[:19].replace("T", " ")
         body = extract_adf_text(c.get("body"))
         if body:
-            comment_texts.append(f"  [{author}]: {body[:300]}")
+            comment_texts.append(f"  [{author} | {date}]: {body}")
 
     # Steps to re-create (customfield_11121)
     steps = extract_adf_text(fields.get("customfield_11121"))
@@ -184,18 +205,22 @@ def _build_ticket_context(issue: dict[str, Any]) -> str:
         f"Summary: {summary}",
         f"Status: {status}",
         f"Priority: {priority}",
+        f"Reporter: {reporter}",
         f"Assignee: {assignee}",
         f"Labels: {', '.join(labels) if labels else 'None'}",
+        f"Components: {', '.join(components) if components else 'None'}",
+        f"Organizations: {', '.join(organizations) if organizations else 'None'}",
         f"Work Category: {work_category or 'Not set'}",
         f"Created: {created}",
         f"Updated: {updated}",
+        *([ f"Resolved: {resolved}" ] if resolved else []),
     ]
     if description:
-        lines.append(f"Description:\n{description[:1000]}")
+        lines.append(f"Description:\n{description}")
     if steps:
-        lines.append(f"Steps to Re-Create:\n{steps[:500]}")
+        lines.append(f"Steps to Re-Create:\n{steps}")
     if comment_texts:
-        lines.append("Recent Comments:\n" + "\n".join(comment_texts))
+        lines.append(f"Comments ({len(comments)} total):\n" + "\n".join(comment_texts))
 
     return "\n".join(lines)
 
