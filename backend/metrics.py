@@ -883,19 +883,45 @@ def _last_comment_author(fields: dict[str, Any]) -> str:
     return author.get("displayName", "")
 
 
-def _extract_description(fields: dict[str, Any]) -> str:
-    """Extract plain text from ADF or string description, truncated to 500 chars."""
+def _extract_description(fields: dict[str, Any], max_len: int = 500) -> str:
+    """Extract plain text from ADF or string description."""
     desc = fields.get("description")
     if not desc:
         return ""
     if isinstance(desc, str):
-        return desc[:500]
+        return desc[:max_len] if max_len else desc
     # ADF format — extract text nodes
     if isinstance(desc, dict):
         texts: list[str] = []
         _walk_adf(desc, texts)
-        return " ".join(texts)[:500]
+        full = " ".join(texts)
+        return full[:max_len] if max_len else full
     return ""
+
+
+def _all_comments_text(fields: dict[str, Any]) -> str:
+    """Extract all comment bodies as plain text with author and date headers."""
+    comment_obj = fields.get("comment", {})
+    comments = comment_obj.get("comments", []) if isinstance(comment_obj, dict) else []
+    if not comments:
+        return ""
+    parts: list[str] = []
+    for c in comments:
+        author = (c.get("author") or {}).get("displayName", "Unknown")
+        date = c.get("created") or ""
+        if date:
+            date = date[:19].replace("T", " ")
+        body_obj = c.get("body")
+        if isinstance(body_obj, str):
+            body = body_obj
+        elif isinstance(body_obj, dict):
+            texts: list[str] = []
+            _walk_adf(body_obj, texts)
+            body = " ".join(texts)
+        else:
+            body = ""
+        parts.append(f"[{author} | {date}] {body}")
+    return "\n---\n".join(parts)
 
 
 def _walk_adf(node: dict[str, Any], texts: list[str]) -> None:
