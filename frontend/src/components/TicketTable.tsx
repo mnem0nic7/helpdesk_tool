@@ -287,11 +287,9 @@ export default function TicketTable({
 
   // Reset visible count when data changes (e.g. new filters applied)
   const dataLen = data.length;
-  const [lastDataLen, setLastDataLen] = useState(dataLen);
-  if (dataLen !== lastDataLen) {
+  useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-    setLastDataLen(dataLen);
-  }
+  }, [dataLen]);
 
   // IntersectionObserver to load more rows on scroll
   const sentinelRef = useRef<HTMLDivElement>(null);

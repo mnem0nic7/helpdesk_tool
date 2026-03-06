@@ -70,8 +70,12 @@ async def get_metrics(
     excluded_count = cache.issue_count - cache.filtered_count
 
     # Parse and apply date range filter
-    df = date.fromisoformat(date_from) if date_from else None
-    dt = date.fromisoformat(date_to) if date_to else None
+    try:
+        df = date.fromisoformat(date_from) if date_from else None
+        dt = date.fromisoformat(date_to) if date_to else None
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
     issues = _filter_by_date(issues, df, dt)
 
     # Compute span in days for adaptive chart grouping
