@@ -218,6 +218,7 @@ class TicketCommentRequest(BaseModel):
     """Add a comment to a single issue."""
 
     comment: str
+    public: bool = False
 
 
 # ---------------------------------------------------------------------------

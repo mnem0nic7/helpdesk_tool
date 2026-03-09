@@ -237,6 +237,7 @@ export interface TicketComment {
   created: string;
   updated: string;
   body: string;
+  public: boolean;
 }
 
 export interface TicketAttachment {
@@ -724,9 +725,10 @@ export const api = {
     });
   },
 
-  addTicketComment(key: string, comment: string): Promise<TicketDetail> {
+  addTicketComment(key: string, comment: string, isPublic = false): Promise<TicketDetail> {
     return postJSON<TicketDetail>(`/api/tickets/${encodeURIComponent(key)}/comment`, {
       comment,
+      public: isPublic,
     });
   },
 

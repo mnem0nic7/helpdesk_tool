@@ -30,6 +30,7 @@ docker compose up -d       # Start Caddy (TLS) + Dashboard
 docker compose down        # Stop all
 ./deploy.sh                # Full deploy: build, restart, health check
 ./deploy.sh --no-cache     # Rebuild without Docker cache
+./release.sh -m "message"  # Stage, commit, push, and redeploy
 ```
 
 ## Architecture
