@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type {
@@ -14,6 +14,17 @@ interface TicketWorkbenchDrawerProps {
   ticketKey: string | null;
   initialTicket?: TicketRow | null;
   onClose: () => void;
+}
+
+const DEFAULT_DRAWER_WIDTH = 768;
+const MIN_DRAWER_WIDTH = 640;
+const VIEWPORT_MARGIN = 32;
+
+function clampDrawerWidth(width: number): number {
+  if (typeof window === "undefined") return DEFAULT_DRAWER_WIDTH;
+  const maxWidth = Math.max(360, window.innerWidth - VIEWPORT_MARGIN);
+  const minWidth = Math.min(MIN_DRAWER_WIDTH, maxWidth);
+  return Math.min(Math.max(width, minWidth), maxWidth);
 }
 
 function formatDateTime(iso: string): string {
@@ -53,6 +64,8 @@ export default function TicketWorkbenchDrawer({
   const queryClient = useQueryClient();
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
+  const [drawerWidth, setDrawerWidth] = useState(() => clampDrawerWidth(DEFAULT_DRAWER_WIDTH));
+  const [isResizing, setIsResizing] = useState(false);
   const [selectedPriority, setSelectedPriority] = useState("");
   const [selectedAssignee, setSelectedAssignee] = useState("");
   const [selectedRequestTypeId, setSelectedRequestTypeId] = useState("");
@@ -111,6 +124,61 @@ export default function TicketWorkbenchDrawer({
     const current = requestTypes.find((option) => option.name === detail.ticket.request_type);
     setSelectedRequestTypeId(current?.id ?? "");
   }, [detail, requestTypes]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handleResize = () => {
+      setDrawerWidth((current) => clampDrawerWidth(current));
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return undefined;
+
+    const previousUserSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+    const updateWidth = (clientX: number) => {
+      setDrawerWidth(clampDrawerWidth(window.innerWidth - clientX));
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      event.preventDefault();
+      updateWidth(event.clientX);
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      event.preventDefault();
+      updateWidth(event.clientX);
+    };
+
+    const stopResizing = () => {
+      setIsResizing(false);
+    };
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("pointerup", stopResizing);
+    window.addEventListener("mouseup", stopResizing);
+
+    return () => {
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.cursor = previousCursor;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("pointerup", stopResizing);
+      window.removeEventListener("mouseup", stopResizing);
+    };
+  }, [isResizing]);
+
+  function handleResizeStart(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsResizing(true);
+  }
 
   function handleUpdated(next: TicketDetail, message: string) {
     queryClient.setQueryData(["ticket-detail", ticketKey], next);
@@ -208,9 +276,26 @@ export default function TicketWorkbenchDrawer({
   return (
     <div className="fixed inset-0 z-50 flex bg-slate-950/35" onClick={onClose}>
       <aside
-        className="ml-auto flex h-full w-full max-w-3xl flex-col bg-white shadow-2xl"
+        data-testid="ticket-workbench-drawer"
+        className="relative ml-auto flex h-full max-w-full flex-col bg-white shadow-2xl"
         onClick={(e) => e.stopPropagation()}
+        style={{ width: `${drawerWidth}px` }}
       >
+        <div
+          role="separator"
+          aria-label="Resize ticket drawer"
+          aria-orientation="vertical"
+          data-testid="ticket-workbench-resizer"
+          className={[
+            "absolute inset-y-0 left-0 z-10 w-3 -translate-x-1/2 cursor-col-resize touch-none",
+            isResizing ? "bg-blue-200/70" : "bg-transparent hover:bg-slate-200/60",
+          ].join(" ")}
+          onPointerDown={handleResizeStart}
+          onDoubleClick={() => setDrawerWidth(clampDrawerWidth(DEFAULT_DRAWER_WIDTH))}
+        >
+          <div className="absolute left-1/2 top-1/2 h-14 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-300" />
+        </div>
+
         <div className="border-b border-slate-200 px-6 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">

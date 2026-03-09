@@ -1,0 +1,115 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { render } from "../test-utils.tsx";
+import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
+
+const { mockApi } = vi.hoisted(() => ({
+  mockApi: {
+    getTicket: vi.fn(),
+    getAssignees: vi.fn(),
+    getPriorities: vi.fn(),
+    getRequestTypes: vi.fn(),
+    getTransitions: vi.fn(),
+    updateTicket: vi.fn(),
+    transitionTicket: vi.fn(),
+    addTicketComment: vi.fn(),
+  },
+}));
+
+vi.mock("../lib/api.ts", () => ({
+  api: mockApi,
+  default: mockApi,
+}));
+
+const ticketRow = {
+  key: "OIT-1",
+  summary: "Printer is offline",
+  issue_type: "Incident",
+  status: "Open",
+  status_category: "To Do",
+  priority: "High",
+  resolution: "",
+  assignee: "Ada Lovelace",
+  assignee_account_id: "acct-1",
+  reporter: "Grace Hopper",
+  created: "2026-03-01T10:00:00Z",
+  updated: "2026-03-02T12:00:00Z",
+  resolved: "",
+  request_type: "Hardware",
+  calendar_ttr_hours: null,
+  age_days: 2,
+  days_since_update: 1,
+  excluded: false,
+  sla_first_response_status: "running",
+  sla_first_response_breach_time: "",
+  sla_first_response_remaining_millis: null,
+  sla_resolution_status: "running",
+  sla_resolution_breach_time: "",
+  sla_resolution_remaining_millis: null,
+  labels: [],
+  components: [],
+  work_category: "",
+  organizations: [],
+  attachment_count: 0,
+};
+
+const ticketDetail = {
+  ticket: ticketRow,
+  description: "Main office printer is unavailable.",
+  steps_to_recreate: "",
+  request_type: "Hardware",
+  work_category: "Support",
+  comments: [],
+  attachments: [],
+  issue_links: [],
+  jira_url: "https://jira.example.com/browse/OIT-1",
+  portal_url: "https://portal.example.com/requests/OIT-1",
+  raw_issue: {},
+};
+
+describe("TicketWorkbenchDrawer", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 1400,
+    });
+    mockApi.getTicket.mockResolvedValue(ticketDetail);
+    mockApi.getAssignees.mockResolvedValue([]);
+    mockApi.getPriorities.mockResolvedValue([{ id: "1", name: "High" }]);
+    mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Hardware", description: "" }]);
+    mockApi.getTransitions.mockResolvedValue([]);
+  });
+
+  it("resizes wider when the drag handle is moved left", async () => {
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Ticket Actions");
+
+    const drawer = screen.getByTestId("ticket-workbench-drawer");
+    const resizer = screen.getByTestId("ticket-workbench-resizer");
+
+    expect(drawer).toHaveStyle({ width: "768px" });
+
+    fireEvent.pointerDown(resizer, { clientX: 632 });
+
+    await waitFor(() => {
+      expect(document.body).toHaveStyle({ cursor: "col-resize" });
+    });
+
+    fireEvent.mouseMove(window, { clientX: 500 });
+
+    await waitFor(() => {
+      expect(drawer).toHaveStyle({ width: "900px" });
+    });
+
+    fireEvent.mouseUp(window);
+  });
+});
