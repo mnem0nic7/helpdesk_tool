@@ -387,7 +387,7 @@ class JiraClient:
         resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
         resp.raise_for_status()
 
-    def assign_issue(self, key: str, account_id: str) -> None:
+    def assign_issue(self, key: str, account_id: str | None) -> None:
         """PUT /rest/api/3/issue/{key}/assignee"""
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}/assignee"
@@ -395,35 +395,46 @@ class JiraClient:
         resp = self.session.put(url, json=payload, timeout=self._TIMEOUT)
         resp.raise_for_status()
 
-    def update_priority(self, key: str, priority_name: str) -> None:
-        """PUT /rest/api/3/issue/{key} to change priority."""
+    def update_issue_fields(self, key: str, fields: dict[str, Any]) -> None:
+        """PUT /rest/api/3/issue/{key} with partial field updates."""
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}"
-        payload = {"fields": {"priority": {"name": priority_name}}}
+        payload = {"fields": fields}
         resp = self.session.put(url, json=payload, timeout=self._TIMEOUT)
         resp.raise_for_status()
+
+    def update_priority(self, key: str, priority_name: str) -> None:
+        """PUT /rest/api/3/issue/{key} to change priority."""
+        self.update_issue_fields(key, {"priority": {"name": priority_name}})
+
+    @staticmethod
+    def _plain_text_to_adf(text: str) -> dict[str, Any]:
+        """Convert plain text into a minimal Atlassian Document Format payload."""
+        paragraphs: list[dict[str, Any]] = []
+        for block in text.split("\n\n"):
+            lines = block.splitlines() or [""]
+            content: list[dict[str, Any]] = []
+            for index, line in enumerate(lines):
+                if line:
+                    content.append({"type": "text", "text": line})
+                if index < len(lines) - 1:
+                    content.append({"type": "hardBreak"})
+            paragraphs.append({"type": "paragraph", "content": content})
+        return {"version": 1, "type": "doc", "content": paragraphs or [{"type": "paragraph", "content": []}]}
+
+    def update_summary(self, key: str, summary: str) -> None:
+        """Update the issue summary."""
+        self.update_issue_fields(key, {"summary": summary})
+
+    def update_description(self, key: str, description: str) -> None:
+        """Update the issue description from plain text."""
+        self.update_issue_fields(key, {"description": self._plain_text_to_adf(description)})
 
     def add_comment(self, key: str, body_text: str) -> dict[str, Any]:
         """POST /rest/api/3/issue/{key}/comment using ADF format."""
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}/comment"
-        payload = {
-            "body": {
-                "version": 1,
-                "type": "doc",
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": body_text,
-                            }
-                        ],
-                    }
-                ],
-            }
-        }
+        payload = {"body": self._plain_text_to_adf(body_text)}
         resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
         resp.raise_for_status()
         return resp.json()
@@ -447,16 +458,26 @@ class JiraClient:
             start += len(data.get("values", []))
         return all_types
 
+    def get_service_desks(self) -> list[dict[str, Any]]:
+        """GET /rest/servicedeskapi/servicedesk for all service desks."""
+        url = f"{self.base_url}/rest/servicedeskapi/servicedesk"
+        resp = self.session.get(url, timeout=self._TIMEOUT)
+        resp.raise_for_status()
+        return resp.json().get("values", [])
+
+    def get_service_desk_id_for_project(self, project: str) -> str | None:
+        """Return the service desk ID for a project key, if one exists."""
+        for desk in self.get_service_desks():
+            if str(desk.get("projectKey", "")).upper() == project.upper():
+                return str(desk.get("id", ""))
+        return None
+
     def set_request_type(self, key: str, request_type_id: str) -> None:
         """Change request type via PUT /rest/api/3/issue/{key} using customfield_11102.
 
         The value must be the request type ID as a string (e.g. "122").
         """
-        validate_jira_key(key)
-        url = f"{self.base_url}/rest/api/3/issue/{key}"
-        payload = {"fields": {"customfield_11102": str(request_type_id)}}
-        resp = self.session.put(url, json=payload, timeout=self._TIMEOUT)
-        resp.raise_for_status()
+        self.update_issue_fields(key, {"customfield_11102": str(request_type_id)})
 
     # ------------------------------------------------------------------
     # Users

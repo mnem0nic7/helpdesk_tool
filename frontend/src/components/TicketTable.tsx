@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-table";
 import type { SortingState } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import api from "../lib/api.ts";
 import type { TicketRow } from "../lib/api.ts";
 
@@ -93,6 +93,7 @@ function buildColumns(
             type="checkbox"
             checked={allKeys.length > 0 && allKeys.every((k) => selectedKeys.has(k))}
             onChange={() => onToggleAll(allKeys)}
+            onClick={(e) => e.stopPropagation()}
             className="h-4 w-4 rounded border-gray-300 text-blue-600"
           />
         ),
@@ -101,6 +102,7 @@ function buildColumns(
             type="checkbox"
             checked={selectedKeys.has(row.original.key)}
             onChange={() => onToggle(row.original.key)}
+            onClick={(e) => e.stopPropagation()}
             className="h-4 w-4 rounded border-gray-300 text-blue-600"
           />
         ),
@@ -120,6 +122,7 @@ function buildColumns(
               href={`${jiraBaseUrl}/browse/${key}`}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
               className="whitespace-nowrap font-mono text-xs text-blue-700 underline hover:text-blue-900"
             >
               {key}
@@ -245,6 +248,7 @@ interface TicketTableProps {
   selectable?: boolean;
   onSelectionChange?: (selected: Set<string>) => void;
   selectedKeys?: Set<string>;
+  onRowOpen?: (ticket: TicketRow) => void;
 }
 
 export default function TicketTable({
@@ -253,6 +257,7 @@ export default function TicketTable({
   selectable = false,
   onSelectionChange,
   selectedKeys = new Set(),
+  onRowOpen,
 }: TicketTableProps) {
   const { data: cacheStatus } = useQuery({
     queryKey: ["cache-status"],
@@ -282,31 +287,6 @@ export default function TicketTable({
   }
 
   const [sorting, setSorting] = useState<SortingState>([]);
-  const PAGE_SIZE = 100;
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-
-  // Reset visible count when data changes (e.g. new filters applied)
-  const dataLen = data.length;
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-  }, [dataLen]);
-
-  // IntersectionObserver to load more rows on scroll
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  const loadMore = useCallback(() => {
-    setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, dataLen));
-  }, [dataLen]);
-
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) loadMore(); },
-      { rootMargin: "200px" },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [loadMore, visibleCount]);
 
   const columns = useMemo(
     () => buildColumns(selectable, selectedKeys, handleToggle, handleToggleAll, allKeys, jiraBaseUrl),
@@ -340,9 +320,7 @@ export default function TicketTable({
     );
   }
 
-  const allRows = table.getRowModel().rows;
-  const visibleRows = allRows.slice(0, visibleCount);
-  const hasMore = visibleCount < allRows.length;
+  const rows = table.getRowModel().rows;
 
   return (
     <div>
@@ -381,13 +359,15 @@ export default function TicketTable({
             ))}
           </thead>
           <tbody className="divide-y divide-gray-100 bg-white">
-            {visibleRows.map((row, idx) => (
+            {rows.map((row, idx) => (
               <tr
                 key={row.id}
                 className={[
                   "transition-colors hover:bg-blue-50",
+                  onRowOpen ? "cursor-pointer" : "",
                   idx % 2 === 1 ? "bg-gray-50/50" : "",
                 ].join(" ")}
+                onClick={() => onRowOpen?.(row.original)}
               >
                 {row.getVisibleCells().map((cell) => (
                   <td key={cell.id} className="px-3 py-2">
@@ -399,11 +379,6 @@ export default function TicketTable({
           </tbody>
         </table>
       </div>
-      {hasMore && (
-        <div ref={sentinelRef} className="py-4 text-center text-sm text-gray-400">
-          Showing {visibleRows.length} of {allRows.length} tickets — scroll for more
-        </div>
-      )}
     </div>
   );
 }

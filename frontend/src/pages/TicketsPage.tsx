@@ -2,10 +2,14 @@ import { useState, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api.ts";
-import type { TicketQueryParams } from "../lib/api.ts";
+import type { TicketQueryParams, TicketRow } from "../lib/api.ts";
 import TicketFilters from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 import TicketTable from "../components/TicketTable.tsx";
+import Pagination from "../components/Pagination.tsx";
+import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
+
+const PAGE_SIZE = 250;
 
 /** Derive initial filter values from URL search params. */
 function filtersFromParams(sp: URLSearchParams): TicketFilterValues {
@@ -30,13 +34,17 @@ export default function TicketsPage() {
   const initialFilters = filtersFromParams(searchParams);
 
   const [filters, setFilters] = useState<TicketFilterValues>(initialFilters);
+  const [page, setPage] = useState(1);
+  const [openTicket, setOpenTicket] = useState<TicketRow | null>(null);
   // Reset filters when navigating to /tickets with new params
   useEffect(() => {
     setFilters(filtersFromParams(searchParams));
+    setPage(1);
   }, [paramsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFilterChange = useCallback((next: TicketFilterValues) => {
     setFilters(next);
+    setPage(1);
   }, []);
 
   // Build query params from state
@@ -50,6 +58,8 @@ export default function TicketsPage() {
     ...(filters.created_after ? { created_after: filters.created_after } : {}),
     ...(filters.created_before ? { created_before: filters.created_before } : {}),
     ...(filters.assignee ? { assignee: filters.assignee } : {}),
+    offset: (page - 1) * PAGE_SIZE,
+    limit: PAGE_SIZE,
   };
 
   const { data, isLoading, isError, error } = useQuery({
@@ -58,7 +68,9 @@ export default function TicketsPage() {
   });
 
   const tickets = data?.tickets ?? [];
+  const matchedCount = data?.matched_count ?? tickets.length;
   const totalCount = data?.total_count;
+  const hasMore = page * PAGE_SIZE < matchedCount;
   const hasFilters = !!(filters.search || filters.status || filters.priority || filters.issue_type || filters.stale_only || filters.assignee || filters.created_after || filters.created_before);
 
   return (
@@ -76,12 +88,12 @@ export default function TicketsPage() {
             <div className="text-sm text-slate-500">
               {hasFilters && totalCount !== undefined ? (
                 <span>
-                  <span className="font-semibold text-slate-800">{tickets.length.toLocaleString()}</span>
-                  {" "}of {totalCount.toLocaleString()} tickets
+                  <span className="font-semibold text-slate-800">{matchedCount.toLocaleString()}</span>
+                  {" "}matched of {totalCount.toLocaleString()} tickets
                 </span>
               ) : (
                 <span>
-                  <span className="font-semibold text-slate-800">{tickets.length.toLocaleString()}</span>
+                  <span className="font-semibold text-slate-800">{matchedCount.toLocaleString()}</span>
                   {" "}tickets
                 </span>
               )}
@@ -110,7 +122,15 @@ export default function TicketsPage() {
       )}
 
       {/* Table */}
-      <TicketTable data={tickets} loading={isLoading} />
+      <TicketTable data={tickets} loading={isLoading} onRowOpen={setOpenTicket} />
+
+      <Pagination page={page} hasMore={hasMore} onPageChange={setPage} />
+
+      <TicketWorkbenchDrawer
+        ticketKey={openTicket?.key ?? null}
+        initialTicket={openTicket}
+        onClose={() => setOpenTicket(null)}
+      />
     </div>
   );
 }

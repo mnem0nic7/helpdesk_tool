@@ -132,3 +132,223 @@ class TestTicketsEndpoint:
             assert "summary" in t
             assert "status" in t
             assert "priority" in t
+
+
+def _adf(text: str) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "type": "doc",
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": text}],
+            }
+        ],
+    }
+
+
+def _detail_issue() -> dict[str, Any]:
+    return {
+        "key": "OIT-123",
+        "fields": {
+            "summary": "VPN login failure",
+            "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+            "priority": {"name": "High"},
+            "assignee": {"displayName": "Alice Admin", "accountId": "acc-alice"},
+            "reporter": {"displayName": "Reporter One"},
+            "issuetype": {"name": "[System] Service request"},
+            "resolution": None,
+            "created": "2026-02-15T10:00:00+00:00",
+            "updated": "2026-03-01T10:00:00+00:00",
+            "resolutiondate": "",
+            "description": _adf("User cannot sign in."),
+            "customfield_11121": "1. Open portal\n2. Attempt login",
+            "customfield_11102": {
+                "requestType": {"name": "Business Application Support"},
+                "_links": {
+                    "agent": "https://example.atlassian.net/browse/OIT-123",
+                    "web": "https://example.atlassian.net/servicedesk/customer/portal/1/OIT-123",
+                },
+            },
+            "customfield_11239": "Identity",
+            "labels": ["vip"],
+            "components": [{"name": "Portal"}],
+            "customfield_10700": [{"name": "Org One"}],
+            "attachment": [
+                {
+                    "id": "9001",
+                    "filename": "screenshot.png",
+                    "mimeType": "image/png",
+                    "size": 2048,
+                    "created": "2026-03-01T09:00:00+00:00",
+                    "author": {"displayName": "Alice Admin"},
+                    "content": "https://example.atlassian.net/file/9001",
+                    "thumbnail": "https://example.atlassian.net/thumb/9001",
+                }
+            ],
+            "issuelinks": [
+                {
+                    "type": {"name": "Blocks", "outward": "blocks", "inward": "is blocked by"},
+                    "outwardIssue": {
+                        "key": "OIT-456",
+                        "fields": {
+                            "summary": "Downstream identity outage",
+                            "status": {"name": "In Progress"},
+                        },
+                    },
+                }
+            ],
+            "comment": {
+                "comments": [
+                    {
+                        "id": "17",
+                        "author": {"displayName": "Tech One"},
+                        "created": "2026-03-01T11:00:00+00:00",
+                        "updated": "2026-03-01T11:05:00+00:00",
+                        "body": _adf("Investigating now."),
+                    }
+                ]
+            },
+        },
+    }
+
+
+class TestTicketDetailAndActions:
+    def test_get_ticket_detail_returns_full_payload(self, test_client, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
+        monkeypatch.setattr(routes_tickets._client, "_backfill_comments", lambda issues: None)
+
+        resp = test_client.get("/api/tickets/OIT-123")
+        assert resp.status_code == 200
+
+        data = resp.json()
+        assert data["ticket"]["key"] == "OIT-123"
+        assert data["description"] == "User cannot sign in."
+        assert data["steps_to_recreate"] == "1. Open portal\n2. Attempt login"
+        assert data["request_type"] == "Business Application Support"
+        assert data["work_category"] == "Identity"
+        assert data["jira_url"].endswith("/browse/OIT-123")
+        assert data["portal_url"].endswith("/portal/1/OIT-123")
+        assert data["comments"][0]["body"] == "Investigating now."
+        assert data["attachments"][0]["filename"] == "screenshot.png"
+        assert data["issue_links"][0]["key"] == "OIT-456"
+
+    def test_get_priorities_and_request_types(self, test_client, monkeypatch):
+        import routes_tickets
+
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_priorities",
+            lambda: [{"id": "1", "name": "Highest"}, {"id": "2", "name": "High"}],
+        )
+        monkeypatch.setattr(routes_tickets._client, "get_service_desk_id_for_project", lambda project: "7")
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_request_types",
+            lambda service_desk_id: [{"id": "122", "name": "Business Application Support", "description": "Apps"}],
+        )
+
+        priorities = test_client.get("/api/priorities")
+        request_types = test_client.get("/api/request-types")
+
+        assert priorities.status_code == 200
+        assert priorities.json() == [{"id": "1", "name": "Highest"}, {"id": "2", "name": "High"}]
+
+        assert request_types.status_code == 200
+        assert request_types.json() == [
+            {"id": "122", "name": "Business Application Support", "description": "Apps"}
+        ]
+
+    def test_update_ticket_writes_supported_fields(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        issue["fields"]["summary"] = "Updated summary"
+        issue["fields"]["priority"] = {"name": "Medium"}
+        issue["fields"]["assignee"] = {"displayName": "Bob Builder", "accountId": "acc-bob"}
+        issue["fields"]["description"] = _adf("Updated description")
+        issue["fields"]["customfield_11102"]["requestType"]["name"] = "Access"
+
+        calls: list[tuple[Any, ...]] = []
+        monkeypatch.setattr(routes_tickets._client, "update_summary", lambda key, value: calls.append(("summary", key, value)))
+        monkeypatch.setattr(routes_tickets._client, "update_description", lambda key, value: calls.append(("description", key, value)))
+        monkeypatch.setattr(routes_tickets._client, "update_priority", lambda key, value: calls.append(("priority", key, value)))
+        monkeypatch.setattr(routes_tickets._client, "assign_issue", lambda key, value: calls.append(("assignee", key, value)))
+        monkeypatch.setattr(routes_tickets._client, "set_request_type", lambda key, value: calls.append(("request_type", key, value)))
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_users_assignable",
+            lambda project: [{"accountId": "acc-bob", "displayName": "Bob Builder"}],
+        )
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
+        monkeypatch.setattr(routes_tickets._client, "_backfill_comments", lambda issues: None)
+
+        resp = test_client.put(
+            "/api/tickets/OIT-123",
+            json={
+                "summary": "Updated summary",
+                "description": "Updated description",
+                "priority": "Medium",
+                "assignee_account_id": "acc-bob",
+                "request_type_id": "122",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert calls == [
+            ("summary", "OIT-123", "Updated summary"),
+            ("description", "OIT-123", "Updated description"),
+            ("priority", "OIT-123", "Medium"),
+            ("assignee", "OIT-123", "acc-bob"),
+            ("request_type", "OIT-123", "122"),
+        ]
+        assert ("OIT-123", "summary", "Updated summary") in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        assert ("OIT-123", "description", "Updated description") in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        assert ("OIT-123", "priority", "Medium") in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        assert ("OIT-123", "assignee", "Bob Builder") in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        assert ("OIT-123", "request_type", "Access") in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        assert resp.json()["ticket"]["summary"] == "Updated summary"
+        assert resp.json()["description"] == "Updated description"
+
+    def test_transition_ticket_updates_status(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        issue["fields"]["status"] = {"name": "In Progress", "statusCategory": {"name": "In Progress"}}
+        calls: list[tuple[Any, ...]] = []
+
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_transitions",
+            lambda key: [{"id": "31", "name": "Start Progress", "to": {"name": "In Progress"}}],
+        )
+        monkeypatch.setattr(routes_tickets._client, "transition_issue", lambda key, transition_id: calls.append((key, transition_id)))
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
+        monkeypatch.setattr(routes_tickets._client, "_backfill_comments", lambda issues: None)
+
+        resp = test_client.post("/api/tickets/OIT-123/transition", json={"transition_id": "31"})
+
+        assert resp.status_code == 200
+        assert calls == [("OIT-123", "31")]
+        assert ("OIT-123", "status", "In Progress") in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        assert resp.json()["ticket"]["status"] == "In Progress"
+
+    def test_comment_ticket_updates_detail(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        calls: list[tuple[Any, ...]] = []
+
+        monkeypatch.setattr(routes_tickets._client, "add_comment", lambda key, comment: calls.append((key, comment)))
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
+        monkeypatch.setattr(routes_tickets._client, "_backfill_comments", lambda issues: None)
+
+        resp = test_client.post("/api/tickets/OIT-123/comment", json={"comment": "Please retry now."})
+
+        assert resp.status_code == 200
+        assert calls == [("OIT-123", "Please retry now.")]
+        assert ("OIT-123", "updated", "") in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        assert resp.json()["comments"][0]["body"] == "Investigating now."
