@@ -66,8 +66,7 @@ async def get_metrics(
     date_to: Optional[str] = Query(None),
 ) -> dict[str, Any]:
     """Return all dashboard metrics computed from the full OIT issue set."""
-    issues = cache.get_filtered_issues()
-    excluded_count = cache.issue_count - cache.filtered_count
+    issues = cache.get_all_issues()
 
     # Parse and apply date range filter
     try:
@@ -85,7 +84,7 @@ async def get_metrics(
         span_days = (end - df).days
 
     return {
-        "headline": compute_headline_metrics(issues, excluded_count),
+        "headline": compute_headline_metrics(issues),
         "weekly_volumes": compute_weekly_volumes(issues, span_days=span_days),
         "age_buckets": compute_age_buckets(issues, span_days=span_days),
         "ttr_distribution": compute_ttr_distribution(issues, span_days=span_days),

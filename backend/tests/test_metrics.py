@@ -9,6 +9,7 @@ from metrics import (
     percentile,
     is_excluded,
     map_status_bucket,
+    _is_open,
     extract_sla_status,
     compute_headline_metrics,
     compute_monthly_volumes,
@@ -107,6 +108,19 @@ class TestMapStatusBucket:
         assert map_status_bucket("Some Random Status") == "Active"
 
 
+class TestOpenDetection:
+    def test_done_status_category_is_terminal_even_with_custom_name(self):
+        issue = {
+            "fields": {
+                "status": {
+                    "name": "Completed by automation",
+                    "statusCategory": {"name": "Done"},
+                }
+            }
+        }
+        assert _is_open(issue) is False
+
+
 # ===== extract_sla_status =====
 
 class TestExtractSlaStatus:
@@ -157,6 +171,37 @@ class TestComputeHeadlineMetrics:
         # OIT-200 updated 2026-02-15, frozen now 2026-03-04 => ~17 days >= 1 => stale
         # OIT-100 updated 2026-03-03T10:00, frozen 2026-03-04T12:00 => ~1.08 days >= 1 => stale
         assert result["stale_count"] == 2
+
+    def test_raw_issue_list_excludes_oasisdev(self, sample_issues, freeze_time):
+        result = compute_headline_metrics(sample_issues)
+        assert result["total_tickets"] == 4
+        assert result["open_backlog"] == 2
+        assert result["resolved"] == 2
+        assert result["excluded_count"] == 2
+
+    def test_done_category_custom_status_not_counted_as_stale(self, freeze_time):
+        issue = {
+            "key": "OIT-999",
+            "fields": {
+                "summary": "Recently completed but custom-done name",
+                "status": {
+                    "name": "Completed by automation",
+                    "statusCategory": {"name": "Done"},
+                },
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-01T12:00:00+00:00",
+                "resolutiondate": "2026-02-01T12:00:00+00:00",
+                "labels": [],
+            },
+        }
+        result = compute_headline_metrics([issue])
+        assert result["open_backlog"] == 0
+        assert result["resolved"] == 1
+        assert result["stale_count"] == 0
 
     def test_empty_list(self, freeze_time):
         result = compute_headline_metrics([])

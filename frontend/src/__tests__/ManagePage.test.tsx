@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { render } from "../test-utils.tsx";
 import ManagePage from "../pages/ManagePage.tsx";
@@ -94,6 +94,7 @@ describe("ManagePage", () => {
     mockApi.getPriorities.mockResolvedValue([{ id: "1", name: "High" }]);
     mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Security Alert", description: "" }]);
     mockApi.getTransitions.mockResolvedValue([]);
+    mockApi.transitionTicket.mockResolvedValue(ticketDetail);
     mockApi.refreshCacheIncremental.mockResolvedValue(undefined);
   });
 
@@ -121,5 +122,54 @@ describe("ManagePage", () => {
     });
     await screen.findByText("Ticket Actions");
     expect(mockApi.getTicket).toHaveBeenCalledWith("OIT-1");
+  });
+
+  it("supports dragging a card to a new kanban column", async () => {
+    const user = userEvent.setup();
+    const movedDetail = {
+      ...ticketDetail,
+      ticket: {
+        ...ticketRow,
+        status: "In Progress",
+        status_category: "In Progress",
+      },
+    };
+    mockApi.getTransitions.mockResolvedValue([
+      { id: "21", name: "Start work", to_status: "In Progress" },
+    ]);
+    mockApi.transitionTicket.mockResolvedValue(movedDetail);
+
+    render(<ManagePage />);
+
+    await user.click(screen.getByRole("button", { name: "Kanban" }));
+    await screen.findByText("To Do");
+
+    const todoColumn = screen.getByRole("heading", { name: "To Do" }).closest("section");
+    const inProgressColumn = screen.getByRole("heading", { name: "In Progress" }).closest("section");
+    const card = screen.getByText(ticketRow.summary).closest("[draggable='true']");
+    expect(todoColumn).not.toBeNull();
+    expect(inProgressColumn).not.toBeNull();
+    expect(card).not.toBeNull();
+
+    const dataTransfer = {
+      effectAllowed: "move",
+      dropEffect: "move",
+      setData: vi.fn(),
+      getData: vi.fn(() => ticketRow.key),
+    };
+
+    fireEvent.dragStart(card!, { dataTransfer });
+    fireEvent.dragOver(inProgressColumn!, { dataTransfer });
+    fireEvent.drop(inProgressColumn!, { dataTransfer });
+
+    await waitFor(() => {
+      expect(mockApi.getTransitions).toHaveBeenCalledWith("OIT-1");
+      expect(mockApi.transitionTicket).toHaveBeenCalledWith("OIT-1", "21");
+    });
+
+    await waitFor(() => {
+      expect(within(inProgressColumn!).getByText(ticketRow.summary)).toBeInTheDocument();
+      expect(within(todoColumn!).queryByText(ticketRow.summary)).not.toBeInTheDocument();
+    });
   });
 });

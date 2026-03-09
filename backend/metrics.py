@@ -277,7 +277,7 @@ def _extract_status(issue: dict[str, Any]) -> tuple[str, str, str]:
     status_name: str = status_obj.get("name", "")
     sc = status_obj.get("statusCategory") or {}
     status_cat: str = sc.get("name", "")
-    bucket = map_status_bucket(status_name)
+    bucket = "Terminal" if status_cat == "Done" else map_status_bucket(status_name)
     return status_name, status_cat, bucket
 
 
@@ -293,21 +293,26 @@ def _is_open(issue: dict[str, Any]) -> bool:
 
 
 def compute_headline_metrics(
-    issues: list[dict[str, Any]], excluded_count: int = 0
+    issues: list[dict[str, Any]], excluded_count: int | None = None
 ) -> dict[str, Any]:
-    """Compute headline KPIs from pre-filtered Jira issues.
+    """Compute headline KPIs from raw Jira issues.
 
-    *excluded_count* should be passed by the caller (from the cache)
-    since the issues list is already filtered.
+    Issues marked as excluded are removed internally so the result matches the
+    rest of the metrics module. When *excluded_count* is omitted it is derived
+    from the provided issue list, which keeps date-scoped metrics accurate.
     """
     now = _now()
+    included, inferred_excluded_count = _filter_issues(issues)
+    effective_excluded_count = (
+        inferred_excluded_count if excluded_count is None else excluded_count
+    )
 
     open_issues: list[dict[str, Any]] = []
     resolved_issues: list[dict[str, Any]] = []
     ttr_values: list[float] = []
     stale_count = 0
 
-    for iss in issues:
+    for iss in included:
         fields = iss.get("fields", {})
         created = parse_dt(fields.get("created"))
         resolved_dt = parse_dt(fields.get("resolutiondate"))
@@ -326,7 +331,7 @@ def compute_headline_metrics(
             if ttr is not None:
                 ttr_values.append(ttr)
 
-    total = len(issues)
+    total = len(included)
     resolution_rate = (len(resolved_issues) / total * 100.0) if total else 0.0
 
     return {
@@ -338,7 +343,7 @@ def compute_headline_metrics(
         "p90_ttr_hours": _round_opt(percentile(ttr_values, 90)),
         "p95_ttr_hours": _round_opt(percentile(ttr_values, 95)),
         "stale_count": stale_count,
-        "excluded_count": excluded_count,
+        "excluded_count": effective_excluded_count,
     }
 
 

@@ -48,10 +48,49 @@ function formatMinutes(m: number): string {
 
 type SortField = "key" | "summary" | "status" | "priority" | "assignee" | "fr_status" | "fr_elapsed" | "res_status" | "res_elapsed";
 type SortDir = "asc" | "desc";
+type SLATimerType = "first_response" | "resolution";
+type SLABucketFilter = { timer: SLATimerType; label: string } | null;
 
 const PRIORITY_ORDER: Record<string, number> = {
   highest: 0, high: 1, medium: 2, low: 3, lowest: 4,
 };
+
+const SLA_BUCKET_RANGES: Record<SLATimerType, Array<[string, number, number]>> = {
+  first_response: [
+    ["<30m", 0, 30],
+    ["30m–1h", 30, 60],
+    ["1–2h", 60, 120],
+    ["2–4h", 120, 240],
+    ["4–8h", 240, 480],
+    ["8h+", 480, Number.POSITIVE_INFINITY],
+  ],
+  resolution: [
+    ["<2h", 0, 120],
+    ["2–4h", 120, 240],
+    ["4–8h", 240, 480],
+    ["1 day", 480, 540],
+    ["1–2d", 540, 1080],
+    ["2–5d", 1080, 2700],
+    ["5d+", 2700, Number.POSITIVE_INFINITY],
+  ],
+};
+
+function getSLAFilterValue(timer: SLATimerType, status: "met" | "breached" | "running"): string {
+  if (timer === "first_response") return `fr_${status}`;
+  return `res_${status}`;
+}
+
+function matchesBucket(
+  timer: SLATimerType,
+  label: string,
+  elapsedMinutes: number | null | undefined,
+): boolean {
+  if (elapsedMinutes == null) return false;
+  const bucket = SLA_BUCKET_RANGES[timer].find(([bucketLabel]) => bucketLabel === label);
+  if (!bucket) return false;
+  const [, lowerBound, upperBound] = bucket;
+  return elapsedMinutes >= lowerBound && elapsedMinutes < upperBound;
+}
 
 function compareTickets(a: SLATicketRow, b: SLATicketRow, field: SortField, dir: SortDir): number {
   let cmp = 0;
@@ -77,11 +116,56 @@ function compareTickets(a: SLATicketRow, b: SLATicketRow, field: SortField, dir:
 // SLA Summary Card
 // ---------------------------------------------------------------------------
 
-function SLASummaryCard({ title, stats }: { title: string; stats: SLATimerStats }) {
+function SLASummaryCard({
+  title,
+  timer,
+  stats,
+  activeFilter,
+  onSelectFilter,
+}: {
+  title: string;
+  timer: SLATimerType;
+  stats: SLATimerStats;
+  activeFilter: string;
+  onSelectFilter: (filterValue: string) => void;
+}) {
   const completed = stats.met + stats.breached;
   const metPct = completed > 0 ? (stats.met / completed) * 100 : 0;
   const breachedPct = completed > 0 ? (stats.breached / completed) * 100 : 0;
   const runningPct = stats.total > 0 ? (stats.running / stats.total) * 100 : 0;
+  const filters = [
+    {
+      key: "met",
+      label: "Met",
+      count: stats.met,
+      pct: metPct,
+      color: "bg-green-500",
+      chipClass: "border-green-200 bg-green-50 text-green-700",
+    },
+    {
+      key: "breached",
+      label: "Breached",
+      count: stats.breached,
+      pct: breachedPct,
+      color: "bg-red-500",
+      chipClass: "border-red-200 bg-red-50 text-red-700",
+    },
+    {
+      key: "running",
+      label: "Running",
+      count: stats.running,
+      pct: runningPct,
+      color: "bg-blue-500",
+      chipClass: "border-blue-200 bg-blue-50 text-blue-700",
+    },
+  ] satisfies Array<{
+    key: "met" | "breached" | "running";
+    label: string;
+    count: number;
+    pct: number;
+    color: string;
+    chipClass: string;
+  }>;
 
   return (
     <div className="rounded-lg bg-white px-5 py-5 shadow">
@@ -105,16 +189,51 @@ function SLASummaryCard({ title, stats }: { title: string; stats: SLATimerStats 
         )}
       </div>
       <div className="mt-4 flex h-4 w-full overflow-hidden rounded-full bg-gray-100">
-        {metPct > 0 && <div className="bg-green-500 transition-all" style={{ width: `${metPct}%` }} title={`Met: ${stats.met}`} />}
-        {runningPct > 0 && <div className="bg-blue-500 transition-all" style={{ width: `${runningPct}%` }} title={`Running: ${stats.running}`} />}
-        {breachedPct > 0 && <div className="bg-red-500 transition-all" style={{ width: `${breachedPct}%` }} title={`Breached: ${stats.breached}`} />}
+        {filters.map((filter) => {
+          if (filter.pct <= 0) return null;
+          const filterValue = getSLAFilterValue(timer, filter.key);
+          const isActive = activeFilter === filterValue;
+          return (
+            <button
+              key={filter.key}
+              type="button"
+              onClick={() => onSelectFilter(filterValue)}
+              className={`${filter.color} transition-all ${isActive ? "ring-2 ring-slate-400 ring-inset" : ""}`}
+              style={{ width: `${filter.pct}%` }}
+              title={`${filter.label}: ${filter.count}`}
+              aria-label={`Filter ${title} ${filter.label}`}
+            />
+          );
+        })}
       </div>
-      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600">
-        <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-green-500" />Met: {stats.met}</span>
-        <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-red-500" />Breached: {stats.breached}</span>
-        <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-blue-500" />Running: {stats.running}</span>
-        <span className="text-gray-400">Total: {stats.total}</span>
+      <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
+        {filters.map((filter) => {
+          const filterValue = getSLAFilterValue(timer, filter.key);
+          const isActive = activeFilter === filterValue;
+          return (
+            <button
+              key={filter.key}
+              type="button"
+              onClick={() => onSelectFilter(filterValue)}
+              disabled={filter.count === 0}
+              aria-pressed={isActive}
+              className={[
+                "inline-flex items-center gap-2 rounded-full border px-3 py-1 font-medium transition-colors",
+                filter.chipClass,
+                isActive ? "ring-2 ring-slate-300 ring-offset-1" : "",
+                filter.count === 0 ? "cursor-not-allowed opacity-50" : "hover:opacity-90",
+              ].join(" ")}
+            >
+              <span className={`h-2 w-2 rounded-full ${filter.color}`} />
+              {filter.label}: {filter.count}
+            </button>
+          );
+        })}
+        <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-slate-500">
+          Total: {stats.total}
+        </span>
       </div>
+      <p className="mt-3 text-xs text-slate-500">Click a segment or status pill to filter the ticket list.</p>
     </div>
   );
 }
@@ -367,6 +486,7 @@ export default function SLAPage() {
   const [filterStatus, setFilterStatus] = useState("");
   const [filterAssignee, setFilterAssignee] = useState("");
   const [filterSLA, setFilterSLA] = useState("");
+  const [bucketFilter, setBucketFilter] = useState<SLABucketFilter>(null);
   const [openOnly, setOpenOnly] = useState(false);
   const [staleOnly, setStaleOnly] = useState(false);
   const [sortField, setSortField] = useState<SortField>("key");
@@ -397,13 +517,21 @@ export default function SLAPage() {
     if (filterAssignee) list = list.filter((t) => t.assignee === filterAssignee);
     if (filterSLA === "fr_breached") list = list.filter((t) => t.sla_first_response?.status === "breached");
     if (filterSLA === "fr_met") list = list.filter((t) => t.sla_first_response?.status === "met");
+    if (filterSLA === "fr_running") list = list.filter((t) => t.sla_first_response?.status === "running");
     if (filterSLA === "res_breached") list = list.filter((t) => t.sla_resolution?.status === "breached");
     if (filterSLA === "res_met") list = list.filter((t) => t.sla_resolution?.status === "met");
+    if (filterSLA === "res_running") list = list.filter((t) => t.sla_resolution?.status === "running");
     if (filterSLA === "any_breached") list = list.filter((t) => t.sla_first_response?.status === "breached" || t.sla_resolution?.status === "breached");
+    if (bucketFilter?.timer === "first_response") {
+      list = list.filter((t) => matchesBucket("first_response", bucketFilter.label, t.sla_first_response?.elapsed_minutes));
+    }
+    if (bucketFilter?.timer === "resolution") {
+      list = list.filter((t) => matchesBucket("resolution", bucketFilter.label, t.sla_resolution?.elapsed_minutes));
+    }
     if (openOnly) list = list.filter((t) => t.status_category !== "Done");
     if (staleOnly) list = list.filter((t) => t.status_category !== "Done" && (t.days_since_update ?? 0) >= 1);
     return [...list].sort((a, b) => compareTickets(a, b, sortField, sortDir));
-  }, [tickets, search, filterPriority, filterStatus, filterAssignee, filterSLA, openOnly, staleOnly, sortField, sortDir]);
+  }, [tickets, search, filterPriority, filterStatus, filterAssignee, filterSLA, bucketFilter, openOnly, staleOnly, sortField, sortDir]);
 
   // Infinite scroll
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -428,7 +556,20 @@ export default function SLAPage() {
 
   const visible = processed.slice(0, visibleCount);
   const hasMore = visibleCount < processed.length;
-  const hasFilters = !!(search || filterPriority || filterStatus || filterAssignee || filterSLA || openOnly || staleOnly);
+  const hasFilters = !!(search || filterPriority || filterStatus || filterAssignee || filterSLA || bucketFilter || openOnly || staleOnly);
+  const activeBucketLabel = bucketFilter
+    ? `${bucketFilter.timer === "first_response" ? "First response" : "Resolution"}: ${bucketFilter.label}`
+    : null;
+
+  function toggleSLAFilter(nextFilter: string) {
+    setFilterSLA((current) => (current === nextFilter ? "" : nextFilter));
+  }
+
+  function toggleBucketFilter(timer: SLATimerType, label: string) {
+    setBucketFilter((current) =>
+      current?.timer === timer && current.label === label ? null : { timer, label },
+    );
+  }
 
   useEffect(() => {
     if (!ticketKey) {
@@ -526,8 +667,20 @@ export default function SLAPage() {
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-        <SLASummaryCard title="First Response" stats={summary.first_response} />
-        <SLASummaryCard title="Resolution" stats={summary.resolution} />
+        <SLASummaryCard
+          title="First Response"
+          timer="first_response"
+          stats={summary.first_response}
+          activeFilter={filterSLA}
+          onSelectFilter={toggleSLAFilter}
+        />
+        <SLASummaryCard
+          title="Resolution"
+          timer="resolution"
+          stats={summary.resolution}
+          activeFilter={filterSLA}
+          onSelectFilter={toggleSLAFilter}
+        />
       </div>
 
       {/* Distribution charts */}
@@ -540,8 +693,18 @@ export default function SLAPage() {
         }
       >
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-          <SLADistributionChart title="First Response Distribution" stats={summary.first_response} />
-          <SLADistributionChart title="Resolution Distribution" stats={summary.resolution} />
+          <SLADistributionChart
+            title="First Response Distribution"
+            stats={summary.first_response}
+            selectedBucket={bucketFilter?.timer === "first_response" ? bucketFilter.label : null}
+            onSelectBucket={(label) => toggleBucketFilter("first_response", label)}
+          />
+          <SLADistributionChart
+            title="Resolution Distribution"
+            stats={summary.resolution}
+            selectedBucket={bucketFilter?.timer === "resolution" ? bucketFilter.label : null}
+            onSelectBucket={(label) => toggleBucketFilter("resolution", label)}
+          />
         </div>
       </Suspense>
 
@@ -582,8 +745,10 @@ export default function SLAPage() {
             <option value="any_breached">Any Breached</option>
             <option value="fr_breached">FR Breached</option>
             <option value="fr_met">FR Met</option>
+            <option value="fr_running">FR Running</option>
             <option value="res_breached">Res Breached</option>
             <option value="res_met">Res Met</option>
+            <option value="res_running">Res Running</option>
           </select>
           <button onClick={() => setOpenOnly((v) => !v)}
             className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
@@ -593,8 +758,17 @@ export default function SLAPage() {
             className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
               staleOnly ? "border-amber-500 bg-amber-50 text-amber-700" : "border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
             }`}>Stale (1d+)</button>
+          {activeBucketLabel && (
+            <button
+              type="button"
+              onClick={() => setBucketFilter(null)}
+              className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700"
+            >
+              Clear bucket: {activeBucketLabel}
+            </button>
+          )}
           {hasFilters && (
-            <button onClick={() => { setSearch(""); setFilterPriority(""); setFilterStatus(""); setFilterAssignee(""); setFilterSLA(""); setOpenOnly(false); setStaleOnly(false); }}
+            <button onClick={() => { setSearch(""); setFilterPriority(""); setFilterStatus(""); setFilterAssignee(""); setFilterSLA(""); setBucketFilter(null); setOpenOnly(false); setStaleOnly(false); }}
               className="text-xs text-gray-500 hover:text-gray-700 underline">Clear filters</button>
           )}
         </div>

@@ -25,14 +25,27 @@ class TestMetricsEndpoint:
         assert headline["total_tickets"] == 4
         assert headline["open_backlog"] == 2
         assert headline["resolved"] == 2
+        assert headline["excluded_count"] == 2
 
     def test_date_filtering(self, test_client):
         # Only include issues created after 2026-02-15
         resp = test_client.get("/api/metrics?date_from=2026-02-15")
         assert resp.status_code == 200
         headline = resp.json()["headline"]
-        # OIT-100 created 2026-02-01 excluded; OIT-300 created 2026-02-20 included
-        assert headline["total_tickets"] < 4
+        assert headline["total_tickets"] == 1
+        assert headline["resolved"] == 1
+        assert headline["open_backlog"] == 0
+        assert headline["stale_count"] == 0
+        assert headline["excluded_count"] == 0
+
+    def test_all_dashboard_sections_exclude_oasisdev(self, test_client):
+        resp = test_client.get("/api/metrics")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert sum(item["total"] for item in data["priority_counts"]) == 4
+        assert sum(item["count"] for item in data["age_buckets"]) == 2
+        assignee_totals = sum(item["resolved"] + item["open"] for item in data["assignee_stats"])
+        assert assignee_totals == 4
 
 
 class TestSLAEndpoints:

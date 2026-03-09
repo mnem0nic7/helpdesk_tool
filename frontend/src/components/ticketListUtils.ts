@@ -82,22 +82,48 @@ export const TICKET_BOARD_COLUMNS: Array<{
   { id: "done", label: "Done", tone: "border-emerald-200 bg-emerald-50/70" },
 ];
 
-export function getTicketBoardColumn(ticket: TicketRow): TicketBoardColumnId {
-  const status = ticket.status.toLowerCase();
-  const category = ticket.status_category.toLowerCase();
+export function getTicketBoardColumnForStatus(
+  status: string,
+  statusCategory = "",
+): TicketBoardColumnId {
+  const normalizedStatus = status.toLowerCase();
+  const normalizedCategory = statusCategory.toLowerCase();
 
   if (
-    status.startsWith("waiting") ||
-    status.includes("pending") ||
-    status.includes("hold")
+    normalizedStatus.startsWith("waiting") ||
+    normalizedStatus.includes("pending") ||
+    normalizedStatus.includes("hold")
   ) {
     return "waiting";
   }
-  if (category === "done" || status === "done" || status === "resolved" || status === "closed") {
+  if (
+    normalizedCategory === "done" ||
+    normalizedStatus === "done" ||
+    normalizedStatus === "resolved" ||
+    normalizedStatus === "closed" ||
+    normalizedStatus === "cancelled" ||
+    normalizedStatus === "canceled" ||
+    normalizedStatus === "declined" ||
+    normalizedStatus === "complete" ||
+    normalizedStatus === "completed"
+  ) {
     return "done";
   }
-  if (category === "in progress" || status === "acknowledged" || status === "in progress") {
+  if (
+    normalizedCategory === "in progress" ||
+    normalizedStatus === "acknowledged" ||
+    normalizedStatus === "in progress" ||
+    normalizedStatus.includes("progress") ||
+    normalizedStatus.includes("investigat") ||
+    normalizedStatus.includes("working")
+  ) {
     return "in_progress";
   }
   return "todo";
+}
+
+export function getTicketBoardColumn(
+  ticket: Pick<TicketRow, "status" | "status_category">,
+): TicketBoardColumnId {
+  return getTicketBoardColumnForStatus(ticket.status, ticket.status_category);
 }
