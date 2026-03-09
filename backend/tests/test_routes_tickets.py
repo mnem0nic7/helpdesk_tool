@@ -22,6 +22,7 @@ def _issue(
     created: str = "2026-02-15T10:00:00+00:00",
     updated: str = "2026-03-01T10:00:00+00:00",
     status_category: str = "To Do",
+    labels: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a minimal issue for _match testing."""
     assignee_obj = {"displayName": assignee} if assignee else None
@@ -35,6 +36,7 @@ def _issue(
             "issuetype": {"name": issue_type},
             "created": created,
             "updated": updated,
+            "labels": labels or [],
             "description": None,
         },
     }
@@ -76,6 +78,12 @@ class TestMatch:
 
     def test_search_case_insensitive(self):
         assert _match(_issue(summary="VPN Issue"), search="vpn") is True
+
+    def test_label_match(self):
+        assert _match(_issue(labels=["vip", "network"]), label="vip") is True
+
+    def test_label_mismatch(self):
+        assert _match(_issue(labels=["vip", "network"]), label="security") is False
 
     def test_open_only(self):
         assert _match(_issue(status_category="To Do"), open_only=True) is True
@@ -142,6 +150,36 @@ class TestTicketsEndpoint:
             assert "summary" in t
             assert "status" in t
             assert "priority" in t
+
+    def test_list_with_label_filter(self, test_client):
+        resp = test_client.get("/api/tickets?label=vip")
+        assert resp.status_code == 200
+        tickets = resp.json()["tickets"]
+        assert len(tickets) == 0  # sample cache data has no non-excluded vip labels
+
+    def test_filter_options_include_labels(self, test_client, monkeypatch):
+        import routes_tickets
+
+        monkeypatch.setattr(
+            routes_tickets,
+            "cache",
+            type(
+                "CacheStub",
+                (),
+                {
+                    "get_filtered_issues": staticmethod(
+                        lambda: [
+                            _issue(labels=["vip", "network"]),
+                            _issue(key="OIT-2", labels=["security"]),
+                        ]
+                    )
+                },
+            )(),
+        )
+
+        resp = test_client.get("/api/filter-options")
+        assert resp.status_code == 200
+        assert resp.json()["labels"] == ["network", "security", "vip"]
 
 
 def _adf(text: str) -> dict[str, Any]:

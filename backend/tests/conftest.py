@@ -211,8 +211,9 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     import routes_chart
     import routes_export
     import routes_cache
+    import routes_triage
 
-    for mod in [issue_cache, routes_metrics, routes_tickets, routes_chart, routes_export, routes_cache]:
+    for mod in [issue_cache, routes_metrics, routes_tickets, routes_chart, routes_export, routes_cache, routes_triage]:
         monkeypatch.setattr(mod, "cache", mock_cache)
 
     # Import app *after* patching

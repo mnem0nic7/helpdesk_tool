@@ -7,10 +7,11 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from ai_client import analyze_ticket, get_available_models, validate_suggestions
+from ai_client import analyze_ticket, get_available_models, score_closed_ticket, validate_suggestions
 from auth import get_session
 from issue_cache import cache
 from jira_client import JiraClient
+from metrics import _is_open, issue_to_row
 from models import TriageAnalyzeRequest, TriageApplyRequest, TriageFieldAction, TriageDismissRequest
 from triage_store import store
 
@@ -22,6 +23,7 @@ _client = JiraClient()
 
 # Progress tracking for run-all background task
 _run_progress: dict[str, Any] = {"running": False, "processed": 0, "total": 0, "current_key": None, "cancel": False}
+_score_progress: dict[str, Any] = {"running": False, "processed": 0, "total": 0, "current_key": None, "cancel": False}
 
 
 @router.get("/models")
@@ -123,6 +125,138 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     background_tasks.add_task(_run)
 
     return {"started": True, "total_tickets": len(all_keys)}
+
+
+@router.get("/technician-scores")
+async def get_technician_scores() -> list[dict[str, Any]]:
+    """Return stored technician QA scores for closed tickets."""
+    issues_by_key = {
+        issue.get("key", ""): issue
+        for issue in cache.get_filtered_issues()
+        if issue.get("key")
+    }
+    results: list[dict[str, Any]] = []
+    for score in store.list_technician_scores(limit=500):
+        issue = issues_by_key.get(score.key)
+        ticket = issue_to_row(issue) if issue else None
+        results.append({
+            **score.model_dump(),
+            "overall_score": round((score.communication_score + score.documentation_score) / 2, 1),
+            "ticket_summary": ticket.get("summary", "") if ticket else "",
+            "ticket_status": ticket.get("status", "") if ticket else "",
+            "ticket_assignee": ticket.get("assignee", "") if ticket else "",
+            "ticket_resolved": ticket.get("resolved", "") if ticket else "",
+        })
+    return results
+
+
+@router.get("/score-run-status")
+async def get_technician_score_run_status() -> dict[str, Any]:
+    """Return progress for the closed-ticket QA scoring workflow."""
+    result = dict(_score_progress)
+    closed_keys = [
+        iss.get("key", "")
+        for iss in cache.get_filtered_issues()
+        if iss.get("key") and not _is_open(iss)
+    ]
+    scored_keys = store.get_technician_scored_keys()
+    result["remaining_count"] = len([k for k in closed_keys if k not in scored_keys])
+    result["processed_count"] = len([k for k in closed_keys if k in scored_keys])
+    return result
+
+
+@router.post("/score-cancel")
+async def cancel_closed_ticket_scoring() -> dict[str, Any]:
+    """Cancel the current closed-ticket QA scoring run."""
+    if not _score_progress["running"]:
+        return {"cancelled": False, "message": "No technician scoring run in progress"}
+    _score_progress["cancel"] = True
+    return {"cancelled": True}
+
+
+@router.post("/score-closed")
+async def run_closed_ticket_scoring(
+    background_tasks: BackgroundTasks,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run technician QA scoring for closed tickets already in the cache."""
+    from config import AUTO_TRIAGE_MODEL
+
+    if _score_progress["running"]:
+        return {
+            "started": False,
+            "total_tickets": _score_progress["total"],
+            "message": "Technician scoring run already in progress",
+        }
+
+    available = get_available_models()
+    if not available:
+        raise HTTPException(
+            status_code=400,
+            detail="No AI model available. Configure an API key before scoring technician responses.",
+        )
+    available_ids = {model.id for model in available}
+    model_id = AUTO_TRIAGE_MODEL if AUTO_TRIAGE_MODEL in available_ids else available[0].id
+
+    issues = cache.get_filtered_issues()
+    issues_by_key = {issue.get("key", ""): issue for issue in issues if issue.get("key")}
+    all_closed_keys = [key for key, issue in issues_by_key.items() if not _is_open(issue)]
+
+    reset = bool((body or {}).get("reset", False))
+    already_scored = store.get_technician_scored_keys()
+    keys_to_process = all_closed_keys if reset else [key for key in all_closed_keys if key not in already_scored]
+
+    limit = (body or {}).get("limit")
+    if isinstance(limit, int) and limit > 0:
+        keys_to_process = keys_to_process[:limit]
+
+    _score_progress.update(
+        running=True,
+        processed=0,
+        total=len(keys_to_process),
+        current_key=None,
+        cancel=False,
+    )
+
+    async def _run() -> None:
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        try:
+            for index, key in enumerate(keys_to_process):
+                if _score_progress.get("cancel"):
+                    logger.info("Technician scoring cancelled after %d/%d", index, len(keys_to_process))
+                    break
+                _score_progress.update(processed=index, current_key=key)
+
+                issue = issues_by_key.get(key)
+                if not issue or _is_open(issue):
+                    continue
+
+                try:
+                    request_comments = await loop.run_in_executor(None, _client.get_request_comments, key)
+                except Exception:
+                    logger.exception("Failed to load request comments for %s during technician scoring", key)
+                    request_comments = []
+
+                score = await loop.run_in_executor(
+                    None,
+                    score_closed_ticket,
+                    issue,
+                    request_comments,
+                    model_id,
+                )
+                store.save_technician_score(score)
+
+            _score_progress.update(processed=len(keys_to_process))
+        except Exception:
+            logger.exception("Closed-ticket technician scoring failed")
+        finally:
+            _score_progress.update(running=False, current_key=None, cancel=False)
+
+    background_tasks.add_task(_run)
+
+    return {"started": True, "total_tickets": len(keys_to_process)}
 
 
 @router.get("/suggestions")

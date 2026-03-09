@@ -9,7 +9,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from config import DATA_DIR
-from models import TriageResult
+from models import TechnicianScore, TriageResult
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,11 @@ class TriageStore:
                 "old_value TEXT, new_value TEXT, confidence REAL, "
                 "model TEXT, source TEXT NOT NULL DEFAULT 'auto', "
                 "approved_by TEXT, timestamp TEXT NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS technician_scores "
+                "(key TEXT PRIMARY KEY, data TEXT NOT NULL, model TEXT, "
+                "created_at TEXT, updated_at TEXT)"
             )
 
     def _conn(self) -> sqlite3.Connection:
@@ -208,6 +213,40 @@ class TriageStore:
             }
             for r in rows
         ]
+
+    def save_technician_score(self, score: TechnicianScore) -> None:
+        """Insert or update a technician QA score for a ticket."""
+        now = datetime.now(timezone.utc).isoformat()
+        data = score.model_dump_json()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO technician_scores "
+                "(key, data, model, created_at, updated_at) "
+                "VALUES (?, ?, ?, COALESCE("
+                "  (SELECT created_at FROM technician_scores WHERE key = ?), ?"
+                "), ?)",
+                (score.key, data, score.model_used, score.key, now, now),
+            )
+
+    def list_technician_scores(self, limit: int = 500) -> list[TechnicianScore]:
+        """Return technician QA scores, newest first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT data FROM technician_scores ORDER BY updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [TechnicianScore(**json.loads(row[0])) for row in rows]
+
+    def get_technician_scored_keys(self) -> set[str]:
+        """Return keys that already have a technician QA score."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT key FROM technician_scores").fetchall()
+        return {row[0] for row in rows}
+
+    def clear_technician_scores(self) -> None:
+        """Delete all technician QA scores."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM technician_scores")
 
     # ------------------------------------------------------------------
     # Per-field manipulation

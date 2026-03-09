@@ -85,6 +85,7 @@ describe("ManagePage", () => {
       statuses: ["Open"],
       priorities: ["High"],
       issue_types: ["Incident"],
+      labels: ["security"],
     });
     mockApi.getAssignees.mockResolvedValue([]);
     mockApi.getCacheStatus.mockResolvedValue({

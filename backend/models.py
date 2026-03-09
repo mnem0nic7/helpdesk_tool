@@ -133,6 +133,7 @@ class ReportFilters(BaseModel):
     priority: Optional[str] = None
     assignee: Optional[str] = None
     issue_type: Optional[str] = None
+    label: Optional[str] = None
     search: Optional[str] = None
     open_only: bool = False
     stale_only: bool = False
@@ -279,3 +280,16 @@ class AIModel(BaseModel):
     id: str
     name: str
     provider: str
+
+
+class TechnicianScore(BaseModel):
+    """AI-evaluated quality score for a closed technician-handled ticket."""
+
+    key: str
+    communication_score: int = Field(ge=1, le=5)
+    communication_notes: str
+    documentation_score: int = Field(ge=1, le=5)
+    documentation_notes: str
+    score_summary: str
+    model_used: str
+    created_at: str

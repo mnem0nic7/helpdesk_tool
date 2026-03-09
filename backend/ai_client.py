@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from config import OPENAI_API_KEY, ANTHROPIC_API_KEY
-from models import AIModel, TriageResult, TriageSuggestion
+from models import AIModel, TechnicianScore, TriageResult, TriageSuggestion
 from request_type import extract_request_type_name_from_fields
 
 logger = logging.getLogger(__name__)
@@ -187,6 +187,37 @@ Respond with ONLY valid JSON (no markdown fences):
 If no changes are needed (except request_type which is always required), return only the request_type suggestion.
 """
 
+TECHNICIAN_SCORE_PROMPT = """You are a QA reviewer for closed IT helpdesk tickets.
+Evaluate the technician's handling of a resolved or closed ticket using only the evidence provided.
+
+Score these dimensions from 1 to 5:
+- communication_score: how clearly and professionally the technician communicated with the end user
+- documentation_score: how well the technician documented what they did, what fixed the issue, and any follow-up context
+
+Scoring guidance:
+- 5 = excellent, complete, clear, and customer-friendly
+- 4 = strong with minor gaps
+- 3 = adequate but missing useful detail
+- 2 = weak, sparse, or unclear
+- 1 = little to no evidence
+
+Rules:
+- Customer-facing communication should be judged mainly from public comments/replies.
+- Documentation should be judged from internal notes, public replies, and the final resolution context together.
+- If there are no public replies, communication_score should usually be 1 or 2.
+- If the notes do not explain what was done to resolve the ticket, documentation_score should usually be 1 or 2.
+- Be strict about evidence. Do not assume work happened if it is not documented.
+
+Respond with ONLY valid JSON:
+{
+  "communication_score": 3,
+  "communication_notes": "Short explanation of the communication quality.",
+  "documentation_score": 4,
+  "documentation_notes": "Short explanation of the documentation quality.",
+  "score_summary": "One-sentence overall assessment."
+}
+"""
+
 
 def _build_ticket_context(issue: dict[str, Any]) -> str:
     """Build a text representation of a ticket for the AI prompt."""
@@ -289,6 +320,87 @@ def _build_ticket_context(issue: dict[str, Any]) -> str:
     if comment_texts:
         lines.append(f"Comments ({len(comments)} total):\n" + "\n".join(comment_texts))
 
+    return "\n".join(lines)
+
+
+def _extract_comment_body(comment: dict[str, Any]) -> str:
+    body = comment.get("body")
+    if isinstance(body, str):
+        return body
+    if isinstance(body, dict):
+        return extract_adf_text(body)
+    return ""
+
+
+def _build_technician_score_context(
+    issue: dict[str, Any],
+    request_comments: list[dict[str, Any]],
+) -> str:
+    """Build a closed-ticket QA context focused on technician communication."""
+    fields = issue.get("fields", {})
+    key = issue.get("key", "")
+    summary = fields.get("summary", "")
+    description = extract_adf_text(fields.get("description"))
+    steps = extract_adf_text(fields.get("customfield_11121"))
+    status_obj = fields.get("status") or {}
+    status = status_obj.get("name", "Unknown")
+    resolution = ((fields.get("resolution") or {}).get("name") or "")
+    resolved = fields.get("resolutiondate") or ""
+    assignee_obj = fields.get("assignee") or {}
+    assignee = (
+        assignee_obj.get("displayName", "Unassigned")
+        if isinstance(assignee_obj, dict)
+        else "Unassigned"
+    )
+    request_type = extract_request_type_name_from_fields(fields)
+
+    public_comments: list[str] = []
+    internal_comments: list[str] = []
+    for comment in request_comments:
+        author = ((comment.get("author") or {}).get("displayName") or "Unknown")
+        created = str(comment.get("created") or "")[:19].replace("T", " ")
+        body = _extract_comment_body(comment)
+        if not body:
+            continue
+        line = f"[{author} | {created}]: {body}"
+        if comment.get("public"):
+            public_comments.append(line)
+        else:
+            internal_comments.append(line)
+
+    raw_comments = []
+    comment_obj = fields.get("comment") or {}
+    if isinstance(comment_obj, dict):
+        for comment in comment_obj.get("comments", []) or []:
+            author = ((comment.get("author") or {}).get("displayName") or "Unknown")
+            created = str(comment.get("created") or "")[:19].replace("T", " ")
+            body = _extract_comment_body(comment)
+            if body:
+                raw_comments.append(f"[{author} | {created}]: {body}")
+
+    lines = [
+        f"Ticket: {key}",
+        f"Summary: {summary}",
+        f"Request Type: {request_type or 'Not set'}",
+        f"Status: {status}",
+        f"Resolution: {resolution or 'Not set'}",
+        f"Resolved: {resolved or 'Not set'}",
+        f"Assignee: {assignee}",
+    ]
+    if description:
+        lines.append(f"Description:\n{description}")
+    if steps:
+        lines.append(f"Steps to Re-Create:\n{steps}")
+    lines.append(
+        "Customer-Facing Comments:\n"
+        + ("\n".join(public_comments) if public_comments else "None")
+    )
+    lines.append(
+        "Internal Notes:\n"
+        + ("\n".join(internal_comments) if internal_comments else "None")
+    )
+    if raw_comments:
+        lines.append("All Jira Comments:\n" + "\n".join(raw_comments))
     return "\n".join(lines)
 
 
@@ -475,6 +587,63 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
         model_used=model_id,
         created_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+def _parse_technician_score(raw: str, key: str, model_id: str) -> TechnicianScore:
+    """Parse AI response JSON into a TechnicianScore."""
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        logger.error("Failed to parse technician score JSON: %s", text[:200])
+        raise ValueError("Model returned invalid technician score JSON") from exc
+
+    def _clamp_score(value: Any) -> int:
+        try:
+            numeric = int(round(float(value)))
+        except (TypeError, ValueError):
+            numeric = 1
+        return max(1, min(5, numeric))
+
+    return TechnicianScore(
+        key=key,
+        communication_score=_clamp_score(data.get("communication_score")),
+        communication_notes=str(data.get("communication_notes", "")).strip(),
+        documentation_score=_clamp_score(data.get("documentation_score")),
+        documentation_notes=str(data.get("documentation_notes", "")).strip(),
+        score_summary=str(data.get("score_summary", "")).strip(),
+        model_used=model_id,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def score_closed_ticket(
+    issue: dict[str, Any],
+    request_comments: list[dict[str, Any]],
+    model_id: str,
+) -> TechnicianScore:
+    """Score technician communication/documentation for a closed ticket."""
+    provider = _get_model_provider(model_id)
+    if not provider:
+        raise ValueError(f"Unknown model: {model_id}")
+
+    user_msg = _build_technician_score_context(issue, request_comments)
+    logger.info("Scoring technician QA for %s with %s (%s)", issue.get("key"), model_id, provider)
+
+    if provider == "openai":
+        raw = _call_openai(model_id, TECHNICIAN_SCORE_PROMPT, user_msg)
+    elif provider == "anthropic":
+        raw = _call_anthropic(model_id, TECHNICIAN_SCORE_PROMPT, user_msg)
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
+
+    return _parse_technician_score(raw, issue.get("key", ""), model_id)
 
 
 # ---------------------------------------------------------------------------

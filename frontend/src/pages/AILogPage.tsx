@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api.ts";
-import type { TriageLogEntry } from "../lib/api.ts";
+import type { TechnicianScoreEntry, TriageLogEntry } from "../lib/api.ts";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
 
@@ -31,6 +31,8 @@ export default function AILogPage() {
   const { ticketKey, buildTicketHref, closeTicket } = useTicketDrawerNavigation();
   const [starting, setStarting] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: "error" | "info" } | null>(null);
+  const [scoreStarting, setScoreStarting] = useState(false);
+  const [scoreMessage, setScoreMessage] = useState<{ text: string; type: "error" | "info" } | null>(null);
 
   // Always poll run status so progress survives navigation
   const { data: runStatus } = useQuery({
@@ -38,13 +40,25 @@ export default function AILogPage() {
     queryFn: () => api.getTriageRunStatus(),
     refetchInterval: 2_000,
   });
+  const { data: scoreRunStatus } = useQuery({
+    queryKey: ["technician-score-run-status"],
+    queryFn: () => api.getTechnicianScoreRunStatus(),
+    refetchInterval: 2_000,
+  });
 
   const isRunning = runStatus?.running ?? false;
+  const isScoring = scoreRunStatus?.running ?? false;
 
   const cancelRun = useMutation({
     mutationFn: () => api.cancelTriageRun(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["triage-run-status"] });
+    },
+  });
+  const cancelScoreRun = useMutation({
+    mutationFn: () => api.cancelTechnicianScoreRun(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["technician-score-run-status"] });
     },
   });
 
@@ -67,10 +81,38 @@ export default function AILogPage() {
     }
   }
 
+  async function handleScoreClosedTickets() {
+    setScoreStarting(true);
+    setScoreMessage(null);
+    try {
+      const res = await api.runClosedTicketScoring();
+      if (res.total_tickets === 0) {
+        setScoreMessage({
+          text: "All closed tickets already have technician QA scores.",
+          type: "info",
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ["technician-score-run-status"] });
+      queryClient.invalidateQueries({ queryKey: ["technician-scores"] });
+    } catch (err) {
+      setScoreMessage({
+        text: `Error: ${err instanceof Error ? err.message : String(err)}`,
+        type: "error",
+      });
+    } finally {
+      setScoreStarting(false);
+    }
+  }
+
   const { data: log, isLoading } = useQuery({
     queryKey: ["triage-log"],
     queryFn: () => api.getTriageLog(),
     refetchInterval: isRunning ? 5_000 : 30_000,
+  });
+  const { data: technicianScores = [], isLoading: scoresLoading } = useQuery({
+    queryKey: ["technician-scores"],
+    queryFn: () => api.getTechnicianScores(),
+    refetchInterval: isScoring ? 5_000 : 30_000,
   });
 
   const entries = log ?? [];
@@ -171,6 +213,125 @@ export default function AILogPage() {
           </div>
         </div>
       )}
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Technician QA Scores</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              AI review of closed tickets only, focused on end-user communication and resolution documentation.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+              Closed scored: {scoreRunStatus?.processed_count?.toLocaleString() ?? "…"}
+            </span>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+              Remaining closed: {scoreRunStatus?.remaining_count?.toLocaleString() ?? "…"}
+            </span>
+            {isScoring ? (
+              <button
+                onClick={() => cancelScoreRun.mutate()}
+                disabled={cancelScoreRun.isPending}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {cancelScoreRun.isPending ? "Stopping…" : "Stop Scoring"}
+              </button>
+            ) : (
+              <button
+                onClick={() => handleScoreClosedTickets()}
+                disabled={scoreStarting}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {scoreStarting ? "Starting…" : `Score Closed Tickets (${scoreRunStatus?.remaining_count?.toLocaleString() ?? "…"})`}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {scoreMessage && (
+          <div className={`mt-4 rounded-lg px-4 py-3 text-sm ${scoreMessage.type === "error" ? "bg-red-50 text-red-700" : "bg-yellow-50 text-yellow-700"}`}>
+            {scoreMessage.text}
+          </div>
+        )}
+
+        {isScoring && scoreRunStatus && scoreRunStatus.total > 0 && (
+          <div className="mt-4 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <div className="mb-1 flex items-center justify-between text-xs">
+              <span>
+                Scoring {scoreRunStatus.current_key ?? "…"} ({scoreRunStatus.processed}/{scoreRunStatus.total})
+              </span>
+              <span>{Math.round((scoreRunStatus.processed / scoreRunStatus.total) * 100)}%</span>
+            </div>
+            <div className="h-2 w-full rounded-full bg-slate-200">
+              <div
+                className="h-2 rounded-full bg-slate-900 transition-all duration-500"
+                style={{ width: `${(scoreRunStatus.processed / scoreRunStatus.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          {scoresLoading && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-400">
+              Loading technician QA scores…
+            </div>
+          )}
+          {!scoresLoading && technicianScores.length === 0 && (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-400">
+              No closed-ticket QA scores yet.
+            </div>
+          )}
+          {technicianScores.map((score: TechnicianScoreEntry) => (
+            <article key={score.key} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <Link to={buildTicketHref(score.key)} className="font-mono text-xs text-blue-700 underline">
+                    {score.key}
+                  </Link>
+                  <h3 className="mt-2 text-sm font-semibold leading-5 text-slate-900">
+                    {score.ticket_summary || "Closed ticket"}
+                  </h3>
+                </div>
+                <div className="rounded-xl bg-white px-3 py-2 text-right shadow-sm">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400">Overall</div>
+                  <div className="text-lg font-semibold text-slate-900">{score.overall_score.toFixed(1)}/5</div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl bg-white px-3 py-3 shadow-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Communication</span>
+                    <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                      {score.communication_score}/5
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-5 text-slate-700">{score.communication_notes}</p>
+                </div>
+                <div className="rounded-xl bg-white px-3 py-3 shadow-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Documentation</span>
+                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                      {score.documentation_score}/5
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-5 text-slate-700">{score.documentation_notes}</p>
+                </div>
+              </div>
+
+              <p className="mt-4 text-sm font-medium text-slate-900">{score.score_summary}</p>
+              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
+                <span>Status: {score.ticket_status || "—"}</span>
+                <span>Assignee: {score.ticket_assignee || "Unassigned"}</span>
+                <span>Resolved: {score.ticket_resolved ? formatTimestamp(score.ticket_resolved) : "—"}</span>
+                <span>Model: {score.model_used}</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
 
       <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
         <div className="max-h-[75vh] overflow-y-auto">

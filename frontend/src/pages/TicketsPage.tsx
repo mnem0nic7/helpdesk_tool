@@ -20,6 +20,7 @@ function filtersFromParams(sp: URLSearchParams): TicketFilterValues {
     status: sp.get("status") ?? "",
     priority: sp.get("priority") ?? "",
     issue_type: sp.get("issue_type") ?? "",
+    label: sp.get("label") ?? "",
     open_only: sp.get("open_only") !== "false",
     stale_only: sp.get("stale_only") === "true",
     created_after: sp.get("created_after") ?? "",
@@ -101,6 +102,7 @@ export default function TicketsPage() {
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.priority ? { priority: filters.priority } : {}),
     ...(filters.issue_type ? { issue_type: filters.issue_type } : {}),
+    ...(filters.label ? { label: filters.label } : {}),
     ...(filters.open_only ? { open_only: true } : {}),
     ...(filters.stale_only ? { stale_only: true } : {}),
     ...(filters.created_after ? { created_after: filters.created_after } : {}),
@@ -119,7 +121,7 @@ export default function TicketsPage() {
   const matchedCount = data?.matched_count ?? tickets.length;
   const totalCount = data?.total_count;
   const hasMore = page * PAGE_SIZE < matchedCount;
-  const hasFilters = !!(filters.search || filters.status || filters.priority || filters.issue_type || filters.stale_only || filters.assignee || filters.created_after || filters.created_before);
+  const hasFilters = !!(filters.search || filters.status || filters.priority || filters.issue_type || filters.label || filters.stale_only || filters.assignee || filters.created_after || filters.created_before);
 
   useEffect(() => {
     if (!ticketKey) {

@@ -55,6 +55,12 @@ def _match(issue: dict[str, Any], **filters: Any) -> bool:
         if issuetype_obj.get("name", "") != filters["issue_type"]:
             return False
 
+    if filters.get("label"):
+        labels = fields.get("labels") or []
+        target = str(filters["label"]).lower()
+        if not any(str(label).lower() == target for label in labels):
+            return False
+
     if filters.get("search"):
         term = filters["search"].lower()
         summary = (fields.get("summary") or "").lower()
@@ -251,6 +257,7 @@ async def list_tickets(
     priority: Optional[str] = Query(None),
     assignee: Optional[str] = Query(None),
     issue_type: Optional[str] = Query(None),
+    label: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     open_only: bool = Query(False),
     stale_only: bool = Query(False),
@@ -267,6 +274,7 @@ async def list_tickets(
         "priority": priority,
         "assignee": assignee,
         "issue_type": issue_type,
+        "label": label,
         "search": search,
         "open_only": open_only,
         "stale_only": stale_only,
@@ -287,11 +295,12 @@ async def list_tickets(
 
 @router.get("/filter-options")
 async def get_filter_options() -> dict[str, list[str]]:
-    """Return distinct statuses, priorities, and issue types from cached tickets."""
+    """Return distinct statuses, priorities, issue types, and labels from cached tickets."""
     issues = cache.get_filtered_issues()
     statuses: set[str] = set()
     priorities: set[str] = set()
     issue_types: set[str] = set()
+    labels: set[str] = set()
     for iss in issues:
         fields = iss.get("fields", {})
         status_name = (fields.get("status") or {}).get("name")
@@ -303,12 +312,16 @@ async def get_filter_options() -> dict[str, list[str]]:
         issue_type_name = (fields.get("issuetype") or {}).get("name")
         if issue_type_name:
             issue_types.add(issue_type_name)
+        for label in fields.get("labels") or []:
+            if label:
+                labels.add(str(label))
     priority_order = ["Highest", "High", "Medium", "Low", "Lowest", "New"]
     sorted_priorities = [p for p in priority_order if p in priorities] + sorted(priorities - set(priority_order))
     return {
         "statuses": sorted(statuses),
         "priorities": sorted_priorities,
         "issue_types": sorted(issue_types),
+        "labels": sorted(labels),
     }
 
 

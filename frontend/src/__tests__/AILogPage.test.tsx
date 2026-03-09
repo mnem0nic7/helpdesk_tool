@@ -8,8 +8,12 @@ const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     getTriageRunStatus: vi.fn(),
     getTriageLog: vi.fn(),
+    getTechnicianScores: vi.fn(),
     cancelTriageRun: vi.fn(),
+    cancelTechnicianScoreRun: vi.fn(),
     runTriageAll: vi.fn(),
+    runClosedTicketScoring: vi.fn(),
+    getTechnicianScoreRunStatus: vi.fn(),
     getTicket: vi.fn(),
     getAssignees: vi.fn(),
     getPriorities: vi.fn(),
@@ -109,8 +113,35 @@ describe("AILogPage", () => {
         timestamp: "2026-03-03T10:00:00Z",
       },
     ]);
+    mockApi.getTechnicianScores.mockResolvedValue([
+      {
+        key: "OIT-1",
+        communication_score: 4,
+        communication_notes: "Clear user-facing updates.",
+        documentation_score: 3,
+        documentation_notes: "Resolution notes were adequate.",
+        overall_score: 3.5,
+        score_summary: "Good communication with moderate documentation detail.",
+        model_used: "gpt-4o-mini",
+        created_at: "2026-03-03T11:00:00Z",
+        ticket_summary: "Printer is offline",
+        ticket_status: "Closed",
+        ticket_assignee: "Ada Lovelace",
+        ticket_resolved: "2026-03-03T09:30:00Z",
+      },
+    ]);
     mockApi.cancelTriageRun.mockResolvedValue({ cancelled: true });
+    mockApi.cancelTechnicianScoreRun.mockResolvedValue({ cancelled: true });
     mockApi.runTriageAll.mockResolvedValue({ started: true, total_tickets: 1 });
+    mockApi.runClosedTicketScoring.mockResolvedValue({ started: true, total_tickets: 1 });
+    mockApi.getTechnicianScoreRunStatus.mockResolvedValue({
+      running: false,
+      processed: 0,
+      total: 0,
+      current_key: null,
+      remaining_count: 1,
+      processed_count: 0,
+    });
     mockApi.getTicket.mockResolvedValue(ticketDetail);
     mockApi.getAssignees.mockResolvedValue([]);
     mockApi.getPriorities.mockResolvedValue([{ id: "1", name: "High" }]);
@@ -127,15 +158,33 @@ describe("AILogPage", () => {
 
     render(<AILogPage />);
 
-    const ticketLink = await screen.findByRole("link", { name: "OIT-1" });
-    expect(ticketLink).toHaveAttribute("href", "/ai-log?ticket=OIT-1");
+    const ticketLinks = await screen.findAllByRole("link", { name: "OIT-1" });
+    expect(ticketLinks).toHaveLength(2);
+    expect(ticketLinks[0]).toHaveAttribute("href", "/ai-log?ticket=OIT-1");
 
-    await user.click(ticketLink);
+    await user.click(ticketLinks[0]);
 
     await waitFor(() => {
       expect(window.location.search).toBe("?ticket=OIT-1");
     });
     await screen.findByText("Ticket Actions");
     expect(mockApi.getTicket).toHaveBeenCalledWith("OIT-1");
+  });
+
+  it("shows technician QA scores and can start scoring closed tickets", async () => {
+    const user = userEvent.setup();
+
+    render(<AILogPage />);
+
+    await screen.findByText("Technician QA Scores");
+    expect(await screen.findByText("Good communication with moderate documentation detail.")).toBeInTheDocument();
+    expect(screen.getByText("Communication")).toBeInTheDocument();
+    expect(screen.getByText("Documentation")).toBeInTheDocument();
+
+    await user.click(await screen.findByRole("button", { name: "Score Closed Tickets (1)" }));
+
+    await waitFor(() => {
+      expect(mockApi.runClosedTicketScoring).toHaveBeenCalledWith();
+    });
   });
 });
