@@ -4,6 +4,7 @@ import { api } from "../lib/api.ts";
 import type {
   Assignee,
   PriorityOption,
+  TicketComment,
   RequestTypeOption,
   TicketDetail,
   TicketRow,
@@ -56,6 +57,14 @@ function chipClass(color: "slate" | "blue" | "amber" | "green") {
   return `inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${classes[color]}`;
 }
 
+function sortCommentsByCreated(comments: TicketComment[]): TicketComment[] {
+  return [...comments].sort((a, b) => {
+    const aTime = new Date(a.created).getTime();
+    const bTime = new Date(b.created).getTime();
+    return bTime - aTime;
+  });
+}
+
 export default function TicketWorkbenchDrawer({
   ticketKey,
   initialTicket,
@@ -72,6 +81,7 @@ export default function TicketWorkbenchDrawer({
   const [selectedTransitionId, setSelectedTransitionId] = useState("");
   const [comment, setComment] = useState("");
   const [commentAudience, setCommentAudience] = useState<"internal" | "customer">("internal");
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
 
@@ -117,6 +127,7 @@ export default function TicketWorkbenchDrawer({
     setComment("");
     setCommentAudience("internal");
     setSelectedTransitionId("");
+    setIsHistoryOpen(false);
   }, [detail]);
 
   useEffect(() => {
@@ -173,6 +184,19 @@ export default function TicketWorkbenchDrawer({
       window.removeEventListener("mouseup", stopResizing);
     };
   }, [isResizing]);
+
+  useEffect(() => {
+    if (!isHistoryOpen) return undefined;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsHistoryOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isHistoryOpen]);
 
   function handleResizeStart(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -269,6 +293,10 @@ export default function TicketWorkbenchDrawer({
         { label: "Work Category", value: detail.work_category || "—" },
       ]
     : [];
+  const historyItems = detail ? sortCommentsByCreated(detail.comments) : [];
+  const recentHistoryItems = historyItems.slice(0, 2);
+  const customerReplyCount = historyItems.filter((item) => item.public).length;
+  const internalNoteCount = historyItems.length - customerReplyCount;
 
   return (
     <div className="fixed inset-0 z-50 flex bg-slate-950/35" onClick={onClose}>
@@ -569,14 +597,28 @@ export default function TicketWorkbenchDrawer({
 
                   <div className="rounded-xl border border-slate-200 p-3">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Comments</h3>
-                      <span className="text-xs text-slate-500">{detail.comments.length} total</span>
+                      <div>
+                        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">
+                          Recent Notes & Communications
+                        </h3>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {historyItems.length} total
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsHistoryOpen(true)}
+                        disabled={historyItems.length === 0}
+                        className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        See History
+                      </button>
                     </div>
                     <div className="mt-3 space-y-2">
-                      {detail.comments.length === 0 && (
-                        <div className="text-sm text-slate-500">No comments on this ticket.</div>
+                      {historyItems.length === 0 && (
+                        <div className="text-sm text-slate-500">No notes or customer communications yet.</div>
                       )}
-                      {detail.comments.map((item) => (
+                      {recentHistoryItems.map((item) => (
                         <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                           <div className="flex items-center justify-between gap-3 text-xs text-slate-500">
                             <div className="flex items-center gap-2">
@@ -716,7 +758,88 @@ export default function TicketWorkbenchDrawer({
             </>
           )}
         </div>
+
       </aside>
+
+      {isHistoryOpen && detail && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-5"
+          onClick={(event) => {
+            event.stopPropagation();
+            setIsHistoryOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ticket-history-title"
+            className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-slate-200 px-5 py-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3
+                    id="ticket-history-title"
+                    className="text-lg font-semibold text-slate-900"
+                  >
+                    Ticket History
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    All internal notes and customer-facing communications for {ticket?.key ?? ticketKey}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <span className={chipClass("slate")}>
+                      {internalNoteCount} internal note{internalNoteCount === 1 ? "" : "s"}
+                    </span>
+                    <span className={chipClass("blue")}>
+                      {customerReplyCount} customer repl{customerReplyCount === 1 ? "y" : "ies"}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsHistoryOpen(false)}
+                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-y-auto px-5 py-4">
+              <div className="space-y-4">
+                {historyItems.length === 0 && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                    No history yet.
+                  </div>
+                )}
+                {historyItems.map((item) => (
+                  <article
+                    key={item.id}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-slate-900">{item.author}</span>
+                        <span className={chipClass(item.public ? "blue" : "slate")}>
+                          {item.public ? "Customer Reply" : "Internal Note"}
+                        </span>
+                      </div>
+                      <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                        {formatDateTime(item.created)}
+                      </span>
+                    </div>
+                    <div className="mt-3 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
+                      {item.body || "Empty comment"}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

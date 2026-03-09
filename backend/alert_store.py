@@ -25,6 +25,7 @@ class AlertStore:
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def _init_db(self) -> None:
@@ -71,6 +72,16 @@ class AlertStore:
                 )
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS alert_seen_tickets (
+                    rule_id INTEGER NOT NULL,
+                    ticket_key TEXT NOT NULL,
+                    seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (rule_id, ticket_key),
+                    FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
+                )
+            """)
+
     # -----------------------------------------------------------------------
     # Alert Rules CRUD
     # -----------------------------------------------------------------------
@@ -97,6 +108,7 @@ class AlertStore:
         return [self._row_to_rule(r) for r in rows]
 
     def create_rule(self, data: dict[str, Any]) -> dict[str, Any]:
+        rule_id: int | None = None
         with self._conn() as conn:
             cur = conn.execute(
                 """INSERT INTO alert_rules
@@ -119,7 +131,8 @@ class AlertStore:
                     data.get("custom_message", ""),
                 ),
             )
-            return self.get_rule(cur.lastrowid)  # type: ignore[return-value]
+            rule_id = cur.lastrowid
+        return self.get_rule(rule_id)  # type: ignore[arg-type, return-value]
 
     def update_rule(self, rule_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
         existing = self.get_rule(rule_id)
@@ -200,6 +213,49 @@ class AlertStore:
                     error,
                 ),
             )
+
+    # -----------------------------------------------------------------------
+    # Seen ticket tracking for "new ticket" alerts
+    # -----------------------------------------------------------------------
+
+    def get_seen_ticket_keys(self, rule_id: int) -> set[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT ticket_key FROM alert_seen_tickets WHERE rule_id = ?",
+                (rule_id,),
+            ).fetchall()
+        return {str(row["ticket_key"]) for row in rows}
+
+    def mark_ticket_keys_seen(self, rule_id: int, ticket_keys: list[str]) -> None:
+        keys = [key for key in dict.fromkeys(ticket_keys) if key]
+        if not keys:
+            return
+
+        seen_at = datetime.now(timezone.utc).isoformat()
+        with self._conn() as conn:
+            conn.executemany(
+                """INSERT OR IGNORE INTO alert_seen_tickets
+                   (rule_id, ticket_key, seen_at)
+                   VALUES (?, ?, ?)""",
+                [(rule_id, key, seen_at) for key in keys],
+            )
+
+    def replace_seen_ticket_keys(self, rule_id: int, ticket_keys: list[str]) -> None:
+        keys = [key for key in dict.fromkeys(ticket_keys) if key]
+        seen_at = datetime.now(timezone.utc).isoformat()
+        with self._conn() as conn:
+            conn.execute("DELETE FROM alert_seen_tickets WHERE rule_id = ?", (rule_id,))
+            if keys:
+                conn.executemany(
+                    """INSERT INTO alert_seen_tickets
+                       (rule_id, ticket_key, seen_at)
+                       VALUES (?, ?, ?)""",
+                    [(rule_id, key, seen_at) for key in keys],
+                )
+
+    def clear_seen_ticket_keys(self, rule_id: int) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM alert_seen_tickets WHERE rule_id = ?", (rule_id,))
 
     def get_history(self, limit: int = 50, rule_id: int | None = None) -> list[dict[str, Any]]:
         with self._conn() as conn:

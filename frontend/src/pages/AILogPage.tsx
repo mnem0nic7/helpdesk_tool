@@ -1,7 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { api } from "../lib/api.ts";
-import type { TriageLogEntry, CacheStatus } from "../lib/api.ts";
+import type { TriageLogEntry } from "../lib/api.ts";
+import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
+import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
 
 const PAGE_SIZE = 100;
 
@@ -25,6 +28,7 @@ function formatTimestamp(iso: string): string {
 
 export default function AILogPage() {
   const queryClient = useQueryClient();
+  const { ticketKey, buildTicketHref, closeTicket } = useTicketDrawerNavigation();
   const [starting, setStarting] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: "error" | "info" } | null>(null);
 
@@ -68,13 +72,6 @@ export default function AILogPage() {
     queryFn: () => api.getTriageLog(),
     refetchInterval: isRunning ? 5_000 : 30_000,
   });
-
-  const { data: cacheStatus } = useQuery<CacheStatus>({
-    queryKey: ["cache-status"],
-    queryFn: () => api.getCacheStatus(),
-    staleTime: Infinity,
-  });
-  const jiraBaseUrl = cacheStatus?.jira_base_url;
 
   const entries = log ?? [];
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -210,18 +207,12 @@ export default function AILogPage() {
                     {formatTimestamp(e.timestamp)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2.5 font-medium">
-                    {jiraBaseUrl ? (
-                      <a
-                        href={`${jiraBaseUrl}/browse/${e.key}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:underline"
-                      >
-                        {e.key}
-                      </a>
-                    ) : (
-                      <span className="text-gray-900">{e.key}</span>
-                    )}
+                    <Link
+                      to={buildTicketHref(e.key)}
+                      className="text-blue-600 hover:underline"
+                    >
+                      {e.key}
+                    </Link>
                   </td>
                   <td className="whitespace-nowrap px-4 py-2.5 text-gray-700">
                     {fieldLabels[e.field] ?? e.field}
@@ -269,6 +260,11 @@ export default function AILogPage() {
           )}
         </div>
       </div>
+
+      <TicketWorkbenchDrawer
+        ticketKey={ticketKey}
+        onClose={closeTicket}
+      />
     </div>
   );
 }

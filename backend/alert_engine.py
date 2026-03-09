@@ -66,7 +66,7 @@ def _matches_filters(issue: dict, filters: dict) -> bool:
     priority = _get_priority(issue).lower()
     if filters.get("priorities"):
         allowed = [p.lower() for p in filters["priorities"]]
-        if priority and priority not in allowed:
+        if not priority or priority not in allowed:
             return False
 
     assignee = _get_assignee(issue).lower()
@@ -80,7 +80,7 @@ def _matches_filters(issue: dict, filters: dict) -> bool:
     request_type = _get_request_type(issue).lower()
     if filters.get("request_types"):
         allowed = [r.lower() for r in filters["request_types"]]
-        if request_type and request_type not in allowed:
+        if not request_type or request_type not in allowed:
             return False
 
     return True
@@ -245,12 +245,18 @@ def evaluate_res_approaching(issues: list[dict], config: dict) -> list[dict]:
     return result
 
 
+def evaluate_new_ticket(issues: list[dict], config: dict) -> list[dict]:
+    """Return currently matching tickets for unseen/new-ticket evaluation."""
+    return list(issues)
+
+
 EVALUATORS = {
     "stale": evaluate_stale,
     "fr_breach": evaluate_fr_breach,
     "res_breach": evaluate_res_breach,
     "fr_approaching": evaluate_fr_approaching,
     "res_approaching": evaluate_res_approaching,
+    "new_ticket": evaluate_new_ticket,
 }
 
 
@@ -270,7 +276,66 @@ TRIGGER_LABELS = {
     "res_breach": "Resolution SLA Breaches",
     "fr_approaching": "Approaching First Response SLA",
     "res_approaching": "Approaching Resolution SLA",
+    "new_ticket": "New Tickets",
 }
+
+
+def _ticket_keys(tickets: list[dict]) -> list[str]:
+    return [key for key in (iss.get("key", "") for iss in tickets) if key]
+
+
+def _evaluate_rule(rule: dict, issues: list[dict]) -> list[dict]:
+    evaluator = EVALUATORS.get(rule["trigger_type"])
+    if not evaluator:
+        raise ValueError(f"Unknown trigger type: {rule['trigger_type']}")
+
+    filtered = [iss for iss in issues if _matches_filters(iss, rule["filters"])]
+    return evaluator(filtered, rule["trigger_config"])
+
+
+def _filter_unseen_tickets(rule: dict, tickets: list[dict]) -> list[dict]:
+    if rule["trigger_type"] != "new_ticket":
+        return tickets
+
+    seen_keys = alert_store.get_seen_ticket_keys(rule["id"])
+    return [iss for iss in tickets if iss.get("key", "") not in seen_keys]
+
+
+def get_rule_matches(
+    rule: dict,
+    issues: list[dict],
+    *,
+    refresh: bool = False,
+    only_new: bool = True,
+) -> list[dict]:
+    """Return tickets matching a rule, optionally refreshed and deduped."""
+    matching = _evaluate_rule(rule, issues)
+
+    if refresh and matching:
+        matching = _refresh_tickets(matching)
+        matching = _evaluate_rule(rule, matching)
+
+    if only_new:
+        matching = _filter_unseen_tickets(rule, matching)
+
+    return matching
+
+
+def baseline_new_ticket_rule(rule: dict, issues: list[dict]) -> None:
+    """Seed seen-ticket state so a new-ticket rule starts from the current backlog."""
+    if rule["trigger_type"] != "new_ticket":
+        return
+
+    matching = get_rule_matches(rule, issues, refresh=False, only_new=False)
+    alert_store.replace_seen_ticket_keys(rule["id"], _ticket_keys(matching))
+
+
+def mark_rule_tickets_seen(rule: dict, tickets: list[dict]) -> None:
+    """Remember successfully-alerted tickets for new-ticket rules."""
+    if rule["trigger_type"] != "new_ticket":
+        return
+
+    alert_store.mark_ticket_keys_seen(rule["id"], _ticket_keys(tickets))
 
 
 def _apply_template(template: str, variables: dict[str, str]) -> str:
@@ -428,26 +493,11 @@ async def run_alert_checks(issues: list[dict]) -> int:
         if not _should_run(rule, now):
             continue
 
-        evaluator = EVALUATORS.get(rule["trigger_type"])
-        if not evaluator:
+        try:
+            matching = get_rule_matches(rule, issues, refresh=True)
+        except ValueError:
             logger.warning("Unknown trigger type: %s", rule["trigger_type"])
             continue
-
-        # Filter issues through rule filters
-        filtered = [iss for iss in issues if _matches_filters(iss, rule["filters"])]
-
-        matching = evaluator(filtered, rule["trigger_config"])
-
-        if not matching:
-            alert_store.update_last_run(rule["id"], sent=False)
-            continue
-
-        # Refresh matching tickets from Jira before sending
-        matching = _refresh_tickets(matching)
-
-        # Re-evaluate after refresh — some may no longer match
-        matching = evaluator(matching, rule["trigger_config"])
-        matching = [iss for iss in matching if _matches_filters(iss, rule["filters"])]
 
         if not matching:
             alert_store.update_last_run(rule["id"], sent=False)
@@ -473,6 +523,7 @@ async def run_alert_checks(issues: list[dict]) -> int:
         alert_store.update_last_run(rule["id"], sent=success)
 
         if success:
+            mark_rule_tickets_seen(rule, matching)
             sent_count += 1
 
     return sent_count
@@ -483,7 +534,7 @@ def _should_run(rule: dict, now: datetime) -> bool:
     frequency = rule["frequency"]
 
     if frequency == "immediate":
-        # Run every check cycle (~10 min) but only send if there are new matches
+        # Run every check cycle (~1 min) but only send if there are new matches
         return True
 
     last_run_str = rule.get("last_run")

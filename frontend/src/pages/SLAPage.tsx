@@ -1,11 +1,14 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { api } from "../lib/api.ts";
 import type {
   SLAMetricsResponse, SLATicketRow, SLATimerStats, SLATarget,
-  SLASettings, CacheStatus,
+  SLASettings,
 } from "../lib/api.ts";
+import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
+import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
 
 const PAGE_SIZE = 100;
 
@@ -379,13 +382,8 @@ export default function SLAPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [showSettings, setShowSettings] = useState(false);
-
-  const { data: cacheStatus } = useQuery<CacheStatus>({
-    queryKey: ["cache-status"],
-    queryFn: () => api.getCacheStatus(),
-    staleTime: Infinity,
-  });
-  const jiraBaseUrl = cacheStatus?.jira_base_url;
+  const { ticketKey, buildTicketHref, closeTicket } = useTicketDrawerNavigation();
+  const [openTicket, setOpenTicket] = useState<SLATicketRow | null>(null);
 
   const { data, isLoading, isFetching, error } = useQuery<SLAMetricsResponse>({
     queryKey: ["sla-metrics", dateFrom, dateTo],
@@ -461,6 +459,19 @@ export default function SLAPage() {
   const visible = processed.slice(0, visibleCount);
   const hasMore = visibleCount < processed.length;
   const hasFilters = !!(search || filterPriority || filterStatus || filterAssignee || filterSLA || openOnly || staleOnly);
+
+  useEffect(() => {
+    if (!ticketKey) {
+      setOpenTicket(null);
+      return;
+    }
+    const matchingTicket = tickets.find((ticket) => ticket.key === ticketKey);
+    if (matchingTicket) {
+      setOpenTicket(matchingTicket);
+      return;
+    }
+    setOpenTicket((current) => (current?.key === ticketKey ? current : null));
+  }, [ticketKey, tickets]);
 
   // Loading
   if (isLoading) {
@@ -639,10 +650,15 @@ export default function SLAPage() {
                   return (
                     <tr key={t.key} className="hover:bg-gray-50">
                       <td className="whitespace-nowrap px-4 py-3 font-medium">
-                        {jiraBaseUrl ? (
-                          <a href={`${jiraBaseUrl}/browse/${t.key}`} target="_blank" rel="noopener noreferrer"
-                            className="text-blue-600 hover:underline">{t.key}</a>
-                        ) : <span className="text-blue-700">{t.key}</span>}
+                        <Link
+                          to={buildTicketHref(t.key)}
+                          onClick={() => {
+                            setOpenTicket(t);
+                          }}
+                          className="text-blue-600 hover:underline"
+                        >
+                          {t.key}
+                        </Link>
                       </td>
                       <td className="max-w-xs truncate px-4 py-3 text-gray-800" title={t.summary}>{t.summary}</td>
                       <td className="whitespace-nowrap px-4 py-3">
@@ -684,6 +700,12 @@ export default function SLAPage() {
           onClose={() => setShowSettings(false)}
         />
       )}
+
+      <TicketWorkbenchDrawer
+        ticketKey={ticketKey}
+        initialTicket={openTicket}
+        onClose={closeTicket}
+      />
     </div>
   );
 }

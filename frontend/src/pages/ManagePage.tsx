@@ -1,5 +1,6 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api.ts";
 import type { TicketQueryParams, TicketRow } from "../lib/api.ts";
 import TicketFilters, {
@@ -7,16 +8,22 @@ import TicketFilters, {
 } from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 import TicketTable from "../components/TicketTable.tsx";
+import TicketKanbanBoard from "../components/TicketKanbanBoard.tsx";
 import BulkActionsToolbar from "../components/BulkActionsToolbar.tsx";
 import Pagination from "../components/Pagination.tsx";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
+import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
+import TicketViewToggle, { type TicketListView } from "../components/TicketViewToggle.tsx";
 
 // Quick-filter preset definitions
 type QuickFilter = "triage" | "all_open" | null;
 const PAGE_SIZE = 250;
 
 export default function ManagePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const { ticketKey, buildTicketHref, openTicketByKey, closeTicket } = useTicketDrawerNavigation();
+  const view: TicketListView = searchParams.get("view") === "kanban" ? "kanban" : "table";
 
   const [filters, setFilters] = useState<TicketFilterValues>({
     ...emptyFilters,
@@ -91,6 +98,40 @@ export default function ManagePage() {
   const totalCount = data?.total_count ?? tickets.length;
   const hasMore = page * PAGE_SIZE < matchedCount;
 
+  useEffect(() => {
+    if (!ticketKey) {
+      setOpenTicket(null);
+      return;
+    }
+    const matchingTicket = tickets.find((ticket) => ticket.key === ticketKey);
+    if (matchingTicket) {
+      setOpenTicket(matchingTicket);
+      return;
+    }
+    setOpenTicket((current) => (current?.key === ticketKey ? current : null));
+  }, [ticketKey, tickets]);
+
+  const openLocalTicket = useCallback(
+    (ticket: TicketRow) => {
+      setOpenTicket(ticket);
+      openTicketByKey(ticket.key);
+    },
+    [openTicketByKey],
+  );
+
+  const handleViewChange = useCallback(
+    (nextView: TicketListView) => {
+      const next = new URLSearchParams(searchParams);
+      if (nextView === "kanban") {
+        next.set("view", "kanban");
+      } else {
+        next.delete("view");
+      }
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
   // Bulk action completed: refresh cache, clear selection, refetch
   function handleActionComplete() {
     setSelectedKeys(new Set());
@@ -126,12 +167,15 @@ export default function ManagePage() {
             Review tickets, open full details, and apply ticket actions without leaving the app.
           </p>
         </div>
-        {!isLoading && (
-          <span className="text-sm text-slate-500">
-            <span className="font-semibold text-slate-800">{matchedCount.toLocaleString()}</span>
-            {" "}matched of {totalCount.toLocaleString()}
-          </span>
-        )}
+        <div className="flex items-center gap-4">
+          {!isLoading && (
+            <span className="text-sm text-slate-500">
+              <span className="font-semibold text-slate-800">{matchedCount.toLocaleString()}</span>
+              {" "}matched of {totalCount.toLocaleString()}
+            </span>
+          )}
+          <TicketViewToggle value={view} onChange={handleViewChange} />
+        </div>
       </div>
 
       {/* Bulk actions toolbar */}
@@ -179,15 +223,28 @@ export default function ManagePage() {
         </div>
       )}
 
-      {/* Table with selectable checkboxes */}
-      <TicketTable
-        data={tickets}
-        loading={isLoading}
-        selectable={true}
-        selectedKeys={selectedKeys}
-        onSelectionChange={setSelectedKeys}
-        onRowOpen={setOpenTicket}
-      />
+      {/* Ticket list with selectable checkboxes */}
+      {view === "kanban" ? (
+        <TicketKanbanBoard
+          data={tickets}
+          loading={isLoading}
+          selectable={true}
+          selectedKeys={selectedKeys}
+          onSelectionChange={setSelectedKeys}
+          onRowOpen={openLocalTicket}
+          ticketHrefBuilder={buildTicketHref}
+        />
+      ) : (
+        <TicketTable
+          data={tickets}
+          loading={isLoading}
+          selectable={true}
+          selectedKeys={selectedKeys}
+          onSelectionChange={setSelectedKeys}
+          onRowOpen={openLocalTicket}
+          ticketHrefBuilder={buildTicketHref}
+        />
+      )}
 
       <Pagination
         page={page}
@@ -199,9 +256,9 @@ export default function ManagePage() {
       />
 
       <TicketWorkbenchDrawer
-        ticketKey={openTicket?.key ?? null}
+        ticketKey={ticketKey}
         initialTicket={openTicket}
-        onClose={() => setOpenTicket(null)}
+        onClose={closeTicket}
       />
     </div>
   );
