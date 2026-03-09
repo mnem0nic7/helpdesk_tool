@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -159,17 +160,40 @@ def _parse_time(s: str) -> tuple[int, int]:
     return int(parts[0]), int(parts[1])
 
 
-def business_minutes_between(
-    start: datetime, end: datetime, settings: dict[str, str],
-) -> float:
-    """Count business minutes between two timezone-aware datetimes."""
-    tz = ZoneInfo(settings.get("business_timezone", "America/New_York"))
+@dataclass(frozen=True)
+class _BusinessHoursContext:
+    tz: ZoneInfo
+    bh_start_h: int
+    bh_start_m: int
+    bh_end_h: int
+    bh_end_m: int
+    working_days: frozenset[int]
+
+
+def _compile_business_hours(settings: dict[str, str]) -> _BusinessHoursContext:
     bh_start_h, bh_start_m = _parse_time(settings.get("business_hours_start", "08:00"))
     bh_end_h, bh_end_m = _parse_time(settings.get("business_hours_end", "20:00"))
-    working_days = {int(d) for d in settings.get("business_days", "0,1,2,3,4").split(",")}
+    working_days = frozenset(
+        int(d) for d in settings.get("business_days", "0,1,2,3,4").split(",") if d
+    )
+    return _BusinessHoursContext(
+        tz=ZoneInfo(settings.get("business_timezone", "America/New_York")),
+        bh_start_h=bh_start_h,
+        bh_start_m=bh_start_m,
+        bh_end_h=bh_end_h,
+        bh_end_m=bh_end_m,
+        working_days=working_days,
+    )
 
-    start_local = start.astimezone(tz)
-    end_local = end.astimezone(tz)
+
+def _business_minutes_between_compiled(
+    start: datetime,
+    end: datetime,
+    context: _BusinessHoursContext,
+) -> float:
+    """Count business minutes using a precompiled business-hours context."""
+    start_local = start.astimezone(context.tz)
+    end_local = end.astimezone(context.tz)
 
     if start_local >= end_local:
         return 0.0
@@ -179,14 +203,22 @@ def business_minutes_between(
     end_date = end_local.date()
 
     while current_date <= end_date:
-        if current_date.weekday() in working_days:
+        if current_date.weekday() in context.working_days:
             day_bh_start = datetime(
-                current_date.year, current_date.month, current_date.day,
-                bh_start_h, bh_start_m, tzinfo=tz,
+                current_date.year,
+                current_date.month,
+                current_date.day,
+                context.bh_start_h,
+                context.bh_start_m,
+                tzinfo=context.tz,
             )
             day_bh_end = datetime(
-                current_date.year, current_date.month, current_date.day,
-                bh_end_h, bh_end_m, tzinfo=tz,
+                current_date.year,
+                current_date.month,
+                current_date.day,
+                context.bh_end_h,
+                context.bh_end_m,
+                tzinfo=context.tz,
             )
             overlap_start = max(start_local, day_bh_start)
             overlap_end = min(end_local, day_bh_end)
@@ -195,6 +227,13 @@ def business_minutes_between(
         current_date += timedelta(days=1)
 
     return total_minutes
+
+
+def business_minutes_between(
+    start: datetime, end: datetime, settings: dict[str, str],
+) -> float:
+    """Count business minutes between two timezone-aware datetimes."""
+    return _business_minutes_between_compiled(start, end, _compile_business_hours(settings))
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +250,33 @@ def _parse_dt(s: str | None) -> datetime | None:
         return None
 
 
+def _build_target_lookup(targets: list[dict[str, Any]]) -> dict[str, dict[tuple[str, str], int]]:
+    lookup: dict[str, dict[tuple[str, str], int]] = {
+        "first_response": {},
+        "resolution": {},
+    }
+    for target in targets:
+        sla_type = target["sla_type"]
+        lookup.setdefault(sla_type, {})[
+            (target["dimension"], target["dimension_value"])
+        ] = target["target_minutes"]
+    return lookup
+
+
+def _get_target_from_lookup(
+    lookup: dict[str, dict[tuple[str, str], int]],
+    sla_type: str,
+    priority: str,
+    request_type: str,
+) -> int:
+    sla_targets = lookup.get(sla_type, {})
+    if priority and ("priority", priority) in sla_targets:
+        return sla_targets[("priority", priority)]
+    if request_type and ("request_type", request_type) in sla_targets:
+        return sla_targets[("request_type", request_type)]
+    return sla_targets.get(("default", "*"), 120)
+
+
 # ---------------------------------------------------------------------------
 # SLA computation
 # ---------------------------------------------------------------------------
@@ -220,6 +286,8 @@ def compute_sla_for_issues(
     config: SLAConfig | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    settings: dict[str, str] | None = None,
+    targets: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Compute custom SLA metrics for a list of issues.
 
@@ -234,9 +302,13 @@ def compute_sla_for_issues(
     from metrics import issue_to_row
 
     cfg = config or sla_config
-    settings = cfg.get_settings()
-    targets = cfg.get_targets()
+    settings = settings or cfg.get_settings()
+    targets = targets or cfg.get_targets()
     now = datetime.now(timezone.utc)
+    business_hours = _compile_business_hours(settings)
+    target_lookup = _build_target_lookup(targets)
+    from_dt = datetime.fromisoformat(f"{date_from}T00:00:00+00:00") if date_from else None
+    to_dt = datetime.fromisoformat(f"{date_to}T23:59:59+00:00") if date_to else None
 
     # Integration reporter names — their comments count as agent responses
     integration_names = {
@@ -245,25 +317,6 @@ def compute_sla_for_issues(
         if n.strip()
     }
 
-    # Filter by created date range
-    filtered = []
-    for issue in issues:
-        created_str = issue.get("fields", {}).get("created")
-        if not created_str:
-            continue
-        created = _parse_dt(created_str)
-        if not created:
-            continue
-        if date_from:
-            from_dt = datetime.fromisoformat(date_from + "T00:00:00+00:00")
-            if created < from_dt:
-                continue
-        if date_to:
-            to_dt = datetime.fromisoformat(date_to + "T23:59:59+00:00")
-            if created > to_dt:
-                continue
-        filtered.append(issue)
-
     # Compute per-ticket SLA
     fr_stats = {"met": 0, "breached": 0, "running": 0, "total": 0, "elapsed_sum": 0.0}
     res_stats = {"met": 0, "breached": 0, "running": 0, "total": 0, "elapsed_sum": 0.0}
@@ -271,14 +324,22 @@ def compute_sla_for_issues(
     res_elapsed_list: list[float] = []
     ticket_rows: list[dict[str, Any]] = []
 
-    for issue in filtered:
+    for issue in issues:
         fields = issue.get("fields", {})
         created = _parse_dt(fields.get("created"))
         if not created:
             continue
+        if from_dt and created < from_dt:
+            continue
+        if to_dt and created > to_dt:
+            continue
 
         # Basic ticket info
-        row = issue_to_row(issue)
+        row = issue_to_row(
+            issue,
+            include_comment_meta=False,
+            include_description=False,
+        )
 
         # Priority and request type for target lookup
         priority = (fields.get("priority") or {}).get("name", "")
@@ -312,17 +373,22 @@ def compute_sla_for_issues(
                 first_response_time = _parse_dt(comment.get("created"))
                 break
 
-        fr_target = cfg.get_target_for_ticket("first_response", priority, request_type)
+        fr_target = _get_target_from_lookup(
+            target_lookup,
+            "first_response",
+            priority,
+            request_type,
+        )
         if first_response_time:
-            elapsed = business_minutes_between(created, first_response_time, settings)
+            elapsed = _business_minutes_between_compiled(created, first_response_time, business_hours)
             fr_status = "breached" if elapsed > fr_target else "met"
         elif is_open:
-            elapsed = business_minutes_between(created, now, settings)
+            elapsed = _business_minutes_between_compiled(created, now, business_hours)
             fr_status = "breached" if elapsed > fr_target else "running"
         else:
             # Resolved without any agent response — breached
             end_time = _parse_dt(fields.get("resolutiondate")) or now
-            elapsed = business_minutes_between(created, end_time, settings)
+            elapsed = _business_minutes_between_compiled(created, end_time, business_hours)
             fr_status = "breached"
         fr_result = {
             "status": fr_status,
@@ -336,13 +402,18 @@ def compute_sla_for_issues(
 
         # --- Resolution ---
         resolution_time = _parse_dt(fields.get("resolutiondate"))
-        res_target = cfg.get_target_for_ticket("resolution", priority, request_type)
+        res_target = _get_target_from_lookup(
+            target_lookup,
+            "resolution",
+            priority,
+            request_type,
+        )
         if resolution_time:
-            elapsed = business_minutes_between(created, resolution_time, settings)
+            elapsed = _business_minutes_between_compiled(created, resolution_time, business_hours)
             res_status = "breached" if elapsed > res_target else "met"
         else:
             # Open ticket — still running
-            elapsed = business_minutes_between(created, now, settings)
+            elapsed = _business_minutes_between_compiled(created, now, business_hours)
             res_status = "breached" if elapsed > res_target else "running"
         res_result = {
             "status": res_status,

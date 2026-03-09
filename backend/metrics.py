@@ -724,7 +724,12 @@ def compute_sla_summary(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-def issue_to_row(issue: dict[str, Any]) -> dict[str, Any]:
+def issue_to_row(
+    issue: dict[str, Any],
+    *,
+    include_comment_meta: bool = True,
+    include_description: bool = True,
+) -> dict[str, Any]:
     """Convert a raw Jira issue dict into a flat dict matching :class:`TicketRow`.
 
     This is used to populate the tickets table in the frontend.
@@ -808,7 +813,7 @@ def issue_to_row(issue: dict[str, Any]) -> dict[str, Any]:
     attachments = fields.get("attachment") or []
     attachment_count: int = len(attachments) if isinstance(attachments, list) else 0
 
-    return {
+    row = {
         "key": issue.get("key", ""),
         "summary": fields.get("summary", ""),
         "issue_type": issue_type,
@@ -841,13 +846,14 @@ def issue_to_row(issue: dict[str, Any]) -> dict[str, Any]:
         "work_category": work_category,
         "organizations": organizations,
         "attachment_count": attachment_count,
-        # Comment data
-        "comment_count": _comment_count(fields),
-        "last_comment_date": _last_comment_date(fields),
-        "last_comment_author": _last_comment_author(fields),
-        # Description (plain text extract)
-        "description": _extract_description(fields),
     }
+    if include_comment_meta:
+        row["comment_count"] = _comment_count(fields)
+        row["last_comment_date"] = _last_comment_date(fields)
+        row["last_comment_author"] = _last_comment_author(fields)
+    if include_description:
+        row["description"] = _extract_description(fields)
+    return row
 
 
 # ---------------------------------------------------------------------------

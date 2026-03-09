@@ -13,7 +13,7 @@ from auth import require_admin
 from config import JIRA_BASE_URL, JIRA_PROJECT
 from issue_cache import cache
 from jira_client import JiraClient, validate_jira_key
-from metrics import issue_to_row
+from metrics import _is_open, issue_to_row
 from models import TicketCommentRequest, TicketTransitionRequest, TicketUpdateRequest
 from request_type import extract_request_type_name_from_fields
 
@@ -28,9 +28,11 @@ _STALE_DAYS = 1
 def _match(issue: dict[str, Any], **filters: Any) -> bool:
     """Return True if the issue matches all provided filters."""
     fields = issue.get("fields", {})
+    status_obj = fields.get("status") or {}
+    status_category_name = ((status_obj.get("statusCategory") or {}).get("name") or "")
+    is_terminal = status_category_name == "Done" or not _is_open(issue)
 
     if filters.get("status"):
-        status_obj = fields.get("status") or {}
         if status_obj.get("name", "") != filters["status"]:
             return False
 
@@ -67,23 +69,23 @@ def _match(issue: dict[str, Any], **filters: Any) -> bool:
         if term not in summary and term not in desc and term not in key:
             return False
 
-    if filters.get("open_only"):
-        status_obj = fields.get("status") or {}
-        sc = status_obj.get("statusCategory") or {}
-        if sc.get("name", "") == "Done":
-            return False
+    if filters.get("open_only") and is_terminal:
+        return False
+
+    if filters.get("stale_only") and is_terminal:
+        return False
 
     if filters.get("stale_only"):
         updated_str = fields.get("updated", "")
-        if updated_str:
-            try:
-                updated = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
-                days_since = (datetime.now(timezone.utc) - updated).total_seconds() / 86400.0
-                if days_since < _STALE_DAYS:
-                    return False
-            except (ValueError, TypeError):
+        if not updated_str:
+            return False
+
+        try:
+            updated = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+            days_since = (datetime.now(timezone.utc) - updated).total_seconds() / 86400.0
+            if days_since < _STALE_DAYS:
                 return False
-        else:
+        except (ValueError, TypeError):
             return False
 
     if filters.get("created_after"):
