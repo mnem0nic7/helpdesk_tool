@@ -83,6 +83,16 @@ class TestMatch:
     def test_open_only_excludes_done(self):
         assert _match(_issue(status_category="Done"), open_only=True) is False
 
+    def test_stale_only_excludes_done(self):
+        assert _match(
+            _issue(
+                status="Resolved",
+                status_category="Done",
+                updated="2026-02-01T10:00:00+00:00",
+            ),
+            stale_only=True,
+        ) is False
+
     def test_created_after(self):
         assert _match(_issue(created="2026-02-20T10:00:00+00:00"), created_after="2026-02-15") is True
 

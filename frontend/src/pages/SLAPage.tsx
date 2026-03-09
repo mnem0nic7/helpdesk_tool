@@ -1,7 +1,6 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { Suspense, lazy, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { api } from "../lib/api.ts";
 import type {
   SLAMetricsResponse, SLATicketRow, SLATimerStats, SLATarget,
@@ -11,6 +10,7 @@ import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
 
 const PAGE_SIZE = 100;
+const SLADistributionChart = lazy(() => import("../components/SLADistributionChart.tsx"));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -114,36 +114,6 @@ function SLASummaryCard({ title, stats }: { title: string; stats: SLATimerStats 
         <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-red-500" />Breached: {stats.breached}</span>
         <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-blue-500" />Running: {stats.running}</span>
         <span className="text-gray-400">Total: {stats.total}</span>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Distribution Bar Chart
-// ---------------------------------------------------------------------------
-
-const DIST_COLORS = ["#10b981", "#34d399", "#6ee7b7", "#fbbf24", "#f97316", "#ef4444", "#dc2626"];
-
-function SLADistributionChart({ title, stats }: { title: string; stats: SLATimerStats }) {
-  const data = stats.distribution ?? [];
-  if (!data.length) return null;
-  return (
-    <div className="rounded-lg bg-white px-5 py-5 shadow">
-      <h3 className="text-sm font-semibold tracking-wide text-gray-700 uppercase">{title}</h3>
-      <div className="mt-3 h-48">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-            <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-            <Tooltip formatter={(v) => [String(v), "Tickets"]} />
-            <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-              {data.map((_entry, i) => (
-                <Cell key={i} fill={DIST_COLORS[i % DIST_COLORS.length]} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
       </div>
     </div>
   );
@@ -561,10 +531,19 @@ export default function SLAPage() {
       </div>
 
       {/* Distribution charts */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-        <SLADistributionChart title="First Response Distribution" stats={summary.first_response} />
-        <SLADistributionChart title="Resolution Distribution" stats={summary.resolution} />
-      </div>
+      <Suspense
+        fallback={
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <div className="h-64 rounded-lg bg-white shadow" />
+            <div className="h-64 rounded-lg bg-white shadow" />
+          </div>
+        }
+      >
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+          <SLADistributionChart title="First Response Distribution" stats={summary.first_response} />
+          <SLADistributionChart title="Resolution Distribution" stats={summary.resolution} />
+        </div>
+      </Suspense>
 
       {/* Tickets table */}
       <div className="rounded-lg bg-white shadow">
