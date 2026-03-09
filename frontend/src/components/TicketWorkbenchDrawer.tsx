@@ -58,6 +58,7 @@ export default function TicketWorkbenchDrawer({
   const [selectedRequestTypeId, setSelectedRequestTypeId] = useState("");
   const [selectedTransitionId, setSelectedTransitionId] = useState("");
   const [comment, setComment] = useState("");
+  const [commentAudience, setCommentAudience] = useState<"internal" | "customer">("internal");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
 
@@ -101,6 +102,7 @@ export default function TicketWorkbenchDrawer({
     setSelectedPriority(detail.ticket.priority);
     setSelectedAssignee(detail.ticket.assignee_account_id ?? "");
     setComment("");
+    setCommentAudience("internal");
     setSelectedTransitionId("");
   }, [detail]);
 
@@ -167,9 +169,10 @@ export default function TicketWorkbenchDrawer({
       if (!ticketKey || !comment.trim()) {
         throw new Error("Comment cannot be empty");
       }
-      return api.addTicketComment(ticketKey, comment.trim());
+      return api.addTicketComment(ticketKey, comment.trim(), commentAudience === "customer");
     },
-    onSuccess: (next) => handleUpdated(next, "Comment added"),
+    onSuccess: (next) =>
+      handleUpdated(next, commentAudience === "customer" ? "Reply sent to customer" : "Internal note added"),
     onError: (error) => {
       setErrorText(error instanceof Error ? error.message : "Failed to add comment");
       setFeedback(null);
@@ -188,6 +191,19 @@ export default function TicketWorkbenchDrawer({
   const sortedPriorities = [...priorities].sort((a: PriorityOption, b: PriorityOption) =>
     a.name.localeCompare(b.name)
   );
+  const metadataItems = detail
+    ? [
+        { label: "Type", value: detail.ticket.issue_type || "—" },
+        { label: "Status", value: detail.ticket.status || "—" },
+        { label: "Request Type", value: detail.ticket.request_type || "—" },
+        { label: "Assignee", value: detail.ticket.assignee || "Unassigned" },
+        { label: "Reporter", value: detail.ticket.reporter || "—" },
+        { label: "Created", value: formatDateTime(detail.ticket.created) },
+        { label: "Updated", value: formatDateTime(detail.ticket.updated) },
+        { label: "Resolved", value: formatDateTime(detail.ticket.resolved) },
+        { label: "Work Category", value: detail.work_category || "—" },
+      ]
+    : [];
 
   return (
     <div className="fixed inset-0 z-50 flex bg-slate-950/35" onClick={onClose}>
@@ -364,19 +380,19 @@ export default function TicketWorkbenchDrawer({
               <section className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
                 <div className="space-y-6">
                   <div className="rounded-xl border border-slate-200 p-4">
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Workflow</h3>
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Status</h3>
                     <div className="mt-4 flex flex-wrap items-end gap-3">
                       <label className="min-w-[260px] flex-1">
-                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Transition</span>
+                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Status</span>
                         <select
                           value={selectedTransitionId}
                           onChange={(e) => setSelectedTransitionId(e.target.value)}
                           className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                         >
-                          <option value="">Select transition</option>
+                          <option value="">{detail.ticket.status || "Select status"}</option>
                           {transitions.map((transition: Transition) => (
                             <option key={transition.id} value={transition.id}>
-                              {transition.name} {transition.to_status ? `-> ${transition.to_status}` : ""}
+                              {transition.to_status || transition.name}
                             </option>
                           ))}
                         </select>
@@ -394,11 +410,41 @@ export default function TicketWorkbenchDrawer({
 
                   <div className="rounded-xl border border-slate-200 p-4">
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Add Comment</h3>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCommentAudience("internal")}
+                        className={[
+                          "rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
+                          commentAudience === "internal"
+                            ? "border-slate-900 bg-slate-900 text-white"
+                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+                        ].join(" ")}
+                      >
+                        Internal Note
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCommentAudience("customer")}
+                        className={[
+                          "rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
+                          commentAudience === "customer"
+                            ? "border-blue-600 bg-blue-600 text-white"
+                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+                        ].join(" ")}
+                      >
+                        Reply To Customer
+                      </button>
+                    </div>
                     <textarea
                       value={comment}
                       onChange={(e) => setComment(e.target.value)}
                       rows={5}
-                      placeholder="Add an internal Jira comment..."
+                      placeholder={
+                        commentAudience === "customer"
+                          ? "Write a reply that will be visible to the customer..."
+                          : "Add an internal note for the support team..."
+                      }
                       className="mt-4 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     />
                     <div className="mt-3 flex items-center gap-3">
@@ -408,9 +454,17 @@ export default function TicketWorkbenchDrawer({
                         disabled={commentMutation.isPending || !comment.trim()}
                         className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {commentMutation.isPending ? "Posting..." : "Post Comment"}
+                        {commentMutation.isPending
+                          ? "Posting..."
+                          : commentAudience === "customer"
+                            ? "Send Reply"
+                            : "Post Internal Note"}
                       </button>
-                      <span className="text-xs text-slate-500">Comment text is sent as Jira rich text</span>
+                      <span className="text-xs text-slate-500">
+                        {commentAudience === "customer"
+                          ? "Customer replies are posted through Jira Service Management"
+                          : "Internal notes stay visible only to agents"}
+                      </span>
                     </div>
                   </div>
 
@@ -443,7 +497,12 @@ export default function TicketWorkbenchDrawer({
                       {detail.comments.map((item) => (
                         <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                           <div className="flex items-center justify-between gap-3 text-xs text-slate-500">
-                            <span className="font-medium text-slate-700">{item.author}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-slate-700">{item.author}</span>
+                              <span className={chipClass(item.public ? "blue" : "slate")}>
+                                {item.public ? "Customer Reply" : "Internal Note"}
+                              </span>
+                            </div>
                             <span>{formatDateTime(item.created)}</span>
                           </div>
                           <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
@@ -458,44 +517,19 @@ export default function TicketWorkbenchDrawer({
                 <div className="space-y-6">
                   <div className="rounded-xl border border-slate-200 p-4">
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Ticket Metadata</h3>
-                    <dl className="mt-4 space-y-3 text-sm text-slate-700">
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">Type</dt>
-                        <dd>{detail.ticket.issue_type || "—"}</dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">Status</dt>
-                        <dd>{detail.ticket.status || "—"}</dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">Request Type</dt>
-                        <dd>{detail.ticket.request_type || "—"}</dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">Assignee</dt>
-                        <dd>{detail.ticket.assignee || "Unassigned"}</dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">Reporter</dt>
-                        <dd>{detail.ticket.reporter || "—"}</dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">Created</dt>
-                        <dd>{formatDateTime(detail.ticket.created)}</dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">Updated</dt>
-                        <dd>{formatDateTime(detail.ticket.updated)}</dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">Resolved</dt>
-                        <dd>{formatDateTime(detail.ticket.resolved)}</dd>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <dt className="text-slate-500">Work Category</dt>
-                        <dd>{detail.work_category || "—"}</dd>
-                      </div>
-                    </dl>
+                    <div className="mt-4 space-y-2 text-sm">
+                      {metadataItems.map((item) => (
+                        <div
+                          key={item.label}
+                          className="flex items-start gap-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                        >
+                          <div className="w-28 shrink-0 text-slate-500">{item.label}</div>
+                          <div className="min-w-0 flex-1 break-words font-semibold text-slate-950">
+                            {String(item.value || "—")}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
                   <div className="rounded-xl border border-slate-200 p-4">

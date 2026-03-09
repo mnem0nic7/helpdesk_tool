@@ -129,17 +129,31 @@ def _ticket_text(value: Any) -> str:
     return ""
 
 
-def _serialize_comments(issue: dict[str, Any]) -> list[dict[str, Any]]:
-    comments = (issue.get("fields", {}).get("comment") or {}).get("comments", [])
+def _comment_timestamp(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return value.get("iso8601") or value.get("jira") or value.get("friendly") or ""
+    return ""
+
+
+def _serialize_comments(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    for comment in comments:
+    for comment in comments or []:
+        author = comment.get("author") or {}
         result.append(
             {
                 "id": str(comment.get("id", "")),
-                "author": ((comment.get("author") or {}).get("displayName") or "Unknown"),
-                "created": comment.get("created", ""),
-                "updated": comment.get("updated", ""),
+                "author": (
+                    author.get("displayName")
+                    or author.get("name")
+                    or author.get("emailAddress")
+                    or "Unknown"
+                ),
+                "created": _comment_timestamp(comment.get("created")),
+                "updated": _comment_timestamp(comment.get("updated")),
                 "body": _ticket_text(comment.get("body")),
+                "public": bool(comment.get("public", False)),
             }
         )
     return result
@@ -191,7 +205,7 @@ def _serialize_issue_links(issue: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _ticket_detail(issue: dict[str, Any]) -> dict[str, Any]:
+def _ticket_detail(issue: dict[str, Any], comments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     fields = issue.get("fields", {})
     request_field = fields.get("customfield_11102") or {}
     request_links = request_field.get("_links") if isinstance(request_field, dict) else {}
@@ -201,7 +215,7 @@ def _ticket_detail(issue: dict[str, Any]) -> dict[str, Any]:
         "steps_to_recreate": _ticket_text(fields.get("customfield_11121")),
         "request_type": extract_request_type_name_from_fields(fields),
         "work_category": fields.get("customfield_11239") or "",
-        "comments": _serialize_comments(issue),
+        "comments": _serialize_comments(comments or []),
         "attachments": _serialize_attachments(issue),
         "issue_links": _serialize_issue_links(issue),
         "jira_url": request_links.get("agent") or _issue_url(issue.get("key", "")),
@@ -221,6 +235,12 @@ def _get_assignable_display_name(account_id: str | None) -> str:
         if user.get("accountId") == account_id:
             return user.get("displayName", "")
     return ""
+
+
+def _load_ticket_detail(key: str) -> dict[str, Any]:
+    issue = _client.get_issue(key)
+    comments = _client.get_request_comments(key)
+    return _ticket_detail(issue, comments)
 
 
 @router.get("/tickets")
@@ -358,13 +378,11 @@ async def get_ticket(key: str) -> dict[str, Any]:
     """Return detailed information for a single ticket."""
     try:
         validate_jira_key(key)
-        issue = _client.get_issue(key)
-        _client._backfill_comments([issue])
+        return _load_ticket_detail(key)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
     except Exception:
         raise HTTPException(status_code=404, detail=f"Issue {key} not found")
-    return _ticket_detail(issue)
 
 
 @router.put("/tickets/{key}")
@@ -416,11 +434,11 @@ async def update_ticket(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     issue = _client.get_issue(key)
-    _client._backfill_comments([issue])
     request_type = extract_request_type_name_from_fields(issue.get("fields", {}))
     if request_type:
         cache.update_cached_field(key, "request_type", request_type)
-    return _ticket_detail(issue)
+    comments = _client.get_request_comments(key)
+    return _ticket_detail(issue, comments)
 
 
 @router.post("/tickets/{key}/transition")
@@ -441,9 +459,7 @@ async def transition_ticket(
         _client.transition_issue(key, body.transition_id)
         if transition_name:
             cache.update_cached_field(key, "status", transition_name)
-        issue = _client.get_issue(key)
-        _client._backfill_comments([issue])
-        return _ticket_detail(issue)
+        return _load_ticket_detail(key)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
     except Exception as exc:
@@ -462,11 +478,9 @@ async def comment_ticket(
         raise HTTPException(status_code=400, detail="comment cannot be empty")
     try:
         validate_jira_key(key)
-        _client.add_comment(key, body.comment.strip())
+        _client.add_request_comment(key, body.comment.strip(), public=body.public)
         cache.update_cached_field(key, "updated", "")
-        issue = _client.get_issue(key)
-        _client._backfill_comments([issue])
-        return _ticket_detail(issue)
+        return _load_ticket_detail(key)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
     except Exception as exc:

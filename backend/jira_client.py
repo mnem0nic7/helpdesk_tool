@@ -251,6 +251,29 @@ class JiraClient:
             if progress_callback:
                 progress_callback("backfilling", idx + 1, len(truncated))
 
+    def get_request_comments(self, key: str) -> list[dict[str, Any]]:
+        """GET all JSM request comments, preserving public/internal visibility."""
+        validate_jira_key(key)
+        url = f"{self.base_url}/rest/servicedeskapi/request/{key}/comment"
+        comments: list[dict[str, Any]] = []
+        start = 0
+
+        while True:
+            resp = self.session.get(
+                url,
+                params={"start": start, "limit": 100, "public": "true", "internal": "true"},
+                timeout=self._TIMEOUT,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            values = data.get("values", [])
+            comments.extend(values)
+            if data.get("isLastPage", True):
+                break
+            start += len(values)
+
+        return comments
+
     # ------------------------------------------------------------------
     # Request type enrichment
     # ------------------------------------------------------------------
@@ -435,6 +458,15 @@ class JiraClient:
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}/comment"
         payload = {"body": self._plain_text_to_adf(body_text)}
+        resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+
+    def add_request_comment(self, key: str, body_text: str, public: bool = False) -> dict[str, Any]:
+        """POST a JSM request comment as an internal note or customer reply."""
+        validate_jira_key(key)
+        url = f"{self.base_url}/rest/servicedeskapi/request/{key}/comment"
+        payload = {"body": body_text, "public": public}
         resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
         resp.raise_for_status()
         return resp.json()

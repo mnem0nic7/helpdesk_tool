@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api.ts";
@@ -27,25 +27,56 @@ function filtersFromParams(sp: URLSearchParams): TicketFilterValues {
 }
 
 export default function TicketsPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  // Key on the search params string so state reinitializes on navigation
-  const paramsKey = searchParams.toString();
-  const initialFilters = filtersFromParams(searchParams);
+  const filterParamsKey = useMemo(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("ticket");
+    return next.toString();
+  }, [searchParams]);
+  const ticketKey = searchParams.get("ticket");
 
-  const [filters, setFilters] = useState<TicketFilterValues>(initialFilters);
+  const [filters, setFilters] = useState<TicketFilterValues>(() => filtersFromParams(searchParams));
   const [page, setPage] = useState(1);
   const [openTicket, setOpenTicket] = useState<TicketRow | null>(null);
-  // Reset filters when navigating to /tickets with new params
+
+  // Reset filters when navigating to /tickets with new filter params.
   useEffect(() => {
-    setFilters(filtersFromParams(searchParams));
+    setFilters(filtersFromParams(new URLSearchParams(filterParamsKey)));
     setPage(1);
-  }, [paramsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filterParamsKey]);
 
   const handleFilterChange = useCallback((next: TicketFilterValues) => {
     setFilters(next);
     setPage(1);
   }, []);
+
+  const openLocalTicket = useCallback(
+    (ticket: TicketRow) => {
+      setOpenTicket(ticket);
+      const next = new URLSearchParams(searchParams);
+      next.set("ticket", ticket.key);
+      setSearchParams(next);
+    },
+    [searchParams, setSearchParams],
+  );
+
+  const closeLocalTicket = useCallback(() => {
+    setOpenTicket(null);
+    const next = new URLSearchParams(searchParams);
+    next.delete("ticket");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const buildTicketHref = useCallback(
+    (key: string) => {
+      const next = new URLSearchParams(searchParams);
+      next.set("ticket", key);
+      const query = next.toString();
+      return query ? `/tickets?${query}` : "/tickets";
+    },
+    [searchParams],
+  );
 
   // Build query params from state
   const queryParams: TicketQueryParams = {
@@ -72,6 +103,19 @@ export default function TicketsPage() {
   const totalCount = data?.total_count;
   const hasMore = page * PAGE_SIZE < matchedCount;
   const hasFilters = !!(filters.search || filters.status || filters.priority || filters.issue_type || filters.stale_only || filters.assignee || filters.created_after || filters.created_before);
+
+  useEffect(() => {
+    if (!ticketKey) {
+      setOpenTicket(null);
+      return;
+    }
+    const matchingTicket = tickets.find((ticket) => ticket.key === ticketKey);
+    if (matchingTicket) {
+      setOpenTicket(matchingTicket);
+      return;
+    }
+    setOpenTicket((current) => (current?.key === ticketKey ? current : null));
+  }, [ticketKey, tickets]);
 
   return (
     <div className="space-y-4">
@@ -122,14 +166,19 @@ export default function TicketsPage() {
       )}
 
       {/* Table */}
-      <TicketTable data={tickets} loading={isLoading} onRowOpen={setOpenTicket} />
+      <TicketTable
+        data={tickets}
+        loading={isLoading}
+        onRowOpen={openLocalTicket}
+        ticketHrefBuilder={buildTicketHref}
+      />
 
       <Pagination page={page} hasMore={hasMore} onPageChange={setPage} />
 
       <TicketWorkbenchDrawer
-        ticketKey={openTicket?.key ?? null}
+        ticketKey={ticketKey}
         initialTicket={openTicket}
-        onClose={() => setOpenTicket(null)}
+        onClose={closeLocalTicket}
       />
     </div>
   );

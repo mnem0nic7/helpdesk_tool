@@ -198,19 +198,21 @@ def _detail_issue() -> dict[str, Any]:
                     },
                 }
             ],
-            "comment": {
-                "comments": [
-                    {
-                        "id": "17",
-                        "author": {"displayName": "Tech One"},
-                        "created": "2026-03-01T11:00:00+00:00",
-                        "updated": "2026-03-01T11:05:00+00:00",
-                        "body": _adf("Investigating now."),
-                    }
-                ]
-            },
         },
     }
+
+
+def _request_comments() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "17",
+            "author": {"displayName": "Tech One"},
+            "created": {"iso8601": "2026-03-01T11:00:00+00:00"},
+            "updated": {"iso8601": "2026-03-01T11:05:00+00:00"},
+            "body": "Investigating now.",
+            "public": False,
+        }
+    ]
 
 
 class TestTicketDetailAndActions:
@@ -219,7 +221,7 @@ class TestTicketDetailAndActions:
 
         issue = _detail_issue()
         monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
-        monkeypatch.setattr(routes_tickets._client, "_backfill_comments", lambda issues: None)
+        monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
 
         resp = test_client.get("/api/tickets/OIT-123")
         assert resp.status_code == 200
@@ -233,6 +235,7 @@ class TestTicketDetailAndActions:
         assert data["jira_url"].endswith("/browse/OIT-123")
         assert data["portal_url"].endswith("/portal/1/OIT-123")
         assert data["comments"][0]["body"] == "Investigating now."
+        assert data["comments"][0]["public"] is False
         assert data["attachments"][0]["filename"] == "screenshot.png"
         assert data["issue_links"][0]["key"] == "OIT-456"
 
@@ -284,7 +287,7 @@ class TestTicketDetailAndActions:
             lambda project: [{"accountId": "acc-bob", "displayName": "Bob Builder"}],
         )
         monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
-        monkeypatch.setattr(routes_tickets._client, "_backfill_comments", lambda issues: None)
+        monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
 
         resp = test_client.put(
             "/api/tickets/OIT-123",
@@ -327,7 +330,7 @@ class TestTicketDetailAndActions:
         )
         monkeypatch.setattr(routes_tickets._client, "transition_issue", lambda key, transition_id: calls.append((key, transition_id)))
         monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
-        monkeypatch.setattr(routes_tickets._client, "_backfill_comments", lambda issues: None)
+        monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
 
         resp = test_client.post("/api/tickets/OIT-123/transition", json={"transition_id": "31"})
 
@@ -342,13 +345,32 @@ class TestTicketDetailAndActions:
         issue = _detail_issue()
         calls: list[tuple[Any, ...]] = []
 
-        monkeypatch.setattr(routes_tickets._client, "add_comment", lambda key, comment: calls.append((key, comment)))
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "add_request_comment",
+            lambda key, comment, public=False: calls.append((key, comment, public)),
+        )
         monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
-        monkeypatch.setattr(routes_tickets._client, "_backfill_comments", lambda issues: None)
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_request_comments",
+            lambda key: _request_comments() + [{
+                "id": "18",
+                "author": {"displayName": "Agent Two"},
+                "created": {"iso8601": "2026-03-01T12:00:00+00:00"},
+                "updated": {"iso8601": "2026-03-01T12:00:00+00:00"},
+                "body": "Please retry now.",
+                "public": True,
+            }],
+        )
 
-        resp = test_client.post("/api/tickets/OIT-123/comment", json={"comment": "Please retry now."})
+        resp = test_client.post(
+            "/api/tickets/OIT-123/comment",
+            json={"comment": "Please retry now.", "public": True},
+        )
 
         assert resp.status_code == 200
-        assert calls == [("OIT-123", "Please retry now.")]
+        assert calls == [("OIT-123", "Please retry now.", True)]
         assert ("OIT-123", "updated", "") in [c.args for c in mock_cache.update_cached_field.call_args_list]
-        assert resp.json()["comments"][0]["body"] == "Investigating now."
+        assert resp.json()["comments"][-1]["body"] == "Please retry now."
+        assert resp.json()["comments"][-1]["public"] is True

@@ -8,6 +8,7 @@ import {
 import type { SortingState } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import api from "../lib/api.ts";
 import type { TicketRow } from "../lib/api.ts";
 
@@ -80,6 +81,7 @@ function buildColumns(
   onToggle: (key: string) => void,
   onToggleAll: (allKeys: string[]) => void,
   allKeys: string[],
+  ticketHrefBuilder?: (key: string) => string,
   jiraBaseUrl?: string,
 ) {
   const cols = [];
@@ -116,6 +118,18 @@ function buildColumns(
       header: "Key",
       cell: (info) => {
         const key = info.getValue();
+        const localHref = ticketHrefBuilder?.(key);
+        if (localHref) {
+          return (
+            <Link
+              to={localHref}
+              onClick={(e) => e.stopPropagation()}
+              className="whitespace-nowrap font-mono text-xs text-blue-700 underline hover:text-blue-900"
+            >
+              {key}
+            </Link>
+          );
+        }
         if (jiraBaseUrl) {
           return (
             <a
@@ -249,6 +263,7 @@ interface TicketTableProps {
   onSelectionChange?: (selected: Set<string>) => void;
   selectedKeys?: Set<string>;
   onRowOpen?: (ticket: TicketRow) => void;
+  ticketHrefBuilder?: (key: string) => string;
 }
 
 export default function TicketTable({
@@ -258,6 +273,7 @@ export default function TicketTable({
   onSelectionChange,
   selectedKeys = new Set(),
   onRowOpen,
+  ticketHrefBuilder,
 }: TicketTableProps) {
   const { data: cacheStatus } = useQuery({
     queryKey: ["cache-status"],
@@ -289,9 +305,18 @@ export default function TicketTable({
   const [sorting, setSorting] = useState<SortingState>([]);
 
   const columns = useMemo(
-    () => buildColumns(selectable, selectedKeys, handleToggle, handleToggleAll, allKeys, jiraBaseUrl),
+    () =>
+      buildColumns(
+        selectable,
+        selectedKeys,
+        handleToggle,
+        handleToggleAll,
+        allKeys,
+        ticketHrefBuilder,
+        jiraBaseUrl,
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectable, selectedKeys, allKeys, jiraBaseUrl],
+    [selectable, selectedKeys, allKeys, ticketHrefBuilder, jiraBaseUrl],
   );
 
   const table = useReactTable({
