@@ -259,12 +259,9 @@ export default function TicketWorkbenchDrawer({
   const sortedPriorities = [...priorities].sort((a: PriorityOption, b: PriorityOption) =>
     a.name.localeCompare(b.name)
   );
-  const metadataItems = detail
+  const actionContextItems = detail
     ? [
         { label: "Type", value: detail.ticket.issue_type || "—" },
-        { label: "Status", value: detail.ticket.status || "—" },
-        { label: "Request Type", value: detail.ticket.request_type || "—" },
-        { label: "Assignee", value: detail.ticket.assignee || "Unassigned" },
         { label: "Reporter", value: detail.ticket.reporter || "—" },
         { label: "Created", value: formatDateTime(detail.ticket.created) },
         { label: "Updated", value: formatDateTime(detail.ticket.updated) },
@@ -296,25 +293,23 @@ export default function TicketWorkbenchDrawer({
           <div className="absolute left-1/2 top-1/2 h-14 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-300" />
         </div>
 
-        <div className="border-b border-slate-200 px-6 py-4">
+        <div className="border-b border-slate-200 px-5 py-3">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">
-                  {ticket?.key ?? ticketKey}
-                </span>
-                {ticket?.status && <span className={chipClass("blue")}>{ticket.status}</span>}
-                {ticket?.priority && <span className={chipClass("amber")}>{ticket.priority}</span>}
-                {ticket?.request_type && <span className={chipClass("green")}>{ticket.request_type}</span>}
+              <div className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">
+                {ticket?.key ?? ticketKey}
               </div>
-              <h2 className="mt-2 text-xl font-semibold text-slate-900">
-                {ticket?.summary || "Loading ticket..."}
-              </h2>
-              <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-500">
-                <span>Reporter: {ticket?.reporter || "—"}</span>
-                <span>Assignee: {ticket?.assignee || "Unassigned"}</span>
-                <span>Updated: {formatDateTime(ticket?.updated ?? "")}</span>
-              </div>
+              <label className="sr-only" htmlFor="ticket-summary-input">
+                Summary
+              </label>
+              <input
+                id="ticket-summary-input"
+                type="text"
+                value={summary}
+                onChange={(e) => setSummary(e.target.value)}
+                className="mt-1.5 w-full rounded-md border border-transparent bg-transparent px-0 py-1 text-xl font-semibold text-slate-900 shadow-none focus:border-blue-200 focus:bg-white focus:px-3 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                placeholder={ticket?.summary || "Loading ticket..."}
+              />
             </div>
             <div className="flex items-center gap-2">
               {detail?.portal_url && (
@@ -348,7 +343,7 @@ export default function TicketWorkbenchDrawer({
           </div>
         </div>
 
-        <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
+        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
           {(isLoading || !detail) && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
               Loading full ticket detail...
@@ -369,7 +364,7 @@ export default function TicketWorkbenchDrawer({
 
           {detail && (
             <>
-              <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <section className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">
                     Ticket Actions
@@ -377,17 +372,7 @@ export default function TicketWorkbenchDrawer({
                   <span className="text-xs text-slate-500">All changes write directly to Jira</span>
                 </div>
 
-                <div className="mt-4 grid gap-4 md:grid-cols-2">
-                  <label className="block">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Summary</span>
-                    <input
-                      type="text"
-                      value={summary}
-                      onChange={(e) => setSummary(e.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </label>
-
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <label className="block">
                     <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Priority</span>
                     <select
@@ -435,6 +420,32 @@ export default function TicketWorkbenchDrawer({
                       ))}
                     </select>
                   </label>
+
+                  <div className="md:col-span-2 xl:col-span-2 flex flex-wrap items-end gap-3">
+                    <label className="min-w-[260px] flex-1">
+                      <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Status</span>
+                      <select
+                        value={selectedTransitionId}
+                        onChange={(e) => setSelectedTransitionId(e.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      >
+                        <option value="">{detail.ticket.status || "Select status"}</option>
+                        {transitions.map((transition: Transition) => (
+                          <option key={transition.id} value={transition.id}>
+                            {transition.to_status || transition.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => transitionMutation.mutate()}
+                      disabled={transitionMutation.isPending || !selectedTransitionId}
+                      className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {transitionMutation.isPending ? "Updating..." : "Change Status"}
+                    </button>
+                  </div>
                 </div>
 
                 <label className="mt-4 block">
@@ -447,7 +458,39 @@ export default function TicketWorkbenchDrawer({
                   />
                 </label>
 
-                <div className="mt-4 flex flex-wrap items-center gap-3">
+                {detail.steps_to_recreate && (
+                  <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+                    <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Steps To Re-Create
+                    </h4>
+                    <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                      {detail.steps_to_recreate}
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Ticket Context
+                  </h4>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    {actionContextItems.map((item) => (
+                      <div
+                        key={item.label}
+                        className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                      >
+                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                          {item.label}
+                        </div>
+                        <div className="mt-1 break-words text-sm font-semibold leading-5 text-slate-900">
+                          {String(item.value || "—")}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-3">
                   <button
                     type="button"
                     onClick={() => saveMutation.mutate()}
@@ -457,45 +500,16 @@ export default function TicketWorkbenchDrawer({
                     {saveMutation.isPending ? "Saving..." : "Save Ticket Details"}
                   </button>
                   <span className="text-xs text-slate-500">
-                    Summary, description, assignee, priority, and request type
+                    Summary, description, assignee, priority, and request type save here. Status updates separately.
                   </span>
                 </div>
               </section>
 
-              <section className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-                <div className="space-y-6">
-                  <div className="rounded-xl border border-slate-200 p-4">
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Status</h3>
-                    <div className="mt-4 flex flex-wrap items-end gap-3">
-                      <label className="min-w-[260px] flex-1">
-                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Status</span>
-                        <select
-                          value={selectedTransitionId}
-                          onChange={(e) => setSelectedTransitionId(e.target.value)}
-                          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                        >
-                          <option value="">{detail.ticket.status || "Select status"}</option>
-                          {transitions.map((transition: Transition) => (
-                            <option key={transition.id} value={transition.id}>
-                              {transition.to_status || transition.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => transitionMutation.mutate()}
-                        disabled={transitionMutation.isPending || !selectedTransitionId}
-                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {transitionMutation.isPending ? "Updating..." : "Change Status"}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 p-4">
+              <section className="grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-slate-200 p-3">
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Add Comment</h3>
-                    <div className="mt-4 flex flex-wrap gap-2">
+                    <div className="mt-3 flex flex-wrap gap-2">
                       <button
                         type="button"
                         onClick={() => setCommentAudience("internal")}
@@ -530,7 +544,7 @@ export default function TicketWorkbenchDrawer({
                           ? "Write a reply that will be visible to the customer..."
                           : "Add an internal note for the support team..."
                       }
-                      className="mt-4 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className="mt-3 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     />
                     <div className="mt-3 flex items-center gap-3">
                       <button
@@ -553,29 +567,12 @@ export default function TicketWorkbenchDrawer({
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-slate-200 p-4">
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Description</h3>
-                    <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                      {detail.description || "No description"}
-                    </div>
-                    {detail.steps_to_recreate && (
-                      <>
-                        <h4 className="mt-5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          Steps To Re-Create
-                        </h4>
-                        <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                          {detail.steps_to_recreate}
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 p-4">
+                  <div className="rounded-xl border border-slate-200 p-3">
                     <div className="flex items-center justify-between">
                       <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Comments</h3>
                       <span className="text-xs text-slate-500">{detail.comments.length} total</span>
                     </div>
-                    <div className="mt-4 space-y-3">
+                    <div className="mt-3 space-y-2">
                       {detail.comments.length === 0 && (
                         <div className="text-sm text-slate-500">No comments on this ticket.</div>
                       )}
@@ -599,27 +596,10 @@ export default function TicketWorkbenchDrawer({
                   </div>
                 </div>
 
-                <div className="space-y-6">
-                  <div className="rounded-xl border border-slate-200 p-4">
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Ticket Metadata</h3>
-                    <div className="mt-4 space-y-2 text-sm">
-                      {metadataItems.map((item) => (
-                        <div
-                          key={item.label}
-                          className="flex items-start gap-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
-                        >
-                          <div className="w-28 shrink-0 text-slate-500">{item.label}</div>
-                          <div className="min-w-0 flex-1 break-words font-semibold text-slate-950">
-                            {String(item.value || "—")}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 p-4">
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-slate-200 p-3">
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Labels And Components</h3>
-                    <div className="mt-4 space-y-4 text-sm text-slate-700">
+                    <div className="mt-3 space-y-3 text-sm text-slate-700">
                       <div>
                         <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Labels</div>
                         <div className="mt-2 flex flex-wrap gap-2">
@@ -656,12 +636,12 @@ export default function TicketWorkbenchDrawer({
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-slate-200 p-4">
+                  <div className="rounded-xl border border-slate-200 p-3">
                     <div className="flex items-center justify-between">
                       <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Attachments</h3>
                       <span className="text-xs text-slate-500">{detail.attachments.length} files</span>
                     </div>
-                    <div className="mt-4 space-y-3">
+                    <div className="mt-3 space-y-2">
                       {detail.attachments.length === 0 && (
                         <div className="text-sm text-slate-500">No attachments on this ticket.</div>
                       )}
@@ -689,12 +669,12 @@ export default function TicketWorkbenchDrawer({
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-slate-200 p-4">
+                  <div className="rounded-xl border border-slate-200 p-3">
                     <div className="flex items-center justify-between">
                       <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Linked Issues</h3>
                       <span className="text-xs text-slate-500">{detail.issue_links.length} links</span>
                     </div>
-                    <div className="mt-4 space-y-3">
+                    <div className="mt-3 space-y-2">
                       {detail.issue_links.length === 0 && (
                         <div className="text-sm text-slate-500">No linked issues.</div>
                       )}
@@ -723,11 +703,11 @@ export default function TicketWorkbenchDrawer({
                     </div>
                   </div>
 
-                  <details className="rounded-xl border border-slate-200 p-4">
+                  <details className="rounded-xl border border-slate-200 p-3">
                     <summary className="cursor-pointer text-sm font-semibold uppercase tracking-wide text-slate-700">
                       Raw Jira Payload
                     </summary>
-                    <pre className="mt-4 overflow-x-auto rounded-lg bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+                    <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-950 p-4 text-xs leading-5 text-slate-100">
                       {JSON.stringify(detail.raw_issue, null, 2)}
                     </pre>
                   </details>
