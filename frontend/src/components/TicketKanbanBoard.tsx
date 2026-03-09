@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import api from "../lib/api.ts";
 import type { TicketRow } from "../lib/api.ts";
@@ -7,6 +7,7 @@ import {
   formatAge,
   formatTTR,
   getTicketBoardColumn,
+  getTicketBoardColumnForStatus,
   priorityClass,
   priorityRank,
   slaBadgeClass,
@@ -62,6 +63,7 @@ export default function TicketKanbanBoard({
   onRowOpen,
   ticketHrefBuilder,
 }: TicketKanbanBoardProps) {
+  const queryClient = useQueryClient();
   const { data: cacheStatus } = useQuery({
     queryKey: ["cache-status"],
     queryFn: () => api.getCacheStatus(),
@@ -69,6 +71,70 @@ export default function TicketKanbanBoard({
     enabled: !ticketHrefBuilder,
   });
   const jiraBaseUrl = cacheStatus?.jira_base_url;
+  const [draggedTicketKey, setDraggedTicketKey] = useState<string | null>(null);
+  const [dragOverColumn, setDragOverColumn] = useState<TicketBoardColumnId | null>(null);
+  const [suppressOpenKey, setSuppressOpenKey] = useState<string | null>(null);
+  const [ticketOverrides, setTicketOverrides] = useState<
+    Record<string, Pick<TicketRow, "status" | "status_category">>
+  >({});
+  const [moveFeedback, setMoveFeedback] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTicketOverrides({});
+  }, [data]);
+
+  const displayData = useMemo(
+    () =>
+      data.map((ticket) =>
+        ticketOverrides[ticket.key] ? { ...ticket, ...ticketOverrides[ticket.key] } : ticket,
+      ),
+    [data, ticketOverrides],
+  );
+
+  const moveMutation = useMutation({
+    mutationFn: async ({
+      ticket,
+      destination,
+      destinationLabel,
+    }: {
+      ticket: TicketRow;
+      destination: TicketBoardColumnId;
+      destinationLabel: string;
+    }) => {
+      const transitions = await api.getTransitions(ticket.key);
+      const matchingTransition = transitions.find(
+        (transition) => getTicketBoardColumnForStatus(transition.to_status) === destination,
+      );
+      if (!matchingTransition) {
+        throw new Error(`No available transition to ${destinationLabel}.`);
+      }
+      const detail = await api.transitionTicket(ticket.key, matchingTransition.id);
+      return { detail, destinationLabel };
+    },
+    onSuccess: ({ detail, destinationLabel }) => {
+      setTicketOverrides((current) => ({
+        ...current,
+        [detail.ticket.key]: {
+          status: detail.ticket.status,
+          status_category: detail.ticket.status_category,
+        },
+      }));
+      queryClient.setQueryData(["ticket-detail", detail.ticket.key], detail);
+      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      queryClient.invalidateQueries({ queryKey: ["manage-tickets"] });
+      queryClient.invalidateQueries({ queryKey: ["filter-options"] });
+      queryClient.invalidateQueries({ queryKey: ["metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["sla-metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket-transitions", detail.ticket.key] });
+      setMoveFeedback(`Moved ${detail.ticket.key} to ${destinationLabel}.`);
+      setMoveError(null);
+    },
+    onError: (error) => {
+      setMoveFeedback(null);
+      setMoveError(error instanceof Error ? error.message : "Failed to move ticket.");
+    },
+  });
 
   const groupedTickets = useMemo(() => {
     const initial: Record<TicketBoardColumnId, TicketRow[]> = {
@@ -78,7 +144,7 @@ export default function TicketKanbanBoard({
       done: [],
     };
 
-    for (const ticket of data) {
+    for (const ticket of displayData) {
       initial[getTicketBoardColumn(ticket)].push(ticket);
     }
 
@@ -87,7 +153,7 @@ export default function TicketKanbanBoard({
     }
 
     return initial;
-  }, [data]);
+  }, [displayData]);
 
   function handleToggle(key: string) {
     if (!onSelectionChange) return;
@@ -95,6 +161,36 @@ export default function TicketKanbanBoard({
     if (next.has(key)) next.delete(key);
     else next.add(key);
     onSelectionChange(next);
+  }
+
+  function handleDragStart(ticket: TicketRow, event: DragEvent<HTMLDivElement>) {
+    setDraggedTicketKey(ticket.key);
+    setSuppressOpenKey(ticket.key);
+    setMoveFeedback(null);
+    setMoveError(null);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", ticket.key);
+  }
+
+  function handleDragEnd() {
+    setDraggedTicketKey(null);
+    setDragOverColumn(null);
+    window.setTimeout(() => {
+      setSuppressOpenKey(null);
+    }, 0);
+  }
+
+  function handleDrop(destination: TicketBoardColumnId) {
+    const key = draggedTicketKey;
+    setDraggedTicketKey(null);
+    setDragOverColumn(null);
+    if (!key || moveMutation.isPending) return;
+    const ticket = displayData.find((entry) => entry.key === key);
+    if (!ticket) return;
+    if (getTicketBoardColumn(ticket) === destination) return;
+    const destinationLabel =
+      TICKET_BOARD_COLUMNS.find((column) => column.id === destination)?.label ?? "the selected column";
+    moveMutation.mutate({ ticket, destination, destinationLabel });
   }
 
   if (loading) {
@@ -115,14 +211,45 @@ export default function TicketKanbanBoard({
   }
 
   return (
-    <div className="overflow-x-auto pb-2">
+    <div className="space-y-3 overflow-x-auto pb-2">
+      {(moveFeedback || moveError || moveMutation.isPending) && (
+        <div
+          className={[
+            "rounded-xl border px-4 py-2 text-sm",
+            moveError
+              ? "border-red-200 bg-red-50 text-red-700"
+              : "border-blue-200 bg-blue-50 text-blue-700",
+          ].join(" ")}
+        >
+          {moveError ?? moveFeedback ?? "Updating ticket status..."}
+        </div>
+      )}
+
+      <p className="text-xs text-slate-500">
+        Drag a card into a new column to transition the ticket status.
+      </p>
+
       <div className="grid min-w-[72rem] grid-cols-4 gap-4">
         {TICKET_BOARD_COLUMNS.map((column) => {
           const tickets = groupedTickets[column.id];
           return (
             <section
               key={column.id}
-              className={`flex min-h-[32rem] flex-col rounded-2xl border shadow-sm ${column.tone}`}
+              onDragOver={(event) => {
+                if (!draggedTicketKey) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setDragOverColumn(column.id);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                handleDrop(column.id);
+              }}
+              className={[
+                "flex min-h-[32rem] flex-col rounded-2xl border shadow-sm transition-colors",
+                column.tone,
+                dragOverColumn === column.id ? "ring-2 ring-blue-300 ring-offset-2" : "",
+              ].join(" ")}
             >
               <header className="flex items-center justify-between border-b border-black/5 px-4 py-3">
                 <div>
@@ -147,12 +274,21 @@ export default function TicketKanbanBoard({
                   const isSelected = selectedKeys.has(ticket.key);
                   const localHref = ticketHrefBuilder?.(ticket.key);
                   const externalHref = jiraBaseUrl ? `${jiraBaseUrl}/browse/${ticket.key}` : null;
+                  const isDragged = draggedTicketKey === ticket.key;
+                  const isMoving =
+                    moveMutation.isPending && moveMutation.variables?.ticket.key === ticket.key;
                   return (
                     <div
                       key={ticket.key}
                       role={onRowOpen ? "button" : undefined}
                       tabIndex={onRowOpen ? 0 : undefined}
-                      onClick={() => onRowOpen?.(ticket)}
+                      draggable={!moveMutation.isPending}
+                      onDragStart={(event) => handleDragStart(ticket, event)}
+                      onDragEnd={handleDragEnd}
+                      onClick={() => {
+                        if (suppressOpenKey === ticket.key) return;
+                        onRowOpen?.(ticket);
+                      }}
                       onKeyDown={(event) => {
                         if (!onRowOpen) return;
                         if (event.key === "Enter" || event.key === " ") {
@@ -166,6 +302,8 @@ export default function TicketKanbanBoard({
                         priorityAccentClass(ticket.priority),
                         onRowOpen ? "cursor-pointer" : "",
                         isSelected ? "ring-2 ring-blue-300" : "",
+                        isDragged ? "opacity-50" : "",
+                        isMoving ? "opacity-60" : "",
                       ].join(" ")}
                     >
                       <div className="flex items-start gap-2">

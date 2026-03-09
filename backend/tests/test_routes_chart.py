@@ -86,6 +86,24 @@ class TestChartDataEndpoint:
         })
         assert resp.status_code == 200
 
+    def test_default_chart_data_excludes_oasisdev(self, test_client):
+        resp = test_client.post("/api/chart/data", json={
+            "group_by": "status",
+            "metric": "count",
+        })
+        assert resp.status_code == 200
+        total = sum(item["value"] for item in resp.json()["data"])
+        assert total == 4
+
+        resp_including_excluded = test_client.post("/api/chart/data", json={
+            "group_by": "status",
+            "metric": "count",
+            "include_excluded": True,
+        })
+        assert resp_including_excluded.status_code == 200
+        total_with_excluded = sum(item["value"] for item in resp_including_excluded.json()["data"])
+        assert total_with_excluded == 6
+
     def test_sorted_desc(self, test_client):
         resp = test_client.post("/api/chart/data", json={
             "group_by": "priority",
