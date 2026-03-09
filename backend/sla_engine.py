@@ -11,6 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from config import DATA_DIR
+from request_type import extract_request_type_name_from_fields
 
 logger = logging.getLogger(__name__)
 
@@ -281,8 +282,7 @@ def compute_sla_for_issues(
 
         # Priority and request type for target lookup
         priority = (fields.get("priority") or {}).get("name", "")
-        rt_obj = (fields.get("customfield_10010") or {}).get("requestType") or {}
-        request_type = rt_obj.get("name", "")
+        request_type = extract_request_type_name_from_fields(fields)
 
         # Status
         status_cat = ((fields.get("status") or {}).get("statusCategory") or {}).get("name", "")

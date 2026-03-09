@@ -10,6 +10,7 @@ from typing import Any
 from alert_store import alert_store
 from email_service import send_email
 from metrics import _is_open
+from request_type import extract_request_type_name_from_fields
 from sla_engine import sla_config, business_minutes_between, _parse_dt
 
 logger = logging.getLogger(__name__)
@@ -44,8 +45,7 @@ def _get_assignee(issue: dict) -> str:
 
 
 def _get_request_type(issue: dict) -> str:
-    rt = (issue.get("fields", {}).get("customfield_10010") or {}).get("requestType") or {}
-    return rt.get("name", "")
+    return extract_request_type_name_from_fields(issue.get("fields", {}))
 
 
 def _updated_minutes_ago(issue: dict, now: datetime) -> float:

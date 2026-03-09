@@ -10,6 +10,7 @@ from typing import Any
 
 from config import OPENAI_API_KEY, ANTHROPIC_API_KEY
 from models import AIModel, TriageResult, TriageSuggestion
+from request_type import extract_request_type_name_from_fields
 
 logger = logging.getLogger(__name__)
 
@@ -213,12 +214,7 @@ def _build_ticket_context(issue: dict[str, Any]) -> str:
     issue_type = issuetype_obj.get("name", "")
 
     # Request type
-    request_type = ""
-    crf = fields.get("customfield_10010")
-    if crf and isinstance(crf, dict):
-        rt_obj = crf.get("requestType")
-        if isinstance(rt_obj, dict):
-            request_type = rt_obj.get("name", "")
+    request_type = extract_request_type_name_from_fields(fields)
 
     # Reporter
     reporter_obj = fields.get("reporter") or {}
@@ -348,12 +344,7 @@ def _parse_suggestions(raw: str, issue: dict[str, Any]) -> list[TriageSuggestion
     fields_data = issue.get("fields", {})
 
     # Extract current request type name
-    crf = fields_data.get("customfield_10010")
-    current_rt = ""
-    if crf and isinstance(crf, dict):
-        rt_obj = crf.get("requestType")
-        if isinstance(rt_obj, dict):
-            current_rt = rt_obj.get("name", "")
+    current_rt = extract_request_type_name_from_fields(fields_data)
 
     current_values = {
         "priority": (fields_data.get("priority") or {}).get("name", ""),
