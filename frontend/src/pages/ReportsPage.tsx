@@ -157,6 +157,7 @@ function filtersToReport(f: TicketFilterValues): ReportConfig["filters"] {
     priority: f.priority || undefined,
     assignee: f.assignee || undefined,
     issue_type: f.issue_type || undefined,
+    label: f.label || undefined,
     search: f.search || undefined,
     open_only: f.open_only || undefined,
     stale_only: f.stale_only || undefined,

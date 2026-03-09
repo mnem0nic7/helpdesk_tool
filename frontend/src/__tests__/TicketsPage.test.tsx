@@ -85,6 +85,7 @@ describe("TicketsPage", () => {
       statuses: ["Open"],
       priorities: ["High"],
       issue_types: ["Incident"],
+      labels: ["hardware"],
     });
     mockApi.getAssignees.mockResolvedValue([]);
     mockApi.getCacheStatus.mockResolvedValue({

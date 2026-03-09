@@ -40,6 +40,7 @@ describe("TicketFilters", () => {
     expect(screen.getByDisplayValue("All Statuses")).toBeInTheDocument();
     expect(screen.getByDisplayValue("All Priorities")).toBeInTheDocument();
     expect(screen.getByDisplayValue("All Types")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("All Tags")).toBeInTheDocument();
     expect(screen.getByText("Open Only")).toBeInTheDocument();
     expect(screen.getByText("Stale Only")).toBeInTheDocument();
   });

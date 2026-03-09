@@ -78,6 +78,7 @@ export default function ManagePage() {
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.priority ? { priority: filters.priority } : {}),
     ...(filters.issue_type ? { issue_type: filters.issue_type } : {}),
+    ...(filters.label ? { label: filters.label } : {}),
     ...(filters.open_only ? { open_only: true } : {}),
     ...(filters.stale_only ? { stale_only: true } : {}),
     ...(filters.created_after ? { created_after: filters.created_after } : {}),

@@ -8,6 +8,7 @@ export interface TicketFilterValues {
   status: string;
   priority: string;
   issue_type: string;
+  label: string;
   open_only: boolean;
   stale_only: boolean;
   created_after: string;
@@ -20,6 +21,7 @@ export const emptyFilters: TicketFilterValues = {
   status: "",
   priority: "",
   issue_type: "",
+  label: "",
   open_only: true,
   stale_only: false,
   created_after: "",
@@ -39,6 +41,7 @@ const FALLBACK_STATUSES = [
 const FALLBACK_PRIORITIES = ["Highest", "High", "Medium", "Low", "Lowest"];
 
 const FALLBACK_ISSUE_TYPES = ["[System] Service request", "[System] Change"];
+const FALLBACK_LABELS: string[] = [];
 
 interface TicketFiltersProps {
   filters: TicketFilterValues;
@@ -60,6 +63,7 @@ export default function TicketFilters({
   const STATUSES = filterOptions?.statuses ?? FALLBACK_STATUSES;
   const PRIORITIES = filterOptions?.priorities ?? FALLBACK_PRIORITIES;
   const ISSUE_TYPES = filterOptions?.issue_types ?? FALLBACK_ISSUE_TYPES;
+  const LABELS = filterOptions?.labels ?? FALLBACK_LABELS;
 
   const { data: assignees } = useQuery({
     queryKey: ["assignees"],
@@ -95,16 +99,8 @@ export default function TicketFilters({
     onFilterChange({ ...emptyFilters });
   }
 
-  const hasActiveFilters =
-    filters.search !== "" ||
-    filters.status !== "" ||
-    filters.priority !== "" ||
-    filters.issue_type !== "" ||
-    filters.open_only ||
-    filters.stale_only ||
-    filters.created_after !== "" ||
-    filters.created_before !== "" ||
-    filters.assignee !== "";
+  const hasActiveFilters = (Object.keys(emptyFilters) as (keyof TicketFilterValues)[])
+    .some((key) => filters[key] !== emptyFilters[key]);
 
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -163,6 +159,22 @@ export default function TicketFilters({
         {ISSUE_TYPES.map((t) => (
           <option key={t} value={t}>
             {t}
+          </option>
+        ))}
+      </select>
+
+      {/* Label dropdown */}
+      <select
+        value={filters.label}
+        onChange={(e) => handleChange("label", e.target.value)}
+        className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm
+                   text-gray-700 shadow-sm
+                   focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+      >
+        <option value="">All Tags</option>
+        {LABELS.map((label) => (
+          <option key={label} value={label}>
+            {label}
           </option>
         ))}
       </select>

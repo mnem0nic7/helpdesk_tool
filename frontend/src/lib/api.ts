@@ -289,6 +289,7 @@ export interface ReportFilters {
   priority?: string;
   assignee?: string;
   issue_type?: string;
+  label?: string;
   search?: string;
   open_only?: boolean;
   stale_only?: boolean;
@@ -388,6 +389,22 @@ export interface TriageLogEntry {
   source: "auto" | "user";
   approved_by: string | null;
   timestamp: string;
+}
+
+export interface TechnicianScoreEntry {
+  key: string;
+  communication_score: number;
+  communication_notes: string;
+  documentation_score: number;
+  documentation_notes: string;
+  overall_score: number;
+  score_summary: string;
+  model_used: string;
+  created_at: string;
+  ticket_summary: string;
+  ticket_status: string;
+  ticket_assignee: string;
+  ticket_resolved: string;
 }
 
 /** Available AI model for triage. */
@@ -539,6 +556,7 @@ export interface TicketQueryParams {
   priority?: string;
   assignee?: string;
   issue_type?: string;
+  label?: string;
   search?: string;
   open_only?: boolean;
   stale_only?: boolean;
@@ -609,7 +627,7 @@ export const api = {
   },
 
   /** Fetch distinct filter options (statuses, priorities, issue types) from cached data. */
-  getFilterOptions(): Promise<{ statuses: string[]; priorities: string[]; issue_types: string[] }> {
+  getFilterOptions(): Promise<{ statuses: string[]; priorities: string[]; issue_types: string[]; labels: string[] }> {
     return fetchJSON("/api/filter-options");
   },
 
@@ -820,6 +838,11 @@ export const api = {
     return fetchJSON<TriageLogEntry[]>("/api/triage/log");
   },
 
+  /** Fetch technician QA scores for closed tickets. */
+  getTechnicianScores(): Promise<TechnicianScoreEntry[]> {
+    return fetchJSON<TechnicianScoreEntry[]>("/api/triage/technician-scores");
+  },
+
   /** Fetch all cached triage suggestions. */
   getTriageSuggestions(): Promise<TriageResult[]> {
     return fetchJSON<TriageResult[]>("/api/triage/suggestions");
@@ -850,9 +873,19 @@ export const api = {
     return fetchJSON("/api/triage/run-status");
   },
 
+  /** Get progress of the current closed-ticket scoring run. */
+  getTechnicianScoreRunStatus(): Promise<{ running: boolean; processed: number; total: number; current_key: string | null; remaining_count?: number; processed_count?: number }> {
+    return fetchJSON("/api/triage/score-run-status");
+  },
+
   /** Cancel the current triage run. */
   cancelTriageRun(): Promise<{ cancelled: boolean }> {
     return postJSON("/api/triage/run-cancel", {});
+  },
+
+  /** Cancel the current closed-ticket scoring run. */
+  cancelTechnicianScoreRun(): Promise<{ cancelled: boolean }> {
+    return postJSON("/api/triage/score-cancel", {});
   },
 
   /** Run auto-triage on cached tickets (background task). Optionally limit count for testing. */
@@ -863,6 +896,14 @@ export const api = {
     if (reset) body.reset = true;
     if (reprocess) body.reprocess = true;
     return postJSON("/api/triage/run-all", body);
+  },
+
+  /** Run technician QA scoring against already closed tickets. */
+  runClosedTicketScoring(limit?: number, reset?: boolean): Promise<{ started: boolean; total_tickets: number }> {
+    const body: Record<string, unknown> = {};
+    if (limit) body.limit = limit;
+    if (reset) body.reset = true;
+    return postJSON("/api/triage/score-closed", body);
   },
 
   // -------------------------------------------------------------------------

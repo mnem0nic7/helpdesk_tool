@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type { AlertRule, AlertTriggerType, AlertTestResult } from "../lib/api.ts";
@@ -21,6 +21,108 @@ const TRIGGER_CONFIGS: Record<string, { label: string; field: string; default: n
   fr_approaching: [{ label: "Threshold (%)", field: "threshold_pct", default: 80 }],
   res_approaching: [{ label: "Threshold (%)", field: "threshold_pct", default: 80 }],
 };
+
+function sortOptionValues(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+function describeSelection(selected: string[], placeholder: string): string {
+  if (selected.length === 0) return placeholder;
+  if (selected.length === 1) return selected[0];
+  return `${selected.length} selected`;
+}
+
+function MultiSelectDropdown({
+  label,
+  placeholder,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  placeholder: string;
+  options: string[];
+  selected: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const sortedOptions = useMemo(() => sortOptionValues(options), [options]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointerDown(event: MouseEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [open]);
+
+  function toggleValue(value: string) {
+    if (selected.includes(value)) {
+      onChange(selected.filter((entry) => entry !== value));
+      return;
+    }
+    onChange([...selected, value]);
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <span className="text-xs text-gray-500">{label}</span>
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+        className="mt-1 flex w-full items-center justify-between rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm"
+      >
+        <span className={selected.length === 0 ? "text-gray-400" : "text-gray-700"}>
+          {describeSelection(selected, placeholder)}
+        </span>
+        <span className="ml-3 text-xs text-gray-400">{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div className="absolute z-20 mt-1 w-full rounded-md border border-gray-200 bg-white shadow-lg">
+          <div className="flex items-center justify-between border-b border-gray-100 px-3 py-2">
+            <span className="text-xs font-medium text-gray-500">{selected.length} selected</span>
+            <button
+              type="button"
+              onClick={() => onChange([])}
+              disabled={selected.length === 0}
+              className="text-xs font-medium text-blue-600 disabled:cursor-not-allowed disabled:text-gray-300"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="max-h-52 overflow-y-auto py-1">
+            {sortedOptions.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-gray-400">No options available.</div>
+            ) : (
+              sortedOptions.map((option) => (
+                <label
+                  key={option}
+                  className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(option)}
+                    onChange={() => toggleValue(option)}
+                    className="h-4 w-4 rounded border-gray-300"
+                  />
+                  <span>{option}</span>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Rule Builder Modal
@@ -73,8 +175,45 @@ function RuleModal({
   }
 
   const filterObj = (form.filters as Record<string, unknown>) ?? {};
+  const selectedPriorities = ((filterObj.priorities as string[]) ?? []).filter(Boolean);
+  const selectedAssignees = ((filterObj.assignees as string[]) ?? []).filter(Boolean);
+  const selectedRequestTypes = ((filterObj.request_types as string[]) ?? []).filter(Boolean);
+
+  const { data: filterOptions } = useQuery({
+    queryKey: ["filter-options"],
+    queryFn: () => api.getFilterOptions(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const { data: assignees = [] } = useQuery({
+    queryKey: ["assignees"],
+    queryFn: () => api.getAssignees(),
+    staleTime: Infinity,
+  });
+  const { data: requestTypes = [] } = useQuery({
+    queryKey: ["request-types"],
+    queryFn: () => api.getRequestTypes(),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const priorityOptions = filterOptions?.priorities ?? [];
+  const assigneeOptions = assignees
+    .map((assignee) => assignee.display_name)
+    .filter(Boolean);
+  const requestTypeOptions = requestTypes
+    .map((requestType) => requestType.name)
+    .filter(Boolean);
 
   const [saving, setSaving] = useState(false);
+
+  function setFilterValues(field: "priorities" | "assignees" | "request_types", values: string[]) {
+    const nextFilters = { ...filterObj };
+    if (values.length > 0) {
+      nextFilters[field] = sortOptionValues(values);
+    } else {
+      delete nextFilters[field];
+    }
+    setForm({ ...form, filters: nextFilters });
+  }
 
   async function handleSubmit() {
     if (!(form.name as string)?.trim()) return alert("Name is required");
@@ -218,36 +357,29 @@ function RuleModal({
             <span className="text-sm font-medium text-gray-700">Filters (optional)</span>
             <p className="text-xs text-gray-400 mb-2">Restrict which tickets trigger this alert.</p>
             <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="text-xs text-gray-500">Priorities (comma-sep)</span>
-                <input type="text" value={((filterObj.priorities as string[]) ?? []).join(", ")}
-                  onChange={(e) => setForm({
-                    ...form,
-                    filters: { ...filterObj, priorities: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) },
-                  })}
-                  placeholder="Highest, High"
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
-              </label>
-              <label className="block">
-                <span className="text-xs text-gray-500">Assignees (comma-sep)</span>
-                <input type="text" value={((filterObj.assignees as string[]) ?? []).join(", ")}
-                  onChange={(e) => setForm({
-                    ...form,
-                    filters: { ...filterObj, assignees: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) },
-                  })}
-                  placeholder="John Doe"
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
-              </label>
-              <label className="block col-span-2">
-                <span className="text-xs text-gray-500">Request Types (comma-sep)</span>
-                <input type="text" value={((filterObj.request_types as string[]) ?? []).join(", ")}
-                  onChange={(e) => setForm({
-                    ...form,
-                    filters: { ...filterObj, request_types: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) },
-                  })}
-                  placeholder="Security Alert, Business Application Support"
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
-              </label>
+              <MultiSelectDropdown
+                label="Priorities"
+                placeholder="Any priority"
+                options={priorityOptions}
+                selected={selectedPriorities}
+                onChange={(values) => setFilterValues("priorities", values)}
+              />
+              <MultiSelectDropdown
+                label="Assignees"
+                placeholder="Any assignee"
+                options={assigneeOptions}
+                selected={selectedAssignees}
+                onChange={(values) => setFilterValues("assignees", values)}
+              />
+              <div className="col-span-2">
+                <MultiSelectDropdown
+                  label="Request Types"
+                  placeholder="Any request type"
+                  options={requestTypeOptions}
+                  selected={selectedRequestTypes}
+                  onChange={(values) => setFilterValues("request_types", values)}
+                />
+              </div>
             </div>
           </div>
 

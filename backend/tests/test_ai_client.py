@@ -1,4 +1,5 @@
-from ai_client import _enforce_security_priority
+import ai_client
+from ai_client import _enforce_security_priority, score_closed_ticket
 from models import TriageSuggestion
 
 
@@ -82,3 +83,64 @@ def test_existing_high_security_ticket_does_not_get_priority_change():
     normalized = _enforce_security_priority(issue, suggestions)
 
     assert all(s.field != "priority" for s in normalized)
+
+
+def test_score_closed_ticket_parses_scores(monkeypatch):
+    issue = {
+        "key": "OIT-42",
+        "fields": {
+            "summary": "Closed ticket",
+            "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+            "resolution": {"name": "Done"},
+            "resolutiondate": "2026-03-03T10:00:00Z",
+            "assignee": {"displayName": "Ada"},
+            "comment": {"comments": []},
+        },
+    }
+
+    monkeypatch.setattr(
+        ai_client,
+        "_call_openai",
+        lambda model_id, system, user_msg: """{
+          "communication_score": 4,
+          "communication_notes": "Clear public updates.",
+          "documentation_score": 3,
+          "documentation_notes": "Resolution steps were partial.",
+          "score_summary": "Good communication, average documentation."
+        }""",
+    )
+
+    score = score_closed_ticket(issue, [{"author": {"displayName": "Ada"}, "body": "Resolved and confirmed.", "public": True}], "gpt-4o-mini")
+
+    assert score.key == "OIT-42"
+    assert score.communication_score == 4
+    assert score.documentation_score == 3
+    assert score.score_summary == "Good communication, average documentation."
+
+
+def test_score_closed_ticket_clamps_invalid_scores(monkeypatch):
+    issue = {
+        "key": "OIT-77",
+        "fields": {
+            "summary": "Closed ticket",
+            "status": {"name": "Closed", "statusCategory": {"name": "Done"}},
+            "comment": {"comments": []},
+        },
+    }
+
+    monkeypatch.setattr(
+        ai_client,
+        "_call_openai",
+        lambda model_id, system, user_msg: """{
+          "communication_score": 9,
+          "communication_notes": "Too generous.",
+          "documentation_score": 0,
+          "documentation_notes": "Too harsh.",
+          "score_summary": "Needs clamping."
+        }""",
+    )
+
+    score = score_closed_ticket(issue, [], "gpt-4o-mini")
+
+    assert score.communication_score == 5
+    assert score.documentation_score == 1
