@@ -28,7 +28,8 @@ _FILTERED_JQL = (
 )
 
 # Refresh interval in seconds
-_REFRESH_INTERVAL = 600  # 10 minutes
+_REFRESH_INTERVAL = 60  # 1 minute
+_INCREMENTAL_LOOKBACK_MINUTES = 2
 
 
 class IssueCache:
@@ -123,7 +124,7 @@ class IssueCache:
     def update_cached_field(self, key: str, field: str, value: str) -> None:
         """Update a field in the cached issue data (in-memory + SQLite).
 
-        Supports: priority, request_type, status, assignee, updated.
+        Supports: summary, description, priority, request_type, status, assignee, updated.
         """
         from datetime import datetime, timezone
         with self._lock:
@@ -132,7 +133,11 @@ class IssueCache:
                 if not issue:
                     continue
                 fields = issue.setdefault("fields", {})
-                if field == "priority":
+                if field == "summary":
+                    fields["summary"] = value
+                elif field == "description":
+                    fields["description"] = value
+                elif field == "priority":
                     fields["priority"] = {"name": value}
                 elif field == "request_type":
                     fields["customfield_10010"] = {
@@ -332,7 +337,10 @@ class IssueCache:
         self._cancel_refresh = False
         self._refresh_progress = {"phase": "starting", "current": 0, "total": 0}
         try:
-            jql = f'project = {JIRA_PROJECT} AND updated >= "-10m" ORDER BY key ASC'
+            jql = (
+                f'project = {JIRA_PROJECT} AND updated >= "-{_INCREMENTAL_LOOKBACK_MINUTES}m" '
+                "ORDER BY key ASC"
+            )
             logger.info("Cache: incremental refresh with JQL: %s", jql)
             updated_issues = self._client.search_all(jql, progress_callback=self._progress_callback)
             logger.info("Cache: incremental fetched %d issues", len(updated_issues))

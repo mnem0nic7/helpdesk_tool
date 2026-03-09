@@ -1,16 +1,19 @@
 import { useState, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { TicketQueryParams } from "../lib/api.ts";
+import type { TicketQueryParams, TicketRow } from "../lib/api.ts";
 import TicketFilters, {
   emptyFilters,
 } from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 import TicketTable from "../components/TicketTable.tsx";
 import BulkActionsToolbar from "../components/BulkActionsToolbar.tsx";
+import Pagination from "../components/Pagination.tsx";
+import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 
 // Quick-filter preset definitions
 type QuickFilter = "triage" | "all_open" | null;
+const PAGE_SIZE = 250;
 
 export default function ManagePage() {
   const queryClient = useQueryClient();
@@ -19,12 +22,15 @@ export default function ManagePage() {
     ...emptyFilters,
     open_only: true,
   });
+  const [page, setPage] = useState(1);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [activeQuickFilter, setActiveQuickFilter] = useState<QuickFilter>("all_open");
+  const [openTicket, setOpenTicket] = useState<TicketRow | null>(null);
 
   // When filters change, clear selection
   const handleFilterChange = useCallback((next: TicketFilterValues) => {
     setFilters(next);
+    setPage(1);
     setSelectedKeys(new Set());
     setActiveQuickFilter(null); // Manual filter change clears quick filter
   }, []);
@@ -36,6 +42,7 @@ export default function ManagePage() {
       open_only: true,
     };
     setFilters(next);
+    setPage(1);
     setSelectedKeys(new Set());
     setActiveQuickFilter("triage");
   }
@@ -46,12 +53,14 @@ export default function ManagePage() {
       open_only: true,
     };
     setFilters(next);
+    setPage(1);
     setSelectedKeys(new Set());
     setActiveQuickFilter("all_open");
   }
 
   function handleClearQuickFilter() {
     setFilters({ ...emptyFilters });
+    setPage(1);
     setSelectedKeys(new Set());
     setActiveQuickFilter(null);
   }
@@ -68,6 +77,8 @@ export default function ManagePage() {
     ...(filters.created_before ? { created_before: filters.created_before } : {}),
     // For triage queue, filter to unassigned tickets
     ...(activeQuickFilter === "triage" ? { assignee: "unassigned" } : filters.assignee ? { assignee: filters.assignee } : {}),
+    offset: (page - 1) * PAGE_SIZE,
+    limit: PAGE_SIZE,
   };
 
   const { data, isLoading, isError, error } = useQuery({
@@ -76,6 +87,9 @@ export default function ManagePage() {
   });
 
   const tickets = data?.tickets ?? [];
+  const matchedCount = data?.matched_count ?? tickets.length;
+  const totalCount = data?.total_count ?? tickets.length;
+  const hasMore = page * PAGE_SIZE < matchedCount;
 
   // Bulk action completed: refresh cache, clear selection, refetch
   function handleActionComplete() {
@@ -109,12 +123,13 @@ export default function ManagePage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Manage Tickets</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Select tickets and apply bulk operations.
+            Review tickets, open full details, and apply ticket actions without leaving the app.
           </p>
         </div>
         {!isLoading && (
           <span className="text-sm text-slate-500">
-            <span className="font-semibold text-slate-800">{tickets.length.toLocaleString()}</span> tickets
+            <span className="font-semibold text-slate-800">{matchedCount.toLocaleString()}</span>
+            {" "}matched of {totalCount.toLocaleString()}
           </span>
         )}
       </div>
@@ -171,6 +186,22 @@ export default function ManagePage() {
         selectable={true}
         selectedKeys={selectedKeys}
         onSelectionChange={setSelectedKeys}
+        onRowOpen={setOpenTicket}
+      />
+
+      <Pagination
+        page={page}
+        hasMore={hasMore}
+        onPageChange={(nextPage) => {
+          setPage(nextPage);
+          setSelectedKeys(new Set());
+        }}
+      />
+
+      <TicketWorkbenchDrawer
+        ticketKey={openTicket?.key ?? null}
+        initialTicket={openTicket}
+        onClose={() => setOpenTicket(null)}
       />
     </div>
   );

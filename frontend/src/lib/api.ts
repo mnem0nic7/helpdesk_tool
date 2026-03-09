@@ -39,6 +39,23 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function putJSON<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    window.location.href = "/api/auth/login";
+    throw new Error("Not authenticated");
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`PUT ${url} failed (${res.status}): ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 // ---------------------------------------------------------------------------
 // TypeScript interfaces – mirror the backend Pydantic models
 // ---------------------------------------------------------------------------
@@ -175,6 +192,17 @@ export interface Transition {
   to_status: string;
 }
 
+export interface PriorityOption {
+  id: string;
+  name: string;
+}
+
+export interface RequestTypeOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
 /** Result of a bulk operation on one ticket. */
 export interface BulkResult {
   key: string;
@@ -201,6 +229,57 @@ export interface BulkPriorityRequest {
 export interface BulkCommentRequest {
   keys: string[];
   comment: string;
+}
+
+export interface TicketComment {
+  id: string;
+  author: string;
+  created: string;
+  updated: string;
+  body: string;
+}
+
+export interface TicketAttachment {
+  id: string;
+  filename: string;
+  mime_type: string;
+  size: number;
+  created: string;
+  author: string;
+  content_url: string;
+  thumbnail_url: string;
+}
+
+export interface TicketIssueLink {
+  direction: string;
+  relationship: string;
+  type: string;
+  key: string;
+  summary: string;
+  status: string;
+  url: string;
+}
+
+export interface TicketDetail {
+  ticket: TicketRow;
+  description: string;
+  steps_to_recreate: string;
+  request_type: string;
+  work_category: string;
+  comments: TicketComment[];
+  attachments: TicketAttachment[];
+  issue_links: TicketIssueLink[];
+  jira_url: string;
+  portal_url: string;
+  raw_issue: Record<string, unknown>;
+}
+
+export interface TicketUpdatePayload {
+  summary?: string;
+  description?: string;
+  priority?: string;
+  assignee_account_id?: string | null;
+  request_type_id?: string;
 }
 
 /** Filters for the report builder. */
@@ -464,6 +543,8 @@ export interface TicketQueryParams {
   stale_only?: boolean;
   created_after?: string;
   created_before?: string;
+  offset?: number;
+  limit?: number;
 }
 
 export interface MetricsQueryParams {
@@ -531,9 +612,17 @@ export const api = {
     return fetchJSON("/api/filter-options");
   },
 
-  /** Fetch a single ticket by its Jira key (e.g. "OIT-1234"). */
-  getTicket(key: string): Promise<TicketRow> {
-    return fetchJSON<TicketRow>(`/api/tickets/${encodeURIComponent(key)}`);
+  /** Fetch a single ticket by its Jira key with full detail payload. */
+  getTicket(key: string): Promise<TicketDetail> {
+    return fetchJSON<TicketDetail>(`/api/tickets/${encodeURIComponent(key)}`);
+  },
+
+  getPriorities(): Promise<PriorityOption[]> {
+    return fetchJSON<PriorityOption[]>("/api/priorities");
+  },
+
+  getRequestTypes(): Promise<RequestTypeOption[]> {
+    return fetchJSON<RequestTypeOption[]>("/api/request-types");
   },
 
   /** Fetch SLA timer summary across all timers. */
@@ -623,6 +712,22 @@ export const api = {
   bulkComment(keys: string[], comment: string): Promise<BulkResult[]> {
     const body: BulkCommentRequest = { keys, comment };
     return postJSON<BulkResult[]>("/api/tickets/bulk/comment", body);
+  },
+
+  updateTicket(key: string, payload: TicketUpdatePayload): Promise<TicketDetail> {
+    return putJSON<TicketDetail>(`/api/tickets/${encodeURIComponent(key)}`, payload);
+  },
+
+  transitionTicket(key: string, transitionId: string): Promise<TicketDetail> {
+    return postJSON<TicketDetail>(`/api/tickets/${encodeURIComponent(key)}/transition`, {
+      transition_id: transitionId,
+    });
+  },
+
+  addTicketComment(key: string, comment: string): Promise<TicketDetail> {
+    return postJSON<TicketDetail>(`/api/tickets/${encodeURIComponent(key)}/comment`, {
+      comment,
+    });
   },
 
   /** Return the URL for the Excel export endpoint (browser navigates to it). */

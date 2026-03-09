@@ -1,0 +1,623 @@
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "../lib/api.ts";
+import type {
+  Assignee,
+  PriorityOption,
+  RequestTypeOption,
+  TicketDetail,
+  TicketRow,
+  Transition,
+} from "../lib/api.ts";
+
+interface TicketWorkbenchDrawerProps {
+  ticketKey: string | null;
+  initialTicket?: TicketRow | null;
+  onClose: () => void;
+}
+
+function formatDateTime(iso: string): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString();
+}
+
+function formatBytes(size: number): string {
+  if (!size) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = size;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function chipClass(color: "slate" | "blue" | "amber" | "green") {
+  const classes = {
+    slate: "bg-slate-100 text-slate-700",
+    blue: "bg-blue-100 text-blue-700",
+    amber: "bg-amber-100 text-amber-700",
+    green: "bg-green-100 text-green-700",
+  };
+  return `inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${classes[color]}`;
+}
+
+export default function TicketWorkbenchDrawer({
+  ticketKey,
+  initialTicket,
+  onClose,
+}: TicketWorkbenchDrawerProps) {
+  const queryClient = useQueryClient();
+  const [summary, setSummary] = useState("");
+  const [description, setDescription] = useState("");
+  const [selectedPriority, setSelectedPriority] = useState("");
+  const [selectedAssignee, setSelectedAssignee] = useState("");
+  const [selectedRequestTypeId, setSelectedRequestTypeId] = useState("");
+  const [selectedTransitionId, setSelectedTransitionId] = useState("");
+  const [comment, setComment] = useState("");
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [errorText, setErrorText] = useState<string | null>(null);
+
+  const { data: detail, isLoading } = useQuery({
+    queryKey: ["ticket-detail", ticketKey],
+    queryFn: () => api.getTicket(ticketKey ?? ""),
+    enabled: !!ticketKey,
+  });
+
+  const { data: assignees = [] } = useQuery({
+    queryKey: ["assignees"],
+    queryFn: () => api.getAssignees(),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!ticketKey,
+  });
+
+  const { data: priorities = [] } = useQuery({
+    queryKey: ["priorities"],
+    queryFn: () => api.getPriorities(),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!ticketKey,
+  });
+
+  const { data: requestTypes = [] } = useQuery({
+    queryKey: ["request-types"],
+    queryFn: () => api.getRequestTypes(),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!ticketKey,
+  });
+
+  const { data: transitions = [] } = useQuery({
+    queryKey: ["ticket-transitions", ticketKey],
+    queryFn: () => api.getTransitions(ticketKey ?? ""),
+    enabled: !!ticketKey,
+  });
+
+  useEffect(() => {
+    if (!detail) return;
+    setSummary(detail.ticket.summary);
+    setDescription(detail.description);
+    setSelectedPriority(detail.ticket.priority);
+    setSelectedAssignee(detail.ticket.assignee_account_id ?? "");
+    setComment("");
+    setSelectedTransitionId("");
+  }, [detail]);
+
+  useEffect(() => {
+    if (!detail) return;
+    const current = requestTypes.find((option) => option.name === detail.ticket.request_type);
+    setSelectedRequestTypeId(current?.id ?? "");
+  }, [detail, requestTypes]);
+
+  function handleUpdated(next: TicketDetail, message: string) {
+    queryClient.setQueryData(["ticket-detail", ticketKey], next);
+    queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    queryClient.invalidateQueries({ queryKey: ["manage-tickets"] });
+    queryClient.invalidateQueries({ queryKey: ["filter-options"] });
+    setFeedback(message);
+    setErrorText(null);
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      if (!detail || !ticketKey) {
+        throw new Error("Ticket detail not loaded");
+      }
+      const payload: Record<string, unknown> = {};
+      if (summary.trim() !== detail.ticket.summary) payload.summary = summary.trim();
+      if (description !== detail.description) payload.description = description;
+      if (selectedPriority !== detail.ticket.priority) payload.priority = selectedPriority;
+      if ((selectedAssignee || "") !== (detail.ticket.assignee_account_id || "")) {
+        payload.assignee_account_id = selectedAssignee || null;
+      }
+      const currentRequestTypeId =
+        requestTypes.find((option) => option.name === detail.ticket.request_type)?.id ?? "";
+      if (selectedRequestTypeId && selectedRequestTypeId !== currentRequestTypeId) {
+        payload.request_type_id = selectedRequestTypeId;
+      }
+      if (Object.keys(payload).length === 0) {
+        throw new Error("No changes to save");
+      }
+      return api.updateTicket(ticketKey, payload);
+    },
+    onSuccess: (next) => handleUpdated(next, "Ticket details updated"),
+    onError: (error) => {
+      setErrorText(error instanceof Error ? error.message : "Failed to update ticket");
+      setFeedback(null);
+    },
+  });
+
+  const transitionMutation = useMutation({
+    mutationFn: () => {
+      if (!ticketKey || !selectedTransitionId) {
+        throw new Error("Choose a transition first");
+      }
+      return api.transitionTicket(ticketKey, selectedTransitionId);
+    },
+    onSuccess: (next) => handleUpdated(next, "Status updated"),
+    onError: (error) => {
+      setErrorText(error instanceof Error ? error.message : "Failed to transition ticket");
+      setFeedback(null);
+    },
+  });
+
+  const commentMutation = useMutation({
+    mutationFn: () => {
+      if (!ticketKey || !comment.trim()) {
+        throw new Error("Comment cannot be empty");
+      }
+      return api.addTicketComment(ticketKey, comment.trim());
+    },
+    onSuccess: (next) => handleUpdated(next, "Comment added"),
+    onError: (error) => {
+      setErrorText(error instanceof Error ? error.message : "Failed to add comment");
+      setFeedback(null);
+    },
+  });
+
+  if (!ticketKey) return null;
+
+  const ticket = detail?.ticket ?? initialTicket;
+  const sortedAssignees = [...assignees].sort((a: Assignee, b: Assignee) =>
+    a.display_name.localeCompare(b.display_name)
+  );
+  const sortedRequestTypes = [...requestTypes].sort((a: RequestTypeOption, b: RequestTypeOption) =>
+    a.name.localeCompare(b.name)
+  );
+  const sortedPriorities = [...priorities].sort((a: PriorityOption, b: PriorityOption) =>
+    a.name.localeCompare(b.name)
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex bg-slate-950/35" onClick={onClose}>
+      <aside
+        className="ml-auto flex h-full w-full max-w-3xl flex-col bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="border-b border-slate-200 px-6 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">
+                  {ticket?.key ?? ticketKey}
+                </span>
+                {ticket?.status && <span className={chipClass("blue")}>{ticket.status}</span>}
+                {ticket?.priority && <span className={chipClass("amber")}>{ticket.priority}</span>}
+                {ticket?.request_type && <span className={chipClass("green")}>{ticket.request_type}</span>}
+              </div>
+              <h2 className="mt-2 text-xl font-semibold text-slate-900">
+                {ticket?.summary || "Loading ticket..."}
+              </h2>
+              <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-500">
+                <span>Reporter: {ticket?.reporter || "—"}</span>
+                <span>Assignee: {ticket?.assignee || "Unassigned"}</span>
+                <span>Updated: {formatDateTime(ticket?.updated ?? "")}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {detail?.portal_url && (
+                <a
+                  href={detail.portal_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Portal
+                </a>
+              )}
+              {detail?.jira_url && (
+                <a
+                  href={detail.jira_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100"
+                >
+                  Open in Jira
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
+          {(isLoading || !detail) && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+              Loading full ticket detail...
+            </div>
+          )}
+
+          {feedback && (
+            <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+              {feedback}
+            </div>
+          )}
+
+          {errorText && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {errorText}
+            </div>
+          )}
+
+          {detail && (
+            <>
+              <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">
+                    Ticket Actions
+                  </h3>
+                  <span className="text-xs text-slate-500">All changes write directly to Jira</span>
+                </div>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <label className="block">
+                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Summary</span>
+                    <input
+                      type="text"
+                      value={summary}
+                      onChange={(e) => setSummary(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Priority</span>
+                    <select
+                      value={selectedPriority}
+                      onChange={(e) => setSelectedPriority(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value="">Select priority</option>
+                      {sortedPriorities.map((priority) => (
+                        <option key={priority.id} value={priority.name}>
+                          {priority.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Assignee</span>
+                    <select
+                      value={selectedAssignee}
+                      onChange={(e) => setSelectedAssignee(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value="">Unassigned</option>
+                      {sortedAssignees.map((assignee) => (
+                        <option key={assignee.account_id} value={assignee.account_id}>
+                          {assignee.display_name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Request Type</span>
+                    <select
+                      value={selectedRequestTypeId}
+                      onChange={(e) => setSelectedRequestTypeId(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value="">Select request type</option>
+                      {sortedRequestTypes.map((requestType) => (
+                        <option key={requestType.id} value={requestType.id}>
+                          {requestType.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <label className="mt-4 block">
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Description</span>
+                  <textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    rows={8}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </label>
+
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => saveMutation.mutate()}
+                    disabled={saveMutation.isPending}
+                    className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {saveMutation.isPending ? "Saving..." : "Save Ticket Details"}
+                  </button>
+                  <span className="text-xs text-slate-500">
+                    Summary, description, assignee, priority, and request type
+                  </span>
+                </div>
+              </section>
+
+              <section className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
+                <div className="space-y-6">
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Workflow</h3>
+                    <div className="mt-4 flex flex-wrap items-end gap-3">
+                      <label className="min-w-[260px] flex-1">
+                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Transition</span>
+                        <select
+                          value={selectedTransitionId}
+                          onChange={(e) => setSelectedTransitionId(e.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                          <option value="">Select transition</option>
+                          {transitions.map((transition: Transition) => (
+                            <option key={transition.id} value={transition.id}>
+                              {transition.name} {transition.to_status ? `-> ${transition.to_status}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => transitionMutation.mutate()}
+                        disabled={transitionMutation.isPending || !selectedTransitionId}
+                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {transitionMutation.isPending ? "Updating..." : "Change Status"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Add Comment</h3>
+                    <textarea
+                      value={comment}
+                      onChange={(e) => setComment(e.target.value)}
+                      rows={5}
+                      placeholder="Add an internal Jira comment..."
+                      className="mt-4 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                    <div className="mt-3 flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => commentMutation.mutate()}
+                        disabled={commentMutation.isPending || !comment.trim()}
+                        className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {commentMutation.isPending ? "Posting..." : "Post Comment"}
+                      </button>
+                      <span className="text-xs text-slate-500">Comment text is sent as Jira rich text</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Description</h3>
+                    <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                      {detail.description || "No description"}
+                    </div>
+                    {detail.steps_to_recreate && (
+                      <>
+                        <h4 className="mt-5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Steps To Re-Create
+                        </h4>
+                        <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                          {detail.steps_to_recreate}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Comments</h3>
+                      <span className="text-xs text-slate-500">{detail.comments.length} total</span>
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      {detail.comments.length === 0 && (
+                        <div className="text-sm text-slate-500">No comments on this ticket.</div>
+                      )}
+                      {detail.comments.map((item) => (
+                        <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                          <div className="flex items-center justify-between gap-3 text-xs text-slate-500">
+                            <span className="font-medium text-slate-700">{item.author}</span>
+                            <span>{formatDateTime(item.created)}</span>
+                          </div>
+                          <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                            {item.body || "Empty comment"}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-6">
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Ticket Metadata</h3>
+                    <dl className="mt-4 space-y-3 text-sm text-slate-700">
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-slate-500">Type</dt>
+                        <dd>{detail.ticket.issue_type || "—"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-slate-500">Status</dt>
+                        <dd>{detail.ticket.status || "—"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-slate-500">Request Type</dt>
+                        <dd>{detail.ticket.request_type || "—"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-slate-500">Assignee</dt>
+                        <dd>{detail.ticket.assignee || "Unassigned"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-slate-500">Reporter</dt>
+                        <dd>{detail.ticket.reporter || "—"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-slate-500">Created</dt>
+                        <dd>{formatDateTime(detail.ticket.created)}</dd>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-slate-500">Updated</dt>
+                        <dd>{formatDateTime(detail.ticket.updated)}</dd>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-slate-500">Resolved</dt>
+                        <dd>{formatDateTime(detail.ticket.resolved)}</dd>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-slate-500">Work Category</dt>
+                        <dd>{detail.work_category || "—"}</dd>
+                      </div>
+                    </dl>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Labels And Components</h3>
+                    <div className="mt-4 space-y-4 text-sm text-slate-700">
+                      <div>
+                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Labels</div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {detail.ticket.labels.length === 0 && <span className="text-slate-400">None</span>}
+                          {detail.ticket.labels.map((label) => (
+                            <span key={label} className={chipClass("slate")}>
+                              {label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Components</div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {detail.ticket.components.length === 0 && <span className="text-slate-400">None</span>}
+                          {detail.ticket.components.map((component) => (
+                            <span key={component} className={chipClass("slate")}>
+                              {component}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Organizations</div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {detail.ticket.organizations.length === 0 && <span className="text-slate-400">None</span>}
+                          {detail.ticket.organizations.map((organization) => (
+                            <span key={organization} className={chipClass("slate")}>
+                              {organization}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Attachments</h3>
+                      <span className="text-xs text-slate-500">{detail.attachments.length} files</span>
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      {detail.attachments.length === 0 && (
+                        <div className="text-sm text-slate-500">No attachments on this ticket.</div>
+                      )}
+                      {detail.attachments.map((attachment) => (
+                        <a
+                          key={attachment.id}
+                          href={attachment.content_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block rounded-lg border border-slate-200 px-3 py-3 hover:bg-slate-50"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-slate-800">
+                                {attachment.filename}
+                              </div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                {attachment.mime_type || "Unknown type"} • {formatBytes(attachment.size)}
+                              </div>
+                            </div>
+                            <div className="text-xs text-slate-500">{formatDateTime(attachment.created)}</div>
+                          </div>
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Linked Issues</h3>
+                      <span className="text-xs text-slate-500">{detail.issue_links.length} links</span>
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      {detail.issue_links.length === 0 && (
+                        <div className="text-sm text-slate-500">No linked issues.</div>
+                      )}
+                      {detail.issue_links.map((link) => (
+                        <a
+                          key={`${link.direction}-${link.key}-${link.relationship}`}
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block rounded-lg border border-slate-200 px-3 py-3 hover:bg-slate-50"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="font-mono text-xs font-semibold uppercase tracking-wide text-blue-700">
+                                {link.key}
+                              </div>
+                              <div className="mt-1 text-sm text-slate-800">{link.summary || "No summary"}</div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                {link.relationship || link.type || "Linked issue"}
+                              </div>
+                            </div>
+                            <span className={chipClass("slate")}>{link.status || "Unknown"}</span>
+                          </div>
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+
+                  <details className="rounded-xl border border-slate-200 p-4">
+                    <summary className="cursor-pointer text-sm font-semibold uppercase tracking-wide text-slate-700">
+                      Raw Jira Payload
+                    </summary>
+                    <pre className="mt-4 overflow-x-auto rounded-lg bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+                      {JSON.stringify(detail.raw_issue, null, 2)}
+                    </pre>
+                  </details>
+                </div>
+              </section>
+            </>
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+}

@@ -198,6 +198,28 @@ class BulkCommentRequest(BulkActionRequest):
     comment: str
 
 
+class TicketUpdateRequest(BaseModel):
+    """Update editable ticket fields on a single issue."""
+
+    summary: Optional[str] = None
+    description: Optional[str] = None
+    priority: Optional[str] = None
+    assignee_account_id: Optional[str] = None
+    request_type_id: Optional[str] = None
+
+
+class TicketTransitionRequest(BaseModel):
+    """Transition a single issue to another workflow state."""
+
+    transition_id: str
+
+
+class TicketCommentRequest(BaseModel):
+    """Add a comment to a single issue."""
+
+    comment: str
+
+
 # ---------------------------------------------------------------------------
 # AI Triage models
 # ---------------------------------------------------------------------------

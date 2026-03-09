@@ -40,6 +40,9 @@ export default function CacheStatusBar() {
     queryClient.invalidateQueries({ queryKey: ["sla-summary"] });
     queryClient.invalidateQueries({ queryKey: ["sla-breaches"] });
     queryClient.invalidateQueries({ queryKey: ["manage-tickets"] });
+    queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    queryClient.invalidateQueries({ queryKey: ["ticket-detail"] });
+    queryClient.invalidateQueries({ queryKey: ["filter-options"] });
   };
 
   // Invalidate queries when refresh completes
