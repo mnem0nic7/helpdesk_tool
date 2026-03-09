@@ -10,6 +10,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 from config import JIRA_EMAIL, JIRA_API_TOKEN, JIRA_BASE_URL
+from request_type import extract_request_type_name_from_fields, has_request_type
 
 # Validate Jira issue keys to prevent path traversal / SSRF
 _JIRA_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
@@ -276,9 +277,11 @@ class JiraClient:
             for issue in issues:
                 key = issue.get("key", "")
                 cached = existing_cache.get(key, {})
-                cached_rt = (cached.get("fields", {}).get("customfield_10010") or {}).get("requestType")
-                if cached_rt:
-                    issue.setdefault("fields", {})["customfield_10010"] = {"requestType": cached_rt}
+                cached_name = extract_request_type_name_from_fields(cached.get("fields", {}))
+                if cached_name:
+                    issue.setdefault("fields", {})["customfield_10010"] = {
+                        "requestType": {"name": cached_name}
+                    }
                     carried += 1
             if carried:
                 logger.info("Carried forward %d request types from cache", carried)
@@ -286,9 +289,7 @@ class JiraClient:
         # Find tickets still missing request type
         keys_to_enrich = [
             i.get("key", "") for i in issues
-            if i.get("key") and not (
-                i.get("fields", {}).get("customfield_10010") or {}
-            ).get("requestType")
+            if i.get("key") and not has_request_type(i.get("fields", {}))
         ]
         if not keys_to_enrich:
             logger.info("All issues already have request type data, no enrichment needed")

@@ -13,6 +13,7 @@ from typing import Any
 
 from config import DATA_DIR, JIRA_PROJECT
 from jira_client import JiraClient
+from request_type import extract_request_type_name_from_fields, has_request_type
 
 logger = logging.getLogger(__name__)
 
@@ -283,9 +284,11 @@ class IssueCache:
                 for issue in all_issues:
                     key = issue.get("key", "")
                     cached = self._all_issues.get(key, {})
-                    cached_rt = (cached.get("fields", {}).get("customfield_10010") or {}).get("requestType")
-                    if cached_rt:
-                        issue.setdefault("fields", {})["customfield_10010"] = {"requestType": cached_rt}
+                    cached_name = extract_request_type_name_from_fields(cached.get("fields", {}))
+                    if cached_name:
+                        issue.setdefault("fields", {})["customfield_10010"] = {
+                            "requestType": {"name": cached_name}
+                        }
 
             new_all: dict[str, dict[str, Any]] = {}
             new_filtered: dict[str, dict[str, Any]] = {}
@@ -393,8 +396,7 @@ class IssueCache:
         issues_to_enrich = []
         with self._lock:
             for key, issue in self._all_issues.items():
-                rt = (issue.get("fields", {}).get("customfield_10010") or {}).get("requestType")
-                if not rt:
+                if not has_request_type(issue.get("fields", {})):
                     issues_to_enrich.append(issue)
 
         if not issues_to_enrich:
@@ -407,8 +409,7 @@ class IssueCache:
         # Count how many were actually enriched
         enriched = 0
         for issue in issues_to_enrich:
-            rt = (issue.get("fields", {}).get("customfield_10010") or {}).get("requestType")
-            if rt:
+            if has_request_type(issue.get("fields", {})):
                 enriched += 1
 
         # Persist to DB

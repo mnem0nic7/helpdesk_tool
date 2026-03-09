@@ -268,3 +268,16 @@ class TestIssueToRow:
         assert row["status"] == ""
         assert row["assignee"] == ""
         assert row["calendar_ttr_hours"] is None
+
+    def test_request_type_from_customfield_11102(self, freeze_time):
+        issue = {
+            "key": "OIT-555",
+            "fields": {
+                "customfield_10010": None,
+                "customfield_11102": {
+                    "requestType": {"name": "Business Application Support"}
+                },
+            },
+        }
+        row = issue_to_row(issue)
+        assert row["request_type"] == "Business Application Support"

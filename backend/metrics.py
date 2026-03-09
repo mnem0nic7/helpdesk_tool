@@ -11,6 +11,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from request_type import extract_request_type_name_from_fields
+
 
 # ---------------------------------------------------------------------------
 # Status-mapping constants
@@ -766,13 +768,8 @@ def issue_to_row(issue: dict[str, Any]) -> dict[str, Any]:
     updated_dt = parse_dt(updated_str)
     resolved_dt = parse_dt(resolved_str)
 
-    # Request type (JSM customfield_10010)
-    request_type = ""
-    crf = fields.get("customfield_10010")
-    if crf and isinstance(crf, dict):
-        rt_obj = crf.get("requestType")
-        if isinstance(rt_obj, dict):
-            request_type = rt_obj.get("name", "")
+    # Request type (JSM custom fields)
+    request_type = extract_request_type_name_from_fields(fields)
 
     # Calendar TTR
     calendar_ttr = _hours_between(created_dt, resolved_dt)
