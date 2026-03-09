@@ -8,7 +8,7 @@ import type { AlertRule, AlertTriggerType, AlertTestResult } from "../lib/api.ts
 // ---------------------------------------------------------------------------
 
 const FREQUENCIES = [
-  { value: "immediate", label: "Every check (~10 min)" },
+  { value: "immediate", label: "Every check (~1 min)" },
   { value: "hourly", label: "Hourly" },
   { value: "daily", label: "Daily" },
   { value: "weekly", label: "Weekly" },
@@ -113,6 +113,14 @@ function RuleModal({
               {triggerTypes.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
           </label>
+
+          {(form.trigger_type as string) === "new_ticket" && (
+            <p className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+              New ticket alerts only send for tickets the rule has not already seen. For cases like
+              security notifications, use <span className="font-semibold">Every check (~1 min)</span> with
+              <span className="font-semibold"> Request Types = Security Alert</span>.
+            </p>
+          )}
 
           {/* Trigger Config */}
           {configFields.length > 0 && (
@@ -228,6 +236,16 @@ function RuleModal({
                     filters: { ...filterObj, assignees: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) },
                   })}
                   placeholder="John Doe"
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
+              </label>
+              <label className="block col-span-2">
+                <span className="text-xs text-gray-500">Request Types (comma-sep)</span>
+                <input type="text" value={((filterObj.request_types as string[]) ?? []).join(", ")}
+                  onChange={(e) => setForm({
+                    ...form,
+                    filters: { ...filterObj, request_types: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) },
+                  })}
+                  placeholder="Security Alert, Business Application Support"
                   className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
               </label>
             </div>
@@ -377,7 +395,7 @@ export default function AlertsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Email Alerts</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Configure automated email alerts for SLA breaches, stale tickets, and more.
+            Configure automated email alerts for new tickets, SLA breaches, stale tickets, and more.
           </p>
         </div>
         <div className="flex gap-2">

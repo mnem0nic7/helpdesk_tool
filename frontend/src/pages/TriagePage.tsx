@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { api } from "../lib/api.ts";
 import type {
   TicketRow,
@@ -12,6 +13,8 @@ import TicketFilters, {
   emptyFilters,
 } from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
+import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
+import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
 
 // ---------------------------------------------------------------------------
 // Confidence bar component
@@ -149,30 +152,29 @@ function SuggestionCard({
 
 function TriageReviewPanel({
   result,
-  jiraBaseUrl,
+  ticketHrefBuilder,
+  onOpenTicket,
   onFieldAccepted,
   onFieldDeclined,
   onDismissAll,
   dismissing,
 }: {
   result: TriageResult;
-  jiraBaseUrl?: string;
+  ticketHrefBuilder: (key: string) => string;
+  onOpenTicket: (key: string) => void;
   onFieldAccepted: (key: string, field: string) => void;
   onFieldDeclined: (key: string, field: string) => void;
   onDismissAll: (key: string) => void;
   dismissing: boolean;
 }) {
-  const keyElement = jiraBaseUrl ? (
-    <a
-      href={`${jiraBaseUrl}/browse/${result.key}`}
-      target="_blank"
-      rel="noopener noreferrer"
+  const keyElement = (
+    <Link
+      to={ticketHrefBuilder(result.key)}
+      onClick={() => onOpenTicket(result.key)}
       className="font-semibold text-blue-600 hover:underline"
     >
       {result.key}
-    </a>
-  ) : (
-    <span className="font-semibold text-gray-900">{result.key}</span>
+    </Link>
   );
 
   if (result.suggestions.length === 0) {
@@ -223,14 +225,8 @@ function TriageReviewPanel({
 
 export default function TriagePage() {
   const queryClient = useQueryClient();
-
-  // Jira base URL for ticket links
-  const { data: cacheStatus } = useQuery({
-    queryKey: ["cache-status"],
-    queryFn: () => api.getCacheStatus(),
-    staleTime: Infinity,
-  });
-  const jiraBaseUrl = cacheStatus?.jira_base_url;
+  const { ticketKey, buildTicketHref, closeTicket } = useTicketDrawerNavigation();
+  const [openTicket, setOpenTicket] = useState<TicketRow | null>(null);
 
   // Model selection
   const { data: models, isLoading: modelsLoading } = useQuery({
@@ -275,6 +271,19 @@ export default function TriagePage() {
     queryFn: () => api.getTickets(queryParams),
   });
   const tickets = ticketsData?.tickets ?? [];
+
+  useEffect(() => {
+    if (!ticketKey) {
+      setOpenTicket(null);
+      return;
+    }
+    const matchingTicket = tickets.find((ticket) => ticket.key === ticketKey);
+    if (matchingTicket) {
+      setOpenTicket(matchingTicket);
+      return;
+    }
+    setOpenTicket((current) => (current?.key === ticketKey ? current : null));
+  }, [ticketKey, tickets]);
 
   // Existing suggestions
   const { data: existingSuggestions } = useQuery({
@@ -513,6 +522,14 @@ export default function TriagePage() {
     }
   }
 
+  const rememberOpenTicket = useCallback(
+    (key: string) => {
+      const matchingTicket = tickets.find((ticket) => ticket.key === key) ?? null;
+      setOpenTicket(matchingTicket);
+    },
+    [tickets],
+  );
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -697,7 +714,16 @@ export default function TriagePage() {
                       />
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 font-medium text-blue-600">
-                      {t.key}
+                      <Link
+                        to={buildTicketHref(t.key)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenTicket(t);
+                        }}
+                        className="hover:underline"
+                      >
+                        {t.key}
+                      </Link>
                     </td>
                     <td className="max-w-[200px] truncate px-2 py-2 text-gray-700">
                       {t.summary}
@@ -763,7 +789,8 @@ export default function TriagePage() {
               <TriageReviewPanel
                 key={r.key}
                 result={r}
-                jiraBaseUrl={jiraBaseUrl}
+                ticketHrefBuilder={buildTicketHref}
+                onOpenTicket={rememberOpenTicket}
                 onFieldAccepted={handleFieldAccepted}
                 onFieldDeclined={handleFieldDeclined}
                 onDismissAll={handleDismissAll}
@@ -778,6 +805,12 @@ export default function TriagePage() {
           </div>
         </div>
       </div>
+
+      <TicketWorkbenchDrawer
+        ticketKey={ticketKey}
+        initialTicket={openTicket}
+        onClose={closeTicket}
+      />
     </div>
   );
 }

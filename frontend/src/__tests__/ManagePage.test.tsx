@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { render } from "../test-utils.tsx";
-import TicketsPage from "../pages/TicketsPage.tsx";
+import ManagePage from "../pages/ManagePage.tsx";
 
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
@@ -17,7 +17,7 @@ const { mockApi } = vi.hoisted(() => ({
     updateTicket: vi.fn(),
     transitionTicket: vi.fn(),
     addTicketComment: vi.fn(),
-    exportAll: vi.fn(() => "/api/export/all"),
+    refreshCacheIncremental: vi.fn(),
   },
 }));
 
@@ -28,7 +28,7 @@ vi.mock("../lib/api.ts", () => ({
 
 const ticketRow = {
   key: "OIT-1",
-  summary: "Printer is offline",
+  summary: "Suspicious login attempt reported",
   issue_type: "Incident",
   status: "Open",
   status_category: "To Do",
@@ -40,7 +40,7 @@ const ticketRow = {
   created: "2026-03-01T10:00:00Z",
   updated: "2026-03-02T12:00:00Z",
   resolved: "",
-  request_type: "Hardware",
+  request_type: "Security Alert",
   calendar_ttr_hours: null,
   age_days: 2,
   days_since_update: 1,
@@ -60,10 +60,10 @@ const ticketRow = {
 
 const ticketDetail = {
   ticket: ticketRow,
-  description: "Main office printer is unavailable.",
+  description: "Security team needs to review this report.",
   steps_to_recreate: "",
-  request_type: "Hardware",
-  work_category: "Support",
+  request_type: "Security Alert",
+  work_category: "Security",
   comments: [],
   attachments: [],
   issue_links: [],
@@ -72,10 +72,10 @@ const ticketDetail = {
   raw_issue: {},
 };
 
-describe("TicketsPage", () => {
+describe("ManagePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    window.history.pushState({}, "", "/tickets");
+    window.history.pushState({}, "", "/manage");
     mockApi.getTickets.mockResolvedValue({
       tickets: [ticketRow],
       matched_count: 1,
@@ -92,31 +92,15 @@ describe("TicketsPage", () => {
     });
     mockApi.getTicket.mockResolvedValue(ticketDetail);
     mockApi.getPriorities.mockResolvedValue([{ id: "1", name: "High" }]);
-    mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Hardware", description: "" }]);
+    mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Security Alert", description: "" }]);
     mockApi.getTransitions.mockResolvedValue([]);
+    mockApi.refreshCacheIncremental.mockResolvedValue(undefined);
   });
 
-  it("opens the local ticket view when the key link is clicked", async () => {
+  it("supports a kanban view that still opens the local ticket drawer", async () => {
     const user = userEvent.setup();
 
-    render(<TicketsPage />);
-
-    const ticketLink = await screen.findByRole("link", { name: "OIT-1" });
-    expect(ticketLink).toHaveAttribute("href", "/tickets?ticket=OIT-1");
-
-    await user.click(ticketLink);
-
-    await waitFor(() => {
-      expect(window.location.search).toBe("?ticket=OIT-1");
-    });
-    await screen.findByText("Ticket Actions");
-    expect(mockApi.getTicket).toHaveBeenCalledWith("OIT-1");
-  });
-
-  it("supports a kanban view that preserves local ticket links", async () => {
-    const user = userEvent.setup();
-
-    render(<TicketsPage />);
+    render(<ManagePage />);
 
     await user.click(screen.getByRole("button", { name: "Kanban" }));
 
@@ -126,6 +110,7 @@ describe("TicketsPage", () => {
 
     await screen.findByText("To Do");
     const ticketLink = await screen.findByRole("link", { name: "OIT-1" });
+    expect(ticketLink.getAttribute("href")).toContain("/manage?");
     expect(ticketLink.getAttribute("href")).toContain("view=kanban");
     expect(ticketLink.getAttribute("href")).toContain("ticket=OIT-1");
 

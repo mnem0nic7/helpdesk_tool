@@ -81,6 +81,10 @@ KNOWN_STATUSES = [
     "Resolved", "Closed", "Done", "Cancelled", "Declined",
 ]
 
+_SECURITY_ALERT_REQUEST_TYPE = "Security Alert"
+_SECURITY_PRIORITY_REASONING = "Security Alert tickets must be triaged at High priority."
+_HIGH_ENOUGH_SECURITY_PRIORITIES = {"High", "Highest"}
+
 SYSTEM_PROMPT = """You are an IT helpdesk triage assistant for a Jira Service Management project (OIT).
 Your job is to analyze tickets and suggest improvements for: priority, request_type, status, assignee, and an optional comment.
 
@@ -375,6 +379,67 @@ def _parse_suggestions(raw: str, issue: dict[str, Any]) -> list[TriageSuggestion
     return suggestions
 
 
+def _enforce_security_priority(issue: dict[str, Any], suggestions: list[TriageSuggestion]) -> list[TriageSuggestion]:
+    """Force security-classified tickets to carry a High priority suggestion.
+
+    The AI prompt already asks for this behavior, but auto-triage needs a
+    deterministic server-side rule so Security Alert tickets are never left at
+    low priority due to model drift or omissions.
+    """
+    if not suggestions:
+        return suggestions
+
+    fields = issue.get("fields", {})
+    current_request_type = extract_request_type_name_from_fields(fields)
+    request_type_suggestion = next(
+        (s for s in suggestions if s.field == "request_type"),
+        None,
+    )
+
+    if request_type_suggestion is not None:
+        is_security_ticket = request_type_suggestion.suggested_value == _SECURITY_ALERT_REQUEST_TYPE
+    else:
+        is_security_ticket = current_request_type == _SECURITY_ALERT_REQUEST_TYPE
+
+    if not is_security_ticket:
+        return suggestions
+
+    current_priority = (fields.get("priority") or {}).get("name", "")
+    if current_priority in _HIGH_ENOUGH_SECURITY_PRIORITIES:
+        return [s for s in suggestions if s.field != "priority"]
+
+    normalized: list[TriageSuggestion] = []
+    priority_replaced = False
+    for suggestion in suggestions:
+        if suggestion.field != "priority":
+            normalized.append(suggestion)
+            continue
+        if not priority_replaced:
+            normalized.append(
+                TriageSuggestion(
+                    field="priority",
+                    current_value=suggestion.current_value or current_priority,
+                    suggested_value="High",
+                    reasoning=_SECURITY_PRIORITY_REASONING,
+                    confidence=max(suggestion.confidence, 0.99),
+                )
+            )
+            priority_replaced = True
+
+    if not priority_replaced:
+        normalized.append(
+            TriageSuggestion(
+                field="priority",
+                current_value=current_priority,
+                suggested_value="High",
+                reasoning=_SECURITY_PRIORITY_REASONING,
+                confidence=0.99,
+            )
+        )
+
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Main analysis entry point
 # ---------------------------------------------------------------------------
@@ -402,7 +467,7 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
-    suggestions = _parse_suggestions(raw, issue)
+    suggestions = _enforce_security_priority(issue, _parse_suggestions(raw, issue))
 
     return TriageResult(
         key=issue.get("key", ""),

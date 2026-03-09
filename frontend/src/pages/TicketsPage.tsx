@@ -6,8 +6,10 @@ import type { TicketQueryParams, TicketRow } from "../lib/api.ts";
 import TicketFilters from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 import TicketTable from "../components/TicketTable.tsx";
+import TicketKanbanBoard from "../components/TicketKanbanBoard.tsx";
 import Pagination from "../components/Pagination.tsx";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
+import TicketViewToggle, { type TicketListView } from "../components/TicketViewToggle.tsx";
 
 const PAGE_SIZE = 250;
 
@@ -32,9 +34,11 @@ export default function TicketsPage() {
   const filterParamsKey = useMemo(() => {
     const next = new URLSearchParams(searchParams);
     next.delete("ticket");
+    next.delete("view");
     return next.toString();
   }, [searchParams]);
   const ticketKey = searchParams.get("ticket");
+  const view: TicketListView = searchParams.get("view") === "kanban" ? "kanban" : "table";
 
   const [filters, setFilters] = useState<TicketFilterValues>(() => filtersFromParams(searchParams));
   const [page, setPage] = useState(1);
@@ -76,6 +80,19 @@ export default function TicketsPage() {
       return query ? `/tickets?${query}` : "/tickets";
     },
     [searchParams],
+  );
+
+  const handleViewChange = useCallback(
+    (nextView: TicketListView) => {
+      const next = new URLSearchParams(searchParams);
+      if (nextView === "kanban") {
+        next.set("view", "kanban");
+      } else {
+        next.delete("view");
+      }
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
   );
 
   // Build query params from state
@@ -143,6 +160,7 @@ export default function TicketsPage() {
               )}
             </div>
           )}
+          <TicketViewToggle value={view} onChange={handleViewChange} />
           <a
             href={api.exportAll()}
             className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
@@ -165,13 +183,22 @@ export default function TicketsPage() {
         </div>
       )}
 
-      {/* Table */}
-      <TicketTable
-        data={tickets}
-        loading={isLoading}
-        onRowOpen={openLocalTicket}
-        ticketHrefBuilder={buildTicketHref}
-      />
+      {/* Ticket list */}
+      {view === "kanban" ? (
+        <TicketKanbanBoard
+          data={tickets}
+          loading={isLoading}
+          onRowOpen={openLocalTicket}
+          ticketHrefBuilder={buildTicketHref}
+        />
+      ) : (
+        <TicketTable
+          data={tickets}
+          loading={isLoading}
+          onRowOpen={openLocalTicket}
+          ticketHrefBuilder={buildTicketHref}
+        />
+      )}
 
       <Pagination page={page} hasMore={hasMore} onPageChange={setPage} />
 

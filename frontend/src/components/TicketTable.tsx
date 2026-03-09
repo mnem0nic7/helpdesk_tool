@@ -11,63 +11,15 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../lib/api.ts";
 import type { TicketRow } from "../lib/api.ts";
-
-// ---------------------------------------------------------------------------
-// Formatting helpers
-// ---------------------------------------------------------------------------
-
-function formatTTR(hours: number | null): string {
-  if (hours == null) return "\u2014";
-  if (hours < 1) return `${Math.round(hours * 60)}m`;
-  if (hours <= 24) return `${hours.toFixed(1)}h`;
-  return `${(hours / 24).toFixed(1)}d`;
-}
-
-function formatAge(days: number | null): string {
-  if (days == null) return "\u2014";
-  return `${days.toFixed(1)}d`;
-}
-
-function formatDate(iso: string): string {
-  if (!iso) return "\u2014";
-  return iso.slice(0, 10);
-}
-
-function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return text.slice(0, max) + "\u2026";
-}
-
-// ---------------------------------------------------------------------------
-// Status / Priority / SLA badge helpers
-// ---------------------------------------------------------------------------
-
-function statusBadgeClass(status: string): string {
-  const s = status.toLowerCase();
-  if (s === "done" || s === "resolved" || s === "closed")
-    return "bg-green-100 text-green-800";
-  if (s === "in progress" || s === "acknowledged")
-    return "bg-blue-100 text-blue-800";
-  if (s.startsWith("waiting"))
-    return "bg-yellow-100 text-yellow-800";
-  return "bg-gray-100 text-gray-700";
-}
-
-function priorityClass(priority: string): string {
-  const p = priority.toLowerCase();
-  if (p === "highest" || p === "high") return "text-red-600 font-semibold";
-  if (p === "medium") return "text-yellow-600 font-medium";
-  return "text-gray-500";
-}
-
-function slaBadgeClass(sla: string): string {
-  const s = sla.toLowerCase();
-  if (s === "breached") return "bg-red-100 text-red-800";
-  if (s === "met") return "bg-green-100 text-green-800";
-  if (s === "running" || s === "ongoing") return "bg-blue-100 text-blue-800";
-  if (s === "paused") return "bg-yellow-100 text-yellow-800";
-  return "bg-gray-100 text-gray-600";
-}
+import {
+  formatAge,
+  formatDate,
+  formatTTR,
+  priorityClass,
+  slaBadgeClass,
+  statusBadgeClass,
+  truncate,
+} from "./ticketListUtils.ts";
 
 // ---------------------------------------------------------------------------
 // Column definitions

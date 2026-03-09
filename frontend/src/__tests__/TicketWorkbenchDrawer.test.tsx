@@ -67,6 +67,33 @@ const ticketDetail = {
   raw_issue: {},
 };
 
+const historyComments = [
+  {
+    id: "c-3",
+    author: "Ada Lovelace",
+    created: "2026-03-03T10:00:00Z",
+    updated: "2026-03-03T10:00:00Z",
+    body: "We reset the print queue and the printer is back online.",
+    public: true,
+  },
+  {
+    id: "c-2",
+    author: "Grace Hopper",
+    created: "2026-03-02T14:00:00Z",
+    updated: "2026-03-02T14:00:00Z",
+    body: "Printer issue acknowledged by support and under investigation.",
+    public: false,
+  },
+  {
+    id: "c-1",
+    author: "Support Bot",
+    created: "2026-03-01T09:00:00Z",
+    updated: "2026-03-01T09:00:00Z",
+    body: "Initial customer report captured from the service portal.",
+    public: true,
+  },
+];
+
 describe("TicketWorkbenchDrawer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -111,5 +138,36 @@ describe("TicketWorkbenchDrawer", () => {
     });
 
     fireEvent.mouseUp(window);
+  });
+
+  it("opens a history popout with the full notes and communication timeline", async () => {
+    mockApi.getTicket.mockResolvedValue({
+      ...ticketDetail,
+      comments: historyComments,
+    });
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: "See History" });
+
+    expect(
+      screen.queryByText("Initial customer report captured from the service portal."),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "See History" }));
+
+    await screen.findByRole("dialog");
+    expect(screen.getByText("Ticket History")).toBeInTheDocument();
+    expect(
+      screen.getByText("Initial customer report captured from the service portal."),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Customer Reply").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Internal Note").length).toBeGreaterThan(0);
   });
 });

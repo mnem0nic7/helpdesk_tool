@@ -9,12 +9,33 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from alert_store import alert_store
 from auth import require_admin
-from alert_engine import run_alert_checks, EVALUATORS, TRIGGER_LABELS
+from alert_engine import (
+    baseline_new_ticket_rule,
+    get_rule_matches,
+    mark_rule_tickets_seen,
+    run_alert_checks,
+    EVALUATORS,
+    TRIGGER_LABELS,
+)
 from issue_cache import cache
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/alerts")
+
+
+def _should_rebaseline_new_ticket_rule(
+    previous_rule: dict[str, Any],
+    updated_rule: dict[str, Any],
+    body: dict[str, Any],
+) -> bool:
+    if updated_rule["trigger_type"] != "new_ticket":
+        return False
+    if previous_rule["trigger_type"] != "new_ticket":
+        return True
+    if not previous_rule.get("enabled", True) and updated_rule.get("enabled", True):
+        return True
+    return any(field in body for field in ("filters", "trigger_config"))
 
 
 @router.get("/rules")
@@ -41,17 +62,27 @@ async def create_rule(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(400, f"trigger_type must be one of: {list(EVALUATORS.keys())}")
     if not body.get("recipients"):
         raise HTTPException(400, "recipients is required")
-    return alert_store.create_rule(body)
+    rule = alert_store.create_rule(body)
+    if rule["trigger_type"] == "new_ticket":
+        baseline_new_ticket_rule(rule, cache.get_filtered_issues())
+    return rule
 
 
 @router.put("/rules/{rule_id}")
 async def update_rule(rule_id: int, body: dict[str, Any]) -> dict[str, Any]:
     """Update an alert rule."""
+    existing = alert_store.get_rule(rule_id)
+    if not existing:
+        raise HTTPException(404, f"Rule {rule_id} not found")
     if body.get("trigger_type") and body["trigger_type"] not in EVALUATORS:
         raise HTTPException(400, f"trigger_type must be one of: {list(EVALUATORS.keys())}")
     result = alert_store.update_rule(rule_id, body)
     if not result:
-        raise HTTPException(404, f"Rule {rule_id} not found")
+        raise HTTPException(500, f"Failed to update rule {rule_id}")
+    if existing["trigger_type"] == "new_ticket" and result["trigger_type"] != "new_ticket":
+        alert_store.clear_seen_ticket_keys(rule_id)
+    elif _should_rebaseline_new_ticket_rule(existing, result, body):
+        baseline_new_ticket_rule(result, cache.get_filtered_issues())
     return result
 
 
@@ -69,7 +100,12 @@ async def toggle_rule(rule_id: int) -> dict[str, Any]:
     rule = alert_store.get_rule(rule_id)
     if not rule:
         raise HTTPException(404, f"Rule {rule_id} not found")
-    return alert_store.update_rule(rule_id, {"enabled": not rule["enabled"]})  # type: ignore[return-value]
+    updated = alert_store.update_rule(rule_id, {"enabled": not rule["enabled"]})
+    if not updated:
+        raise HTTPException(500, f"Failed to toggle rule {rule_id}")
+    if _should_rebaseline_new_ticket_rule(rule, updated, {"enabled": updated["enabled"]}):
+        baseline_new_ticket_rule(updated, cache.get_filtered_issues())
+    return updated
 
 
 @router.post("/rules/{rule_id}/test")
@@ -79,16 +115,10 @@ async def test_rule(rule_id: int) -> dict[str, Any]:
     if not rule:
         raise HTTPException(404, f"Rule {rule_id} not found")
 
-    evaluator = EVALUATORS.get(rule["trigger_type"])
-    if not evaluator:
-        raise HTTPException(400, f"Unknown trigger type: {rule['trigger_type']}")
-
-    issues = cache.get_filtered_issues()
-    filtered = [iss for iss in issues if True]  # Apply filters later
-
-    from alert_engine import _matches_filters
-    filtered = [iss for iss in issues if _matches_filters(iss, rule["filters"])]
-    matching = evaluator(filtered, rule["trigger_config"])
+    try:
+        matching = get_rule_matches(rule, cache.get_filtered_issues())
+    except ValueError:
+        raise HTTPException(400, f"Unknown trigger type: {rule['trigger_type']}") from None
 
     return {
         "rule": rule,
@@ -104,29 +134,18 @@ async def send_rule_now(rule_id: int, _admin: dict = Depends(require_admin)) -> 
     if not rule:
         raise HTTPException(404, f"Rule {rule_id} not found")
 
-    evaluator = EVALUATORS.get(rule["trigger_type"])
-    if not evaluator:
-        raise HTTPException(400, f"Unknown trigger type: {rule['trigger_type']}")
-
-    from alert_engine import _matches_filters, _render_email, _refresh_tickets, set_jira_base_url
+    from alert_engine import _render_email, set_jira_base_url
     from email_service import send_email
     from config import JIRA_BASE_URL
     set_jira_base_url(JIRA_BASE_URL)
 
-    issues = cache.get_filtered_issues()
-    filtered = [iss for iss in issues if _matches_filters(iss, rule["filters"])]
-    matching = evaluator(filtered, rule["trigger_config"])
+    try:
+        matching = get_rule_matches(rule, cache.get_filtered_issues(), refresh=True)
+    except ValueError:
+        raise HTTPException(400, f"Unknown trigger type: {rule['trigger_type']}") from None
 
     if not matching:
         return {"sent": False, "matching_count": 0, "reason": "No matching tickets"}
-
-    # Refresh from Jira and re-evaluate to avoid sending stale data
-    matching = _refresh_tickets(matching)
-    matching = evaluator(matching, rule["trigger_config"])
-    matching = [iss for iss in matching if _matches_filters(iss, rule["filters"])]
-
-    if not matching:
-        return {"sent": False, "matching_count": 0, "reason": "No matching tickets after refresh"}
 
     subject, html = _render_email(rule, matching)
     recipients = [r.strip() for r in rule["recipients"].split(",") if r.strip()]
@@ -144,6 +163,8 @@ async def send_rule_now(rule_id: int, _admin: dict = Depends(require_admin)) -> 
         error=None if success else "Email delivery failed",
     )
     alert_store.update_last_run(rule["id"], sent=success)
+    if success:
+        mark_rule_tickets_seen(rule, matching)
 
     return {"sent": success, "matching_count": len(matching), "ticket_count": len(ticket_keys)}
 
