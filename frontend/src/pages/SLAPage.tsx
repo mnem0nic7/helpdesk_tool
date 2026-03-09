@@ -75,7 +75,7 @@ const SLA_BUCKET_RANGES: Record<SLATimerType, Array<[string, number, number]>> =
   ],
 };
 
-function getSLAFilterValue(timer: SLATimerType, status: "met" | "breached" | "running"): string {
+function getSLAFilterValue(timer: SLATimerType, status: "met" | "breached" | "running" | "total"): string {
   if (timer === "first_response") return `fr_${status}`;
   return `res_${status}`;
 }
@@ -133,6 +133,8 @@ function SLASummaryCard({
   const metPct = completed > 0 ? (stats.met / completed) * 100 : 0;
   const breachedPct = completed > 0 ? (stats.breached / completed) * 100 : 0;
   const runningPct = stats.total > 0 ? (stats.running / stats.total) * 100 : 0;
+  const totalFilterValue = getSLAFilterValue(timer, "total");
+  const isTotalActive = activeFilter === totalFilterValue;
   const filters = [
     {
       key: "met",
@@ -170,7 +172,16 @@ function SLASummaryCard({
   return (
     <div className="rounded-lg bg-white px-5 py-5 shadow">
       <h3 className="text-sm font-semibold tracking-wide text-gray-700 uppercase">{title}</h3>
-      <div className="mt-3 flex items-baseline gap-4">
+      <button
+        type="button"
+        onClick={() => onSelectFilter(totalFilterValue)}
+        aria-pressed={isTotalActive}
+        aria-label={`Filter ${title} Total`}
+        className={[
+          "mt-3 flex w-full items-baseline gap-4 rounded-xl px-2 py-2 text-left transition-colors",
+          isTotalActive ? "bg-slate-50 ring-2 ring-slate-300" : "hover:bg-slate-50",
+        ].join(" ")}
+      >
         <div>
           <span className="text-3xl font-bold text-green-600">{stats.compliance_pct.toFixed(1)}%</span>
           <span className="ml-1 text-xs text-gray-500">Compliance</span>
@@ -187,7 +198,7 @@ function SLASummaryCard({
             <span className="ml-1 text-xs text-gray-500">P95</span>
           </div>
         )}
-      </div>
+      </button>
       <div className="mt-4 flex h-4 w-full overflow-hidden rounded-full bg-gray-100">
         {filters.map((filter) => {
           if (filter.pct <= 0) return null;
@@ -229,11 +240,21 @@ function SLASummaryCard({
             </button>
           );
         })}
-        <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-slate-500">
+        <button
+          type="button"
+          onClick={() => onSelectFilter(totalFilterValue)}
+          aria-pressed={isTotalActive}
+          className={[
+            "inline-flex items-center rounded-full border px-3 py-1 text-slate-500 transition-colors",
+            isTotalActive
+              ? "border-slate-300 bg-slate-100 ring-2 ring-slate-300 ring-offset-1"
+              : "border-slate-200 bg-slate-50 hover:bg-slate-100",
+          ].join(" ")}
+        >
           Total: {stats.total}
-        </span>
+        </button>
       </div>
-      <p className="mt-3 text-xs text-slate-500">Click a segment or status pill to filter the ticket list.</p>
+      <p className="mt-3 text-xs text-slate-500">Click a metric, segment, or status pill to filter the ticket list.</p>
     </div>
   );
 }
@@ -515,9 +536,11 @@ export default function SLAPage() {
     if (filterPriority) list = list.filter((t) => t.priority === filterPriority);
     if (filterStatus) list = list.filter((t) => t.status === filterStatus);
     if (filterAssignee) list = list.filter((t) => t.assignee === filterAssignee);
+    if (filterSLA === "fr_total") list = list.filter((t) => t.sla_first_response != null);
     if (filterSLA === "fr_breached") list = list.filter((t) => t.sla_first_response?.status === "breached");
     if (filterSLA === "fr_met") list = list.filter((t) => t.sla_first_response?.status === "met");
     if (filterSLA === "fr_running") list = list.filter((t) => t.sla_first_response?.status === "running");
+    if (filterSLA === "res_total") list = list.filter((t) => t.sla_resolution != null);
     if (filterSLA === "res_breached") list = list.filter((t) => t.sla_resolution?.status === "breached");
     if (filterSLA === "res_met") list = list.filter((t) => t.sla_resolution?.status === "met");
     if (filterSLA === "res_running") list = list.filter((t) => t.sla_resolution?.status === "running");
@@ -743,9 +766,11 @@ export default function SLAPage() {
             className="rounded-md border border-gray-300 px-2 py-1.5 text-sm">
             <option value="">All SLA Status</option>
             <option value="any_breached">Any Breached</option>
+            <option value="fr_total">FR Total</option>
             <option value="fr_breached">FR Breached</option>
             <option value="fr_met">FR Met</option>
             <option value="fr_running">FR Running</option>
+            <option value="res_total">Res Total</option>
             <option value="res_breached">Res Breached</option>
             <option value="res_met">Res Met</option>
             <option value="res_running">Res Running</option>

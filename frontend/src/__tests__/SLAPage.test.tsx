@@ -81,15 +81,15 @@ const slaMetricsResponse = {
       ],
     },
     resolution: {
-      total: 2,
+      total: 3,
       met: 1,
       breached: 0,
-      running: 1,
+      running: 2,
       compliance_pct: 100,
-      avg_elapsed_minutes: 510,
+      avg_elapsed_minutes: 360,
       p95_elapsed_minutes: 840,
       distribution: [
-        { label: "<2h", count: 0 },
+        { label: "<2h", count: 1 },
         { label: "2–4h", count: 1 },
         { label: "4–8h", count: 0 },
         { label: "1 day", count: 0 },
@@ -138,6 +138,21 @@ const slaMetricsResponse = {
         elapsed_minutes: 840,
         target_minutes: 1440,
         breach_time: "2026-03-02T10:00:00Z",
+      },
+    },
+    {
+      ...baseTicket,
+      key: "OIT-3",
+      summary: "Awaiting follow-up details from reporting team",
+      status: "Waiting for customer",
+      status_category: "In Progress",
+      priority: "Medium",
+      sla_first_response: null,
+      sla_resolution: {
+        status: "running",
+        elapsed_minutes: 60,
+        target_minutes: 480,
+        breach_time: "2026-03-02T18:00:00Z",
       },
     },
   ],
@@ -192,6 +207,21 @@ describe("SLAPage", () => {
     await waitFor(() => {
       expect(screen.getByText("OIT-1")).toBeInTheDocument();
       expect(screen.getByText("OIT-2")).toBeInTheDocument();
+    });
+  });
+
+  it("filters the ticket list when a summary total metric is clicked", async () => {
+    const user = userEvent.setup();
+
+    render(<SLAPage />);
+
+    await screen.findByText("SLA Tracker");
+    await user.click(screen.getByRole("button", { name: "Filter First Response Total" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("OIT-1")).toBeInTheDocument();
+      expect(screen.getByText("OIT-2")).toBeInTheDocument();
+      expect(screen.queryByText("OIT-3")).not.toBeInTheDocument();
     });
   });
 });
