@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type {
@@ -65,7 +65,7 @@ function formatTimestamp(iso: string): string {
 // ---------------------------------------------------------------------------
 
 function renderInline(text: string) {
-  const parts: (string | JSX.Element)[] = [];
+  const parts: ReactNode[] = [];
   const re = /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g;
   let last = 0;
   let m: RegExpExecArray | null;
