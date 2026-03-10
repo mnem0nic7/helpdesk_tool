@@ -869,8 +869,12 @@ export const api = {
     return postJSON<{ content: string }>(`/api/kb/articles/${id}/reformat`, {});
   },
 
-  reformatAllKnowledgeBaseArticles(): Promise<{ reformatted: number }> {
-    return postJSON<{ reformatted: number }>("/api/kb/articles/reformat-all", {});
+  reformatAllKnowledgeBaseArticles(): Promise<{ started: boolean; total: number }> {
+    return postJSON<{ started: boolean; total: number }>("/api/kb/articles/reformat-all", {});
+  },
+
+  getReformatStatus(): Promise<{ running: boolean; processed: number; total: number; errors: number }> {
+    return fetchJSON("/api/kb/reformat-status");
   },
 
   async draftKBArticleFromSOP(file: File): Promise<KnowledgeBaseDraft> {

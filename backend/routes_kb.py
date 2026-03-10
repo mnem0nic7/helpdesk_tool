@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
 
 from ai_client import draft_kb_article, draft_kb_from_sop, get_available_models, reformat_kb_article_content
 from auth import require_admin
@@ -17,12 +17,15 @@ from models import (
     KnowledgeBaseDraft,
     KnowledgeBaseDraftRequest,
 )
+
 from request_type import extract_request_type_name_from_fields
 from site_context import get_current_site_scope, get_scoped_issues
 
 router = APIRouter(prefix="/api/kb")
 
 _client = JiraClient()
+
+_reformat_progress: dict[str, Any] = {"running": False, "processed": 0, "total": 0, "errors": 0}
 
 
 def _ensure_primary_site() -> None:
@@ -104,39 +107,54 @@ async def draft_from_sop(
     return draft_kb_from_sop(text, filename, available[0].id)
 
 
+@router.get("/reformat-status")
+async def get_reformat_status() -> dict[str, Any]:
+    return dict(_reformat_progress)
+
+
 @router.post("/articles/reformat-all")
 async def reformat_all_articles(
+    background_tasks: BackgroundTasks,
     _admin: dict[str, Any] = Depends(require_admin),
-) -> dict[str, int]:
-    """Reformat all KB articles as structured markdown using AI."""
+) -> dict[str, Any]:
+    """Kick off background reformat of all KB articles. Poll /api/kb/reformat-status for progress."""
     _ensure_primary_site()
+    if _reformat_progress["running"]:
+        return {"started": False, "message": "Reformat already in progress"}
     available = get_available_models()
     if not available:
         raise HTTPException(status_code=400, detail="No AI model available to reformat articles")
     model_id = available[0].id
     all_articles = kb_store.list_articles()
-    count = 0
-    for article in all_articles:
+
+    async def _run() -> None:
+        _reformat_progress.update(running=True, processed=0, total=len(all_articles), errors=0)
         try:
-            new_content = reformat_kb_article_content(article, model_id)
-            if new_content:
-                from models import KnowledgeBaseArticleUpsertRequest
-                kb_store.update_article(
-                    article.id,  # type: ignore[arg-type]
-                    KnowledgeBaseArticleUpsertRequest(
-                        title=article.title,
-                        request_type=article.request_type,
-                        summary=article.summary,
-                        content=new_content,
-                        source_ticket_key=article.source_ticket_key or None,
-                    ),
-                    ai_generated=True,
-                )
-                count += 1
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning("Failed to reformat article %s: %s", article.id, exc)
-    return {"reformatted": count}
+            for article in all_articles:
+                try:
+                    new_content = reformat_kb_article_content(article, model_id)
+                    if new_content:
+                        kb_store.update_article(
+                            article.id,  # type: ignore[arg-type]
+                            KnowledgeBaseArticleUpsertRequest(
+                                title=article.title,
+                                request_type=article.request_type,
+                                summary=article.summary,
+                                content=new_content,
+                                source_ticket_key=article.source_ticket_key or None,
+                            ),
+                            ai_generated=True,
+                        )
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).warning("Failed to reformat article %s: %s", article.id, exc)
+                    _reformat_progress["errors"] += 1
+                _reformat_progress["processed"] += 1
+        finally:
+            _reformat_progress["running"] = False
+
+    background_tasks.add_task(_run)
+    return {"started": True, "total": len(all_articles)}
 
 
 @router.post("/articles/{article_id}/reformat")

@@ -329,18 +329,36 @@ export default function KnowledgeBasePage() {
     },
   });
 
+  const reformatStatusQuery = useQuery({
+    queryKey: ["kb-reformat-status"],
+    queryFn: () => api.getReformatStatus(),
+    refetchInterval: (q) => (q.state.data?.running ? 1500 : false),
+  });
+
   const reformatAllMutation = useMutation({
     mutationFn: () => api.reformatAllKnowledgeBaseArticles(),
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ["kb-articles"] });
+    onSuccess: () => {
       setConfirmReformatAll(false);
-      setMessage({ type: "info", text: `Reformatted ${result.reformatted} article${result.reformatted !== 1 ? "s" : ""}.` });
+      queryClient.invalidateQueries({ queryKey: ["kb-reformat-status"] });
     },
     onError: (error) => {
       setConfirmReformatAll(false);
       setMessage({ type: "error", text: error instanceof Error ? error.message : String(error) });
     },
   });
+
+  const reformatRunning = reformatStatusQuery.data?.running ?? false;
+  const reformatProcessed = reformatStatusQuery.data?.processed ?? 0;
+  const reformatTotal = reformatStatusQuery.data?.total ?? 0;
+  const prevReformatRunning = useRef(false);
+
+  useEffect(() => {
+    if (prevReformatRunning.current && !reformatRunning && reformatTotal > 0) {
+      queryClient.invalidateQueries({ queryKey: ["kb-articles"] });
+      setMessage({ type: "info", text: `Reformatted ${reformatProcessed} article${reformatProcessed !== 1 ? "s" : ""}.` });
+    }
+    prevReformatRunning.current = reformatRunning;
+  }, [reformatRunning, reformatProcessed, reformatTotal, queryClient]);
 
   const sopMutation = useMutation({
     mutationFn: (file: File) => api.draftKBArticleFromSOP(file),
@@ -451,17 +469,21 @@ export default function KnowledgeBasePage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {confirmReformatAll ? (
+          {reformatRunning ? (
+            <span className="self-center text-xs font-medium text-amber-700">
+              Reformatting… {reformatProcessed}/{reformatTotal}
+            </span>
+          ) : confirmReformatAll ? (
             <>
               <span className="self-center text-xs text-amber-700">
-                Reformat all 147 articles with AI?
+                Reformat all {articles.length} articles with AI?
               </span>
               <button
                 onClick={() => reformatAllMutation.mutate()}
                 disabled={reformatAllMutation.isPending}
                 className="self-start rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-700 disabled:opacity-50"
               >
-                {reformatAllMutation.isPending ? "Reformatting…" : "Confirm"}
+                {reformatAllMutation.isPending ? "Starting…" : "Confirm"}
               </button>
               <button
                 onClick={() => setConfirmReformatAll(false)}
