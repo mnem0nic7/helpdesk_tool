@@ -5,8 +5,13 @@ export interface SiteBranding {
   alertPrefix: string;
 }
 
+function isOasisDevHost(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase();
+  return host === "oasisdev.movedocs.com" || host.startsWith("oasisdev.");
+}
+
 export function getSiteBranding(): SiteBranding {
-  if (typeof window !== "undefined" && window.location.hostname === "oasisdev.movedocs.com") {
+  if (typeof window !== "undefined" && isOasisDevHost(window.location.hostname)) {
     return {
       scope: "oasisdev",
       appName: "OasisDev Helpdesk",

@@ -57,6 +57,22 @@ class TestMetricsEndpoint:
         assert headline["stale_count"] == 2
         assert headline["excluded_count"] == 0
 
+    def test_forwarded_oasisdev_host_metrics_only_include_oasisdev_tickets(self, test_client):
+        resp = test_client.get(
+            "/api/metrics",
+            headers={
+                "host": "dashboard.internal",
+                "x-forwarded-host": "oasisdev.movedocs.com",
+            },
+        )
+        assert resp.status_code == 200
+        headline = resp.json()["headline"]
+        assert headline["total_tickets"] == 2
+        assert headline["open_backlog"] == 2
+        assert headline["resolved"] == 0
+        assert headline["stale_count"] == 2
+        assert headline["excluded_count"] == 0
+
 
 class TestSLAEndpoints:
     """GET /api/sla/summary and /api/sla/breaches"""

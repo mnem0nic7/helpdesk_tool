@@ -1,4 +1,8 @@
 it-app.movedocs.com, oasisdev.movedocs.com {
 	tls internal
-	reverse_proxy dashboard:80
+	reverse_proxy dashboard:80 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-Proto {http.request.scheme}
+	}
 }
