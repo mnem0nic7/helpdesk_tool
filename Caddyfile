@@ -1,5 +1,13 @@
 it-app.movedocs.com, oasisdev.movedocs.com {
-	tls internal
+	tls {
+		issuer acme {
+			dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+			resolvers 1.1.1.1 1.0.0.1
+			propagation_delay 30s
+			propagation_timeout 5m
+		}
+		issuer internal
+	}
 	reverse_proxy dashboard:80 {
 		header_up Host {http.request.host}
 		header_up X-Forwarded-Host {http.request.host}
