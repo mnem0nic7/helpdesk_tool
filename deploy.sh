@@ -37,9 +37,9 @@ docker compose down
 echo ">>> Starting containers..."
 docker compose up -d
 
-# Health check — wait up to 60 seconds (Caddy needs time for TLS cert)
+# Health check — wait up to 120 seconds (first-time DNS-01 cert can take 30-90s)
 echo ">>> Waiting for health check..."
-for i in $(seq 1 60); do
+for i in $(seq 1 120); do
     if curl -sf http://localhost:80/api/health > /dev/null 2>&1; then
         echo ""
         echo "=== DEPLOYED SUCCESSFULLY ==="
