@@ -22,6 +22,7 @@ reports/
 
 # Scratch / planning
 plan.md
+SOP-Helpdesk
 
 # One-off scripts with hardcoded credentials
 pull_all_fields.py

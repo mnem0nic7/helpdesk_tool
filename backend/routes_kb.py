@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
-from ai_client import draft_kb_article, get_available_models, reformat_kb_article_content
+from ai_client import draft_kb_article, draft_kb_from_sop, get_available_models, reformat_kb_article_content
 from auth import require_admin
 from jira_client import JiraClient
-from knowledge_base import kb_store
+from knowledge_base import extract_sop_text, kb_store
 from metrics import _is_open
 from models import (
     KnowledgeBaseArticle,
@@ -79,6 +79,29 @@ async def delete_article(
     if not kb_store.delete_article(article_id):
         raise HTTPException(status_code=404, detail=f"KB article {article_id} not found")
     return {"deleted": True}
+
+
+@router.post("/articles/from-sop")
+async def draft_from_sop(
+    file: UploadFile = File(...),
+    _admin: dict[str, Any] = Depends(require_admin),
+) -> KnowledgeBaseDraft:
+    """Upload a DOCX, PDF, or TXT SOP and convert it to a KB article draft using AI."""
+    _ensure_primary_site()
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 10 MB)")
+    filename = file.filename or "upload"
+    try:
+        text = extract_sop_text(filename, content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Could not extract any text from the uploaded file")
+    available = get_available_models()
+    if not available:
+        raise HTTPException(status_code=400, detail="No AI model available to convert the SOP")
+    return draft_kb_from_sop(text, filename, available[0].id)
 
 
 @router.post("/articles/reformat-seeded")

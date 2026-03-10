@@ -65,7 +65,8 @@ def _extract_docx_lines(blob: bytes) -> list[str]:
         root = ET.fromstring(docx.read("word/document.xml"))
 
     lines: list[str] = []
-    for para in root.findall(".//w:body/w:p", _DOCX_NS):
+    # findall("//w:p") captures paragraphs in both body and table cells (w:tc)
+    for para in root.findall(".//w:p", _DOCX_NS):
         text = "".join((node.text or "") for node in para.findall(".//w:t", _DOCX_NS)).strip()
         if text:
             lines.append(text)
@@ -105,6 +106,33 @@ def _default_seed_archive_paths() -> list[Path]:
         Path("/app/OIT_KB_Articles.zip"),
     ])
     return candidates
+
+
+_SUPPORTED_SOP_EXTENSIONS = {".docx", ".txt", ".pdf"}
+
+
+def extract_sop_text(filename: str, content: bytes) -> str:
+    """Extract plain text from a DOCX, TXT, or PDF upload."""
+    ext = Path(filename).suffix.lower()
+    if ext == ".docx":
+        lines = _extract_docx_lines(content)
+        return "\n\n".join(lines)
+    if ext == ".txt":
+        return content.decode("utf-8", errors="replace")
+    if ext == ".pdf":
+        return _extract_pdf_text(content)
+    raise ValueError(f"Unsupported file type '{ext}'. Please upload a .docx, .txt, or .pdf file.")
+
+
+def _extract_pdf_text(content: bytes) -> str:
+    try:
+        import io
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise ValueError("PDF support requires pypdf (pip install pypdf)") from exc
+    reader = PdfReader(io.BytesIO(content))
+    pages = [page.extract_text() or "" for page in reader.pages]
+    return "\n\n".join(p.strip() for p in pages if p.strip())
 
 
 class KnowledgeBaseStore:
