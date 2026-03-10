@@ -329,7 +329,7 @@ class IssueCache:
     # Incremental refresh
     # ------------------------------------------------------------------
 
-    def _incremental_refresh(self) -> list[str]:
+    def _incremental_refresh(self, include_excluded_updates: bool = True) -> list[str]:
         """Fetch only issues updated in the last refresh interval and merge.
 
         Returns a list of issue keys that need auto-triage (not yet processed).
@@ -344,6 +344,17 @@ class IssueCache:
             )
             logger.info("Cache: incremental refresh with JQL: %s", jql)
             updated_issues = self._client.search_all(jql, progress_callback=self._progress_callback)
+            if not include_excluded_updates:
+                original_count = len(updated_issues)
+                updated_issues = [
+                    issue for issue in updated_issues if not JiraClient.is_excluded(issue)
+                ]
+                skipped = original_count - len(updated_issues)
+                if skipped:
+                    logger.info(
+                        "Cache: skipped %d OasisDev issue update(s) during background refresh",
+                        skipped,
+                    )
             logger.info("Cache: incremental fetched %d issues", len(updated_issues))
 
             # Enrich request types for the updated batch
@@ -569,7 +580,7 @@ class IssueCache:
             await asyncio.sleep(_REFRESH_INTERVAL)
             try:
                 new_keys = await asyncio.get_running_loop().run_in_executor(
-                    None, self._incremental_refresh
+                    None, self._incremental_refresh, False
                 )
                 if new_keys:
                     await self._auto_triage_new_tickets(new_keys)
