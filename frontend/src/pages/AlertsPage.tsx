@@ -21,6 +21,7 @@ const TRIGGER_CONFIGS: Record<string, { label: string; field: string; default: n
   stale: [{ label: "Stale after (hours)", field: "stale_hours", default: 24 }],
   fr_approaching: [{ label: "Threshold (%)", field: "threshold_pct", default: 80 }],
   res_approaching: [{ label: "Threshold (%)", field: "threshold_pct", default: 80 }],
+  unresolved: [{ label: "Unresolved after (hours)", field: "hours", default: 8 }],
 };
 
 function sortOptionValues(values: string[]): string[] {

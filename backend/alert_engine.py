@@ -244,6 +244,26 @@ def evaluate_new_ticket(issues: list[dict], config: dict) -> list[dict]:
     return list(issues)
 
 
+def evaluate_unresolved(issues: list[dict], config: dict) -> list[dict]:
+    """Find open tickets still unresolved after a given number of hours (wall-clock)."""
+    hours = float(config.get("hours", 8))
+    threshold_minutes = hours * 60
+    now = datetime.now(timezone.utc)
+    result = []
+    for iss in issues:
+        if not _is_open(iss):
+            continue
+        created_str = (iss.get("fields") or {}).get("created")
+        if not created_str:
+            continue
+        created = _parse_dt(created_str)
+        if not created:
+            continue
+        if (now - created).total_seconds() / 60.0 > threshold_minutes:
+            result.append(iss)
+    return result
+
+
 EVALUATORS = {
     "stale": evaluate_stale,
     "fr_breach": evaluate_fr_breach,
@@ -251,6 +271,7 @@ EVALUATORS = {
     "fr_approaching": evaluate_fr_approaching,
     "res_approaching": evaluate_res_approaching,
     "new_ticket": evaluate_new_ticket,
+    "unresolved": evaluate_unresolved,
 }
 
 
@@ -270,6 +291,7 @@ TRIGGER_LABELS = {
     "fr_approaching": "Approaching First Response SLA",
     "res_approaching": "Approaching Resolution SLA",
     "new_ticket": "New Tickets",
+    "unresolved": "Unresolved Past Time Limit",
 }
 
 

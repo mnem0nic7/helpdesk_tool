@@ -195,6 +195,17 @@ Respond with ONLY valid JSON (no markdown fences):
 If no changes are needed (except request_type which is always required), return only the request_type suggestion.
 """
 
+KB_SOP_PROMPT = """You are converting a Standard Operating Procedure (SOP) document into an internal IT helpdesk knowledge base article.
+
+Return a single JSON object with these fields:
+- "title": concise KB article title (not the SOP document title verbatim)
+- "summary": one sentence describing what the article covers
+- "request_type": the closest IT helpdesk category if inferable (e.g. "Email or Outlook", "VPN", "Password MFA Authentication", "Onboard new employees"), otherwise empty string
+- "content": full article in markdown — ## for section headings, numbered lists for step-by-step procedures (group consecutive steps without blank lines between them), - for bullet points, and Note:/Warning:/Tip:/Important: prefixes for callouts
+
+Preserve all technical details exactly. Return only the JSON object, no preamble, no markdown fences."""
+
+
 KB_REFORMAT_PROMPT = """You are reformatting an IT knowledge base article for better readability.
 
 Restructure the content using clean markdown:
@@ -800,6 +811,70 @@ def draft_kb_article(
         model_id,
         existing_article,
         fallback_request_type=extract_request_type_name_from_fields(issue.get("fields", {})),
+    )
+
+
+def draft_kb_from_sop(text: str, filename: str, model_id: str) -> KnowledgeBaseDraft:
+    """Convert extracted SOP text into a KB article draft using AI."""
+    provider = _get_model_provider(model_id)
+    if not provider:
+        raise ValueError(f"Unknown model: {model_id}")
+
+    # Truncate to avoid token overrun on very long SOPs
+    user_msg = f"Source file: {filename}\n\nSOP content:\n{text[:8000]}"
+    logger.info("Drafting KB article from SOP '%s' with %s (%s)", filename, model_id, provider)
+
+    if provider == "openai":
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": KB_SOP_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.2,
+            max_tokens=3000,
+        )
+        raw = resp.choices[0].message.content or "{}"
+    else:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        resp = client.messages.create(
+            model=model_id,
+            system=KB_SOP_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+            temperature=0.2,
+            max_tokens=3000,
+        )
+        raw = resp.content[0].text
+
+    return _parse_sop_draft(raw, filename)
+
+
+def _parse_sop_draft(raw: str, filename: str) -> KnowledgeBaseDraft:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        text = text.rsplit("```", 1)[0].strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        import re
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        data = json.loads(m.group()) if m else {}
+    stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("_", " ")
+    return KnowledgeBaseDraft(
+        title=str(data.get("title") or stem),
+        request_type=str(data.get("request_type") or ""),
+        summary=str(data.get("summary") or ""),
+        content=str(data.get("content") or ""),
+        model_used=model_id,
+        source_ticket_key="",
+        suggested_article_id=None,
+        suggested_article_title="",
+        recommended_action="create_new",
+        change_summary=f"Converted from {filename}",
     )
 
 

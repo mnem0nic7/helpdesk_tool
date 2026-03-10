@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type {
@@ -236,6 +236,8 @@ export default function KnowledgeBasePage() {
   const [ticketKey, setTicketKey] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmReformatAll, setConfirmReformatAll] = useState(false);
+  const [sopFile, setSopFile] = useState<File | null>(null);
+  const sopInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ type: "info" | "error"; text: string } | null>(null);
 
   const { data: requestTypes = [] } = useQuery({
@@ -336,6 +338,32 @@ export default function KnowledgeBasePage() {
     },
     onError: (error) => {
       setConfirmReformatAll(false);
+      setMessage({ type: "error", text: error instanceof Error ? error.message : String(error) });
+    },
+  });
+
+  const sopMutation = useMutation({
+    mutationFn: (file: File) => api.draftKBArticleFromSOP(file),
+    onSuccess: (draft) => {
+      setSelectedId(null);
+      setMode("create");
+      setEditor({
+        id: null,
+        code: "",
+        title: draft.title,
+        request_type: draft.request_type,
+        summary: draft.summary,
+        content: draft.content,
+        source_ticket_key: "",
+        source_filename: "",
+        imported_from_seed: false,
+        ai_generated: true,
+      });
+      setSopFile(null);
+      if (sopInputRef.current) sopInputRef.current.value = "";
+      setMessage({ type: "info", text: `AI converted the SOP to a draft. Review and save.` });
+    },
+    onError: (error) => {
       setMessage({ type: "error", text: error instanceof Error ? error.message : String(error) });
     },
   });
@@ -579,6 +607,28 @@ export default function KnowledgeBasePage() {
                   </button>
                 )}
               </div>
+            </div>
+
+            {/* SOP upload */}
+            <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3">
+              <div>
+                <span className="text-sm font-semibold text-slate-900">Upload SOP</span>
+                <span className="ml-2 text-xs text-slate-400">.docx · .pdf · .txt</span>
+              </div>
+              <input
+                ref={sopInputRef}
+                type="file"
+                accept=".docx,.pdf,.txt"
+                onChange={(e) => setSopFile(e.target.files?.[0] ?? null)}
+                className="text-xs text-slate-600 file:mr-2 file:cursor-pointer file:rounded-lg file:border file:border-slate-300 file:bg-white file:px-3 file:py-1 file:text-xs file:font-medium file:text-slate-700 file:hover:bg-slate-50"
+              />
+              <button
+                onClick={() => sopFile && sopMutation.mutate(sopFile)}
+                disabled={sopMutation.isPending || !sopFile}
+                className="rounded-lg bg-slate-700 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {sopMutation.isPending ? "Converting…" : "Convert to Article"}
+              </button>
             </div>
           </section>
 

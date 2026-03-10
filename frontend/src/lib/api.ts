@@ -873,6 +873,21 @@ export const api = {
     return postJSON<{ reformatted: number }>("/api/kb/articles/reformat-seeded", {});
   },
 
+  async draftKBArticleFromSOP(file: File): Promise<KnowledgeBaseDraft> {
+    const body = new FormData();
+    body.append("file", file);
+    const res = await fetch("/api/kb/articles/from-sop", { method: "POST", body });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Upload failed (${res.status}): ${text}`);
+    }
+    return res.json() as Promise<KnowledgeBaseDraft>;
+  },
+
   draftKnowledgeBaseArticleFromTicket(
     key: string,
     articleId?: number | null,
