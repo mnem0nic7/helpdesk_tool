@@ -129,6 +129,23 @@ class TestAuthMiddleware:
         resp = auth_client.get("/api/health")
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
+        assert resp.json()["site_scope"] == "primary"
+
+    def test_health_uses_oasisdev_host_scope(self, auth_client):
+        resp = auth_client.get("/api/health", headers={"host": "oasisdev.movedocs.com"})
+        assert resp.status_code == 200
+        assert resp.json()["site_scope"] == "oasisdev"
+
+    def test_health_uses_forwarded_host_scope(self, auth_client):
+        resp = auth_client.get(
+            "/api/health",
+            headers={
+                "host": "dashboard.internal",
+                "x-forwarded-host": "oasisdev.movedocs.com",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["site_scope"] == "oasisdev"
 
     def test_auth_login_is_not_blocked_by_middleware(self, auth_client):
         resp = auth_client.get("/api/auth/login", follow_redirects=False)

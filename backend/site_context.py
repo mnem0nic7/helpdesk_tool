@@ -39,6 +39,8 @@ def normalize_host(host: str | None) -> str:
     raw = (host or "").strip().lower()
     if not raw:
         return ""
+    if "," in raw:
+        raw = raw.split(",", 1)[0].strip()
     return raw.split(":", 1)[0]
 
 
@@ -51,7 +53,10 @@ def get_site_scope_for_host(host: str | None) -> SiteScope:
 
 def get_site_scope_from_request(request: Request) -> SiteScope:
     """Determine the current site scope from the incoming request host."""
-    return get_site_scope_for_host(request.headers.get("host") or request.url.netloc)
+    forwarded_host = request.headers.get("x-forwarded-host")
+    return get_site_scope_for_host(
+        forwarded_host or request.headers.get("host") or request.url.netloc
+    )
 
 
 def set_current_site_scope(scope: SiteScope) -> Token[SiteScope]:

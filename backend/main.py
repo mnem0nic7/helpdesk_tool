@@ -30,6 +30,7 @@ from routes_sla import router as sla_router
 from routes_alerts import router as alerts_router
 from issue_cache import cache
 from site_context import (
+    get_current_site_scope,
     get_site_scope_from_request,
     reset_current_site_scope,
     set_current_site_scope,
@@ -132,7 +133,8 @@ app.include_router(alerts_router)
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    scope = get_current_site_scope()
+    return {"status": "ok", "site_scope": scope}
 
 
 # ---------------------------------------------------------------------------
