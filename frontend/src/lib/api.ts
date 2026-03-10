@@ -869,8 +869,8 @@ export const api = {
     return postJSON<{ content: string }>(`/api/kb/articles/${id}/reformat`, {});
   },
 
-  reformatAllSeededKnowledgeBaseArticles(): Promise<{ reformatted: number }> {
-    return postJSON<{ reformatted: number }>("/api/kb/articles/reformat-seeded", {});
+  reformatAllKnowledgeBaseArticles(): Promise<{ reformatted: number }> {
+    return postJSON<{ reformatted: number }>("/api/kb/articles/reformat-all", {});
   },
 
   async draftKBArticleFromSOP(file: File): Promise<KnowledgeBaseDraft> {
