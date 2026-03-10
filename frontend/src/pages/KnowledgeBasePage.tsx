@@ -64,6 +64,30 @@ function formatTimestamp(iso: string): string {
 // Lightweight markdown renderer — handles DOCX plain text and AI markdown
 // ---------------------------------------------------------------------------
 
+type CalloutStyle = {
+  border: string;
+  bg: string;
+  label: string;
+  labelColor: string;
+};
+
+const CALLOUT_STYLES: Record<string, CalloutStyle> = {
+  note:      { border: "border-blue-300",  bg: "bg-blue-50",  label: "Note",      labelColor: "text-blue-700" },
+  fyi:       { border: "border-blue-300",  bg: "bg-blue-50",  label: "FYI",       labelColor: "text-blue-700" },
+  tip:       { border: "border-green-300", bg: "bg-green-50", label: "Tip",       labelColor: "text-green-700" },
+  warning:   { border: "border-amber-300", bg: "bg-amber-50", label: "Warning",   labelColor: "text-amber-700" },
+  caution:   { border: "border-amber-300", bg: "bg-amber-50", label: "Caution",   labelColor: "text-amber-700" },
+  important: { border: "border-red-300",   bg: "bg-red-50",   label: "Important", labelColor: "text-red-700" },
+  critical:  { border: "border-red-300",   bg: "bg-red-50",   label: "Critical",  labelColor: "text-red-700" },
+};
+
+function getCallout(text: string): { style: CalloutStyle; body: string } | null {
+  const m = text.match(/^(note|fyi|tip|warning|caution|important|critical):\s*/i);
+  if (!m) return null;
+  const style = CALLOUT_STYLES[m[1].toLowerCase()];
+  return style ? { style, body: text.slice(m[0].length) } : null;
+}
+
 function renderInline(text: string) {
   const parts: ReactNode[] = [];
   const re = /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g;
@@ -93,49 +117,94 @@ function ArticleContent({ text }: { text: string }) {
 
   const blocks = text.split(/\n\n+/);
   return (
-    <div className="space-y-3 text-sm leading-relaxed text-slate-800">
+    <div className="space-y-4 text-[15px] leading-relaxed text-slate-800">
       {blocks.map((block, i) => {
         const trimmed = block.trim();
         if (!trimmed) return null;
 
+        // Horizontal rule
+        if (/^(-{3,}|\*{3,})$/.test(trimmed))
+          return <hr key={i} className="border-slate-200" />;
+
+        // Fenced code block
         if (trimmed.startsWith("```")) {
           const inner = trimmed.replace(/^```\w*\n?/, "").replace(/\n?```$/, "");
           return (
-            <pre key={i} className="overflow-x-auto rounded-lg bg-slate-100 p-3 font-mono text-xs text-slate-800">
+            <pre key={i} className="overflow-x-auto rounded-lg bg-slate-900 p-4 font-mono text-xs leading-5 text-slate-100">
               {inner}
             </pre>
           );
         }
 
+        // Headings
         if (trimmed.startsWith("### "))
-          return <h4 key={i} className="font-semibold text-slate-900">{trimmed.slice(4)}</h4>;
+          return (
+            <h4 key={i} className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+              {trimmed.slice(4)}
+            </h4>
+          );
         if (trimmed.startsWith("## "))
-          return <h3 key={i} className="text-base font-semibold text-slate-900">{trimmed.slice(3)}</h3>;
+          return (
+            <h3 key={i} className="border-b border-slate-200 pb-1 text-base font-semibold text-slate-900">
+              {trimmed.slice(3)}
+            </h3>
+          );
         if (trimmed.startsWith("# "))
-          return <h2 key={i} className="text-lg font-bold text-slate-900">{trimmed.slice(2)}</h2>;
+          return (
+            <h2 key={i} className="text-lg font-bold text-slate-900">
+              {trimmed.slice(2)}
+            </h2>
+          );
 
         const lines = trimmed.split("\n").filter((l) => l.trim());
 
+        // Unordered list
         if (lines.length > 0 && lines.every((l) => /^[-*•]\s/.test(l))) {
           return (
-            <ul key={i} className="ml-5 list-disc space-y-1">
+            <ul key={i} className="space-y-1.5 pl-1">
               {lines.map((l, j) => (
-                <li key={j}>{renderInline(l.replace(/^[-*•]\s+/, ""))}</li>
+                <li key={j} className="flex gap-2.5">
+                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
+                  <span>{renderInline(l.replace(/^[-*•]\s+/, ""))}</span>
+                </li>
               ))}
             </ul>
           );
         }
 
+        // Ordered list — rendered as numbered step cards
         if (lines.length > 0 && lines.every((l) => /^\d+[.)]\s/.test(l))) {
           return (
-            <ol key={i} className="ml-5 list-decimal space-y-1">
+            <div key={i} className="space-y-2">
               {lines.map((l, j) => (
-                <li key={j}>{renderInline(l.replace(/^\d+[.)]\s+/, ""))}</li>
+                <div key={j} className="flex gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-700 text-xs font-bold text-white">
+                    {j + 1}
+                  </span>
+                  <span className="flex-1 pt-0.5">{renderInline(l.replace(/^\d+[.)]\s+/, ""))}</span>
+                </div>
               ))}
-            </ol>
+            </div>
           );
         }
 
+        // Callout box — Note / Tip / Warning / Important / etc.
+        const callout = getCallout(trimmed);
+        if (callout) {
+          return (
+            <div
+              key={i}
+              className={`rounded-lg border-l-4 px-4 py-3 ${callout.style.border} ${callout.style.bg}`}
+            >
+              <span className={`mr-2 text-xs font-bold uppercase tracking-wide ${callout.style.labelColor}`}>
+                {callout.style.label}
+              </span>
+              <span className="text-sm text-slate-700">{renderInline(callout.body)}</span>
+            </div>
+          );
+        }
+
+        // Regular paragraph
         return (
           <p key={i}>
             {trimmed.split("\n").map((l, j) => (
