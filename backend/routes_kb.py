@@ -104,19 +104,19 @@ async def draft_from_sop(
     return draft_kb_from_sop(text, filename, available[0].id)
 
 
-@router.post("/articles/reformat-seeded")
-async def reformat_seeded_articles(
+@router.post("/articles/reformat-all")
+async def reformat_all_articles(
     _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, int]:
-    """Reformat all seed-imported KB articles as structured markdown using AI."""
+    """Reformat all KB articles as structured markdown using AI."""
     _ensure_primary_site()
     available = get_available_models()
     if not available:
         raise HTTPException(status_code=400, detail="No AI model available to reformat articles")
     model_id = available[0].id
-    seeded = [a for a in kb_store.list_articles() if a.imported_from_seed]
+    all_articles = kb_store.list_articles()
     count = 0
-    for article in seeded:
+    for article in all_articles:
         try:
             new_content = reformat_kb_article_content(article, model_id)
             if new_content:

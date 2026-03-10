@@ -330,11 +330,11 @@ export default function KnowledgeBasePage() {
   });
 
   const reformatAllMutation = useMutation({
-    mutationFn: () => api.reformatAllSeededKnowledgeBaseArticles(),
+    mutationFn: () => api.reformatAllKnowledgeBaseArticles(),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["kb-articles"] });
       setConfirmReformatAll(false);
-      setMessage({ type: "info", text: `Reformatted ${result.reformatted} seeded article${result.reformatted !== 1 ? "s" : ""}.` });
+      setMessage({ type: "info", text: `Reformatted ${result.reformatted} article${result.reformatted !== 1 ? "s" : ""}.` });
     },
     onError: (error) => {
       setConfirmReformatAll(false);
@@ -454,7 +454,7 @@ export default function KnowledgeBasePage() {
           {confirmReformatAll ? (
             <>
               <span className="self-center text-xs text-amber-700">
-                Reformat all seeded articles with AI?
+                Reformat all 147 articles with AI?
               </span>
               <button
                 onClick={() => reformatAllMutation.mutate()}
@@ -475,7 +475,7 @@ export default function KnowledgeBasePage() {
               onClick={() => setConfirmReformatAll(true)}
               className="self-start rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 shadow-sm hover:bg-amber-100"
             >
-              Reformat All Seeded
+              Reformat All
             </button>
           )}
           <button
