@@ -138,3 +138,29 @@ def test_alert_store_scopes_rules_and_history(tmp_path):
     assert [rule["name"] for rule in store.get_rules(site_scope="oasisdev")] == ["Oasis rule"]
     assert store.get_history(site_scope="primary")[0]["ticket_keys"] == ["OIT-1"]
     assert store.get_history(site_scope="oasisdev")[0]["ticket_keys"] == ["OIT-500"]
+
+
+@pytest.mark.parametrize(
+    ("site_scope", "expected_host"),
+    [
+        ("primary", "https://it-app.movedocs.com"),
+        ("oasisdev", "https://oasisdev.movedocs.com"),
+    ],
+)
+def test_render_email_links_back_to_local_ticket_view(site_scope, expected_host):
+    import alert_engine
+
+    rule = {
+        "name": "Security arrivals",
+        "trigger_type": "new_ticket",
+    }
+    subject, html = alert_engine._render_email(
+        rule,
+        [_issue("OIT-42", "Security Alert", priority="High")],
+        site_scope=site_scope,
+    )
+
+    assert subject.startswith("[")
+    assert f'href="{expected_host}/tickets?ticket=OIT-42"' in html
+    assert f'href="{expected_host}/alerts"' in html
+    assert "browse/OIT-42" not in html

@@ -146,10 +146,8 @@ async def send_rule_now(rule_id: int, _admin: dict = Depends(require_admin)) -> 
     if not rule:
         raise HTTPException(404, f"Rule {rule_id} not found")
 
-    from alert_engine import _render_email, set_jira_base_url
+    from alert_engine import _render_email
     from email_service import send_email
-    from config import JIRA_BASE_URL
-    set_jira_base_url(JIRA_BASE_URL)
 
     try:
         matching = get_rule_matches(rule, _current_scope_issues(), refresh=True)

@@ -6,6 +6,7 @@ import html
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 from alert_store import alert_store
 from email_service import send_email
@@ -15,14 +16,6 @@ from sla_engine import sla_config, business_minutes_between, _parse_dt
 from site_context import get_site_origin, get_site_profile
 
 logger = logging.getLogger(__name__)
-
-# Jira base URL for ticket links — set at startup
-_jira_base_url: str = ""
-
-
-def set_jira_base_url(url: str) -> None:
-    global _jira_base_url
-    _jira_base_url = url.rstrip("/")
 
 
 # ---------------------------------------------------------------------------
@@ -265,10 +258,9 @@ EVALUATORS = {
 # Email rendering
 # ---------------------------------------------------------------------------
 
-def _ticket_url(key: str) -> str:
-    if _jira_base_url:
-        return f"{_jira_base_url}/browse/{key}"
-    return key
+def _site_ticket_url(key: str, site_scope: str) -> str:
+    query = urlencode({"ticket": key})
+    return f"{get_site_origin(site_scope)}/tickets?{query}"
 
 
 TRIGGER_LABELS = {
@@ -383,13 +375,14 @@ def _render_email(
 
     rows_html = ""
     for iss in tickets[:100]:
-        key = html.escape(iss.get("key", "?"))
+        raw_key = iss.get("key", "?")
+        key = html.escape(raw_key)
         fields = iss.get("fields", {})
         summary = html.escape(fields.get("summary", "")[:80])
         priority = html.escape(_get_priority(iss))
         assignee = html.escape(_get_assignee(iss))
         status = html.escape((fields.get("status") or {}).get("name", ""))
-        url = _ticket_url(key)
+        url = _site_ticket_url(raw_key, site_scope)
         rows_html += f"""<tr>
             <td style="padding:6px 10px;border-bottom:1px solid #eee"><a href="{url}" style="color:#2563eb;text-decoration:none">{key}</a></td>
             <td style="padding:6px 10px;border-bottom:1px solid #eee">{summary}</td>

@@ -592,9 +592,7 @@ class IssueCache:
     async def _run_alert_checks(self) -> None:
         """Evaluate alert rules and send emails if triggered."""
         try:
-            from alert_engine import run_alert_checks, set_jira_base_url
-            from config import JIRA_BASE_URL
-            set_jira_base_url(JIRA_BASE_URL)
+            from alert_engine import run_alert_checks
             all_issues = self.get_all_issues()
             sent = 0
             sent += await run_alert_checks(filter_issues_for_scope(all_issues, "primary"), site_scope="primary")
