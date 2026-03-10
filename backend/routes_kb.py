@@ -70,6 +70,17 @@ async def update_article(
     return article
 
 
+@router.delete("/articles/{article_id}")
+async def delete_article(
+    article_id: int,
+    _admin: dict[str, Any] = Depends(require_admin),
+) -> dict[str, bool]:
+    _ensure_primary_site()
+    if not kb_store.delete_article(article_id):
+        raise HTTPException(status_code=404, detail=f"KB article {article_id} not found")
+    return {"deleted": True}
+
+
 @router.post("/articles/draft-from-ticket")
 async def draft_article_from_ticket(
     body: KnowledgeBaseDraftRequest,
