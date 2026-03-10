@@ -28,7 +28,9 @@ from routes_triage import router as triage_router
 from routes_auth import router as auth_router
 from routes_sla import router as sla_router
 from routes_alerts import router as alerts_router
+from routes_kb import router as kb_router
 from issue_cache import cache
+from knowledge_base import kb_store
 from site_context import (
     get_current_site_scope,
     get_site_scope_from_request,
@@ -40,6 +42,7 @@ from site_context import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start background cache refresh on startup, stop on shutdown."""
+    kb_store.ensure_seed_articles()
     await cache.start_background_refresh()
     yield
     await cache.stop_background_refresh()
@@ -126,6 +129,7 @@ app.include_router(chart_router)
 app.include_router(triage_router)
 app.include_router(sla_router)
 app.include_router(alerts_router)
+app.include_router(kb_router)
 
 # ---------------------------------------------------------------------------
 # Routes

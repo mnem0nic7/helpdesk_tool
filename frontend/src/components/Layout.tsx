@@ -15,6 +15,7 @@ const navItems = [
   { to: "/triage", label: "AI Triage", icon: "\u25C6" },
   { to: "/ai-log", label: "AI Log", icon: "\u25CB" },
   { to: "/alerts", label: "Alerts", icon: "\u25B3" },
+  { to: "/knowledge-base", label: "Knowledge Base", icon: "\u25A9", primaryOnly: true },
 ];
 
 export default function Layout() {
@@ -58,7 +59,9 @@ export default function Layout() {
 
         {/* Navigation */}
         <nav className="flex-1 space-y-1 px-3 py-4">
-          {navItems.map(({ to, label, icon }) => (
+          {navItems
+            .filter((item) => !item.primaryOnly || branding.scope === "primary")
+            .map(({ to, label, icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -75,7 +78,7 @@ export default function Layout() {
               <span className="text-base leading-none">{icon}</span>
               {label}
             </NavLink>
-          ))}
+            ))}
         </nav>
 
         {/* Footer — user info or version */}

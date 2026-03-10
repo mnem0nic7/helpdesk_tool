@@ -547,6 +547,43 @@ export interface UserInfo {
   name: string;
 }
 
+export interface KnowledgeBaseArticle {
+  id: number;
+  slug: string;
+  code: string;
+  title: string;
+  request_type: string;
+  summary: string;
+  content: string;
+  source_filename: string;
+  source_ticket_key: string;
+  imported_from_seed: boolean;
+  ai_generated: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeBaseArticleUpsertPayload {
+  title: string;
+  request_type: string;
+  summary: string;
+  content: string;
+  source_ticket_key?: string;
+}
+
+export interface KnowledgeBaseDraft {
+  title: string;
+  request_type: string;
+  summary: string;
+  content: string;
+  model_used: string;
+  source_ticket_key: string;
+  suggested_article_id: number | null;
+  suggested_article_title: string;
+  recommended_action: "update_existing" | "create_new";
+  change_summary: string;
+}
+
 // ---------------------------------------------------------------------------
 // Query-parameter helpers
 // ---------------------------------------------------------------------------
@@ -797,6 +834,39 @@ export const api = {
   /** Fetch current cache status. */
   getCacheStatus(): Promise<CacheStatus> {
     return fetchJSON<CacheStatus>("/api/cache/status");
+  },
+
+  // -------------------------------------------------------------------------
+  // Knowledge Base
+  // -------------------------------------------------------------------------
+
+  getKnowledgeBaseArticles(search = "", requestType = ""): Promise<KnowledgeBaseArticle[]> {
+    return fetchJSON<KnowledgeBaseArticle[]>(
+      `/api/kb/articles${buildQuery({ search, request_type: requestType })}`,
+    );
+  },
+
+  getKnowledgeBaseArticle(id: number): Promise<KnowledgeBaseArticle> {
+    return fetchJSON<KnowledgeBaseArticle>(`/api/kb/articles/${id}`);
+  },
+
+  createKnowledgeBaseArticle(payload: KnowledgeBaseArticleUpsertPayload): Promise<KnowledgeBaseArticle> {
+    return postJSON<KnowledgeBaseArticle>("/api/kb/articles", payload);
+  },
+
+  updateKnowledgeBaseArticle(id: number, payload: KnowledgeBaseArticleUpsertPayload): Promise<KnowledgeBaseArticle> {
+    return putJSON<KnowledgeBaseArticle>(`/api/kb/articles/${id}`, payload);
+  },
+
+  draftKnowledgeBaseArticleFromTicket(
+    key: string,
+    articleId?: number | null,
+    model?: string,
+  ): Promise<KnowledgeBaseDraft> {
+    const body: Record<string, unknown> = { key };
+    if (articleId) body.article_id = articleId;
+    if (model) body.model = model;
+    return postJSON<KnowledgeBaseDraft>("/api/kb/articles/draft-from-ticket", body);
   },
 
   /** Trigger a full cache refresh (returns when complete). */
