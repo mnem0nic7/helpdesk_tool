@@ -29,6 +29,11 @@ from routes_auth import router as auth_router
 from routes_sla import router as sla_router
 from routes_alerts import router as alerts_router
 from issue_cache import cache
+from site_context import (
+    get_site_scope_from_request,
+    reset_current_site_scope,
+    set_current_site_scope,
+)
 
 
 @asynccontextmanager
@@ -67,10 +72,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class SiteContextMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        scope = get_site_scope_from_request(request)
+        request.state.site_scope = scope
+        token = set_current_site_scope(scope)
+        try:
+            return await call_next(request)
+        finally:
+            reset_current_site_scope(token)
+
+
 # ---------------------------------------------------------------------------
 # Middleware stack (applied in reverse order — CORS outermost)
 # ---------------------------------------------------------------------------
 app.add_middleware(AuthMiddleware)
+app.add_middleware(SiteContextMiddleware)
 app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY)
 
 # ---------------------------------------------------------------------------
@@ -80,6 +97,8 @@ _cors_origins = [
     "http://localhost:5173",  # Vite dev server
     "http://localhost:3000",  # Docker (nginx)
     "http://localhost:3002",  # Docker (nginx, alternate port)
+    "https://it-app.movedocs.com",
+    "https://oasisdev.movedocs.com",
 ]
 _extra_origin = os.getenv("CORS_ORIGIN", "")
 if _extra_origin:

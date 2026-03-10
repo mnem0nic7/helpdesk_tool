@@ -47,6 +47,16 @@ class TestMetricsEndpoint:
         assignee_totals = sum(item["resolved"] + item["open"] for item in data["assignee_stats"])
         assert assignee_totals == 4
 
+    def test_oasisdev_host_metrics_only_include_oasisdev_tickets(self, test_client):
+        resp = test_client.get("/api/metrics", headers={"host": "oasisdev.movedocs.com"})
+        assert resp.status_code == 200
+        headline = resp.json()["headline"]
+        assert headline["total_tickets"] == 2
+        assert headline["open_backlog"] == 2
+        assert headline["resolved"] == 0
+        assert headline["stale_count"] == 2
+        assert headline["excluded_count"] == 0
+
 
 class TestSLAEndpoints:
     """GET /api/sla/summary and /api/sla/breaches"""

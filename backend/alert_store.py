@@ -33,6 +33,7 @@ class AlertStore:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS alert_rules (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_scope TEXT NOT NULL DEFAULT 'primary',
                     name TEXT NOT NULL,
                     enabled INTEGER NOT NULL DEFAULT 1,
                     trigger_type TEXT NOT NULL,
@@ -51,6 +52,8 @@ class AlertStore:
             """)
             # Migrate: add custom_subject and custom_message if missing
             cols = {r[1] for r in conn.execute("PRAGMA table_info(alert_rules)").fetchall()}
+            if "site_scope" not in cols:
+                conn.execute("ALTER TABLE alert_rules ADD COLUMN site_scope TEXT NOT NULL DEFAULT 'primary'")
             if "custom_subject" not in cols:
                 conn.execute("ALTER TABLE alert_rules ADD COLUMN custom_subject TEXT NOT NULL DEFAULT ''")
             if "custom_message" not in cols:
@@ -59,6 +62,7 @@ class AlertStore:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS alert_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_scope TEXT NOT NULL DEFAULT 'primary',
                     rule_id INTEGER NOT NULL,
                     rule_name TEXT NOT NULL,
                     trigger_type TEXT NOT NULL,
@@ -71,6 +75,9 @@ class AlertStore:
                     FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
                 )
             """)
+            history_cols = {r[1] for r in conn.execute("PRAGMA table_info(alert_history)").fetchall()}
+            if "site_scope" not in history_cols:
+                conn.execute("ALTER TABLE alert_history ADD COLUMN site_scope TEXT NOT NULL DEFAULT 'primary'")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS alert_seen_tickets (
@@ -86,24 +93,27 @@ class AlertStore:
     # Alert Rules CRUD
     # -----------------------------------------------------------------------
 
-    def get_rules(self) -> list[dict[str, Any]]:
+    def get_rules(self, site_scope: str = "primary") -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM alert_rules ORDER BY created_at DESC"
+                "SELECT * FROM alert_rules WHERE site_scope = ? ORDER BY created_at DESC",
+                (site_scope,),
             ).fetchall()
         return [self._row_to_rule(r) for r in rows]
 
-    def get_rule(self, rule_id: int) -> dict[str, Any] | None:
+    def get_rule(self, rule_id: int, site_scope: str = "primary") -> dict[str, Any] | None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM alert_rules WHERE id = ?", (rule_id,)
+                "SELECT * FROM alert_rules WHERE id = ? AND site_scope = ?",
+                (rule_id, site_scope),
             ).fetchone()
         return self._row_to_rule(row) if row else None
 
-    def get_enabled_rules(self) -> list[dict[str, Any]]:
+    def get_enabled_rules(self, site_scope: str = "primary") -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM alert_rules WHERE enabled = 1 ORDER BY id"
+                "SELECT * FROM alert_rules WHERE enabled = 1 AND site_scope = ? ORDER BY id",
+                (site_scope,),
             ).fetchall()
         return [self._row_to_rule(r) for r in rows]
 
@@ -112,11 +122,12 @@ class AlertStore:
         with self._conn() as conn:
             cur = conn.execute(
                 """INSERT INTO alert_rules
-                   (name, enabled, trigger_type, trigger_config, frequency,
+                   (site_scope, name, enabled, trigger_type, trigger_config, frequency,
                     schedule_time, schedule_days, recipients, cc, filters,
                     custom_subject, custom_message)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
+                    data.get("site_scope", "primary"),
                     data["name"],
                     1 if data.get("enabled", True) else 0,
                     data["trigger_type"],
@@ -132,10 +143,10 @@ class AlertStore:
                 ),
             )
             rule_id = cur.lastrowid
-        return self.get_rule(rule_id)  # type: ignore[arg-type, return-value]
+        return self.get_rule(rule_id, site_scope=data.get("site_scope", "primary"))  # type: ignore[arg-type, return-value]
 
-    def update_rule(self, rule_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
-        existing = self.get_rule(rule_id)
+    def update_rule(self, rule_id: int, data: dict[str, Any], site_scope: str = "primary") -> dict[str, Any] | None:
+        existing = self.get_rule(rule_id, site_scope=site_scope)
         if not existing:
             return None
 
@@ -147,7 +158,7 @@ class AlertStore:
                    recipients=?, cc=?, filters=?,
                    custom_subject=?, custom_message=?,
                    updated_at=datetime('now')
-                   WHERE id=?""",
+                   WHERE id=? AND site_scope=?""",
                 (
                     data.get("name", existing["name"]),
                     1 if data.get("enabled", existing["enabled"]) else 0,
@@ -162,27 +173,31 @@ class AlertStore:
                     data.get("custom_subject", existing.get("custom_subject", "")),
                     data.get("custom_message", existing.get("custom_message", "")),
                     rule_id,
+                    site_scope,
                 ),
             )
-        return self.get_rule(rule_id)
+        return self.get_rule(rule_id, site_scope=site_scope)
 
-    def delete_rule(self, rule_id: int) -> bool:
+    def delete_rule(self, rule_id: int, site_scope: str = "primary") -> bool:
         with self._conn() as conn:
-            cur = conn.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))
+            cur = conn.execute(
+                "DELETE FROM alert_rules WHERE id = ? AND site_scope = ?",
+                (rule_id, site_scope),
+            )
         return cur.rowcount > 0
 
-    def update_last_run(self, rule_id: int, sent: bool = False) -> None:
+    def update_last_run(self, rule_id: int, sent: bool = False, site_scope: str = "primary") -> None:
         now = datetime.now(timezone.utc).isoformat()
         with self._conn() as conn:
             if sent:
                 conn.execute(
-                    "UPDATE alert_rules SET last_run=?, last_sent=? WHERE id=?",
-                    (now, now, rule_id),
+                    "UPDATE alert_rules SET last_run=?, last_sent=? WHERE id=? AND site_scope=?",
+                    (now, now, rule_id, site_scope),
                 )
             else:
                 conn.execute(
-                    "UPDATE alert_rules SET last_run=? WHERE id=?",
-                    (now, rule_id),
+                    "UPDATE alert_rules SET last_run=? WHERE id=? AND site_scope=?",
+                    (now, rule_id, site_scope),
                 )
 
     # -----------------------------------------------------------------------
@@ -199,10 +214,11 @@ class AlertStore:
         with self._conn() as conn:
             conn.execute(
                 """INSERT INTO alert_history
-                   (rule_id, rule_name, trigger_type, recipients,
+                   (site_scope, rule_id, rule_name, trigger_type, recipients,
                     ticket_count, ticket_keys, status, error)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
+                    rule.get("site_scope", "primary"),
                     rule["id"],
                     rule["name"],
                     rule["trigger_type"],
@@ -257,17 +273,19 @@ class AlertStore:
         with self._conn() as conn:
             conn.execute("DELETE FROM alert_seen_tickets WHERE rule_id = ?", (rule_id,))
 
-    def get_history(self, limit: int = 50, rule_id: int | None = None) -> list[dict[str, Any]]:
+    def get_history(self, limit: int = 50, rule_id: int | None = None, site_scope: str = "primary") -> list[dict[str, Any]]:
         with self._conn() as conn:
             if rule_id is not None:
                 rows = conn.execute(
-                    "SELECT * FROM alert_history WHERE rule_id = ? ORDER BY sent_at DESC LIMIT ?",
-                    (rule_id, limit),
+                    """SELECT * FROM alert_history
+                       WHERE rule_id = ? AND site_scope = ?
+                       ORDER BY sent_at DESC LIMIT ?""",
+                    (rule_id, site_scope, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM alert_history ORDER BY sent_at DESC LIMIT ?",
-                    (limit,),
+                    "SELECT * FROM alert_history WHERE site_scope = ? ORDER BY sent_at DESC LIMIT ?",
+                    (site_scope, limit),
                 ).fetchall()
         return [self._row_to_history(r) for r in rows]
 

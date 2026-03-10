@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends
 from auth import require_admin
 from config import JIRA_BASE_URL
 from issue_cache import cache
+from site_context import get_current_site_scope, get_site_profile, get_scoped_issues
 
 router = APIRouter(prefix="/api")
 
@@ -17,33 +18,45 @@ router = APIRouter(prefix="/api")
 @router.get("/cache/status")
 async def cache_status() -> dict[str, Any]:
     """Return current cache state."""
-    return {**cache.status(), "jira_base_url": JIRA_BASE_URL}
+    status = cache.status()
+    scope = get_current_site_scope()
+    profile = get_site_profile(scope)
+    if scope == "oasisdev":
+        visible_count = len(get_scoped_issues())
+        status["issue_count"] = visible_count
+        status["filtered_count"] = visible_count
+    return {
+        **status,
+        "jira_base_url": JIRA_BASE_URL,
+        "site_scope": scope,
+        "site_name": profile["app_name"],
+    }
 
 
 @router.post("/cache/refresh")
 async def cache_refresh(background_tasks: BackgroundTasks, _admin: dict = Depends(require_admin)) -> dict[str, Any]:
     """Trigger a full cache refresh (non-blocking — poll /cache/status for progress)."""
     if cache.refreshing:
-        return {**cache.status(), "jira_base_url": JIRA_BASE_URL, "message": "Refresh already in progress"}
+        return {**(await cache_status()), "message": "Refresh already in progress"}
 
     async def _run() -> None:
         await asyncio.get_running_loop().run_in_executor(None, cache.trigger_refresh)
 
     background_tasks.add_task(_run)
-    return {**cache.status(), "jira_base_url": JIRA_BASE_URL, "started": True}
+    return {**(await cache_status()), "started": True}
 
 
 @router.post("/cache/refresh/incremental")
 async def cache_refresh_incremental(background_tasks: BackgroundTasks, _admin: dict = Depends(require_admin)) -> dict[str, Any]:
     """Trigger an incremental cache refresh (non-blocking — poll /cache/status for progress)."""
     if cache.refreshing:
-        return {**cache.status(), "jira_base_url": JIRA_BASE_URL, "message": "Refresh already in progress"}
+        return {**(await cache_status()), "message": "Refresh already in progress"}
 
     async def _run() -> None:
         await asyncio.get_running_loop().run_in_executor(None, cache.trigger_incremental_refresh)
 
     background_tasks.add_task(_run)
-    return {**cache.status(), "jira_base_url": JIRA_BASE_URL, "started": True}
+    return {**(await cache_status()), "started": True}
 
 
 @router.post("/cache/refresh/cancel")

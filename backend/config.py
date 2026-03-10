@@ -13,6 +13,8 @@ JIRA_API_TOKEN: str = os.getenv("JIRA_API_TOKEN", "")
 JIRA_BASE_URL: str = os.getenv("JIRA_BASE_URL", "").rstrip("/")
 JIRA_PROJECT: str = os.getenv("JIRA_PROJECT", "OIT")
 DATA_DIR: str = os.getenv("DATA_DIR", "/app/data")
+PRIMARY_APP_HOST: str = os.getenv("PRIMARY_APP_HOST", "it-app.movedocs.com")
+OASISDEV_APP_HOST: str = os.getenv("OASISDEV_APP_HOST", "oasisdev.movedocs.com")
 
 # AI provider API keys
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")

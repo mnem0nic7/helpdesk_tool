@@ -10,6 +10,7 @@ import MonthlyTrendChart from "../components/charts/MonthlyTrendChart.tsx";
 import AgingPieChart from "../components/charts/AgingPieChart.tsx";
 import TTRDistributionChart from "../components/charts/TTRDistributionChart.tsx";
 import PriorityBarChart from "../components/charts/PriorityBarChart.tsx";
+import { getSiteBranding } from "../lib/siteContext.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -147,6 +148,7 @@ function AssigneesTable({ rows, onRowClick }: AssigneesTableProps) {
 // ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
+  const branding = getSiteBranding();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -233,7 +235,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Overview of OIT helpdesk metrics and KPIs
+            Overview of {branding.appName} metrics and KPIs
           </p>
         </div>
         <DateRangeSelector value={dateRange} onChange={handleDateRangeChange} />

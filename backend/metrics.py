@@ -9,7 +9,7 @@ from __future__ import annotations
 import statistics
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from request_type import extract_request_type_name_from_fields
 
@@ -83,6 +83,8 @@ _TTR_BUCKETS: list[tuple[float, str]] = [
     (720, "14-30d"),
     (float("inf"), "30+d"),
 ]
+
+IssueScope = Literal["primary", "oasisdev", "all"]
 
 
 # ---------------------------------------------------------------------------
@@ -258,12 +260,23 @@ def _hours_between(a: datetime | None, b: datetime | None) -> Optional[float]:
     return None
 
 
-def _filter_issues(issues: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
-    """Partition *issues* into (included, excluded_count)."""
+def _filter_issues(
+    issues: list[dict[str, Any]],
+    scope: IssueScope = "primary",
+) -> tuple[list[dict[str, Any]], int]:
+    """Partition issues into (included, excluded_count) for a dashboard scope."""
     included: list[dict[str, Any]] = []
     excluded_count = 0
     for issue in issues:
-        if is_excluded(issue):
+        excluded = is_excluded(issue)
+        if scope == "all":
+            included.append(issue)
+            continue
+        if scope == "oasisdev":
+            if excluded:
+                included.append(issue)
+            continue
+        if excluded:
             excluded_count += 1
         else:
             included.append(issue)
@@ -293,7 +306,9 @@ def _is_open(issue: dict[str, Any]) -> bool:
 
 
 def compute_headline_metrics(
-    issues: list[dict[str, Any]], excluded_count: int | None = None
+    issues: list[dict[str, Any]],
+    excluded_count: int | None = None,
+    scope: IssueScope = "primary",
 ) -> dict[str, Any]:
     """Compute headline KPIs from raw Jira issues.
 
@@ -302,7 +317,7 @@ def compute_headline_metrics(
     from the provided issue list, which keeps date-scoped metrics accurate.
     """
     now = _now()
-    included, inferred_excluded_count = _filter_issues(issues)
+    included, inferred_excluded_count = _filter_issues(issues, scope=scope)
     effective_excluded_count = (
         inferred_excluded_count if excluded_count is None else excluded_count
     )
@@ -347,13 +362,16 @@ def compute_headline_metrics(
     }
 
 
-def compute_monthly_volumes(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def compute_monthly_volumes(
+    issues: list[dict[str, Any]],
+    scope: IssueScope = "primary",
+) -> list[dict[str, Any]]:
     """Compute monthly created/resolved volumes.
 
     Returns a chronologically sorted list of dicts matching
     :class:`MonthlyVolume` field names.
     """
-    included, _ = _filter_issues(issues)
+    included, _ = _filter_issues(issues, scope=scope)
 
     monthly_created: Counter[str] = Counter()
     monthly_resolved: Counter[str] = Counter()
@@ -386,7 +404,10 @@ def compute_monthly_volumes(issues: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 def compute_weekly_volumes(
-    issues: list[dict[str, Any]], num_weeks: int = 8, span_days: int | None = None,
+    issues: list[dict[str, Any]],
+    num_weeks: int = 8,
+    span_days: int | None = None,
+    scope: IssueScope = "primary",
 ) -> list[dict[str, Any]]:
     """Compute ticket volumes grouped adaptively by time range.
 
@@ -400,7 +421,7 @@ def compute_weekly_volumes(
     """
     from datetime import timedelta
 
-    included, _ = _filter_issues(issues)
+    included, _ = _filter_issues(issues, scope=scope)
     now = _now()
     today = now.date()
 
@@ -491,12 +512,16 @@ def _age_buckets_for_span(span_days: int | None) -> list[tuple[float, str]]:
     return _AGE_BUCKETS
 
 
-def compute_age_buckets(issues: list[dict[str, Any]], span_days: int | None = None) -> list[dict[str, Any]]:
+def compute_age_buckets(
+    issues: list[dict[str, Any]],
+    span_days: int | None = None,
+    scope: IssueScope = "primary",
+) -> list[dict[str, Any]]:
     """Compute age-distribution buckets for open tickets.
 
     Bucket boundaries adapt to the selected date range.
     """
-    included, _ = _filter_issues(issues)
+    included, _ = _filter_issues(issues, scope=scope)
     now = _now()
     buckets = _age_buckets_for_span(span_days)
 
@@ -533,12 +558,16 @@ def _ttr_buckets_for_span(span_days: int | None) -> list[tuple[float, str]]:
     return _TTR_BUCKETS
 
 
-def compute_ttr_distribution(issues: list[dict[str, Any]], span_days: int | None = None) -> list[dict[str, Any]]:
+def compute_ttr_distribution(
+    issues: list[dict[str, Any]],
+    span_days: int | None = None,
+    scope: IssueScope = "primary",
+) -> list[dict[str, Any]]:
     """Compute time-to-resolve distribution buckets.
 
     Bucket boundaries adapt to the selected date range.
     """
-    included, _ = _filter_issues(issues)
+    included, _ = _filter_issues(issues, scope=scope)
 
     ttr_values: list[float] = []
     for iss in included:
@@ -575,13 +604,16 @@ def compute_ttr_distribution(issues: list[dict[str, Any]], span_days: int | None
     return result
 
 
-def compute_priority_counts(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def compute_priority_counts(
+    issues: list[dict[str, Any]],
+    scope: IssueScope = "primary",
+) -> list[dict[str, Any]]:
     """Compute ticket counts grouped by priority.
 
     Returns a list of dicts matching :class:`PriorityCount` field names,
     ordered Highest -> Lowest, then any remaining priorities alphabetically.
     """
-    included, _ = _filter_issues(issues)
+    included, _ = _filter_issues(issues, scope=scope)
 
     total_by_priority: Counter[str] = Counter()
     open_by_priority: Counter[str] = Counter()
@@ -618,13 +650,16 @@ def compute_priority_counts(issues: list[dict[str, Any]]) -> list[dict[str, Any]
     return result
 
 
-def compute_assignee_stats(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def compute_assignee_stats(
+    issues: list[dict[str, Any]],
+    scope: IssueScope = "primary",
+) -> list[dict[str, Any]]:
     """Compute per-assignee workload metrics.
 
     Returns the top 30 assignees by resolved count, as a list of dicts
     matching :class:`AssigneeStats` field names.
     """
-    included, _ = _filter_issues(issues)
+    included, _ = _filter_issues(issues, scope=scope)
     now = _now()
 
     resolved_by: Counter[str] = Counter()
@@ -674,7 +709,10 @@ def compute_assignee_stats(issues: list[dict[str, Any]]) -> list[dict[str, Any]]
     return entries[:30]
 
 
-def compute_sla_summary(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def compute_sla_summary(
+    issues: list[dict[str, Any]],
+    scope: IssueScope = "primary",
+) -> list[dict[str, Any]]:
     """Compute SLA timer summaries for each of the four JSM SLA timers.
 
     Returns a list of dicts matching :class:`SLATimerSummary` field names.
@@ -685,7 +723,7 @@ def compute_sla_summary(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     - ``customfield_11267`` -- Close After Resolution
     - ``customfield_11268`` -- Review Normal Change
     """
-    included, _ = _filter_issues(issues)
+    included, _ = _filter_issues(issues, scope=scope)
 
     result: list[dict[str, Any]] = []
 

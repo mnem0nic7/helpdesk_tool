@@ -10,6 +10,7 @@ import TicketKanbanBoard from "../components/TicketKanbanBoard.tsx";
 import Pagination from "../components/Pagination.tsx";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import TicketViewToggle, { type TicketListView } from "../components/TicketViewToggle.tsx";
+import { getSiteBranding } from "../lib/siteContext.ts";
 
 const PAGE_SIZE = 250;
 
@@ -30,6 +31,7 @@ function filtersFromParams(sp: URLSearchParams): TicketFilterValues {
 }
 
 export default function TicketsPage() {
+  const branding = getSiteBranding();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const filterParamsKey = useMemo(() => {
@@ -143,7 +145,7 @@ export default function TicketsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Tickets</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Browse and search OIT helpdesk tickets. Showing open tickets by default.
+            Browse and search {branding.appName} tickets. Showing open tickets by default.
           </p>
         </div>
         <div className="flex items-center gap-4">
