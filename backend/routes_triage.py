@@ -13,6 +13,7 @@ from issue_cache import cache
 from jira_client import JiraClient
 from metrics import _is_open, issue_to_row
 from models import TriageAnalyzeRequest, TriageApplyRequest, TriageFieldAction, TriageDismissRequest
+from site_context import get_current_site_scope, get_scoped_issues, key_is_visible_in_scope
 from triage_store import store
 
 logger = logging.getLogger(__name__)
@@ -21,9 +22,35 @@ router = APIRouter(prefix="/api/triage")
 
 _client = JiraClient()
 
-# Progress tracking for run-all background task
-_run_progress: dict[str, Any] = {"running": False, "processed": 0, "total": 0, "current_key": None, "cancel": False}
-_score_progress: dict[str, Any] = {"running": False, "processed": 0, "total": 0, "current_key": None, "cancel": False}
+def _new_progress_state() -> dict[str, Any]:
+    return {"running": False, "processed": 0, "total": 0, "current_key": None, "cancel": False}
+
+
+_run_progress: dict[str, dict[str, Any]] = {
+    "primary": _new_progress_state(),
+    "oasisdev": _new_progress_state(),
+}
+_score_progress: dict[str, dict[str, Any]] = {
+    "primary": _new_progress_state(),
+    "oasisdev": _new_progress_state(),
+}
+
+
+def _current_run_progress() -> dict[str, Any]:
+    return _run_progress[get_current_site_scope()]
+
+
+def _current_score_progress() -> dict[str, Any]:
+    return _score_progress[get_current_site_scope()]
+
+
+def _visible_issue_keys() -> set[str]:
+    return {issue.get("key", "") for issue in get_scoped_issues() if issue.get("key")}
+
+
+def _ensure_ticket_visible(key: str) -> None:
+    if not key_is_visible_in_scope(key):
+        raise HTTPException(status_code=404, detail=f"Ticket {key} is not available on this site")
 
 
 @router.get("/models")
@@ -35,16 +62,17 @@ async def list_models() -> list[dict[str, Any]]:
 @router.get("/log")
 async def get_triage_log() -> list[dict[str, Any]]:
     """Return all AI triage changes applied to Jira (auto and user-approved)."""
-    return store.get_triage_log(limit=500)
+    visible_keys = _visible_issue_keys()
+    return [entry for entry in store.get_triage_log(limit=500) if entry.get("key") in visible_keys]
 
 
 @router.get("/run-status")
 async def get_run_status() -> dict[str, Any]:
     """Return progress of the current run-all background task, plus ticket counts."""
-    result = dict(_run_progress)
+    result = dict(_current_run_progress())
     # Add counts for button labels
     already_done = store.get_auto_triaged_keys()
-    all_keys = [iss.get("key", "") for iss in cache.get_filtered_issues() if iss.get("key")]
+    all_keys = [iss.get("key", "") for iss in get_scoped_issues() if iss.get("key")]
     result["remaining_count"] = len([k for k in all_keys if k not in already_done])
     result["processed_count"] = len([k for k in all_keys if k in already_done])
     return result
@@ -53,9 +81,10 @@ async def get_run_status() -> dict[str, Any]:
 @router.post("/run-cancel")
 async def cancel_triage_run() -> dict[str, Any]:
     """Cancel the current triage run."""
-    if not _run_progress["running"]:
+    progress = _current_run_progress()
+    if not progress["running"]:
         return {"cancelled": False, "message": "No triage run in progress"}
-    _run_progress["cancel"] = True
+    progress["cancel"] = True
     return {"cancelled": True}
 
 
@@ -64,9 +93,12 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     """Run auto-triage on ALL existing cached tickets as a background task."""
     from config import AUTO_TRIAGE_MODEL
 
+    site_scope = get_current_site_scope()
+    progress = _run_progress[site_scope]
+
     # Prevent concurrent runs
-    if _run_progress["running"]:
-        return {"started": False, "total_tickets": _run_progress["total"], "message": "Triage run already in progress"}
+    if progress["running"]:
+        return {"started": False, "total_tickets": progress["total"], "message": "Triage run already in progress"}
 
     model = (body or {}).get("model") or AUTO_TRIAGE_MODEL
 
@@ -78,8 +110,7 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
             detail=f"Model '{model}' not available. Configure the API key or choose another model.",
         )
 
-    # Use filtered issues to exclude oasisdev tickets from triage
-    all_issues = cache.get_filtered_issues()
+    all_issues = get_scoped_issues()
     all_keys = [issue.get("key", "") for issue in all_issues if issue.get("key")]
 
     # Mode flags:
@@ -112,15 +143,15 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     if limit and isinstance(limit, int) and limit > 0:
         all_keys = all_keys[:limit]
 
-    _run_progress.update(running=True, processed=0, total=len(all_keys), current_key=None, cancel=False)
+    progress.update(running=True, processed=0, total=len(all_keys), current_key=None, cancel=False)
 
     async def _run() -> None:
         try:
-            await cache._auto_triage_new_tickets(all_keys, progress=_run_progress)
+            await cache._auto_triage_new_tickets(all_keys, progress=progress)
         except Exception:
             logger.exception("run-all: background triage failed")
         finally:
-            _run_progress.update(running=False, current_key=None, cancel=False)
+            progress.update(running=False, current_key=None, cancel=False)
 
     background_tasks.add_task(_run)
 
@@ -130,13 +161,16 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
 @router.get("/technician-scores")
 async def get_technician_scores() -> list[dict[str, Any]]:
     """Return stored technician QA scores for closed tickets."""
+    visible_keys = _visible_issue_keys()
     issues_by_key = {
         issue.get("key", ""): issue
-        for issue in cache.get_filtered_issues()
+        for issue in get_scoped_issues()
         if issue.get("key")
     }
     results: list[dict[str, Any]] = []
     for score in store.list_technician_scores(limit=500):
+        if score.key not in visible_keys:
+            continue
         issue = issues_by_key.get(score.key)
         ticket = issue_to_row(issue) if issue else None
         results.append({
@@ -153,10 +187,10 @@ async def get_technician_scores() -> list[dict[str, Any]]:
 @router.get("/score-run-status")
 async def get_technician_score_run_status() -> dict[str, Any]:
     """Return progress for the closed-ticket QA scoring workflow."""
-    result = dict(_score_progress)
+    result = dict(_current_score_progress())
     closed_keys = [
         iss.get("key", "")
-        for iss in cache.get_filtered_issues()
+        for iss in get_scoped_issues()
         if iss.get("key") and not _is_open(iss)
     ]
     scored_keys = store.get_technician_scored_keys()
@@ -168,9 +202,10 @@ async def get_technician_score_run_status() -> dict[str, Any]:
 @router.post("/score-cancel")
 async def cancel_closed_ticket_scoring() -> dict[str, Any]:
     """Cancel the current closed-ticket QA scoring run."""
-    if not _score_progress["running"]:
+    progress = _current_score_progress()
+    if not progress["running"]:
         return {"cancelled": False, "message": "No technician scoring run in progress"}
-    _score_progress["cancel"] = True
+    progress["cancel"] = True
     return {"cancelled": True}
 
 
@@ -181,11 +216,13 @@ async def run_closed_ticket_scoring(
 ) -> dict[str, Any]:
     """Run technician QA scoring for closed tickets already in the cache."""
     from config import AUTO_TRIAGE_MODEL
+    site_scope = get_current_site_scope()
+    progress = _score_progress[site_scope]
 
-    if _score_progress["running"]:
+    if progress["running"]:
         return {
             "started": False,
-            "total_tickets": _score_progress["total"],
+            "total_tickets": progress["total"],
             "message": "Technician scoring run already in progress",
         }
 
@@ -198,7 +235,7 @@ async def run_closed_ticket_scoring(
     available_ids = {model.id for model in available}
     model_id = AUTO_TRIAGE_MODEL if AUTO_TRIAGE_MODEL in available_ids else available[0].id
 
-    issues = cache.get_filtered_issues()
+    issues = get_scoped_issues()
     issues_by_key = {issue.get("key", ""): issue for issue in issues if issue.get("key")}
     all_closed_keys = [key for key, issue in issues_by_key.items() if not _is_open(issue)]
 
@@ -210,7 +247,7 @@ async def run_closed_ticket_scoring(
     if isinstance(limit, int) and limit > 0:
         keys_to_process = keys_to_process[:limit]
 
-    _score_progress.update(
+    progress.update(
         running=True,
         processed=0,
         total=len(keys_to_process),
@@ -224,10 +261,10 @@ async def run_closed_ticket_scoring(
         loop = asyncio.get_running_loop()
         try:
             for index, key in enumerate(keys_to_process):
-                if _score_progress.get("cancel"):
+                if progress.get("cancel"):
                     logger.info("Technician scoring cancelled after %d/%d", index, len(keys_to_process))
                     break
-                _score_progress.update(processed=index, current_key=key)
+                progress.update(processed=index, current_key=key)
 
                 issue = issues_by_key.get(key)
                 if not issue or _is_open(issue):
@@ -248,11 +285,11 @@ async def run_closed_ticket_scoring(
                 )
                 store.save_technician_score(score)
 
-            _score_progress.update(processed=len(keys_to_process))
+            progress.update(processed=len(keys_to_process))
         except Exception:
             logger.exception("Closed-ticket technician scoring failed")
         finally:
-            _score_progress.update(running=False, current_key=None, cancel=False)
+            progress.update(running=False, current_key=None, cancel=False)
 
     background_tasks.add_task(_run)
 
@@ -262,12 +299,18 @@ async def run_closed_ticket_scoring(
 @router.get("/suggestions")
 async def list_suggestions() -> list[dict[str, Any]]:
     """Return cached triage suggestions, excluding auto-triage-owned fields."""
-    return [r.model_dump() for r in store.list_all(strip_auto_fields=True)]
+    visible_keys = _visible_issue_keys()
+    return [
+        result.model_dump()
+        for result in store.list_all(strip_auto_fields=True)
+        if result.key in visible_keys
+    ]
 
 
 @router.get("/suggestions/{key}")
 async def get_suggestion(key: str) -> dict[str, Any]:
     """Return cached suggestion for a specific ticket."""
+    _ensure_ticket_visible(key)
     result = store.get(key)
     if not result:
         raise HTTPException(status_code=404, detail=f"No suggestion for {key}")
@@ -297,16 +340,16 @@ async def analyze(req: TriageAnalyzeRequest) -> list[dict[str, Any]]:
     cached = store.get_many(req.keys) if not req.force else {}
     results: list[dict[str, Any]] = []
 
-    all_issues = {i.get("key", ""): i for i in cache.get_filtered_issues()}
+    all_issues = {i.get("key", ""): i for i in get_scoped_issues()}
 
     for key in req.keys:
-        if key in cached:
-            results.append(cached[key].model_dump())
-            continue
-
         issue = all_issues.get(key)
         if not issue:
             results.append({"key": key, "error": f"Issue {key} not found in cache"})
+            continue
+
+        if key in cached:
+            results.append(cached[key].model_dump())
             continue
 
         try:
@@ -324,6 +367,7 @@ async def analyze(req: TriageAnalyzeRequest) -> list[dict[str, Any]]:
 @router.post("/apply")
 async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
     """Apply accepted suggestions to a ticket via Jira API."""
+    _ensure_ticket_visible(req.key)
     suggestion = store.get(req.key)
     if not suggestion:
         raise HTTPException(status_code=404, detail=f"No suggestion for {req.key}")
@@ -412,6 +456,7 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
 @router.post("/apply-field")
 async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[str, Any]:
     """Apply a single suggestion field to Jira and remove it from the stored suggestion."""
+    _ensure_ticket_visible(req.key)
     suggestion = store.get(req.key)
     if not suggestion:
         raise HTTPException(status_code=404, detail=f"No suggestion for {req.key}")
@@ -513,6 +558,7 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
 @router.post("/dismiss")
 async def dismiss_suggestion(req: TriageDismissRequest) -> dict[str, Any]:
     """Dismiss (delete) all suggestions for a ticket."""
+    _ensure_ticket_visible(req.key)
     existing = store.get(req.key)
     if not existing:
         raise HTTPException(status_code=404, detail=f"No suggestion for {req.key}")

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type { AlertRule, AlertTriggerType, AlertTestResult } from "../lib/api.ts";
+import { getSiteBranding } from "../lib/siteContext.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -140,6 +141,7 @@ function RuleModal({
   onClose: () => void;
 }) {
   const isEdit = rule?.id != null;
+  const branding = getSiteBranding();
   const [form, setForm] = useState<Record<string, unknown>>({
     name: rule?.name ?? "",
     trigger_type: rule?.trigger_type ?? "stale",
@@ -339,7 +341,7 @@ function RuleModal({
               <span className="text-xs text-gray-500">Subject Line</span>
               <input type="text" value={(form.custom_subject as string) ?? ""}
                 onChange={(e) => setForm({ ...form, custom_subject: e.target.value })}
-                placeholder="Default: [OIT Alert] {rule_name}: {ticket_count} {trigger_label}"
+                placeholder={`Default: [${branding.alertPrefix} Alert] {rule_name}: {ticket_count} {trigger_label}`}
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
             </label>
             <label className="mt-2 block">

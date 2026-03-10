@@ -114,3 +114,27 @@ async def test_create_new_ticket_rule_baselines_existing_matching_tickets(tmp_pa
     updated_preview = await routes_alerts.test_rule(rule["id"])
     assert updated_preview["matching_count"] == 1
     assert updated_preview["sample_keys"] == ["OIT-12"]
+
+
+def test_alert_store_scopes_rules_and_history(tmp_path):
+    store = AlertStore(str(tmp_path / "alerts.db"))
+
+    primary_rule = store.create_rule({
+        "name": "Primary rule",
+        "trigger_type": "stale",
+        "recipients": "primary@example.com",
+    })
+    oasis_rule = store.create_rule({
+        "name": "Oasis rule",
+        "trigger_type": "stale",
+        "recipients": "oasis@example.com",
+        "site_scope": "oasisdev",
+    })
+
+    store.record_send(primary_rule, ["OIT-1"])
+    store.record_send(oasis_rule, ["OIT-500"])
+
+    assert [rule["name"] for rule in store.get_rules(site_scope="primary")] == ["Primary rule"]
+    assert [rule["name"] for rule in store.get_rules(site_scope="oasisdev")] == ["Oasis rule"]
+    assert store.get_history(site_scope="primary")[0]["ticket_keys"] == ["OIT-1"]
+    assert store.get_history(site_scope="oasisdev")[0]["ticket_keys"] == ["OIT-500"]

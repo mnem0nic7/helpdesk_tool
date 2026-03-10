@@ -21,6 +21,7 @@ from issue_cache import cache
 from metrics import issue_to_row, _extract_description, _all_comments_text
 from models import ReportConfig
 from routes_tickets import _match
+from site_context import get_scoped_issues, get_site_profile
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +108,7 @@ _HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center")
 
 def _apply_config(config: ReportConfig) -> list[dict[str, Any]]:
     """Filter, convert to flat rows, and sort according to the config."""
-    # Choose issue set based on include_excluded
-    if config.include_excluded:
-        issues = cache.get_all_issues()
-    else:
-        issues = cache.get_filtered_issues()
+    issues = get_scoped_issues(include_excluded_on_primary=config.include_excluded)
 
     # Apply filters via the shared _match function
     filters = config.filters.model_dump(exclude_none=True)
@@ -230,6 +227,7 @@ async def report_export(config: ReportConfig) -> FileResponse:
     """Generate and return an Excel workbook from the report config."""
     rows = _apply_config(config)
     columns = config.columns or DEFAULT_COLUMNS
+    report_prefix = get_site_profile()["report_prefix"]
 
     wb = Workbook()
     ws = wb.active
@@ -259,7 +257,7 @@ async def report_export(config: ReportConfig) -> FileResponse:
         ws.column_dimensions["D"].width = 14
     else:
         # Flat detail sheet
-        ws.title = "OIT Report"
+        ws.title = f"{report_prefix} Report"
         headers = [FIELD_META.get(c, {}).get("label", c) for c in columns]
         for col_idx, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_idx, value=h)
@@ -290,7 +288,7 @@ async def report_export(config: ReportConfig) -> FileResponse:
 
     # Save to temp file
     now = datetime.now(timezone.utc)
-    filename = f"OIT_Report_{now.strftime('%Y%m%d_%H%M')}.xlsx"
+    filename = f"{report_prefix}_Report_{now.strftime('%Y%m%d_%H%M')}.xlsx"
     tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
     tmp_path = tmp.name
     tmp.close()
@@ -316,7 +314,7 @@ _FULL_COLUMNS: list[str] = list(FIELD_META.keys())
 @router.get("/export/all")
 async def export_all_data(include_excluded: bool = False) -> FileResponse:
     """Export ALL ticket data with every available field as Excel."""
-    issues = cache.get_all_issues() if include_excluded else cache.get_filtered_issues()
+    issues = get_scoped_issues(include_excluded_on_primary=include_excluded)
     rows = []
     for iss in issues:
         row = issue_to_row(iss)
@@ -330,7 +328,8 @@ async def export_all_data(include_excluded: bool = False) -> FileResponse:
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "All Tickets"
+    report_prefix = get_site_profile()["report_prefix"]
+    ws.title = f"{report_prefix} Tickets"
 
     columns = _FULL_COLUMNS
     headers = [FIELD_META.get(c, {}).get("label", c) for c in columns]
@@ -364,7 +363,7 @@ async def export_all_data(include_excluded: bool = False) -> FileResponse:
         ws.column_dimensions[col_letter].width = _WIDTH_MAP.get(col_key, 15)
 
     now = datetime.now(timezone.utc)
-    filename = f"OIT_All_Data_{now.strftime('%Y%m%d_%H%M')}.xlsx"
+    filename = f"{report_prefix}_All_Data_{now.strftime('%Y%m%d_%H%M')}.xlsx"
     tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
     tmp_path = tmp.name
     tmp.close()
@@ -389,14 +388,15 @@ async def export_excel() -> FileResponse:
     """Generate and return an Excel workbook with all OIT issues."""
     logger.info("Starting Excel export from cache")
 
-    # Read from cache (all issues, including excluded)
-    issues = cache.get_all_issues()
+    # Read from the current site scope.
+    issues = get_scoped_issues(include_excluded_on_primary=True)
     logger.info("Export: %d issues from cache", len(issues))
 
     # Create workbook
     wb = Workbook()
     ws = wb.active
-    ws.title = "OIT Tickets"
+    report_prefix = get_site_profile()["report_prefix"]
+    ws.title = f"{report_prefix} Tickets"
 
     # Write header row
     for col_idx, (header_text, _) in enumerate(_COLUMNS, start=1):
@@ -442,7 +442,7 @@ async def export_excel() -> FileResponse:
 
     # Save to temp file
     now = datetime.now(timezone.utc)
-    filename = f"OIT_Report_{now.strftime('%Y%m%d_%H%M')}.xlsx"
+    filename = f"{report_prefix}_Report_{now.strftime('%Y%m%d_%H%M')}.xlsx"
 
     tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
     tmp_path = tmp.name

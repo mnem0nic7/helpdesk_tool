@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 
 from issue_cache import cache
 from sla_engine import sla_config, compute_sla_for_issues
+from site_context import get_scoped_issues
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ async def get_sla_metrics(
                 date.fromisoformat(val)
             except ValueError:
                 raise HTTPException(400, f"Invalid {label} format: expected YYYY-MM-DD")
-    issues = cache.get_filtered_issues()
+    issues = get_scoped_issues()
     return compute_sla_for_issues(issues, date_from=date_from, date_to=date_to)
 
 

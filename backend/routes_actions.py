@@ -16,6 +16,7 @@ from models import (
     BulkPriorityRequest,
     BulkStatusRequest,
 )
+from site_context import key_is_visible_in_scope
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +41,15 @@ async def bulk_status(req: BulkStatusRequest, _admin: dict = Depends(require_adm
     """Transition multiple issues to a new status."""
     success: list[str] = []
     failed: list[dict[str, str]] = []
+    allowed_keys = [key for key in req.keys if key_is_visible_in_scope(key)]
+    blocked_keys = [key for key in req.keys if key not in allowed_keys]
+    failed.extend({"key": key, "error": "Ticket is not available on this site"} for key in blocked_keys)
 
     # Resolve transition name for cache update (same transition for all keys)
     transition_name = ""
-    if req.keys:
+    if allowed_keys:
         try:
-            transitions = _client.get_transitions(req.keys[0])
+            transitions = _client.get_transitions(allowed_keys[0])
             for t in transitions:
                 if t.get("id") == req.transition_id:
                     transition_name = t.get("to", {}).get("name", t.get("name", ""))
@@ -53,7 +57,7 @@ async def bulk_status(req: BulkStatusRequest, _admin: dict = Depends(require_adm
         except Exception:
             pass
 
-    for key in req.keys:
+    for key in allowed_keys:
         try:
             _client.transition_issue(key, req.transition_id)
             success.append(key)
@@ -70,6 +74,9 @@ async def bulk_assign(req: BulkAssignRequest, _admin: dict = Depends(require_adm
     """Reassign multiple issues to a single account."""
     success: list[str] = []
     failed: list[dict[str, str]] = []
+    allowed_keys = [key for key in req.keys if key_is_visible_in_scope(key)]
+    blocked_keys = [key for key in req.keys if key not in allowed_keys]
+    failed.extend({"key": key, "error": "Ticket is not available on this site"} for key in blocked_keys)
 
     # Resolve display name for cache update
     display_name = ""
@@ -84,7 +91,7 @@ async def bulk_assign(req: BulkAssignRequest, _admin: dict = Depends(require_adm
         except Exception:
             pass
 
-    for key in req.keys:
+    for key in allowed_keys:
         try:
             _client.assign_issue(key, req.account_id)
             success.append(key)
@@ -100,8 +107,11 @@ async def bulk_priority(req: BulkPriorityRequest, _admin: dict = Depends(require
     """Change the priority of multiple issues."""
     success: list[str] = []
     failed: list[dict[str, str]] = []
+    allowed_keys = [key for key in req.keys if key_is_visible_in_scope(key)]
+    blocked_keys = [key for key in req.keys if key not in allowed_keys]
+    failed.extend({"key": key, "error": "Ticket is not available on this site"} for key in blocked_keys)
 
-    for key in req.keys:
+    for key in allowed_keys:
         try:
             _client.update_priority(key, req.priority)
             success.append(key)
@@ -117,8 +127,11 @@ async def bulk_comment(req: BulkCommentRequest, _admin: dict = Depends(require_a
     """Add the same comment to multiple issues."""
     success: list[str] = []
     failed: list[dict[str, str]] = []
+    allowed_keys = [key for key in req.keys if key_is_visible_in_scope(key)]
+    blocked_keys = [key for key in req.keys if key not in allowed_keys]
+    failed.extend({"key": key, "error": "Ticket is not available on this site"} for key in blocked_keys)
 
-    for key in req.keys:
+    for key in allowed_keys:
         try:
             _client.add_comment(key, req.comment)
             success.append(key)

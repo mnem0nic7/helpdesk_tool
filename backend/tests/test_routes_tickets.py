@@ -158,28 +158,45 @@ class TestTicketsEndpoint:
         assert len(tickets) == 0  # sample cache data has no non-excluded vip labels
 
     def test_filter_options_include_labels(self, test_client, monkeypatch):
+        import issue_cache
         import routes_tickets
 
+        cache_stub = type(
+            "CacheStub",
+            (),
+            {
+                "get_all_issues": staticmethod(
+                    lambda: [
+                        _issue(labels=["vip", "network"]),
+                        _issue(key="OIT-2", labels=["security"]),
+                    ]
+                ),
+                "get_filtered_issues": staticmethod(
+                    lambda: [
+                        _issue(labels=["vip", "network"]),
+                        _issue(key="OIT-2", labels=["security"]),
+                    ]
+                ),
+            },
+        )()
         monkeypatch.setattr(
             routes_tickets,
             "cache",
-            type(
-                "CacheStub",
-                (),
-                {
-                    "get_filtered_issues": staticmethod(
-                        lambda: [
-                            _issue(labels=["vip", "network"]),
-                            _issue(key="OIT-2", labels=["security"]),
-                        ]
-                    )
-                },
-            )(),
+            cache_stub,
         )
+        monkeypatch.setattr(issue_cache, "cache", cache_stub)
 
         resp = test_client.get("/api/filter-options")
         assert resp.status_code == 200
         assert resp.json()["labels"] == ["network", "security", "vip"]
+
+    def test_oasisdev_host_lists_only_oasisdev_tickets(self, test_client):
+        resp = test_client.get("/api/tickets", headers={"host": "oasisdev.movedocs.com"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["matched_count"] == 2
+        assert data["total_count"] == 2
+        assert [ticket["key"] for ticket in data["tickets"]] == ["OIT-600", "OIT-500"]
 
 
 def _adf(text: str) -> dict[str, Any]:
@@ -268,6 +285,7 @@ class TestTicketDetailAndActions:
         import routes_tickets
 
         issue = _detail_issue()
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
         monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
         monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
 
@@ -317,6 +335,7 @@ class TestTicketDetailAndActions:
         import routes_tickets
 
         issue = _detail_issue()
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
         issue["fields"]["summary"] = "Updated summary"
         issue["fields"]["priority"] = {"name": "Medium"}
         issue["fields"]["assignee"] = {"displayName": "Bob Builder", "accountId": "acc-bob"}
@@ -368,6 +387,7 @@ class TestTicketDetailAndActions:
         import routes_tickets
 
         issue = _detail_issue()
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
         issue["fields"]["status"] = {"name": "In Progress", "statusCategory": {"name": "In Progress"}}
         calls: list[tuple[Any, ...]] = []
 
@@ -391,6 +411,7 @@ class TestTicketDetailAndActions:
         import routes_tickets
 
         issue = _detail_issue()
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
         calls: list[tuple[Any, ...]] = []
 
         monkeypatch.setattr(

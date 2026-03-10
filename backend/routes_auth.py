@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from auth import oauth, create_session, get_session, delete_session, is_allowed_user
 from config import ENTRA_TENANT_ID
+from site_context import get_request_origin
 
 logger = logging.getLogger(__name__)
 
@@ -94,15 +95,9 @@ async def logout(request: Request):
     sid = request.cookies.get(_COOKIE_NAME)
     if sid:
         delete_session(sid)
-    # Build the post-logout redirect back to the app
-    # Use configured CORS_ORIGIN or a safe default — never trust Host header
+    # Build the post-logout redirect back to the current dashboard host.
     from urllib.parse import quote
-    from config import JIRA_BASE_URL
-    import os
-    app_origin = os.getenv("CORS_ORIGIN", "").rstrip("/")
-    if not app_origin:
-        proto = request.headers.get("x-forwarded-proto", "https")
-        app_origin = f"{proto}://it-app.movedocs.com"
+    app_origin = get_request_origin(request).rstrip("/")
     post_logout_uri = f"{app_origin}/"
     entra_logout = (
         f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/oauth2/v2.0/logout"

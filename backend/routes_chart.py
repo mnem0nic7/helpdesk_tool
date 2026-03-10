@@ -13,6 +13,7 @@ from issue_cache import cache
 from metrics import issue_to_row, parse_dt, _is_open, _filter_issues, _hours_between, _now
 from models import ChartDataRequest, ChartTimeseriesRequest
 from routes_tickets import _match
+from site_context import get_scoped_issues
 
 router = APIRouter(prefix="/api")
 
@@ -27,7 +28,7 @@ def _get_matched_rows(
     include_excluded: bool,
 ) -> list[dict[str, Any]]:
     """Get issues from cache, apply filters, convert to flat rows."""
-    issues = cache.get_all_issues() if include_excluded else cache.get_filtered_issues()
+    issues = get_scoped_issues(include_excluded_on_primary=include_excluded)
     # Remove false booleans so _match doesn't treat them as active
     for k in ("open_only", "stale_only"):
         if not filters.get(k):
@@ -169,7 +170,7 @@ def _compute_monthly_series(issues: list[dict[str, Any]]) -> list[dict[str, Any]
 async def chart_timeseries(req: ChartTimeseriesRequest) -> dict[str, Any]:
     """Return time series data for line/area charts."""
     # Get raw issues (not rows) for time series — we need fields.created etc.
-    issues = cache.get_all_issues() if req.include_excluded else cache.get_filtered_issues()
+    issues = get_scoped_issues(include_excluded_on_primary=req.include_excluded)
 
     # Apply filters
     filters = req.filters.model_dump(exclude_none=True)

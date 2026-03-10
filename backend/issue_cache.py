@@ -14,6 +14,7 @@ from typing import Any
 from config import DATA_DIR, JIRA_PROJECT
 from jira_client import JiraClient
 from request_type import extract_request_type_name_from_fields, has_request_type
+from site_context import filter_issues_for_scope
 
 logger = logging.getLogger(__name__)
 
@@ -477,10 +478,6 @@ class IssueCache:
                     issue = self._all_issues.get(key)
                 if not issue:
                     continue
-                # Skip excluded (oasisdev) tickets
-                if JiraClient.is_excluded(issue):
-                    seen.add(key)
-                    continue
 
                 result = await loop.run_in_executor(
                     None, analyze_ticket, issue, AUTO_TRIAGE_MODEL
@@ -587,8 +584,10 @@ class IssueCache:
             from alert_engine import run_alert_checks, set_jira_base_url
             from config import JIRA_BASE_URL
             set_jira_base_url(JIRA_BASE_URL)
-            issues = self.get_filtered_issues()
-            sent = await run_alert_checks(issues)
+            all_issues = self.get_all_issues()
+            sent = 0
+            sent += await run_alert_checks(filter_issues_for_scope(all_issues, "primary"), site_scope="primary")
+            sent += await run_alert_checks(filter_issues_for_scope(all_issues, "oasisdev"), site_scope="oasisdev")
             if sent:
                 logger.info("Alerts: sent %d email(s)", sent)
         except Exception:

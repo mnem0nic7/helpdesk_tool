@@ -1,4 +1,4 @@
-it-app.movedocs.com {
+it-app.movedocs.com, oasisdev.movedocs.com {
 	tls internal
 	reverse_proxy dashboard:80
 }

@@ -21,6 +21,7 @@ from metrics import (
     extract_sla_status,
     issue_to_row,
 )
+from site_context import get_current_site_scope, get_scoped_issues
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ async def get_metrics(
     date_to: Optional[str] = Query(None),
 ) -> dict[str, Any]:
     """Return all dashboard metrics computed from the full OIT issue set."""
+    scope = get_current_site_scope()
     issues = cache.get_all_issues()
 
     # Parse and apply date range filter
@@ -84,26 +86,26 @@ async def get_metrics(
         span_days = (end - df).days
 
     return {
-        "headline": compute_headline_metrics(issues),
-        "weekly_volumes": compute_weekly_volumes(issues, span_days=span_days),
-        "age_buckets": compute_age_buckets(issues, span_days=span_days),
-        "ttr_distribution": compute_ttr_distribution(issues, span_days=span_days),
-        "priority_counts": compute_priority_counts(issues),
-        "assignee_stats": compute_assignee_stats(issues),
+        "headline": compute_headline_metrics(issues, scope=scope),
+        "weekly_volumes": compute_weekly_volumes(issues, span_days=span_days, scope=scope),
+        "age_buckets": compute_age_buckets(issues, span_days=span_days, scope=scope),
+        "ttr_distribution": compute_ttr_distribution(issues, span_days=span_days, scope=scope),
+        "priority_counts": compute_priority_counts(issues, scope=scope),
+        "assignee_stats": compute_assignee_stats(issues, scope=scope),
     }
 
 
 @router.get("/sla/summary")
 async def get_sla_summary() -> dict[str, Any]:
     """Return SLA timer summaries for all JSM SLA timers."""
-    issues = cache.get_filtered_issues()
-    return {"timers": compute_sla_summary(issues)}
+    issues = cache.get_all_issues()
+    return {"timers": compute_sla_summary(issues, scope=get_current_site_scope())}
 
 
 @router.get("/sla/breaches")
 async def get_sla_breaches() -> dict[str, Any]:
     """Return tickets that have any BREACHED SLA timer."""
-    issues = cache.get_filtered_issues()
+    issues = get_scoped_issues()
 
     breaches: list[dict[str, Any]] = []
     for issue in issues:

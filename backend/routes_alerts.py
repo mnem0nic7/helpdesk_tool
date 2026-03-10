@@ -18,6 +18,7 @@ from alert_engine import (
     TRIGGER_LABELS,
 )
 from issue_cache import cache
+from site_context import filter_issues_for_scope, get_current_site_scope
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +39,23 @@ def _should_rebaseline_new_ticket_rule(
     return any(field in body for field in ("filters", "trigger_config"))
 
 
+def _current_scope_issues() -> list[dict[str, Any]]:
+    try:
+        return filter_issues_for_scope(cache.get_all_issues(), get_current_site_scope())
+    except AttributeError:
+        return cache.get_filtered_issues()
+
+
 @router.get("/rules")
 async def list_rules() -> list[dict[str, Any]]:
     """List all alert rules."""
-    return alert_store.get_rules()
+    return alert_store.get_rules(site_scope=get_current_site_scope())
 
 
 @router.get("/rules/{rule_id}")
 async def get_rule(rule_id: int) -> dict[str, Any]:
     """Get a single alert rule."""
-    rule = alert_store.get_rule(rule_id)
+    rule = alert_store.get_rule(rule_id, site_scope=get_current_site_scope())
     if not rule:
         raise HTTPException(404, f"Rule {rule_id} not found")
     return rule
@@ -62,34 +70,36 @@ async def create_rule(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(400, f"trigger_type must be one of: {list(EVALUATORS.keys())}")
     if not body.get("recipients"):
         raise HTTPException(400, "recipients is required")
-    rule = alert_store.create_rule(body)
+    site_scope = get_current_site_scope()
+    rule = alert_store.create_rule({**body, "site_scope": site_scope})
     if rule["trigger_type"] == "new_ticket":
-        baseline_new_ticket_rule(rule, cache.get_filtered_issues())
+        baseline_new_ticket_rule(rule, _current_scope_issues())
     return rule
 
 
 @router.put("/rules/{rule_id}")
 async def update_rule(rule_id: int, body: dict[str, Any]) -> dict[str, Any]:
     """Update an alert rule."""
-    existing = alert_store.get_rule(rule_id)
+    site_scope = get_current_site_scope()
+    existing = alert_store.get_rule(rule_id, site_scope=site_scope)
     if not existing:
         raise HTTPException(404, f"Rule {rule_id} not found")
     if body.get("trigger_type") and body["trigger_type"] not in EVALUATORS:
         raise HTTPException(400, f"trigger_type must be one of: {list(EVALUATORS.keys())}")
-    result = alert_store.update_rule(rule_id, body)
+    result = alert_store.update_rule(rule_id, body, site_scope=site_scope)
     if not result:
         raise HTTPException(500, f"Failed to update rule {rule_id}")
     if existing["trigger_type"] == "new_ticket" and result["trigger_type"] != "new_ticket":
         alert_store.clear_seen_ticket_keys(rule_id)
     elif _should_rebaseline_new_ticket_rule(existing, result, body):
-        baseline_new_ticket_rule(result, cache.get_filtered_issues())
+        baseline_new_ticket_rule(result, _current_scope_issues())
     return result
 
 
 @router.delete("/rules/{rule_id}")
 async def delete_rule(rule_id: int) -> dict[str, Any]:
     """Delete an alert rule."""
-    if not alert_store.delete_rule(rule_id):
+    if not alert_store.delete_rule(rule_id, site_scope=get_current_site_scope()):
         raise HTTPException(404, f"Rule {rule_id} not found")
     return {"deleted": True}
 
@@ -97,26 +107,27 @@ async def delete_rule(rule_id: int) -> dict[str, Any]:
 @router.post("/rules/{rule_id}/toggle")
 async def toggle_rule(rule_id: int) -> dict[str, Any]:
     """Toggle a rule's enabled state."""
-    rule = alert_store.get_rule(rule_id)
+    site_scope = get_current_site_scope()
+    rule = alert_store.get_rule(rule_id, site_scope=site_scope)
     if not rule:
         raise HTTPException(404, f"Rule {rule_id} not found")
-    updated = alert_store.update_rule(rule_id, {"enabled": not rule["enabled"]})
+    updated = alert_store.update_rule(rule_id, {"enabled": not rule["enabled"]}, site_scope=site_scope)
     if not updated:
         raise HTTPException(500, f"Failed to toggle rule {rule_id}")
     if _should_rebaseline_new_ticket_rule(rule, updated, {"enabled": updated["enabled"]}):
-        baseline_new_ticket_rule(updated, cache.get_filtered_issues())
+        baseline_new_ticket_rule(updated, _current_scope_issues())
     return updated
 
 
 @router.post("/rules/{rule_id}/test")
 async def test_rule(rule_id: int) -> dict[str, Any]:
     """Test-run a rule: evaluate without sending email, return matching tickets."""
-    rule = alert_store.get_rule(rule_id)
+    rule = alert_store.get_rule(rule_id, site_scope=get_current_site_scope())
     if not rule:
         raise HTTPException(404, f"Rule {rule_id} not found")
 
     try:
-        matching = get_rule_matches(rule, cache.get_filtered_issues())
+        matching = get_rule_matches(rule, _current_scope_issues())
     except ValueError:
         raise HTTPException(400, f"Unknown trigger type: {rule['trigger_type']}") from None
 
@@ -130,7 +141,8 @@ async def test_rule(rule_id: int) -> dict[str, Any]:
 @router.post("/rules/{rule_id}/send")
 async def send_rule_now(rule_id: int, _admin: dict = Depends(require_admin)) -> dict[str, Any]:
     """Immediately evaluate and send a single rule's alert."""
-    rule = alert_store.get_rule(rule_id)
+    site_scope = get_current_site_scope()
+    rule = alert_store.get_rule(rule_id, site_scope=site_scope)
     if not rule:
         raise HTTPException(404, f"Rule {rule_id} not found")
 
@@ -140,14 +152,14 @@ async def send_rule_now(rule_id: int, _admin: dict = Depends(require_admin)) -> 
     set_jira_base_url(JIRA_BASE_URL)
 
     try:
-        matching = get_rule_matches(rule, cache.get_filtered_issues(), refresh=True)
+        matching = get_rule_matches(rule, _current_scope_issues(), refresh=True)
     except ValueError:
         raise HTTPException(400, f"Unknown trigger type: {rule['trigger_type']}") from None
 
     if not matching:
         return {"sent": False, "matching_count": 0, "reason": "No matching tickets"}
 
-    subject, html = _render_email(rule, matching)
+    subject, html = _render_email(rule, matching, site_scope=site_scope)
     recipients = [r.strip() for r in rule["recipients"].split(",") if r.strip()]
     cc = [c.strip() for c in (rule.get("cc") or "").split(",") if c.strip()] or None
 
@@ -162,7 +174,7 @@ async def send_rule_now(rule_id: int, _admin: dict = Depends(require_admin)) -> 
         status="sent" if success else "failed",
         error=None if success else "Email delivery failed",
     )
-    alert_store.update_last_run(rule["id"], sent=success)
+    alert_store.update_last_run(rule["id"], sent=success, site_scope=site_scope)
     if success:
         mark_rule_tickets_seen(rule, matching)
 
@@ -172,15 +184,16 @@ async def send_rule_now(rule_id: int, _admin: dict = Depends(require_admin)) -> 
 @router.post("/run")
 async def run_alerts_now(_admin: dict = Depends(require_admin)) -> dict[str, Any]:
     """Manually trigger all enabled alert rules."""
-    issues = cache.get_filtered_issues()
-    sent = await run_alert_checks(issues)
+    site_scope = get_current_site_scope()
+    issues = _current_scope_issues()
+    sent = await run_alert_checks(issues, site_scope=site_scope)
     return {"sent_count": sent}
 
 
 @router.get("/history")
 async def get_history(limit: int = 50, rule_id: int | None = None) -> list[dict[str, Any]]:
     """Get alert send history."""
-    return alert_store.get_history(limit=limit, rule_id=rule_id)
+    return alert_store.get_history(limit=limit, rule_id=rule_id, site_scope=get_current_site_scope())
 
 
 @router.get("/trigger-types")

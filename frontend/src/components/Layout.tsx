@@ -1,7 +1,9 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import CacheStatusBar from "./CacheStatusBar.tsx";
 import { api } from "../lib/api.ts";
+import { getSiteBranding } from "../lib/siteContext.ts";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: "\u25A3" },
@@ -16,12 +18,17 @@ const navItems = [
 ];
 
 export default function Layout() {
+  const branding = getSiteBranding();
   const { data: user, isLoading } = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => api.getMe(),
     retry: false,
     staleTime: 5 * 60 * 1000,
   });
+
+  useEffect(() => {
+    document.title = branding.appName;
+  }, [branding.appName]);
 
   // While checking auth, show nothing to avoid layout flash
   if (isLoading) {
@@ -45,7 +52,7 @@ export default function Layout() {
         {/* Brand */}
         <div className="flex h-16 items-center gap-2 border-b border-slate-700 px-6">
           <span className="text-lg font-semibold tracking-wide text-white">
-            OIT Helpdesk
+            {branding.appName}
           </span>
         </div>
 
@@ -89,7 +96,7 @@ export default function Layout() {
               </button>
             </div>
           ) : (
-            <div className="text-xs text-slate-500">OIT Dashboard v0.1</div>
+            <div className="text-xs text-slate-500">{branding.dashboardName} v0.1</div>
           )}
         </div>
       </aside>

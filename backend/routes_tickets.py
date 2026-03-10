@@ -16,6 +16,7 @@ from jira_client import JiraClient, validate_jira_key
 from metrics import _is_open, issue_to_row
 from models import TicketCommentRequest, TicketTransitionRequest, TicketUpdateRequest
 from request_type import extract_request_type_name_from_fields
+from site_context import get_scoped_issues, key_is_visible_in_scope
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +252,11 @@ def _load_ticket_detail(key: str) -> dict[str, Any]:
     return _ticket_detail(issue, comments)
 
 
+def _ensure_ticket_visible(key: str) -> None:
+    if not key_is_visible_in_scope(key):
+        raise HTTPException(status_code=404, detail=f"Issue {key} not found")
+
+
 @router.get("/tickets")
 async def list_tickets(
     status: Optional[str] = Query(None),
@@ -267,7 +273,7 @@ async def list_tickets(
     limit: int = Query(500, ge=1, le=2000),
 ) -> dict[str, Any]:
     """Return filtered OIT tickets from cache with pagination."""
-    issues = cache.get_filtered_issues()
+    issues = get_scoped_issues()
 
     filters = {
         "status": status,
@@ -296,7 +302,7 @@ async def list_tickets(
 @router.get("/filter-options")
 async def get_filter_options() -> dict[str, list[str]]:
     """Return distinct statuses, priorities, issue types, and labels from cached tickets."""
-    issues = cache.get_filtered_issues()
+    issues = get_scoped_issues()
     statuses: set[str] = set()
     priorities: set[str] = set()
     issue_types: set[str] = set()
@@ -373,6 +379,7 @@ async def get_statuses(key: str) -> list[dict[str, Any]]:
     """Return available transitions for a given issue."""
     try:
         validate_jira_key(key)
+        _ensure_ticket_visible(key)
         transitions = _client.get_transitions(key)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
@@ -393,6 +400,7 @@ async def get_ticket(key: str) -> dict[str, Any]:
     """Return detailed information for a single ticket."""
     try:
         validate_jira_key(key)
+        _ensure_ticket_visible(key)
         return _load_ticket_detail(key)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
@@ -409,6 +417,7 @@ async def update_ticket(
     """Update editable fields on a single ticket."""
     try:
         validate_jira_key(key)
+        _ensure_ticket_visible(key)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
 
@@ -465,6 +474,7 @@ async def transition_ticket(
     """Transition a ticket to a new status."""
     try:
         validate_jira_key(key)
+        _ensure_ticket_visible(key)
         transition_name = ""
         transitions = _client.get_transitions(key)
         for transition in transitions:
@@ -493,6 +503,7 @@ async def comment_ticket(
         raise HTTPException(status_code=400, detail="comment cannot be empty")
     try:
         validate_jira_key(key)
+        _ensure_ticket_visible(key)
         _client.add_request_comment(key, body.comment.strip(), public=body.public)
         cache.update_cached_field(key, "updated", "")
         return _load_ticket_detail(key)

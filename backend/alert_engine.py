@@ -12,6 +12,7 @@ from email_service import send_email
 from metrics import _is_open
 from request_type import extract_request_type_name_from_fields
 from sla_engine import sla_config, business_minutes_between, _parse_dt
+from site_context import get_site_origin, get_site_profile
 
 logger = logging.getLogger(__name__)
 
@@ -346,13 +347,18 @@ def _apply_template(template: str, variables: dict[str, str]) -> str:
     return result
 
 
-def _render_email(rule: dict, tickets: list[dict]) -> tuple[str, str]:
+def _render_email(
+    rule: dict,
+    tickets: list[dict],
+    site_scope: str = "primary",
+) -> tuple[str, str]:
     """Render email subject and HTML body for an alert.
 
     Custom templates support these variables:
       {rule_name}, {trigger_label}, {ticket_count}
     """
     trigger_label = TRIGGER_LABELS.get(rule["trigger_type"], rule["trigger_type"])
+    profile = get_site_profile(site_scope)  # type: ignore[arg-type]
     template_vars = {
         "rule_name": rule["name"],
         "trigger_label": trigger_label,
@@ -364,7 +370,7 @@ def _render_email(rule: dict, tickets: list[dict]) -> tuple[str, str]:
     if custom_subject:
         subject = _apply_template(custom_subject, template_vars)
     else:
-        subject = f"[OIT Alert] {rule['name']}: {len(tickets)} {trigger_label}"
+        subject = f"[{profile['alert_prefix']} Alert] {rule['name']}: {len(tickets)} {trigger_label}"
 
     # Custom message — inserted above the ticket table
     custom_message = (rule.get("custom_message") or "").strip()
@@ -395,6 +401,7 @@ def _render_email(rule: dict, tickets: list[dict]) -> tuple[str, str]:
     overflow = ""
     if len(tickets) > 100:
         overflow = f"<p style='color:#6b7280;font-size:13px'>...and {len(tickets) - 100} more tickets.</p>"
+    manage_alerts_url = f"{get_site_origin(site_scope)}/alerts"
 
     html_body = f"""
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:800px;margin:0 auto">
@@ -418,7 +425,7 @@ def _render_email(rule: dict, tickets: list[dict]) -> tuple[str, str]:
             </table>
             {overflow}
             <p style="margin-top:20px;font-size:12px;color:#9ca3af">
-                Sent from OIT Helpdesk Dashboard &bull; <a href="https://it-app.movedocs.com/alerts" style="color:#2563eb">Manage Alerts</a>
+                Sent from {html.escape(profile['app_name'])} &bull; <a href="{manage_alerts_url}" style="color:#2563eb">Manage Alerts</a>
             </p>
         </div>
     </div>
@@ -480,9 +487,9 @@ def _refresh_tickets(tickets: list[dict]) -> list[dict]:
 # Main evaluation loop
 # ---------------------------------------------------------------------------
 
-async def run_alert_checks(issues: list[dict]) -> int:
+async def run_alert_checks(issues: list[dict], site_scope: str = "primary") -> int:
     """Evaluate all enabled rules and send alerts. Returns number of emails sent."""
-    rules = alert_store.get_enabled_rules()
+    rules = alert_store.get_enabled_rules(site_scope=site_scope)
     if not rules:
         return 0
 
@@ -500,11 +507,11 @@ async def run_alert_checks(issues: list[dict]) -> int:
             continue
 
         if not matching:
-            alert_store.update_last_run(rule["id"], sent=False)
+            alert_store.update_last_run(rule["id"], sent=False, site_scope=site_scope)
             continue
 
         # Render and send
-        subject, html = _render_email(rule, matching)
+        subject, html = _render_email(rule, matching, site_scope=site_scope)
         recipients = [r.strip() for r in rule["recipients"].split(",") if r.strip()]
         cc = [c.strip() for c in (rule.get("cc") or "").split(",") if c.strip()] or None
 
@@ -520,7 +527,7 @@ async def run_alert_checks(issues: list[dict]) -> int:
             status="sent" if success else "failed",
             error=None if success else "Email delivery failed",
         )
-        alert_store.update_last_run(rule["id"], sent=success)
+        alert_store.update_last_run(rule["id"], sent=success, site_scope=site_scope)
 
         if success:
             mark_rule_tickets_seen(rule, matching)
