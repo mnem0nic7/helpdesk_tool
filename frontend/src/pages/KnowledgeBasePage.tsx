@@ -235,6 +235,7 @@ export default function KnowledgeBasePage() {
   const [editor, setEditor] = useState<EditorState>(emptyEditorState());
   const [ticketKey, setTicketKey] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmReformatAll, setConfirmReformatAll] = useState(false);
   const [message, setMessage] = useState<{ type: "info" | "error"; text: string } | null>(null);
 
   const { data: requestTypes = [] } = useQuery({
@@ -310,6 +311,31 @@ export default function KnowledgeBasePage() {
     },
     onError: (error) => {
       setConfirmDelete(false);
+      setMessage({ type: "error", text: error instanceof Error ? error.message : String(error) });
+    },
+  });
+
+  const reformatMutation = useMutation({
+    mutationFn: (id: number) => api.reformatKnowledgeBaseArticle(id),
+    onSuccess: (result) => {
+      setMode("edit");
+      setEditor((s) => ({ ...s, content: result.content }));
+      setMessage({ type: "info", text: "AI reformatted the content. Review and save to apply." });
+    },
+    onError: (error) => {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : String(error) });
+    },
+  });
+
+  const reformatAllMutation = useMutation({
+    mutationFn: () => api.reformatAllSeededKnowledgeBaseArticles(),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["kb-articles"] });
+      setConfirmReformatAll(false);
+      setMessage({ type: "info", text: `Reformatted ${result.reformatted} seeded article${result.reformatted !== 1 ? "s" : ""}.` });
+    },
+    onError: (error) => {
+      setConfirmReformatAll(false);
       setMessage({ type: "error", text: error instanceof Error ? error.message : String(error) });
     },
   });
@@ -396,12 +422,41 @@ export default function KnowledgeBasePage() {
             Internal OIT troubleshooting articles — also used as context for AI triage.
           </p>
         </div>
-        <button
-          onClick={handleNewArticle}
-          className="self-start rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-        >
-          + New Article
-        </button>
+        <div className="flex flex-wrap gap-2">
+          {confirmReformatAll ? (
+            <>
+              <span className="self-center text-xs text-amber-700">
+                Reformat all seeded articles with AI?
+              </span>
+              <button
+                onClick={() => reformatAllMutation.mutate()}
+                disabled={reformatAllMutation.isPending}
+                className="self-start rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-700 disabled:opacity-50"
+              >
+                {reformatAllMutation.isPending ? "Reformatting…" : "Confirm"}
+              </button>
+              <button
+                onClick={() => setConfirmReformatAll(false)}
+                className="self-start rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setConfirmReformatAll(true)}
+              className="self-start rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 shadow-sm hover:bg-amber-100"
+            >
+              Reformat All Seeded
+            </button>
+          )}
+          <button
+            onClick={handleNewArticle}
+            className="self-start rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            + New Article
+          </button>
+        </div>
       </div>
 
       {message && (
@@ -602,6 +657,13 @@ export default function KnowledgeBasePage() {
                         className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50"
                       >
                         Edit
+                      </button>
+                      <button
+                        onClick={() => activeArticle.id && reformatMutation.mutate(activeArticle.id)}
+                        disabled={reformatMutation.isPending}
+                        className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 shadow-sm hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        {reformatMutation.isPending ? "Reformatting…" : "Reformat with AI"}
                       </button>
                       <button
                         onClick={() => setConfirmDelete(true)}

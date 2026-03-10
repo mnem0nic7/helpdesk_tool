@@ -865,6 +865,14 @@ export const api = {
     });
   },
 
+  reformatKnowledgeBaseArticle(id: number): Promise<{ content: string }> {
+    return postJSON<{ content: string }>(`/api/kb/articles/${id}/reformat`, {});
+  },
+
+  reformatAllSeededKnowledgeBaseArticles(): Promise<{ reformatted: number }> {
+    return postJSON<{ reformatted: number }>("/api/kb/articles/reformat-seeded", {});
+  },
+
   draftKnowledgeBaseArticleFromTicket(
     key: string,
     articleId?: number | null,
