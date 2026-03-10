@@ -7,6 +7,8 @@ import type {
 } from "../lib/api.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
 
+type Mode = "view" | "edit" | "create";
+
 type EditorState = KnowledgeBaseArticleUpsertPayload & {
   id: number | null;
   code: string;
@@ -17,7 +19,7 @@ type EditorState = KnowledgeBaseArticleUpsertPayload & {
 
 function toEditorState(article: KnowledgeBaseArticle): EditorState {
   return {
-    id: article.id,
+    id: article.id ?? null,
     code: article.code,
     title: article.title,
     request_type: article.request_type,
@@ -58,15 +60,112 @@ function formatTimestamp(iso: string): string {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Lightweight markdown renderer — handles DOCX plain text and AI markdown
+// ---------------------------------------------------------------------------
+
+function renderInline(text: string) {
+  const parts: (string | JSX.Element)[] = [];
+  const re = /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    if (m[0].startsWith("**")) {
+      parts.push(<strong key={m.index}>{m[2]}</strong>);
+    } else if (m[0].startsWith("*")) {
+      parts.push(<em key={m.index}>{m[3]}</em>);
+    } else {
+      parts.push(
+        <code key={m.index} className="rounded bg-slate-100 px-1 font-mono text-xs text-slate-700">
+          {m[4]}
+        </code>,
+      );
+    }
+    last = re.lastIndex;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.length === 1 && typeof parts[0] === "string" ? parts[0] : <>{parts}</>;
+}
+
+function ArticleContent({ text }: { text: string }) {
+  if (!text) return <p className="italic text-slate-400">No content.</p>;
+
+  const blocks = text.split(/\n\n+/);
+  return (
+    <div className="space-y-3 text-sm leading-relaxed text-slate-800">
+      {blocks.map((block, i) => {
+        const trimmed = block.trim();
+        if (!trimmed) return null;
+
+        if (trimmed.startsWith("```")) {
+          const inner = trimmed.replace(/^```\w*\n?/, "").replace(/\n?```$/, "");
+          return (
+            <pre key={i} className="overflow-x-auto rounded-lg bg-slate-100 p-3 font-mono text-xs text-slate-800">
+              {inner}
+            </pre>
+          );
+        }
+
+        if (trimmed.startsWith("### "))
+          return <h4 key={i} className="font-semibold text-slate-900">{trimmed.slice(4)}</h4>;
+        if (trimmed.startsWith("## "))
+          return <h3 key={i} className="text-base font-semibold text-slate-900">{trimmed.slice(3)}</h3>;
+        if (trimmed.startsWith("# "))
+          return <h2 key={i} className="text-lg font-bold text-slate-900">{trimmed.slice(2)}</h2>;
+
+        const lines = trimmed.split("\n").filter((l) => l.trim());
+
+        if (lines.length > 0 && lines.every((l) => /^[-*•]\s/.test(l))) {
+          return (
+            <ul key={i} className="ml-5 list-disc space-y-1">
+              {lines.map((l, j) => (
+                <li key={j}>{renderInline(l.replace(/^[-*•]\s+/, ""))}</li>
+              ))}
+            </ul>
+          );
+        }
+
+        if (lines.length > 0 && lines.every((l) => /^\d+[.)]\s/.test(l))) {
+          return (
+            <ol key={i} className="ml-5 list-decimal space-y-1">
+              {lines.map((l, j) => (
+                <li key={j}>{renderInline(l.replace(/^\d+[.)]\s+/, ""))}</li>
+              ))}
+            </ol>
+          );
+        }
+
+        return (
+          <p key={i}>
+            {trimmed.split("\n").map((l, j) => (
+              <span key={j}>
+                {j > 0 && <br />}
+                {renderInline(l)}
+              </span>
+            ))}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
 export default function KnowledgeBasePage() {
   const branding = getSiteBranding();
   const queryClient = useQueryClient();
+
   const [search, setSearch] = useState("");
   const [requestTypeFilter, setRequestTypeFilter] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [isCreatingNew, setIsCreatingNew] = useState(false);
+  const [mode, setMode] = useState<Mode>("view");
   const [editor, setEditor] = useState<EditorState>(emptyEditorState());
   const [ticketKey, setTicketKey] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [message, setMessage] = useState<{ type: "info" | "error"; text: string } | null>(null);
 
   const { data: requestTypes = [] } = useQuery({
@@ -81,24 +180,24 @@ export default function KnowledgeBasePage() {
 
   useEffect(() => {
     if (!articles.length) {
-      setSelectedId(null);
-      setEditor((current) => (current.id === null ? current : emptyEditorState()));
+      if (mode !== "create") {
+        setSelectedId(null);
+        setEditor((prev) => (prev.id === null ? prev : emptyEditorState()));
+      }
       return;
     }
-    if (isCreatingNew) {
-      return;
-    }
-    const selected = articles.find((article) => article.id === selectedId);
+    if (mode === "create") return;
+    const selected = articles.find((a) => a.id === selectedId);
     if (!selected) {
-      setSelectedId(articles[0].id);
+      setSelectedId(articles[0].id ?? null);
       setEditor(toEditorState(articles[0]));
+      setMode("view");
       return;
     }
-    setEditor((current) => {
-      if (current.id !== selected.id) return current;
-      return toEditorState(selected);
-    });
-  }, [articles, isCreatingNew, selectedId]);
+    if (mode === "view") {
+      setEditor((prev) => (prev.id !== (selected.id ?? null) ? prev : toEditorState(selected)));
+    }
+  }, [articles, mode, selectedId]);
 
   const saveMutation = useMutation({
     mutationFn: async ({ payload, forceCreate }: { payload: EditorState; forceCreate: boolean }) => {
@@ -116,21 +215,33 @@ export default function KnowledgeBasePage() {
     },
     onSuccess: (article, variables) => {
       queryClient.invalidateQueries({ queryKey: ["kb-articles"] });
-      setSelectedId(article.id);
-      setIsCreatingNew(false);
+      setSelectedId(article.id ?? null);
+      setMode("view");
       setEditor(toEditorState(article));
+      setConfirmDelete(false);
       setMessage({
         type: "info",
-        text: variables.forceCreate
-          ? `Created KB article ${article.title}.`
-          : `Saved KB article ${article.title}.`,
+        text: variables.forceCreate ? `Created "${article.title}".` : `Saved "${article.title}".`,
       });
     },
     onError: (error) => {
-      setMessage({
-        type: "error",
-        text: error instanceof Error ? error.message : String(error),
-      });
+      setMessage({ type: "error", text: error instanceof Error ? error.message : String(error) });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.deleteKnowledgeBaseArticle(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["kb-articles"] });
+      setSelectedId(null);
+      setMode("view");
+      setEditor(emptyEditorState());
+      setConfirmDelete(false);
+      setMessage({ type: "info", text: "Article deleted." });
+    },
+    onError: (error) => {
+      setConfirmDelete(false);
+      setMessage({ type: "error", text: error instanceof Error ? error.message : String(error) });
     },
   });
 
@@ -139,10 +250,10 @@ export default function KnowledgeBasePage() {
       api.draftKnowledgeBaseArticleFromTicket(key, articleId),
     onSuccess: (draft) => {
       const target = draft.suggested_article_id
-        ? articles.find((article) => article.id === draft.suggested_article_id)
+        ? articles.find((a) => a.id === draft.suggested_article_id)
         : null;
       setSelectedId(target?.id ?? null);
-      setIsCreatingNew(!target);
+      setMode(target ? "edit" : "create");
       setEditor({
         id: target?.id ?? null,
         code: target?.code ?? "",
@@ -159,14 +270,11 @@ export default function KnowledgeBasePage() {
         type: "info",
         text: draft.change_summary
           ? `${draft.recommended_action === "update_existing" ? "AI drafted an update" : "AI drafted a new article"}: ${draft.change_summary}`
-          : `AI drafted ${draft.recommended_action === "update_existing" ? "an article update" : "a new article"} from ${draft.source_ticket_key}.`,
+          : `AI drafted ${draft.recommended_action === "update_existing" ? "an update" : "a new article"} from ${draft.source_ticket_key}.`,
       });
     },
     onError: (error) => {
-      setMessage({
-        type: "error",
-        text: error instanceof Error ? error.message : String(error),
-      });
+      setMessage({ type: "error", text: error instanceof Error ? error.message : String(error) });
     },
   });
 
@@ -181,237 +289,348 @@ export default function KnowledgeBasePage() {
     );
   }
 
-  const activeArticle = articles.find((article) => article.id === selectedId) ?? null;
+  const activeArticle = articles.find((a) => a.id === selectedId) ?? null;
+
+  function handleSelectArticle(article: KnowledgeBaseArticle) {
+    setSelectedId(article.id ?? null);
+    setMode("view");
+    setEditor(toEditorState(article));
+    setConfirmDelete(false);
+    setMessage(null);
+  }
+
+  function handleNewArticle() {
+    setSelectedId(null);
+    setMode("create");
+    setEditor(emptyEditorState());
+    setConfirmDelete(false);
+    setMessage(null);
+  }
+
+  function handleCancelEdit() {
+    if (activeArticle) {
+      setMode("view");
+      setEditor(toEditorState(activeArticle));
+    } else {
+      setMode("view");
+      setEditor(emptyEditorState());
+    }
+    setConfirmDelete(false);
+  }
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Knowledge Base</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Browse and maintain internal OIT troubleshooting articles. AI triage also uses these articles as context.
+            Internal OIT troubleshooting articles — also used as context for AI triage.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => {
-              setSelectedId(null);
-              setIsCreatingNew(true);
-              setEditor(emptyEditorState());
-              setMessage(null);
-            }}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            New Article
-          </button>
-          <button
-            onClick={() => saveMutation.mutate({ payload: editor, forceCreate: false })}
-            disabled={saveMutation.isPending || !editor.title.trim() || !editor.content.trim()}
-            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {saveMutation.isPending ? "Saving…" : editor.id ? "Save Changes" : "Create Article"}
-          </button>
-          {editor.id && (
-            <button
-              onClick={() => saveMutation.mutate({ payload: editor, forceCreate: true })}
-              disabled={saveMutation.isPending || !editor.title.trim() || !editor.content.trim()}
-              className="rounded-lg border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Save As New
-            </button>
-          )}
-        </div>
+        <button
+          onClick={handleNewArticle}
+          className="self-start rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+        >
+          + New Article
+        </button>
       </div>
 
       {message && (
-        <div className={`rounded-xl px-4 py-3 text-sm ${message.type === "error" ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700"}`}>
+        <div
+          className={`rounded-xl px-4 py-3 text-sm ${
+            message.type === "error" ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700"
+          }`}
+        >
           {message.text}
         </div>
       )}
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end">
-          <div className="flex-1">
-            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Search Articles</label>
+      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
+        {/* Left: search + article list */}
+        <aside className="space-y-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
             <input
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search title, summary, steps, or code…"
-              className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search articles…"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
             />
-          </div>
-          <div className="w-full xl:w-80">
-            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Request Type</label>
             <select
               value={requestTypeFilter}
-              onChange={(event) => setRequestTypeFilter(event.target.value)}
+              onChange={(e) => setRequestTypeFilter(e.target.value)}
               className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
             >
               <option value="">All request types</option>
-              {requestTypes.map((option) => (
-                <option key={option.id} value={option.name}>
-                  {option.name}
+              {requestTypes.map((rt) => (
+                <option key={rt.id} value={rt.name}>
+                  {rt.name}
                 </option>
               ))}
             </select>
           </div>
-        </div>
-      </section>
 
-      <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-4 py-3">
-            <div className="text-sm font-semibold text-slate-900">Articles</div>
-            <div className="mt-1 text-xs text-slate-500">{articles.length} visible</div>
-          </div>
-          <div className="max-h-[72vh] overflow-y-auto">
-            {isLoading && (
-              <div className="px-4 py-8 text-center text-sm text-slate-400">Loading articles…</div>
-            )}
-            {!isLoading && articles.length === 0 && (
-              <div className="px-4 py-8 text-center text-sm text-slate-400">No KB articles matched the current filters.</div>
-            )}
-            {articles.map((article) => (
-              <button
-                key={article.id}
-                onClick={() => {
-                  setSelectedId(article.id);
-                  setIsCreatingNew(false);
-                  setEditor(toEditorState(article));
-                  setMessage(null);
-                }}
-                className={`block w-full border-b border-slate-100 px-4 py-3 text-left transition-colors ${selectedId === article.id ? "bg-blue-50" : "hover:bg-slate-50"}`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {article.code && (
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-600">
-                          {article.code}
-                        </span>
-                      )}
-                      {article.imported_from_seed && (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-                          Seeded
-                        </span>
-                      )}
-                      {article.ai_generated && (
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                          AI
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-2 text-sm font-semibold text-slate-900">{article.title}</div>
-                    <div className="mt-1 text-xs text-slate-500">{article.request_type || "General"}</div>
-                    <p className="mt-2 text-xs leading-5 text-slate-600">{article.summary || article.content}</p>
+          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <span className="text-sm font-semibold text-slate-900">Articles</span>
+              <span className="text-xs text-slate-400">{articles.length}</span>
+            </div>
+            <div className="max-h-[66vh] overflow-y-auto">
+              {isLoading && (
+                <div className="px-4 py-6 text-center text-sm text-slate-400">Loading…</div>
+              )}
+              {!isLoading && articles.length === 0 && (
+                <div className="px-4 py-6 text-center text-sm text-slate-400">No articles found.</div>
+              )}
+              {articles.map((article) => (
+                <button
+                  key={article.id}
+                  onClick={() => handleSelectArticle(article)}
+                  className={`block w-full border-b border-slate-100 px-4 py-3 text-left transition-colors last:border-0 ${
+                    selectedId === article.id && mode !== "create" ? "bg-blue-50" : "hover:bg-slate-50"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {article.code && (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[10px] text-slate-600">
+                        {article.code}
+                      </span>
+                    )}
+                    {article.imported_from_seed && (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                        Seeded
+                      </span>
+                    )}
+                    {article.ai_generated && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                        AI
+                      </span>
+                    )}
                   </div>
-                </div>
-              </button>
-            ))}
+                  <div className="mt-1.5 text-sm font-medium leading-snug text-slate-900">
+                    {article.title}
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-400">
+                    {article.request_type || "General"}
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
-        </section>
+        </aside>
 
-        <div className="space-y-5">
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        {/* Right: AI draft panel + content panel */}
+        <div className="space-y-4">
+          {/* AI Draft — always visible */}
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900">AI Draft From Closed Ticket</h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  Turn a resolved ticket into a KB draft. Review the output before saving it.
+                <h2 className="text-sm font-semibold text-slate-900">Draft From Closed Ticket</h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Generate a new article or update using a resolved ticket as source.
                 </p>
               </div>
-              <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="flex flex-wrap gap-2">
                 <input
                   value={ticketKey}
-                  onChange={(event) => setTicketKey(event.target.value.toUpperCase())}
+                  onChange={(e) => setTicketKey(e.target.value.toUpperCase())}
                   placeholder="OIT-12345"
-                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                  className="w-32 rounded-xl border border-slate-300 px-3 py-1.5 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                 />
                 <button
                   onClick={() => draftMutation.mutate({ key: ticketKey.trim() })}
                   disabled={draftMutation.isPending || !ticketKey.trim()}
-                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {draftMutation.isPending ? "Drafting…" : "Draft From Ticket"}
                 </button>
-                {editor.id && (
+                {activeArticle && mode === "view" && (
                   <button
-                    onClick={() => draftMutation.mutate({ key: ticketKey.trim(), articleId: editor.id })}
+                    onClick={() =>
+                      draftMutation.mutate({ key: ticketKey.trim(), articleId: activeArticle.id })
+                    }
                     disabled={draftMutation.isPending || !ticketKey.trim()}
-                    className="rounded-lg border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    Draft Update for Current Article
+                    Draft Update for This Article
                   </button>
                 )}
               </div>
             </div>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900">
-                  {editor.id ? "Edit Article" : "New Article"}
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  {activeArticle
-                    ? `Last updated ${formatTimestamp(activeArticle.updated_at)}`
-                    : "Create a new internal troubleshooting article."}
-                </p>
-              </div>
-              {activeArticle && (
-                <div className="flex flex-wrap gap-2 text-xs">
-                  {activeArticle.imported_from_seed && (
-                    <span className="rounded-full bg-emerald-100 px-3 py-1 font-medium text-emerald-700">
-                      Imported from DOCX
-                    </span>
-                  )}
-                  {activeArticle.ai_generated && (
-                    <span className="rounded-full bg-amber-100 px-3 py-1 font-medium text-amber-700">
-                      AI-touched
-                    </span>
-                  )}
-                  {activeArticle.source_ticket_key && (
-                    <span className="rounded-full bg-slate-100 px-3 py-1 font-medium text-slate-600">
-                      Ticket {activeArticle.source_ticket_key}
-                    </span>
+          {/* Empty state */}
+          {mode === "view" && !activeArticle && (
+            <div className="flex items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 py-24">
+              <p className="text-sm text-slate-400">
+                Select an article to read it, or{" "}
+                <button
+                  onClick={handleNewArticle}
+                  className="font-medium text-blue-600 hover:underline"
+                >
+                  create a new one
+                </button>
+                .
+              </p>
+            </div>
+          )}
+
+          {/* View mode */}
+          {mode === "view" && activeArticle && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {activeArticle.code && (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-600">
+                        {activeArticle.code}
+                      </span>
+                    )}
+                    {activeArticle.imported_from_seed && (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                        Imported from DOCX
+                      </span>
+                    )}
+                    {activeArticle.ai_generated && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                        AI-touched
+                      </span>
+                    )}
+                    {activeArticle.source_ticket_key && (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                        {activeArticle.source_ticket_key}
+                      </span>
+                    )}
+                  </div>
+                  <h2 className="mt-2 text-xl font-bold text-slate-900">{activeArticle.title}</h2>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {activeArticle.request_type || "General"} · Updated{" "}
+                    {formatTimestamp(activeArticle.updated_at)}
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  {confirmDelete ? (
+                    <>
+                      <span className="text-xs text-red-600">Delete this article?</span>
+                      <button
+                        onClick={() => activeArticle.id && deleteMutation.mutate(activeArticle.id)}
+                        disabled={deleteMutation.isPending}
+                        className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                      >
+                        {deleteMutation.isPending ? "Deleting…" : "Confirm Delete"}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelete(false)}
+                        className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => setMode("edit")}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelete(true)}
+                        className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 shadow-sm hover:bg-red-50"
+                      >
+                        Delete
+                      </button>
+                    </>
                   )}
                 </div>
-              )}
-            </div>
+              </div>
 
-            <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-              <div className="space-y-4">
+              {activeArticle.summary && activeArticle.summary !== activeArticle.content && (
+                <p className="mt-4 text-sm italic text-slate-500">{activeArticle.summary}</p>
+              )}
+
+              <div className="mt-4">
+                <ArticleContent text={activeArticle.content} />
+              </div>
+            </section>
+          )}
+
+          {/* Edit / Create mode */}
+          {(mode === "edit" || mode === "create") && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-4">
+                <h2 className="text-lg font-semibold text-slate-900">
+                  {mode === "create" ? "New Article" : "Edit Article"}
+                </h2>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleCancelEdit}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  {mode === "edit" && editor.id && (
+                    <button
+                      onClick={() => saveMutation.mutate({ payload: editor, forceCreate: true })}
+                      disabled={saveMutation.isPending || !editor.title.trim() || !editor.content.trim()}
+                      className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Save As New
+                    </button>
+                  )}
+                  <button
+                    onClick={() => saveMutation.mutate({ payload: editor, forceCreate: false })}
+                    disabled={saveMutation.isPending || !editor.title.trim() || !editor.content.trim()}
+                    className="rounded-lg bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {saveMutation.isPending
+                      ? "Saving…"
+                      : mode === "create"
+                        ? "Create Article"
+                        : "Save Changes"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-5 space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Title</label>
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Title
+                  </label>
                   <input
                     value={editor.title}
-                    onChange={(event) => setEditor((current) => ({ ...current, title: event.target.value }))}
+                    onChange={(e) => setEditor((s) => ({ ...s, title: e.target.value }))}
                     className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                   />
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Request Type</label>
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Request Type
+                    </label>
                     <select
                       value={editor.request_type}
-                      onChange={(event) => setEditor((current) => ({ ...current, request_type: event.target.value }))}
+                      onChange={(e) => setEditor((s) => ({ ...s, request_type: e.target.value }))}
                       className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                     >
                       <option value="">General</option>
-                      {requestTypes.map((option) => (
-                        <option key={option.id} value={option.name}>
-                          {option.name}
+                      {requestTypes.map((rt) => (
+                        <option key={rt.id} value={rt.name}>
+                          {rt.name}
                         </option>
                       ))}
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Source Ticket</label>
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Source Ticket
+                    </label>
                     <input
                       value={editor.source_ticket_key ?? ""}
-                      onChange={(event) => setEditor((current) => ({ ...current, source_ticket_key: event.target.value.toUpperCase() }))}
+                      onChange={(e) =>
+                        setEditor((s) => ({ ...s, source_ticket_key: e.target.value.toUpperCase() }))
+                      }
                       placeholder="Optional"
                       className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                     />
@@ -419,53 +638,31 @@ export default function KnowledgeBasePage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Summary</label>
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Summary
+                  </label>
                   <textarea
                     value={editor.summary}
-                    onChange={(event) => setEditor((current) => ({ ...current, summary: event.target.value }))}
-                    rows={3}
+                    onChange={(e) => setEditor((s) => ({ ...s, summary: e.target.value }))}
+                    rows={2}
                     className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Article Content</label>
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Content
+                  </label>
                   <textarea
                     value={editor.content}
-                    onChange={(event) => setEditor((current) => ({ ...current, content: event.target.value }))}
-                    rows={22}
+                    onChange={(e) => setEditor((s) => ({ ...s, content: e.target.value }))}
+                    rows={24}
                     className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 font-mono text-sm leading-6 text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                   />
                 </div>
               </div>
-
-              <aside className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <h3 className="text-sm font-semibold text-slate-900">Article Metadata</h3>
-                <dl className="mt-4 space-y-3 text-sm">
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Code</dt>
-                    <dd className="mt-1 text-slate-700">{editor.code || "—"}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Source File</dt>
-                    <dd className="mt-1 break-all text-slate-700">{editor.source_filename || "—"}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mode</dt>
-                    <dd className="mt-1 text-slate-700">{editor.id ? "Update existing article" : "Create new article"}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Imported Seed</dt>
-                    <dd className="mt-1 text-slate-700">{editor.imported_from_seed ? "Yes" : "No"}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">AI Drafted</dt>
-                    <dd className="mt-1 text-slate-700">{editor.ai_generated ? "Yes" : "No"}</dd>
-                  </div>
-                </dl>
-              </aside>
-            </div>
-          </section>
+            </section>
+          )}
         </div>
       </div>
     </div>

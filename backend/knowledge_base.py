@@ -351,6 +351,11 @@ class KnowledgeBaseStore:
         scored.sort(key=lambda item: (-item[0], item[1].title.lower(), item[1].id or 0))
         return [article for _, article in scored[:limit]]
 
+    def delete_article(self, article_id: int) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM kb_articles WHERE id = ?", (article_id,))
+        return cur.rowcount > 0
+
     def find_default_target_article(self, request_type: str) -> KnowledgeBaseArticle | None:
         if not request_type:
             return None

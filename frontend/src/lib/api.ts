@@ -858,6 +858,13 @@ export const api = {
     return putJSON<KnowledgeBaseArticle>(`/api/kb/articles/${id}`, payload);
   },
 
+  deleteKnowledgeBaseArticle(id: number): Promise<{ deleted: boolean }> {
+    return fetch(`/api/kb/articles/${id}`, { method: "DELETE" }).then(async (res) => {
+      if (!res.ok) throw new Error(`DELETE failed (${res.status}): ${await res.text()}`);
+      return res.json() as Promise<{ deleted: boolean }>;
+    });
+  },
+
   draftKnowledgeBaseArticleFromTicket(
     key: string,
     articleId?: number | null,
