@@ -141,7 +141,7 @@ async def reformat_all_articles(
                                 request_type=article.request_type,
                                 summary=article.summary,
                                 content=new_content,
-                                source_ticket_key=article.source_ticket_key or None,
+                                source_ticket_key=article.source_ticket_key or "",
                             ),
                             ai_generated=True,
                         )
