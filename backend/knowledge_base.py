@@ -60,16 +60,42 @@ def _tokenize(text: str) -> set[str]:
     return tokens
 
 
+def _table_first_cell_text(tbl: ET.Element) -> str:
+    first_cell = tbl.find(".//w:tc", _DOCX_NS)
+    if first_cell is None:
+        return ""
+    first_para = first_cell.find(".//w:p", _DOCX_NS)
+    if first_para is None:
+        return ""
+    return "".join((n.text or "") for n in first_para.findall(".//w:t", _DOCX_NS)).strip()
+
+
+_SKIP_TABLE_HEADERS = {"revision history", "revision", "document history", "change history"}
+
+
 def _extract_docx_lines(blob: bytes) -> list[str]:
     with zipfile.ZipFile(io.BytesIO(blob)) as docx:
         root = ET.fromstring(docx.read("word/document.xml"))
 
+    body = root.find(".//w:body", _DOCX_NS)
+    if body is None:
+        return []
+
     lines: list[str] = []
-    # findall("//w:p") captures paragraphs in both body and table cells (w:tc)
-    for para in root.findall(".//w:p", _DOCX_NS):
-        text = "".join((node.text or "") for node in para.findall(".//w:t", _DOCX_NS)).strip()
-        if text:
-            lines.append(text)
+    for child in body:
+        tag = child.tag.split("}")[-1]
+        if tag == "tbl":
+            first = _table_first_cell_text(child)
+            if first.lower() in _SKIP_TABLE_HEADERS:
+                continue
+            for para in child.findall(".//w:p", _DOCX_NS):
+                text = "".join((n.text or "") for n in para.findall(".//w:t", _DOCX_NS)).strip()
+                if text:
+                    lines.append(text)
+        elif tag == "p":
+            text = "".join((n.text or "") for n in child.findall(".//w:t", _DOCX_NS)).strip()
+            if text:
+                lines.append(text)
     return lines
 
 
