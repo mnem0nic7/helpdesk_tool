@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ai_client import draft_kb_article, get_available_models
+from ai_client import draft_kb_article, get_available_models, reformat_kb_article_content
 from auth import require_admin
 from jira_client import JiraClient
 from knowledge_base import kb_store
@@ -79,6 +79,58 @@ async def delete_article(
     if not kb_store.delete_article(article_id):
         raise HTTPException(status_code=404, detail=f"KB article {article_id} not found")
     return {"deleted": True}
+
+
+@router.post("/articles/reformat-seeded")
+async def reformat_seeded_articles(
+    _admin: dict[str, Any] = Depends(require_admin),
+) -> dict[str, int]:
+    """Reformat all seed-imported KB articles as structured markdown using AI."""
+    _ensure_primary_site()
+    available = get_available_models()
+    if not available:
+        raise HTTPException(status_code=400, detail="No AI model available to reformat articles")
+    model_id = available[0].id
+    seeded = [a for a in kb_store.list_articles() if a.imported_from_seed]
+    count = 0
+    for article in seeded:
+        try:
+            new_content = reformat_kb_article_content(article, model_id)
+            if new_content:
+                from models import KnowledgeBaseArticleUpsertRequest
+                kb_store.update_article(
+                    article.id,  # type: ignore[arg-type]
+                    KnowledgeBaseArticleUpsertRequest(
+                        title=article.title,
+                        request_type=article.request_type,
+                        summary=article.summary,
+                        content=new_content,
+                        source_ticket_key=article.source_ticket_key or None,
+                    ),
+                    ai_generated=True,
+                )
+                count += 1
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to reformat article %s: %s", article.id, exc)
+    return {"reformatted": count}
+
+
+@router.post("/articles/{article_id}/reformat")
+async def reformat_article(
+    article_id: int,
+    _admin: dict[str, Any] = Depends(require_admin),
+) -> dict[str, str]:
+    """Reformat a single KB article's content as structured markdown using AI."""
+    _ensure_primary_site()
+    article = kb_store.get_article(article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail=f"KB article {article_id} not found")
+    available = get_available_models()
+    if not available:
+        raise HTTPException(status_code=400, detail="No AI model available")
+    new_content = reformat_kb_article_content(article, available[0].id)
+    return {"content": new_content}
 
 
 @router.post("/articles/draft-from-ticket")

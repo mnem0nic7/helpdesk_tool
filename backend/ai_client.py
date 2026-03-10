@@ -195,6 +195,20 @@ Respond with ONLY valid JSON (no markdown fences):
 If no changes are needed (except request_type which is always required), return only the request_type suggestion.
 """
 
+KB_REFORMAT_PROMPT = """You are reformatting an IT knowledge base article for better readability.
+
+Restructure the content using clean markdown:
+- ## for section headings (e.g. ## Description, ## Steps, ## Notes, ## Additional Information)
+- ### for sub-headings
+- Numbered lists for step-by-step procedures: 1. First step\n2. Second step (grouped, not separated by blank lines)
+- - for unordered bullet lists
+- Start callout paragraphs with one of: Note:, Warning:, Tip:, Caution:, or Important:
+- **bold** for key terms or UI element names
+
+Preserve all technical content exactly — do not add, remove, or alter any technical information.
+Return ONLY the reformatted content. No preamble, no explanation, no markdown fences."""
+
+
 KB_DRAFT_PROMPT = """You are maintaining the internal OIT helpdesk knowledge base.
 Use the closed ticket evidence and any existing related KB article to draft either:
 - an update to the existing article, or
@@ -787,6 +801,45 @@ def draft_kb_article(
         existing_article,
         fallback_request_type=extract_request_type_name_from_fields(issue.get("fields", {})),
     )
+
+
+def reformat_kb_article_content(article: KnowledgeBaseArticle, model_id: str) -> str:
+    """Reformat an existing KB article's content as structured markdown."""
+    provider = _get_model_provider(model_id)
+    if not provider:
+        raise ValueError(f"Unknown model: {model_id}")
+
+    user_msg = (
+        f"Article Title: {article.title}\n"
+        f"Request Type: {article.request_type or 'General'}\n\n"
+        f"Current content:\n{article.content}"
+    )
+    logger.info("Reformatting KB article %s with %s (%s)", article.id, model_id, provider)
+
+    if provider == "openai":
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": KB_REFORMAT_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.2,
+            max_tokens=3000,
+        )
+        return (resp.choices[0].message.content or "").strip()
+
+    import anthropic
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    resp = client.messages.create(
+        model=model_id,
+        system=KB_REFORMAT_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+        temperature=0.2,
+        max_tokens=3000,
+    )
+    return resp.content[0].text.strip()
 
 
 # ---------------------------------------------------------------------------
