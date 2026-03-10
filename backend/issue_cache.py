@@ -330,8 +330,8 @@ class IssueCache:
     # Incremental refresh
     # ------------------------------------------------------------------
 
-    def _incremental_refresh(self, include_excluded_updates: bool = True) -> list[str]:
-        """Fetch only issues updated in the last refresh interval and merge.
+    def _incremental_refresh(self, include_excluded_updates: bool = True, lookback_minutes: int = _INCREMENTAL_LOOKBACK_MINUTES) -> list[str]:
+        """Fetch only issues updated in the last lookback_minutes and merge.
 
         Returns a list of issue keys that need auto-triage (not yet processed).
         """
@@ -340,7 +340,7 @@ class IssueCache:
         self._refresh_progress = {"phase": "starting", "current": 0, "total": 0}
         try:
             jql = (
-                f'project = {JIRA_PROJECT} AND updated >= "-{_INCREMENTAL_LOOKBACK_MINUTES}m" '
+                f'project = {JIRA_PROJECT} AND updated >= "-{lookback_minutes}m" '
                 "ORDER BY key ASC"
             )
             logger.info("Cache: incremental refresh with JQL: %s", jql)
@@ -576,12 +576,21 @@ class IssueCache:
             self._bg_task = None
 
     async def _refresh_loop(self) -> None:
-        """Run incremental refresh every _REFRESH_INTERVAL seconds."""
+        """Run incremental refresh every _REFRESH_INTERVAL seconds.
+
+        Runs immediately on startup (to catch changes since last DB snapshot),
+        then repeats on the interval.
+        """
+        first = True
         while True:
-            await asyncio.sleep(_REFRESH_INTERVAL)
+            if not first:
+                await asyncio.sleep(_REFRESH_INTERVAL)
+            # On startup use a 24-hour lookback to catch anything missed during downtime
+            lookback = 60 * 24 if first else _INCREMENTAL_LOOKBACK_MINUTES
+            first = False
             try:
                 new_keys = await asyncio.get_running_loop().run_in_executor(
-                    None, self._incremental_refresh, False
+                    None, self._incremental_refresh, False, lookback
                 )
                 if new_keys:
                     await self._auto_triage_new_tickets(new_keys)
