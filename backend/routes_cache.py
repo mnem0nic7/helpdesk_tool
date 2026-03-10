@@ -35,7 +35,20 @@ async def cache_status() -> dict[str, Any]:
 
 @router.post("/cache/refresh")
 async def cache_refresh(background_tasks: BackgroundTasks, _admin: dict = Depends(require_admin)) -> dict[str, Any]:
-    """Trigger a full cache refresh (non-blocking — poll /cache/status for progress)."""
+    """Trigger an incremental cache refresh (non-blocking — poll /cache/status for progress)."""
+    if cache.refreshing:
+        return {**(await cache_status()), "message": "Refresh already in progress"}
+
+    async def _run() -> None:
+        await asyncio.get_running_loop().run_in_executor(None, cache.trigger_incremental_refresh)
+
+    background_tasks.add_task(_run)
+    return {**(await cache_status()), "started": True}
+
+
+@router.post("/cache/refresh/full")
+async def cache_refresh_full(background_tasks: BackgroundTasks, _admin: dict = Depends(require_admin)) -> dict[str, Any]:
+    """Trigger a full historical re-fetch from Jira (slow — use only when DB is stale)."""
     if cache.refreshing:
         return {**(await cache_status()), "message": "Refresh already in progress"}
 
