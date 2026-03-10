@@ -24,8 +24,9 @@ WORKDIR /app
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend source
+# Copy backend source and KB seed archive
 COPY backend/ ./backend/
+COPY OIT_KB_Articles.zip ./OIT_KB_Articles.zip
 
 # Copy frontend build output to nginx html root
 COPY --from=frontend-build /build/dist/ /usr/share/nginx/html/

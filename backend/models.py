@@ -293,3 +293,59 @@ class TechnicianScore(BaseModel):
     score_summary: str
     model_used: str
     created_at: str
+
+
+# ---------------------------------------------------------------------------
+# Knowledge base models
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeBaseArticle(BaseModel):
+    """One searchable/editable internal knowledge base article."""
+
+    id: int | None = None
+    slug: str
+    code: str = ""
+    title: str
+    request_type: str = ""
+    summary: str = ""
+    content: str
+    source_filename: str = ""
+    source_ticket_key: str = ""
+    imported_from_seed: bool = False
+    ai_generated: bool = False
+    created_at: str
+    updated_at: str
+
+
+class KnowledgeBaseArticleUpsertRequest(BaseModel):
+    """Create or update a knowledge base article."""
+
+    title: str
+    request_type: str = ""
+    summary: str = ""
+    content: str
+    source_ticket_key: str = ""
+
+
+class KnowledgeBaseDraftRequest(BaseModel):
+    """Generate an AI-authored KB draft from a closed ticket."""
+
+    key: str
+    model: Optional[str] = None
+    article_id: Optional[int] = None
+
+
+class KnowledgeBaseDraft(BaseModel):
+    """AI-generated draft to create or update a KB article."""
+
+    title: str
+    request_type: str = ""
+    summary: str = ""
+    content: str
+    model_used: str
+    source_ticket_key: str
+    suggested_article_id: Optional[int] = None
+    suggested_article_title: str = ""
+    recommended_action: str = "create_new"
+    change_summary: str = ""

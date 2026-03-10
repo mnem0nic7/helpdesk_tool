@@ -9,7 +9,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from config import OPENAI_API_KEY, ANTHROPIC_API_KEY
-from models import AIModel, TechnicianScore, TriageResult, TriageSuggestion
+from models import (
+    AIModel,
+    KnowledgeBaseArticle,
+    KnowledgeBaseDraft,
+    TechnicianScore,
+    TriageResult,
+    TriageSuggestion,
+)
 from request_type import extract_request_type_name_from_fields
 
 logger = logging.getLogger(__name__)
@@ -94,6 +101,7 @@ Your job is to analyze tickets and suggest improvements for: priority, request_t
 - Status must be one of: {statuses}
 - For assignee, suggest a name only if you can identify the right person from context. Otherwise omit.
 - For comments, suggest a brief triage note only if it would help the agent handling the ticket.
+- Relevant internal knowledge base articles may be included. Use them as context for classification and handling notes, but do not assume facts not present in the ticket or KB excerpts.
 - Provide a confidence score (0.0-1.0) and brief reasoning for each suggestion.
 
 ## Request Type Classification Rules
@@ -187,6 +195,29 @@ Respond with ONLY valid JSON (no markdown fences):
 If no changes are needed (except request_type which is always required), return only the request_type suggestion.
 """
 
+KB_DRAFT_PROMPT = """You are maintaining the internal OIT helpdesk knowledge base.
+Use the closed ticket evidence and any existing related KB article to draft either:
+- an update to the existing article, or
+- a new article when no existing article covers the resolution well.
+
+Rules:
+- Use only information supported by the ticket description, comments, and notes.
+- Remove customer-specific details, names, email addresses, and one-off context unless it is operationally necessary.
+- Focus on reusable troubleshooting and resolution guidance for technicians.
+- Prefer concise section headings and action-oriented steps.
+- If an existing article is provided, preserve its general scope and improve it with the new resolution details.
+
+Respond with ONLY valid JSON:
+{
+  "title": "Article title",
+  "request_type": "One request type name or empty string",
+  "summary": "One or two sentence overview.",
+  "content": "Full article body in plain text with section headings and paragraph breaks.",
+  "recommended_action": "update_existing",
+  "change_summary": "What this draft adds or changes."
+}
+"""
+
 TECHNICIAN_SCORE_PROMPT = """You are a QA reviewer for closed IT helpdesk tickets.
 Evaluate the technician's handling of a resolved or closed ticket using only the evidence provided.
 
@@ -219,7 +250,10 @@ Respond with ONLY valid JSON:
 """
 
 
-def _build_ticket_context(issue: dict[str, Any]) -> str:
+def _build_ticket_context(
+    issue: dict[str, Any],
+    kb_matches: list[KnowledgeBaseArticle] | None = None,
+) -> str:
     """Build a text representation of a ticket for the AI prompt."""
     fields = issue.get("fields", {})
 
@@ -319,6 +353,15 @@ def _build_ticket_context(issue: dict[str, Any]) -> str:
         lines.append(f"Steps to Re-Create:\n{steps}")
     if comment_texts:
         lines.append(f"Comments ({len(comments)} total):\n" + "\n".join(comment_texts))
+    if kb_matches:
+        kb_lines = []
+        for article in kb_matches:
+            excerpt = article.content[:1200].strip()
+            kb_lines.append(
+                f"- {article.title} ({article.request_type or 'General'}): {article.summary or 'No summary'}\n"
+                f"{excerpt}"
+            )
+        lines.append("Relevant Knowledge Base Articles:\n" + "\n\n".join(kb_lines))
 
     return "\n".join(lines)
 
@@ -402,6 +445,25 @@ def _build_technician_score_context(
     if raw_comments:
         lines.append("All Jira Comments:\n" + "\n".join(raw_comments))
     return "\n".join(lines)
+
+
+def _build_kb_draft_context(
+    issue: dict[str, Any],
+    request_comments: list[dict[str, Any]],
+    existing_article: KnowledgeBaseArticle | None,
+) -> str:
+    """Build the context for an AI-generated KB draft."""
+    ticket_context = _build_technician_score_context(issue, request_comments)
+    if not existing_article:
+        return ticket_context + "\n\nExisting KB Article:\nNone"
+    return (
+        ticket_context
+        + "\n\nExisting KB Article:\n"
+        + f"Title: {existing_article.title}\n"
+        + f"Request Type: {existing_article.request_type or 'Not set'}\n"
+        + f"Summary: {existing_article.summary or 'None'}\n"
+        + f"Content:\n{existing_article.content}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -562,13 +624,23 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
     provider = _get_model_provider(model_id)
     if not provider:
         raise ValueError(f"Unknown model: {model_id}")
+    fields = issue.get("fields", {})
+    request_type = extract_request_type_name_from_fields(fields)
 
     system = SYSTEM_PROMPT.format(
         priorities=", ".join(KNOWN_PRIORITIES),
         request_types=", ".join(get_request_type_names()),
         statuses=", ".join(KNOWN_STATUSES),
     )
-    user_msg = _build_ticket_context(issue)
+    from knowledge_base import kb_store
+
+    base_context = _build_ticket_context(issue)
+    kb_matches = kb_store.find_relevant_articles(
+        request_type=request_type,
+        query_text=base_context,
+        limit=3,
+    )
+    user_msg = _build_ticket_context(issue, kb_matches=kb_matches)
 
     logger.info("Analyzing %s with %s (%s)", issue.get("key"), model_id, provider)
 
@@ -623,6 +695,47 @@ def _parse_technician_score(raw: str, key: str, model_id: str) -> TechnicianScor
     )
 
 
+def _parse_kb_draft(
+    raw: str,
+    key: str,
+    model_id: str,
+    existing_article: KnowledgeBaseArticle | None,
+    fallback_request_type: str = "",
+) -> KnowledgeBaseDraft:
+    """Parse AI response JSON into a KB draft payload."""
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        logger.error("Failed to parse KB draft JSON: %s", text[:200])
+        raise ValueError("Model returned invalid KB draft JSON") from exc
+
+    request_type = str(data.get("request_type", "")).strip() or fallback_request_type
+
+    recommended_action = str(data.get("recommended_action", "")).strip().lower()
+    if recommended_action not in {"update_existing", "create_new"}:
+        recommended_action = "update_existing" if existing_article else "create_new"
+
+    return KnowledgeBaseDraft(
+        title=str(data.get("title", "")).strip() or (existing_article.title if existing_article else f"{key} Resolution"),
+        request_type=request_type or (existing_article.request_type if existing_article else ""),
+        summary=str(data.get("summary", "")).strip(),
+        content=str(data.get("content", "")).strip(),
+        model_used=model_id,
+        source_ticket_key=key,
+        suggested_article_id=existing_article.id if existing_article else None,
+        suggested_article_title=existing_article.title if existing_article else "",
+        recommended_action=recommended_action,
+        change_summary=str(data.get("change_summary", "")).strip(),
+    )
+
+
 def score_closed_ticket(
     issue: dict[str, Any],
     request_comments: list[dict[str, Any]],
@@ -644,6 +757,36 @@ def score_closed_ticket(
         raise ValueError(f"Unsupported provider: {provider}")
 
     return _parse_technician_score(raw, issue.get("key", ""), model_id)
+
+
+def draft_kb_article(
+    issue: dict[str, Any],
+    request_comments: list[dict[str, Any]],
+    model_id: str,
+    existing_article: KnowledgeBaseArticle | None = None,
+) -> KnowledgeBaseDraft:
+    """Generate a KB draft from a closed ticket and optional existing article."""
+    provider = _get_model_provider(model_id)
+    if not provider:
+        raise ValueError(f"Unknown model: {model_id}")
+
+    user_msg = _build_kb_draft_context(issue, request_comments, existing_article)
+    logger.info("Drafting KB article for %s with %s (%s)", issue.get("key"), model_id, provider)
+
+    if provider == "openai":
+        raw = _call_openai(model_id, KB_DRAFT_PROMPT, user_msg)
+    elif provider == "anthropic":
+        raw = _call_anthropic(model_id, KB_DRAFT_PROMPT, user_msg)
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
+
+    return _parse_kb_draft(
+        raw,
+        issue.get("key", ""),
+        model_id,
+        existing_article,
+        fallback_request_type=extract_request_type_name_from_fields(issue.get("fields", {})),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ const ReportsPage = lazy(() => import("./pages/ReportsPage"));
 const TriagePage = lazy(() => import("./pages/TriagePage"));
 const AILogPage = lazy(() => import("./pages/AILogPage"));
 const AlertsPage = lazy(() => import("./pages/AlertsPage"));
+const KnowledgeBasePage = lazy(() => import("./pages/KnowledgeBasePage"));
 
 function PageFallback() {
   return (
@@ -38,6 +39,7 @@ export default function App() {
             <Route path="triage" element={<TriagePage />} />
             <Route path="ai-log" element={<AILogPage />} />
             <Route path="alerts" element={<AlertsPage />} />
+            <Route path="knowledge-base" element={<KnowledgeBasePage />} />
           </Route>
         </Routes>
       </Suspense>
