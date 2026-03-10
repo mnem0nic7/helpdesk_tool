@@ -24,6 +24,7 @@ class TriageStore:
 
     def _init_db(self) -> None:
         with sqlite3.connect(self._db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS suggestions "
                 "(key TEXT PRIMARY KEY, data TEXT, model TEXT, "

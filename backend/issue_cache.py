@@ -173,6 +173,7 @@ class IssueCache:
     def _init_db(self) -> None:
         """Create the SQLite table if it doesn't exist."""
         with sqlite3.connect(self._db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS issues "
                 "(key TEXT PRIMARY KEY, data TEXT, excluded INTEGER)"
