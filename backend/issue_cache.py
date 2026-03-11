@@ -482,6 +482,47 @@ class IssueCache:
         return enriched
 
     # ------------------------------------------------------------------
+    # Rule-based priority enforcement
+    # ------------------------------------------------------------------
+
+    # Request types that are always forced to at least High priority
+    _ALWAYS_HIGH_REQUEST_TYPES: frozenset[str] = frozenset({"Security Alert"})
+    # Priorities considered >= High (do not downgrade these)
+    _HIGH_OR_ABOVE: frozenset[str] = frozenset({"High", "Highest"})
+
+    def _apply_priority_rules(self, key: str, issue: dict[str, Any]) -> bool:
+        """Enforce rule-based priority overrides. Returns True if a change was made.
+
+        Current rules:
+          - Security Alert request type → force priority to High (unless already High/Highest).
+        """
+        from triage_store import store
+        from jira_client import JiraClient
+
+        fields = issue.get("fields", {})
+        request_type = extract_request_type_name_from_fields(fields)
+        if request_type not in self._ALWAYS_HIGH_REQUEST_TYPES:
+            return False
+
+        current_priority = (fields.get("priority") or {}).get("name", "")
+        if current_priority in self._HIGH_OR_ABOVE:
+            return False
+
+        target = "High"
+        try:
+            JiraClient().update_priority(key, target)
+            store.log_change(key, "priority", current_priority, target, 1.0, "rule:security-alert")
+            self.update_cached_field(key, "priority", target)
+            logger.info(
+                "Priority rule: %s (%s) %s → %s",
+                key, request_type, current_priority or "(none)", target,
+            )
+            return True
+        except Exception:
+            logger.exception("Priority rule: failed to update %s priority", key)
+            return False
+
+    # ------------------------------------------------------------------
     # Auto-triage
     # ------------------------------------------------------------------
 
@@ -532,6 +573,9 @@ class IssueCache:
                 if not issue:
                     continue
 
+                # Apply deterministic rules first (e.g. Security Alert → High)
+                await loop.run_in_executor(None, self._apply_priority_rules, key, issue)
+
                 result = await loop.run_in_executor(
                     None, analyze_ticket, issue, AUTO_TRIAGE_MODEL
                 )
@@ -581,6 +625,15 @@ class IssueCache:
                                 )
                     except Exception:
                         logger.exception("Auto-triage: failed to apply %s for %s", s.field, key)
+
+                # If AI reclassified the request type, re-run priority rules — the new type
+                # may now trigger a rule (e.g. newly classified as Security Alert → High).
+                if request_type_updated and not priority_updated:
+                    with self._lock:
+                        updated_issue = self._all_issues.get(key, issue)
+                    await loop.run_in_executor(
+                        None, self._apply_priority_rules, key, updated_issue
+                    )
 
                 # Remove priority and request_type suggestions entirely — auto-triage owns these fields.
                 # Applied ones are already written to Jira; unapplied ones (low confidence) should not
