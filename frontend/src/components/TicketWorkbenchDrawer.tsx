@@ -1,6 +1,7 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
+import { getSiteBranding } from "../lib/siteContext.ts";
 import type {
   Assignee,
   PriorityOption,
@@ -271,6 +272,21 @@ export default function TicketWorkbenchDrawer({
     },
   });
 
+  const removeOasisDevMutation = useMutation({
+    mutationFn: () => {
+      if (!ticketKey) throw new Error("No ticket selected");
+      return api.removeOasisDevLabel(ticketKey);
+    },
+    onSuccess: (next) => {
+      handleUpdated(next, "Ticket reclassified — oasisdev label removed");
+      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    },
+    onError: (error) => {
+      setErrorText(error instanceof Error ? error.message : "Failed to remove oasisdev label");
+      setFeedback(null);
+    },
+  });
+
   if (!ticketKey) return null;
 
   const ticket = detail?.ticket ?? initialTicket;
@@ -340,6 +356,17 @@ export default function TicketWorkbenchDrawer({
               />
             </div>
             <div className="flex items-center gap-2">
+              {getSiteBranding().scope === "oasisdev" &&
+                detail?.ticket.labels.some((l) => l.toLowerCase().includes("oasisdev")) && (
+                  <button
+                    type="button"
+                    disabled={removeOasisDevMutation.isPending}
+                    onClick={() => removeOasisDevMutation.mutate()}
+                    className="rounded-md border border-amber-400 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                  >
+                    {removeOasisDevMutation.isPending ? "Removing…" : "Not Oasis Dev"}
+                  </button>
+                )}
               {detail?.portal_url && (
                 <a
                   href={detail.portal_url}
