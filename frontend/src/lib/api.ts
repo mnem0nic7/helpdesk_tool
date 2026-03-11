@@ -787,6 +787,11 @@ export const api = {
     });
   },
 
+  /** Remove the oasisdev label from a ticket and add an internal note. */
+  removeOasisDevLabel(key: string): Promise<TicketDetail> {
+    return postJSON<TicketDetail>(`/api/tickets/${encodeURIComponent(key)}/remove-oasisdev-label`, {});
+  },
+
   /** Return the URL for the Excel export endpoint (browser navigates to it). */
   exportExcel(): string {
     return "/api/export/excel";

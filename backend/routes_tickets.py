@@ -512,3 +512,46 @@ async def comment_ticket(
     except Exception as exc:
         logger.exception("Failed to comment on ticket %s", key)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/tickets/{key}/remove-oasisdev-label")
+async def remove_oasisdev_label(
+    key: str,
+    _admin: dict = Depends(require_admin),
+) -> dict[str, Any]:
+    """Remove the oasisdev label from a ticket and add an internal note.
+
+    Used from the OasisDev queue to reclassify a ticket that was incorrectly
+    tagged. Removes all labels containing 'oasisdev', posts an internal note,
+    and moves the issue into the primary ticket scope.
+    """
+    try:
+        validate_jira_key(key)
+        _ensure_ticket_visible(key)
+
+        # Read current labels from the cached issue
+        all_issues = {iss["key"]: iss for iss in cache.get_all_issues() if iss.get("key")}
+        issue = all_issues.get(key)
+        current_labels: list[str] = (issue or {}).get("fields", {}).get("labels") or []
+        new_labels = [lbl for lbl in current_labels if "oasisdev" not in lbl.lower()]
+
+        # Write updates to Jira
+        _client.update_issue_fields(key, {"labels": new_labels})
+        _client.add_request_comment(
+            key,
+            "This ticket has been reviewed and confirmed to be unrelated to OasisDev. "
+            "The oasisdev label has been removed.",
+            public=False,
+        )
+
+        # Keep cache coherent
+        cache.update_cached_labels(key, new_labels)
+
+        return _load_ticket_detail(key)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to remove oasisdev label from ticket %s", key)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

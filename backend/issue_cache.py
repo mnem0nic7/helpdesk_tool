@@ -166,6 +166,28 @@ class IssueCache:
         if issue:
             self._upsert_to_db([issue])
 
+    def update_cached_labels(self, key: str, labels: list[str]) -> None:
+        """Update the labels list for a cached issue and re-evaluate its scope.
+
+        When the oasisdev label is removed, the issue moves from the oasisdev
+        scope into the primary scope (_issues dict).
+        """
+        from metrics import is_excluded as _is_excluded
+        with self._lock:
+            issue = self._all_issues.get(key)
+            if issue:
+                issue.setdefault("fields", {})["labels"] = labels
+                issue["fields"]["updated"] = datetime.now(timezone.utc).isoformat()
+                # Re-evaluate scope membership based on new labels
+                if _is_excluded(issue):
+                    self._issues.pop(key, None)
+                else:
+                    self._issues[key] = issue
+        with self._lock:
+            issue = self._all_issues.get(key)
+        if issue:
+            self._upsert_to_db([issue])
+
     # ------------------------------------------------------------------
     # SQLite persistence
     # ------------------------------------------------------------------
