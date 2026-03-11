@@ -67,9 +67,10 @@ class IssueCache:
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._init_db()
 
-        # Eagerly restore from SQLite so tickets are available immediately
-        if self._load_from_db():
-            self._init_event.set()
+        # Set to True once start_background_refresh() is called.
+        # _ensure_initialized() uses this to decide whether to wait for the
+        # background task or load synchronously (test / standalone usage).
+        self._start_background_called = False
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -289,22 +290,24 @@ class IssueCache:
     def _ensure_initialized(self) -> None:
         """Block until the cache has been populated at least once.
 
-        If DB is empty and a full Jira fetch is needed, this blocks on the
-        first request. Subsequent requests served from SQLite are fast.
+        In production the background task (started by start_background_refresh)
+        loads SQLite and sets _init_event; we just wait on it.  In tests /
+        standalone usage the flag is False so we fall back to a direct load.
         """
         if self._initialized:
             return
-        # If nobody started init yet, do it now (first request triggers it)
+        if self._start_background_called:
+            # Background task is running — wait for it to finish loading.
+            self._init_event.wait(timeout=120)
+            return
+        # Fallback (tests, standalone): load synchronously.
         if not self._init_event.is_set():
-            # Try loading from SQLite first (fast path)
             if self._load_from_db():
                 self._init_event.set()
                 return
-            # DB empty — must do a full fetch (slow path, first time only)
             logger.info("Cache: cold start — fetching all issues from Jira (first request will be slow)")
             self._full_fetch()
         else:
-            # Another thread is doing init — wait for it
             self._init_event.wait(timeout=120)
 
     def _progress_callback(self, phase: str, current: int, total: int) -> None:
@@ -656,8 +659,28 @@ class IssueCache:
     # ------------------------------------------------------------------
 
     async def start_background_refresh(self) -> None:
-        """Start the periodic background refresh loop."""
-        self._bg_task = asyncio.create_task(self._refresh_loop())
+        """Start the background init + periodic refresh loop.
+
+        SQLite loading runs inside the task (via run_in_executor) so uvicorn
+        can start accepting connections before the load completes.  The first
+        request that needs data will block on _init_event, which is set as soon
+        as _load_from_db() (or _full_fetch() for a cold start) finishes.
+        """
+        self._start_background_called = True
+        self._bg_task = asyncio.create_task(self._init_and_refresh_loop())
+
+    async def _init_and_refresh_loop(self) -> None:
+        """Load from SQLite then run the periodic refresh loop."""
+        loop = asyncio.get_running_loop()
+        loaded = await loop.run_in_executor(None, self._load_from_db)
+        if loaded:
+            self._init_event.set()
+        else:
+            # Cold start — no cached data; full Jira fetch required.
+            # _full_fetch() sets _init_event in its finally block.
+            logger.info("Cache: cold start — full Jira fetch required (this takes a while)")
+            await loop.run_in_executor(None, self._full_fetch)
+        await self._refresh_loop()
 
     async def stop_background_refresh(self) -> None:
         """Cancel the background refresh loop."""
@@ -688,6 +711,14 @@ class IssueCache:
                     downtime_minutes = (
                         datetime.now(timezone.utc) - self._last_refresh
                     ).total_seconds() / 60
+                    if downtime_minutes < 5:
+                        # Data is fresh — skip the startup Jira call entirely.
+                        logger.info(
+                            "Cache: data is %.1f min old — skipping startup incremental",
+                            downtime_minutes,
+                        )
+                        first = False
+                        continue
                     lookback = min(int(downtime_minutes) + 5, 120)
                 else:
                     lookback = 60 * 24  # No prior timestamp — cold start, use large lookback
