@@ -58,6 +58,14 @@ class TriageStore:
                 "(key TEXT PRIMARY KEY, data TEXT NOT NULL, model TEXT, "
                 "created_at TEXT, updated_at TEXT)"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_triage_log_timestamp "
+                "ON auto_triage_log(timestamp)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_suggestions_updated_at "
+                "ON suggestions(updated_at)"
+            )
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path)
