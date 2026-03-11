@@ -277,9 +277,9 @@ export default function TicketWorkbenchDrawer({
       if (!ticketKey) throw new Error("No ticket selected");
       return api.removeOasisDevLabel(ticketKey);
     },
-    onSuccess: (next) => {
-      handleUpdated(next, "Ticket reclassified — oasisdev label removed");
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      onClose();
     },
     onError: (error) => {
       setErrorText(error instanceof Error ? error.message : "Failed to remove oasisdev label");
