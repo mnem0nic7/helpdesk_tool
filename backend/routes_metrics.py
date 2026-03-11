@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query
 
 from issue_cache import cache
 from metrics import (
+    _filter_issues,
     compute_headline_metrics,
     compute_monthly_volumes,
     compute_weekly_volumes,
@@ -85,13 +86,16 @@ async def get_metrics(
         end = dt or date.today()
         span_days = (end - df).days
 
+    # Pre-filter once rather than letting each compute function filter independently
+    filtered, excluded_count = _filter_issues(issues, scope=scope)
+
     return {
-        "headline": compute_headline_metrics(issues, scope=scope),
-        "weekly_volumes": compute_weekly_volumes(issues, span_days=span_days, scope=scope),
-        "age_buckets": compute_age_buckets(issues, span_days=span_days, scope=scope),
-        "ttr_distribution": compute_ttr_distribution(issues, span_days=span_days, scope=scope),
-        "priority_counts": compute_priority_counts(issues, scope=scope),
-        "assignee_stats": compute_assignee_stats(issues, scope=scope),
+        "headline": compute_headline_metrics(filtered, excluded_count=excluded_count, scope="all"),
+        "weekly_volumes": compute_weekly_volumes(filtered, span_days=span_days, scope="all"),
+        "age_buckets": compute_age_buckets(filtered, span_days=span_days, scope="all"),
+        "ttr_distribution": compute_ttr_distribution(filtered, span_days=span_days, scope="all"),
+        "priority_counts": compute_priority_counts(filtered, scope="all"),
+        "assignee_stats": compute_assignee_stats(filtered, scope="all"),
     }
 
 

@@ -166,6 +166,7 @@ export default function DashboardPage() {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["metrics", metricsParams],
     queryFn: () => api.getMetrics(metricsParams),
+    staleTime: 5 * 60 * 1000, // treat as fresh for 5 minutes — prevents refetch on tab focus
   });
 
   // Update URL when date range changes

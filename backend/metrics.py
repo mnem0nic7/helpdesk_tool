@@ -168,7 +168,13 @@ def percentile(data: list[float], p: float) -> Optional[float]:
     """
     if not data:
         return None
-    s = sorted(data)
+    return _percentile_sorted(sorted(data), p)
+
+
+def _percentile_sorted(s: list[float], p: float) -> Optional[float]:
+    """Like ``percentile`` but *s* must already be sorted ascending."""
+    if not s:
+        return None
     k = (len(s) - 1) * p / 100.0
     f = int(k)
     c = f + 1
@@ -349,14 +355,15 @@ def compute_headline_metrics(
     total = len(included)
     resolution_rate = (len(resolved_issues) / total * 100.0) if total else 0.0
 
+    ttr_sorted = sorted(ttr_values)
     return {
         "total_tickets": total,
         "open_backlog": len(open_issues),
         "resolved": len(resolved_issues),
         "resolution_rate": round(resolution_rate, 2),
-        "median_ttr_hours": _round_opt(percentile(ttr_values, 50)),
-        "p90_ttr_hours": _round_opt(percentile(ttr_values, 90)),
-        "p95_ttr_hours": _round_opt(percentile(ttr_values, 95)),
+        "median_ttr_hours": _round_opt(_percentile_sorted(ttr_sorted, 50)),
+        "p90_ttr_hours": _round_opt(_percentile_sorted(ttr_sorted, 90)),
+        "p95_ttr_hours": _round_opt(_percentile_sorted(ttr_sorted, 95)),
         "stale_count": stale_count,
         "excluded_count": effective_excluded_count,
     }

@@ -89,6 +89,18 @@ class AlertStore:
                     FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
                 )
             """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alert_rules_scope_enabled "
+                "ON alert_rules(site_scope, enabled)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alert_history_rule_scope_sent "
+                "ON alert_history(rule_id, site_scope, sent_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alert_history_scope_sent "
+                "ON alert_history(site_scope, sent_at)"
+            )
 
     # -----------------------------------------------------------------------
     # Alert Rules CRUD
