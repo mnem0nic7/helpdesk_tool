@@ -193,13 +193,39 @@ class IssueCache:
     # ------------------------------------------------------------------
 
     def _init_db(self) -> None:
-        """Create the SQLite table if it doesn't exist."""
+        """Create the SQLite tables if they don't exist."""
         with sqlite3.connect(self._db_path) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS issues "
                 "(key TEXT PRIMARY KEY, data TEXT, excluded INTEGER)"
             )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS metadata "
+                "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+
+    def _persist_last_refresh(self) -> None:
+        """Write _last_refresh timestamp to the metadata table."""
+        if not self._last_refresh:
+            return
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_refresh', ?)",
+                (self._last_refresh.isoformat(),),
+            )
+
+    def _restore_last_refresh(self) -> None:
+        """Read the persisted last_refresh timestamp from the metadata table."""
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT value FROM metadata WHERE key = 'last_refresh'"
+                ).fetchone()
+            if row:
+                self._last_refresh = datetime.fromisoformat(row[0])
+        except Exception:
+            pass  # Non-fatal — will fall back to full startup lookback
 
     def _load_from_db(self) -> bool:
         """Populate in-memory dicts from SQLite. Returns True if rows existed."""
@@ -218,11 +244,12 @@ class IssueCache:
             self._all_issues = new_all
             self._issues = new_filtered
             self._initialized = True
-            self._last_refresh = datetime.now(timezone.utc)
+        self._restore_last_refresh()
         logger.info(
-            "Cache: restored %d total, %d filtered from SQLite",
+            "Cache: restored %d total, %d filtered from SQLite (last Jira sync: %s)",
             len(new_all),
             len(new_filtered),
+            self._last_refresh.isoformat() if self._last_refresh else "unknown",
         )
         return True
 
@@ -332,6 +359,7 @@ class IssueCache:
                 self._issues = new_filtered
                 self._initialized = True
                 self._last_refresh = datetime.now(timezone.utc)
+            self._persist_last_refresh()
 
             logger.info(
                 "Cache: populated %d total, %d filtered",
@@ -383,6 +411,7 @@ class IssueCache:
                     else:
                         self._issues[key] = issue
                 self._last_refresh = datetime.now(timezone.utc)
+            self._persist_last_refresh()
 
             # Return ALL keys not yet auto-triaged (not just updated ones)
             seen = self._load_auto_triage_seen()
@@ -597,8 +626,21 @@ class IssueCache:
         while True:
             if not first:
                 await asyncio.sleep(_REFRESH_INTERVAL)
-            # On startup use a 24-hour lookback to catch anything missed during downtime
-            lookback = 60 * 24 if first else _INCREMENTAL_LOOKBACK_MINUTES
+            if first:
+                # Compute lookback from actual downtime so a normal 2-5 min redeploy
+                # fetches almost nothing instead of a full 24-hour sweep.
+                # Cap at 120 min; if downtime exceeded that, a manual full-refresh
+                # will catch the gap (rare scenario).
+                if self._last_refresh:
+                    downtime_minutes = (
+                        datetime.now(timezone.utc) - self._last_refresh
+                    ).total_seconds() / 60
+                    lookback = min(int(downtime_minutes) + 5, 120)
+                else:
+                    lookback = 60 * 24  # No prior timestamp — cold start, use large lookback
+                logger.info("Cache: startup lookback = %d min (downtime-based)", lookback)
+            else:
+                lookback = _INCREMENTAL_LOOKBACK_MINUTES
             first = False
             try:
                 new_keys = await asyncio.get_running_loop().run_in_executor(
