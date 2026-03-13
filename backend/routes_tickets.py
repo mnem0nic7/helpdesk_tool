@@ -344,13 +344,21 @@ async def get_priorities() -> list[dict[str, str]]:
 
 @router.get("/request-types")
 async def get_request_types() -> list[dict[str, str]]:
-    """Return request types that appear in the current scope's cached tickets."""
+    """Return request types that appear in the current scope's cached tickets.
+
+    The `id` field is the numeric Jira request type ID required by
+    customfield_11102 when writing; `name` is the human-readable label.
+    """
     issues = get_scoped_issues()
     seen: dict[str, dict[str, str]] = {}
     for iss in issues:
-        name = extract_request_type_name_from_fields(iss.get("fields", {}))
-        if name and name not in seen:
-            seen[name] = {"id": name, "name": name, "description": ""}
+        fields = iss.get("fields", {})
+        # customfield_10010 carries the full requestType object including the numeric id.
+        rt = (fields.get("customfield_10010") or {}).get("requestType") or {}
+        name = rt.get("name", "").strip()
+        rt_id = str(rt.get("id", "")).strip()
+        if name and rt_id and name not in seen:
+            seen[name] = {"id": rt_id, "name": name, "description": rt.get("description", "")}
     return sorted(seen.values(), key=lambda x: x["name"])
 
 
