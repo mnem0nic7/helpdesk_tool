@@ -190,7 +190,7 @@ function RuleModal({
   const { data: assignees = [] } = useQuery({
     queryKey: ["assignees"],
     queryFn: () => api.getAssignees(),
-    staleTime: Infinity,
+    staleTime: 5 * 60 * 1000,
   });
   const { data: requestTypes = [] } = useQuery({
     queryKey: ["request-types"],

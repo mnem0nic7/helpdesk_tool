@@ -344,34 +344,32 @@ async def get_priorities() -> list[dict[str, str]]:
 
 @router.get("/request-types")
 async def get_request_types() -> list[dict[str, str]]:
-    """Return available request types for the configured service desk."""
-    service_desk_id = _client.get_service_desk_id_for_project(JIRA_PROJECT)
-    if not service_desk_id:
-        return []
-    request_types = _client.get_request_types(service_desk_id)
-    return [
-        {
-            "id": str(request_type.get("id", "")),
-            "name": request_type.get("name", ""),
-            "description": request_type.get("description", ""),
-        }
-        for request_type in request_types
-        if request_type.get("id") and request_type.get("name")
-    ]
+    """Return request types that appear in the current scope's cached tickets."""
+    issues = get_scoped_issues()
+    seen: dict[str, dict[str, str]] = {}
+    for iss in issues:
+        name = extract_request_type_name_from_fields(iss.get("fields", {}))
+        if name and name not in seen:
+            seen[name] = {"id": name, "name": name, "description": ""}
+    return sorted(seen.values(), key=lambda x: x["name"])
 
 
 @router.get("/assignees")
 async def get_assignees() -> list[dict[str, Any]]:
-    """Return the list of assignable users for the OIT project."""
-    users = _client.get_users_assignable(JIRA_PROJECT)
-    return [
-        {
-            "account_id": u.get("accountId", ""),
-            "display_name": u.get("displayName", ""),
-            "email_address": u.get("emailAddress", ""),
-        }
-        for u in users
-    ]
+    """Return assignees that appear in the current scope's cached tickets."""
+    issues = get_scoped_issues()
+    seen: dict[str, dict[str, Any]] = {}
+    for iss in issues:
+        assignee = (iss.get("fields") or {}).get("assignee") or {}
+        account_id = assignee.get("accountId", "")
+        display_name = assignee.get("displayName", "")
+        if account_id and display_name and account_id not in seen:
+            seen[account_id] = {
+                "account_id": account_id,
+                "display_name": display_name,
+                "email_address": assignee.get("emailAddress", ""),
+            }
+    return sorted(seen.values(), key=lambda x: x["display_name"])
 
 
 @router.get("/statuses/{key}")
