@@ -68,7 +68,7 @@ export default function TicketFilters({
   const { data: assignees } = useQuery({
     queryKey: ["assignees"],
     queryFn: () => api.getAssignees(),
-    staleTime: Infinity,
+    staleTime: 5 * 60 * 1000,
   });
   const sortedAssignees = (assignees ?? [])
     .filter((a: Assignee) => a.display_name)
