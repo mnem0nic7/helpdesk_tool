@@ -179,6 +179,7 @@ function RuleModal({
 
   const filterObj = (form.filters as Record<string, unknown>) ?? {};
   const ticketScope = (filterObj.ticket_scope as string) || "open";
+  const newOnly = (filterObj.new_only as boolean) ?? false;
   const selectedPriorities = ((filterObj.priorities as string[]) ?? []).filter(Boolean);
   const selectedAssignees = ((filterObj.assignees as string[]) ?? []).filter(Boolean);
   const selectedRequestTypes = ((filterObj.request_types as string[]) ?? []).filter(Boolean);
@@ -362,18 +363,34 @@ function RuleModal({
             <p className="text-xs text-gray-400 mb-2">Restrict which tickets trigger this alert.</p>
 
             {/* Ticket Scope */}
-            <label className="block mb-3">
+            <div className="mb-3 space-y-2">
               <span className="text-xs text-gray-500">Ticket Scope</span>
-              <select
-                value={ticketScope}
-                onChange={(e) => setForm({ ...form, filters: { ...filterObj, ticket_scope: e.target.value } })}
-                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-              >
-                <option value="open">Open tickets only</option>
-                <option value="all">All tickets</option>
-                <option value="new">New tickets (since last run)</option>
-              </select>
-            </label>
+              <div className="flex items-center gap-5">
+                {(["open", "all"] as const).map((val) => (
+                  <label key={val} className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="radio"
+                      name="ticket_scope"
+                      value={val}
+                      checked={ticketScope === val}
+                      onChange={() => setForm({ ...form, filters: { ...filterObj, ticket_scope: val } })}
+                      className="h-4 w-4 border-gray-300 text-blue-600"
+                    />
+                    {val === "open" ? "Open tickets only" : "All tickets"}
+                  </label>
+                ))}
+              </div>
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={newOnly}
+                  onChange={(e) => setForm({ ...form, filters: { ...filterObj, new_only: e.target.checked } })}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                New tickets only
+                <span className="text-xs text-gray-400">(created since last run)</span>
+              </label>
+            </div>
 
             <div className="grid grid-cols-2 gap-3">
               <MultiSelectDropdown
@@ -614,12 +631,11 @@ export default function AlertsPage() {
                     <div className="mt-1 text-xs text-gray-400">
                       Filters: {Object.entries(rule.filters)
                         .map(([k, v]) => {
-                          if (k === "ticket_scope") {
-                            const label = v === "all" ? "All tickets" : v === "new" ? "New tickets" : "Open only";
-                            return `Scope: ${label}`;
-                          }
+                          if (k === "ticket_scope") return `Scope: ${v === "all" ? "All" : "Open only"}`;
+                          if (k === "new_only") return v ? "New only" : null;
                           return `${k}: ${Array.isArray(v) ? v.join(", ") : v}`;
                         })
+                        .filter(Boolean)
                         .join(" | ")}
                     </div>
                   )}

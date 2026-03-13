@@ -83,31 +83,28 @@ def _matches_filters(issue: dict, filters: dict) -> bool:
 
 
 def _apply_ticket_scope(issues: list[dict], filters: dict, rule: dict) -> list[dict]:
-    """Pre-filter issues by ticket_scope before running the evaluator.
+    """Pre-filter issues by ticket_scope and new_only before running the evaluator.
 
-    Scopes:
-      "open" (default) — only open/in-progress tickets
-      "all"            — all tickets regardless of status
-      "new"            — tickets created since the rule last ran (or last 24 h)
+    ticket_scope: "open" (default) — only open/in-progress tickets
+                  "all"            — all tickets regardless of status
+    new_only:     True             — further restrict to tickets created since last run
     """
-    scope = (filters.get("ticket_scope") or "open")
-    if scope == "all":
-        return issues
-    if scope == "open":
-        return [iss for iss in issues if _is_open(iss)]
-    if scope == "new":
+    scope = filters.get("ticket_scope") or "open"
+    result = [iss for iss in issues if _is_open(iss)] if scope == "open" else list(issues)
+
+    if filters.get("new_only"):
         last_run_str = rule.get("last_run")
         if last_run_str:
             cutoff = _parse_dt(last_run_str) or (datetime.now(timezone.utc) - timedelta(hours=24))
         else:
             cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-        return [
-            iss for iss in issues
+        result = [
+            iss for iss in result
             if (created := _parse_dt((iss.get("fields") or {}).get("created")))
             and created >= cutoff
         ]
-    # Unknown scope — fall back to open-only
-    return [iss for iss in issues if _is_open(iss)]
+
+    return result
 
 
 def evaluate_stale(issues: list[dict], config: dict) -> list[dict]:
