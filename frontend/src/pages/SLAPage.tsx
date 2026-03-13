@@ -9,7 +9,7 @@ import type {
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 20;
 const SLADistributionChart = lazy(() => import("../components/SLADistributionChart.tsx"));
 
 // ---------------------------------------------------------------------------

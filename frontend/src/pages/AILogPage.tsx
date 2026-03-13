@@ -6,7 +6,7 @@ import type { TechnicianScoreEntry, TriageLogEntry } from "../lib/api.ts";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 20;
 
 const fieldLabels: Record<string, string> = {
   priority: "Priority",
