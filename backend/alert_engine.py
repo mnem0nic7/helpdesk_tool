@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 
+from datetime import timedelta
+
 from alert_store import alert_store
 from email_service import send_email
 from metrics import _is_open
@@ -78,6 +80,34 @@ def _matches_filters(issue: dict, filters: dict) -> bool:
             return False
 
     return True
+
+
+def _apply_ticket_scope(issues: list[dict], filters: dict, rule: dict) -> list[dict]:
+    """Pre-filter issues by ticket_scope before running the evaluator.
+
+    Scopes:
+      "open" (default) — only open/in-progress tickets
+      "all"            — all tickets regardless of status
+      "new"            — tickets created since the rule last ran (or last 24 h)
+    """
+    scope = (filters.get("ticket_scope") or "open")
+    if scope == "all":
+        return issues
+    if scope == "open":
+        return [iss for iss in issues if _is_open(iss)]
+    if scope == "new":
+        last_run_str = rule.get("last_run")
+        if last_run_str:
+            cutoff = _parse_dt(last_run_str) or (datetime.now(timezone.utc) - timedelta(hours=24))
+        else:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        return [
+            iss for iss in issues
+            if (created := _parse_dt((iss.get("fields") or {}).get("created")))
+            and created >= cutoff
+        ]
+    # Unknown scope — fall back to open-only
+    return [iss for iss in issues if _is_open(iss)]
 
 
 def evaluate_stale(issues: list[dict], config: dict) -> list[dict]:
@@ -304,7 +334,9 @@ def _evaluate_rule(rule: dict, issues: list[dict]) -> list[dict]:
     if not evaluator:
         raise ValueError(f"Unknown trigger type: {rule['trigger_type']}")
 
-    filtered = [iss for iss in issues if _matches_filters(iss, rule["filters"])]
+    filters = rule["filters"]
+    scoped = _apply_ticket_scope(issues, filters, rule)
+    filtered = [iss for iss in scoped if _matches_filters(iss, filters)]
     return evaluator(filtered, rule["trigger_config"])
 
 

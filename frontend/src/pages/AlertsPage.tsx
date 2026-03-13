@@ -178,6 +178,7 @@ function RuleModal({
   }
 
   const filterObj = (form.filters as Record<string, unknown>) ?? {};
+  const ticketScope = (filterObj.ticket_scope as string) || "open";
   const selectedPriorities = ((filterObj.priorities as string[]) ?? []).filter(Boolean);
   const selectedAssignees = ((filterObj.assignees as string[]) ?? []).filter(Boolean);
   const selectedRequestTypes = ((filterObj.request_types as string[]) ?? []).filter(Boolean);
@@ -359,6 +360,21 @@ function RuleModal({
           <div>
             <span className="text-sm font-medium text-gray-700">Filters (optional)</span>
             <p className="text-xs text-gray-400 mb-2">Restrict which tickets trigger this alert.</p>
+
+            {/* Ticket Scope */}
+            <label className="block mb-3">
+              <span className="text-xs text-gray-500">Ticket Scope</span>
+              <select
+                value={ticketScope}
+                onChange={(e) => setForm({ ...form, filters: { ...filterObj, ticket_scope: e.target.value } })}
+                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              >
+                <option value="open">Open tickets only</option>
+                <option value="all">All tickets</option>
+                <option value="new">New tickets (since last run)</option>
+              </select>
+            </label>
+
             <div className="grid grid-cols-2 gap-3">
               <MultiSelectDropdown
                 label="Priorities"
@@ -596,7 +612,15 @@ export default function AlertsPage() {
                   )}
                   {rule.filters && Object.keys(rule.filters).length > 0 && (
                     <div className="mt-1 text-xs text-gray-400">
-                      Filters: {Object.entries(rule.filters).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`).join(" | ")}
+                      Filters: {Object.entries(rule.filters)
+                        .map(([k, v]) => {
+                          if (k === "ticket_scope") {
+                            const label = v === "all" ? "All tickets" : v === "new" ? "New tickets" : "Open only";
+                            return `Scope: ${label}`;
+                          }
+                          return `${k}: ${Array.isArray(v) ? v.join(", ") : v}`;
+                        })
+                        .join(" | ")}
                     </div>
                   )}
                 </div>
