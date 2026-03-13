@@ -93,6 +93,20 @@ class JiraClient:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _raise_for_status(resp: requests.Response) -> None:
+        """Like raise_for_status() but includes the Jira response body in the error."""
+        if resp.ok:
+            return
+        try:
+            body = resp.json()
+        except Exception:
+            body = resp.text[:500]
+        raise requests.HTTPError(
+            f"{resp.status_code} {resp.reason} — Jira error: {body}",
+            response=resp,
+        )
+
+    @staticmethod
     def is_excluded(issue: dict[str, Any]) -> bool:
         """Return True if the issue should be excluded from metrics.
 
@@ -408,7 +422,7 @@ class JiraClient:
         url = f"{self.base_url}/rest/api/3/issue/{key}/transitions"
         payload = {"transition": {"id": transition_id}}
         resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
 
     def assign_issue(self, key: str, account_id: str | None) -> None:
         """PUT /rest/api/3/issue/{key}/assignee"""
@@ -416,15 +430,16 @@ class JiraClient:
         url = f"{self.base_url}/rest/api/3/issue/{key}/assignee"
         payload = {"accountId": account_id}
         resp = self.session.put(url, json=payload, timeout=self._TIMEOUT)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
 
     def update_issue_fields(self, key: str, fields: dict[str, Any]) -> None:
         """PUT /rest/api/3/issue/{key} with partial field updates."""
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}"
         payload = {"fields": fields}
+        logger.debug("update_issue_fields %s: %s", key, fields)
         resp = self.session.put(url, json=payload, timeout=self._TIMEOUT)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
 
     def update_priority(self, key: str, priority_name: str) -> None:
         """PUT /rest/api/3/issue/{key} to change priority."""
@@ -459,7 +474,7 @@ class JiraClient:
         url = f"{self.base_url}/rest/api/3/issue/{key}/comment"
         payload = {"body": self._plain_text_to_adf(body_text)}
         resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.json()
 
     def add_request_comment(self, key: str, body_text: str, public: bool = False) -> dict[str, Any]:
@@ -468,7 +483,7 @@ class JiraClient:
         url = f"{self.base_url}/rest/servicedeskapi/request/{key}/comment"
         payload = {"body": body_text, "public": public}
         resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.json()
 
     # ------------------------------------------------------------------
