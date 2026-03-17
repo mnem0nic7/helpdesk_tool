@@ -168,8 +168,18 @@ def test_azure_vms_returns_cached_vm_inventory(test_client, monkeypatch):
             "deallocated_vms": 1,
             "distinct_sizes": 2,
         },
-        "by_size": [{"label": "Standard_D4s_v5", "count": 1}],
+        "by_size": [
+            {
+                "label": "Standard_D4s_v5",
+                "vm_count": 1,
+                "reserved_instance_count": 1,
+                "delta": 0,
+                "coverage_status": "balanced",
+            }
+        ],
         "by_state": [{"label": "Running", "count": 1}, {"label": "Deallocated", "count": 1}],
+        "reservation_data_available": True,
+        "reservation_error": None,
     }
     monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
 
@@ -179,3 +189,4 @@ def test_azure_vms_returns_cached_vm_inventory(test_client, monkeypatch):
     body = resp.json()
     assert body["summary"]["total_vms"] == 2
     assert body["vms"][0]["size"] == "Standard_D4s_v5"
+    assert body["by_size"][0]["reserved_instance_count"] == 1

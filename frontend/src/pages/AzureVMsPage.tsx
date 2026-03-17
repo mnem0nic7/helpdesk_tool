@@ -15,6 +15,26 @@ function StatCard({ label, value, tone = "text-slate-900" }: { label: string; va
   );
 }
 
+function coverageTone(status: "needed" | "excess" | "balanced" | "unavailable"): string {
+  switch (status) {
+    case "needed":
+      return "text-amber-700";
+    case "excess":
+      return "text-sky-700";
+    case "balanced":
+      return "text-emerald-700";
+    default:
+      return "text-slate-400";
+  }
+}
+
+function coverageLabel(delta: number | null): string {
+  if (delta === null) return "Unavailable";
+  if (delta > 0) return `${delta.toLocaleString()} needed`;
+  if (delta < 0) return `${Math.abs(delta).toLocaleString()} excess`;
+  return "Balanced";
+}
+
 export default function AzureVMsPage() {
   const [search, setSearch] = useState("");
   const [subscriptionId, setSubscriptionId] = useState("");
@@ -70,14 +90,56 @@ export default function AzureVMsPage() {
 
       <div className="grid gap-4 xl:grid-cols-[1.4fr,1fr]">
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Size Footprint</h2>
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {data.by_size.slice(0, 12).map((item) => (
-              <div key={item.label} className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3">
-                <span className="text-sm font-medium text-slate-800">{item.label}</span>
-                <span className="text-sm font-semibold text-slate-900">{item.count.toLocaleString()}</span>
-              </div>
-            ))}
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Size Footprint vs Reserved Instances</h2>
+              <p className="mt-1 text-xs text-slate-500">Tenant-wide exact-SKU comparison.</p>
+            </div>
+            <div
+              className={[
+                "rounded-full px-3 py-1 text-xs font-semibold",
+                data.reservation_data_available
+                  ? "bg-emerald-50 text-emerald-700"
+                  : "bg-amber-50 text-amber-700",
+              ].join(" ")}
+            >
+              {data.reservation_data_available ? "RI data connected" : "RI data unavailable"}
+            </div>
+          </div>
+          {!data.reservation_data_available ? (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Reserved-instance counts are unavailable with the current Azure permissions. VM counts are still shown.
+            </div>
+          ) : null}
+          <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
+            <div className="grid grid-cols-[minmax(0,1.8fr),0.8fr,0.9fr,1fr] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <div>SKU</div>
+              <div className="text-right">VMs</div>
+              <div className="text-right">Reserved</div>
+              <div className="text-right">Needed / Excess</div>
+            </div>
+            <div className="divide-y divide-slate-200">
+              {data.by_size.length === 0 ? (
+                <div className="px-4 py-8 text-center text-sm text-slate-500">
+                  No VM size footprint data is available yet.
+                </div>
+              ) : null}
+              {data.by_size.slice(0, 12).map((item) => (
+                <div
+                  key={item.label}
+                  className="grid grid-cols-[minmax(0,1.8fr),0.8fr,0.9fr,1fr] items-center gap-3 px-4 py-3 text-sm"
+                >
+                  <div className="truncate font-medium text-slate-800">{item.label}</div>
+                  <div className="text-right font-semibold text-slate-900">{item.vm_count.toLocaleString()}</div>
+                  <div className="text-right font-semibold text-slate-900">
+                    {item.reserved_instance_count === null ? "—" : item.reserved_instance_count.toLocaleString()}
+                  </div>
+                  <div className={`text-right font-semibold ${coverageTone(item.coverage_status)}`}>
+                    {coverageLabel(item.delta)}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </section>
 

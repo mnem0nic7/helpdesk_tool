@@ -67,6 +67,69 @@ def test_query_resources_captures_vm_size_and_sku(monkeypatch):
     ]
 
 
+def test_list_reservations_normalizes_active_vm_reservations(monkeypatch):
+    client = AzureClient()
+
+    monkeypatch.setattr(
+        client,
+        "_paged_get",
+        lambda url, *, scope, params=None, headers=None: [
+            {
+                "id": "/providers/Microsoft.Capacity/reservationOrders/order-1/reservations/res-1",
+                "name": "res-1",
+                "location": "eastus",
+                "sku": {"name": "Standard_E4as_v4"},
+                "properties": {
+                    "displayName": "Prod E4 RI",
+                    "quantity": 12,
+                    "reservedResourceType": "VirtualMachines",
+                    "appliedScopeType": "Shared",
+                    "displayProvisioningState": "Succeeded",
+                    "provisioningState": "Succeeded",
+                    "term": "P1Y",
+                    "expiryDateTime": "2027-03-17T00:00:00Z",
+                    "renew": True,
+                    "reservedResourceProperties": {
+                        "instanceFlexibility": "On",
+                    },
+                },
+            },
+            {
+                "id": "/providers/Microsoft.Capacity/reservationOrders/order-1/reservations/res-2",
+                "name": "res-2",
+                "sku": {"name": "Standard_D4s_v5"},
+                "properties": {
+                    "quantity": 3,
+                    "reservedResourceType": "SqlDatabases",
+                    "provisioningState": "Succeeded",
+                },
+            },
+        ],
+    )
+
+    rows = client.list_reservations()
+
+    assert rows == [
+        {
+            "id": "/providers/Microsoft.Capacity/reservationOrders/order-1/reservations/res-1",
+            "name": "res-1",
+            "display_name": "Prod E4 RI",
+            "sku": "Standard_E4as_v4",
+            "quantity": 12,
+            "location": "eastus",
+            "reserved_resource_type": "VirtualMachines",
+            "applied_scope_type": "Shared",
+            "display_provisioning_state": "Succeeded",
+            "provisioning_state": "Succeeded",
+            "term": "P1Y",
+            "renew": True,
+            "expiry_date_time": "2027-03-17T00:00:00+00:00",
+            "instance_flexibility": "On",
+            "applied_scopes": [],
+        }
+    ]
+
+
 def test_inventory_refresh_continues_when_management_groups_are_unauthorized(tmp_path, monkeypatch):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
 
