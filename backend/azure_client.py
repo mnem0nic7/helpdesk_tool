@@ -154,6 +154,62 @@ class AzureClient:
     def _strip_resource_id(value: str) -> str:
         return value.strip().strip("/")
 
+    @staticmethod
+    def _resource_parent_id(value: Any) -> str:
+        resource_id = str(value or "").strip().strip("/")
+        if not resource_id:
+            return ""
+        parts = resource_id.split("/")
+        try:
+            providers_index = parts.index("providers")
+        except ValueError:
+            return ""
+        trailing = parts[providers_index + 1 :]
+        if len(trailing) <= 3:
+            return ""
+        return "/" + "/".join(parts[:-2])
+
+    @staticmethod
+    def _walk_path(item: Any, path: tuple[str, ...]) -> Any:
+        current = item
+        for segment in path:
+            if not isinstance(current, dict):
+                return None
+            current = current.get(segment)
+        return current
+
+    @classmethod
+    def _resource_id_list(
+        cls,
+        value: Any,
+        *path_options: tuple[str, ...],
+    ) -> list[str]:
+        results: list[str] = []
+
+        def append_if_present(candidate: Any) -> None:
+            text = str(candidate or "").strip()
+            if text and text not in results:
+                results.append(text)
+
+        if isinstance(value, str):
+            append_if_present(value)
+            return results
+        if not isinstance(value, list):
+            return results
+
+        for item in value:
+            if isinstance(item, str):
+                append_if_present(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            for path in path_options:
+                candidate = cls._walk_path(item, path)
+                if candidate:
+                    append_if_present(candidate)
+                    break
+        return results
+
     def list_subscriptions(self) -> list[dict[str, Any]]:
         payload = self._request(
             "GET",
@@ -326,8 +382,14 @@ Resources
     location,
     subscriptionId,
     resourceGroup,
+    managedBy,
     skuName = tostring(sku.name),
     vmSize = tostring(properties.hardwareProfile.vmSize),
+    virtualMachineId = tostring(properties.virtualMachine.id),
+    networkInterfaces = properties.networkProfile.networkInterfaces,
+    osDiskId = tostring(properties.storageProfile.osDisk.managedDisk.id),
+    dataDisks = properties.storageProfile.dataDisks,
+    ipConfigurations = properties.ipConfigurations,
     tags,
     provisioningState = tostring(properties.provisioningState),
     powerState = tostring(properties.extended.instanceView.powerState.code),
@@ -359,6 +421,16 @@ Resources
                         "id": item.get("id") or "",
                         "name": item.get("name") or "",
                         "resource_type": item.get("type") or "",
+                        "parent_resource_id": self._resource_parent_id(item.get("id") or ""),
+                        "managed_by": item.get("managedBy") or "",
+                        "attached_vm_id": item.get("virtualMachineId") or "",
+                        "network_interface_ids": self._resource_id_list(item.get("networkInterfaces"), ("id",)),
+                        "os_disk_id": str(item.get("osDiskId") or "").strip(),
+                        "data_disk_ids": self._resource_id_list(item.get("dataDisks"), ("managedDisk", "id")),
+                        "public_ip_ids": self._resource_id_list(
+                            item.get("ipConfigurations"),
+                            ("properties", "publicIPAddress", "id"),
+                        ),
                         "kind": item.get("kind") or "",
                         "location": item.get("location") or "",
                         "subscription_id": item.get("subscriptionId") or "",
@@ -515,6 +587,8 @@ Resources
         self,
         subscriptions: list[dict[str, Any]],
         grouping_dimension: str,
+        *,
+        limit: int | None = 20,
     ) -> list[dict[str, Any]]:
         totals: dict[str, float] = {}
         for scope_path in self._cost_scope_paths(subscriptions):
@@ -531,7 +605,9 @@ Resources
             }
             for label, amount in sorted(totals.items(), key=lambda item: item[1], reverse=True)
         ]
-        return rows[:20]
+        if limit is None:
+            return rows
+        return rows[:limit]
 
     def list_advisor_recommendations(
         self,

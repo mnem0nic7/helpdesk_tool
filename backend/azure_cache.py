@@ -8,6 +8,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -44,6 +45,8 @@ _DATASET_CONFIG: dict[str, dict[str, Any]] = {
             "cost_by_service",
             "cost_by_subscription",
             "cost_by_resource_group",
+            "cost_by_resource_id",
+            "cost_by_resource_id_status",
             "advisor",
         ],
     },
@@ -439,6 +442,34 @@ class AzureCache:
             by_service = self._client.get_cost_breakdown(subscriptions, "ServiceName")
             by_subscription = self._client.get_cost_breakdown(subscriptions, "SubscriptionName")
             by_resource_group = self._client.get_cost_breakdown(subscriptions, "ResourceGroupName")
+            by_resource_id: list[dict[str, Any]] = []
+            by_resource_id_status = {"available": False, "error": None}
+            for attempt in range(3):
+                try:
+                    by_resource_id = self._client.get_cost_breakdown(
+                        subscriptions,
+                        "ResourceId",
+                        limit=None,
+                    )
+                    by_resource_id_status = {"available": True, "error": None}
+                    break
+                except AzureApiError as exc:
+                    message = str(exc)
+                    if "429" in message and attempt < 2:
+                        delay_seconds = 2 * (attempt + 1)
+                        logger.warning(
+                            "Azure cost by resource id hit throttling; retrying in %ss: %s",
+                            delay_seconds,
+                            exc,
+                        )
+                        time.sleep(delay_seconds)
+                        continue
+                    logger.warning(
+                        "Azure cost by resource id is unavailable for this principal; continuing cost refresh without it: %s",
+                        exc,
+                    )
+                    by_resource_id_status = {"available": False, "error": message}
+                    break
             advisor = self._client.list_advisor_recommendations(subscriptions)
             summary = {
                 "lookback_days": AZURE_COST_LOOKBACK_DAYS,
@@ -460,6 +491,8 @@ class AzureCache:
                     "cost_by_service": by_service,
                     "cost_by_subscription": by_subscription,
                     "cost_by_resource_group": by_resource_group,
+                    "cost_by_resource_id": by_resource_id,
+                    "cost_by_resource_id_status": by_resource_id_status,
                     "advisor": advisor,
                 }
             )
@@ -579,6 +612,17 @@ class AzureCache:
         value = value.replace("_", " ").replace("-", " ").strip()
         return value.title() if value else "Unknown"
 
+    @staticmethod
+    def _normalize_resource_id(value: Any) -> str:
+        return str(value or "").strip().strip("/").lower()
+
+    @staticmethod
+    def _resource_display_name(value: Any) -> str:
+        text = str(value or "").strip().strip("/")
+        if not text:
+            return ""
+        return text.split("/")[-1]
+
     def list_virtual_machines(
         self,
         *,
@@ -649,7 +693,7 @@ class AzureCache:
             if power_state.lower() == "deallocated":
                 deallocated_vms += 1
 
-        by_size = self.get_vm_coverage_by_sku()[:20]
+        by_size = self.get_vm_coverage_by_sku()
         by_state = [
             {"label": label, "count": count}
             for label, count in sorted(by_state_counts.items(), key=lambda item: (-item[1], item[0].lower()))
@@ -666,7 +710,7 @@ class AzureCache:
                 "deallocated_vms": deallocated_vms,
                 "distinct_sizes": len(by_size_counts),
             },
-            "by_size": by_size[:20],
+            "by_size": by_size,
             "by_state": by_state,
             "reservation_data_available": bool(reservation_status["available"]),
             "reservation_error": reservation_status.get("error"),
@@ -718,6 +762,24 @@ class AzureCache:
     def get_advisor(self) -> list[dict[str, Any]]:
         return self._snapshot("advisor") or []
 
+    def _get_resource_cost_status(self) -> dict[str, Any]:
+        status = self._snapshot("cost_by_resource_id_status")
+        if isinstance(status, dict):
+            return {
+                "available": bool(status.get("available")),
+                "error": status.get("error"),
+            }
+        return {"available": False, "error": None}
+
+    def _resource_cost_index(self) -> dict[str, dict[str, Any]]:
+        rows = self._snapshot("cost_by_resource_id") or []
+        index: dict[str, dict[str, Any]] = {}
+        for item in rows:
+            key = self._normalize_resource_id(item.get("label"))
+            if key:
+                index[key] = item
+        return index
+
     def _get_reservation_status(self) -> dict[str, Any]:
         status = self._snapshot("reservation_status")
         if isinstance(status, dict):
@@ -726,6 +788,11 @@ class AzureCache:
                 "error": status.get("error"),
             }
         return {"available": False, "error": None}
+
+    @staticmethod
+    def _normalize_region(value: Any) -> str:
+        region = str(value or "").strip().lower()
+        return region or "unknown"
 
     def get_vm_reservations_by_sku(self) -> list[dict[str, Any]]:
         reservations = self._snapshot("reservations") or []
@@ -745,29 +812,113 @@ class AzureCache:
             for sku, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))
         ]
 
-    def get_vm_coverage_by_sku(self) -> list[dict[str, Any]]:
-        vm_rows = self.get_vm_inventory_by_sku()
-        vm_counts: dict[str, int] = defaultdict(int)
-        for item in vm_rows:
-            sku = str(item.get("sku") or "Unknown")
-            vm_counts[sku] += int(item.get("count") or 0)
+    def get_vm_reservations_by_sku_region(self) -> list[dict[str, Any]]:
+        reservations = self._snapshot("reservations") or []
+        counts: dict[tuple[str, str], int] = defaultdict(int)
+        for item in reservations:
+            sku = str(item.get("sku") or "").strip() or "Unknown"
+            region = self._normalize_region(item.get("location"))
+            try:
+                quantity = int(item.get("quantity") or 0)
+            except (TypeError, ValueError):
+                quantity = 0
+            if quantity <= 0:
+                continue
+            counts[(sku, region)] += quantity
 
+        return [
+            {
+                "sku": sku,
+                "region": region,
+                "reserved_instance_count": count,
+            }
+            for (sku, region), count in sorted(
+                counts.items(),
+                key=lambda item: (-item[1], item[0][0].lower(), item[0][1].lower()),
+            )
+        ]
+
+    def get_vm_excess_reservation_report(self) -> list[dict[str, Any]]:
         reservation_status = self._get_reservation_status()
-        reservation_counts: dict[str, int] = defaultdict(int)
-        if reservation_status["available"]:
-            for item in self.get_vm_reservations_by_sku():
-                sku = str(item.get("sku") or "Unknown")
-                reservation_counts[sku] += int(item.get("reserved_instance_count") or 0)
+        if not reservation_status["available"]:
+            return []
 
-        skus = set(vm_counts)
-        if reservation_status["available"]:
-            skus.update(reservation_counts)
+        reservation_names: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for item in self._snapshot("reservations") or []:
+            sku = str(item.get("sku") or "").strip() or "Unknown"
+            region = self._normalize_region(item.get("location"))
+            try:
+                quantity = int(item.get("quantity") or 0)
+            except (TypeError, ValueError):
+                quantity = 0
+            if quantity <= 0:
+                continue
+
+            display_name = (
+                str(item.get("display_name") or "").strip()
+                or str(item.get("name") or "").strip()
+                or str(item.get("id") or "").strip()
+            )
+            if display_name and display_name not in reservation_names[(sku, region)]:
+                reservation_names[(sku, region)].append(display_name)
 
         rows: list[dict[str, Any]] = []
-        for sku in skus:
-            vm_count = int(vm_counts.get(sku) or 0)
+        for item in self.get_vm_coverage_by_sku():
+            if str(item.get("coverage_status") or "") != "excess":
+                continue
+
+            sku = str(item.get("label") or "").strip() or "Unknown"
+            region = self._normalize_region(item.get("region"))
+            delta = item.get("delta")
+            if delta is None:
+                continue
+
+            rows.append(
+                {
+                    "label": sku,
+                    "region": region,
+                    "vm_count": int(item.get("vm_count") or 0),
+                    "reserved_instance_count": int(item.get("reserved_instance_count") or 0),
+                    "excess_count": abs(int(delta)),
+                    "active_reservation_names": sorted(reservation_names.get((sku, region), []), key=str.lower),
+                }
+            )
+
+        rows.sort(
+            key=lambda item: (
+                -int(item.get("excess_count") or 0),
+                -int(item.get("reserved_instance_count") or 0),
+                str(item.get("label") or "").lower(),
+                str(item.get("region") or "").lower(),
+            )
+        )
+        return rows
+
+    def get_vm_coverage_by_sku(self) -> list[dict[str, Any]]:
+        vm_rows = self.get_vm_inventory_by_sku()
+        vm_counts: dict[tuple[str, str], int] = defaultdict(int)
+        for item in vm_rows:
+            sku = str(item.get("sku") or "Unknown")
+            region = self._normalize_region(item.get("region"))
+            vm_counts[(sku, region)] += int(item.get("count") or 0)
+
+        reservation_status = self._get_reservation_status()
+        reservation_counts: dict[tuple[str, str], int] = defaultdict(int)
+        if reservation_status["available"]:
+            for item in self.get_vm_reservations_by_sku_region():
+                sku = str(item.get("sku") or "Unknown")
+                region = self._normalize_region(item.get("region"))
+                reservation_counts[(sku, region)] += int(item.get("reserved_instance_count") or 0)
+
+        sku_regions = set(vm_counts)
+        if reservation_status["available"]:
+            sku_regions.update(reservation_counts)
+
+        rows: list[dict[str, Any]] = []
+        for sku, region in sku_regions:
+            vm_count = int(vm_counts.get((sku, region)) or 0)
             reserved_instance_count = (
-                int(reservation_counts.get(sku) or 0)
+                int(reservation_counts.get((sku, region)) or 0)
                 if reservation_status["available"]
                 else None
             )
@@ -787,6 +938,7 @@ class AzureCache:
             rows.append(
                 {
                     "label": sku,
+                    "region": region,
                     "vm_count": vm_count,
                     "reserved_instance_count": reserved_instance_count,
                     "delta": delta,
@@ -803,6 +955,7 @@ class AzureCache:
                         int(item.get("reserved_instance_count") or 0),
                     ),
                     str(item.get("label") or "").lower(),
+                    str(item.get("region") or "").lower(),
                 )
             )
         else:
@@ -810,13 +963,14 @@ class AzureCache:
                 key=lambda item: (
                     -int(item.get("vm_count") or 0),
                     str(item.get("label") or "").lower(),
+                    str(item.get("region") or "").lower(),
                 )
             )
         return rows
 
     def get_vm_inventory_by_sku(self) -> list[dict[str, Any]]:
         resources = self._snapshot("resources") or []
-        counts: dict[tuple[str, str], dict[str, Any]] = {}
+        counts: dict[tuple[str, str, str], dict[str, Any]] = {}
         for item in resources:
             resource_type = str(item.get("resource_type") or "").lower()
             if resource_type != "microsoft.compute/virtualmachines":
@@ -825,13 +979,15 @@ class AzureCache:
             sku = str(item.get("vm_size") or item.get("sku_name") or "").strip() or "Unknown"
             subscription_id = str(item.get("subscription_id") or "").strip()
             subscription_name = str(item.get("subscription_name") or "").strip()
-            key = (subscription_id, sku)
+            region = self._normalize_region(item.get("location"))
+            key = (subscription_id, sku, region)
             row = counts.setdefault(
                 key,
                 {
                     "subscription_id": subscription_id,
                     "subscription_name": subscription_name,
                     "sku": sku,
+                    "region": region,
                     "count": 0,
                 },
             )
@@ -843,6 +999,7 @@ class AzureCache:
                 -(int(item.get("count") or 0)),
                 str(item.get("subscription_name") or item.get("subscription_id") or "").lower(),
                 str(item.get("sku") or "").lower(),
+                str(item.get("region") or "").lower(),
             ),
         )
 
@@ -884,6 +1041,171 @@ class AzureCache:
                 else None
             ),
             "by_sku_coverage": coverage_rows,
+        }
+
+    def get_virtual_machine_detail(self, resource_id: str) -> dict[str, Any] | None:
+        normalized_vm_id = self._normalize_resource_id(resource_id)
+        if not normalized_vm_id:
+            return None
+
+        resources = self._snapshot("resources") or []
+        resource_by_id: dict[str, dict[str, Any]] = {}
+        children_by_parent: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        managed_by_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        attached_vm_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+        for item in resources:
+            normalized_id = self._normalize_resource_id(item.get("id"))
+            if not normalized_id:
+                continue
+            resource_by_id[normalized_id] = item
+
+            parent_id = self._normalize_resource_id(item.get("parent_resource_id"))
+            if parent_id:
+                children_by_parent[parent_id].append(item)
+
+            managed_by = self._normalize_resource_id(item.get("managed_by"))
+            if managed_by:
+                managed_by_index[managed_by].append(item)
+
+            attached_vm_id = self._normalize_resource_id(item.get("attached_vm_id"))
+            if attached_vm_id:
+                attached_vm_index[attached_vm_id].append(item)
+
+        vm_item = resource_by_id.get(normalized_vm_id)
+        if not vm_item or not self._is_virtual_machine(vm_item):
+            return None
+
+        relationship_priority = {
+            "Virtual machine": 100,
+            "OS disk": 90,
+            "Data disk": 85,
+            "Network interface": 80,
+            "Public IP": 70,
+            "Child resource": 60,
+            "Managed by VM": 50,
+            "Attached VM resource": 40,
+            "Associated resource": 10,
+        }
+        associated_by_id: dict[str, tuple[str, int]] = {}
+
+        def mark_related(target_resource_id: Any, relationship: str) -> None:
+            normalized_target = self._normalize_resource_id(target_resource_id)
+            if not normalized_target:
+                return
+            priority = relationship_priority.get(relationship, 0)
+            current = associated_by_id.get(normalized_target)
+            if current and current[1] >= priority:
+                return
+            associated_by_id[normalized_target] = (relationship, priority)
+
+        mark_related(vm_item.get("id"), "Virtual machine")
+
+        network_interface_ids = list(vm_item.get("network_interface_ids") or [])
+        os_disk_id = vm_item.get("os_disk_id")
+        data_disk_ids = list(vm_item.get("data_disk_ids") or [])
+
+        for nic_id in network_interface_ids:
+            mark_related(nic_id, "Network interface")
+        if os_disk_id:
+            mark_related(os_disk_id, "OS disk")
+        for disk_id in data_disk_ids:
+            mark_related(disk_id, "Data disk")
+
+        for child in children_by_parent.get(normalized_vm_id, []):
+            mark_related(child.get("id"), "Child resource")
+        for item in managed_by_index.get(normalized_vm_id, []):
+            mark_related(item.get("id"), "Managed by VM")
+        for item in attached_vm_index.get(normalized_vm_id, []):
+            mark_related(item.get("id"), "Attached VM resource")
+
+        for nic_id in network_interface_ids:
+            nic = resource_by_id.get(self._normalize_resource_id(nic_id))
+            if not nic:
+                continue
+            for public_ip_id in nic.get("public_ip_ids") or []:
+                mark_related(public_ip_id, "Public IP")
+
+        resource_cost_status = self._get_resource_cost_status()
+        resource_cost_index = self._resource_cost_index() if resource_cost_status["available"] else {}
+
+        associated_resources: list[dict[str, Any]] = []
+        known_cost_count = 0
+        total_cost = 0.0
+        vm_cost = 0.0
+
+        for normalized_id, (relationship, priority) in associated_by_id.items():
+            item = resource_by_id.get(normalized_id)
+            cost_row = resource_cost_index.get(normalized_id)
+            cost_value: float | None
+            if resource_cost_status["available"]:
+                if cost_row:
+                    cost_value = round(float(cost_row.get("amount") or 0.0), 2)
+                    known_cost_count += 1
+                else:
+                    cost_value = 0.0
+            else:
+                cost_value = None
+
+            if cost_value is not None:
+                total_cost += cost_value
+                if relationship == "Virtual machine":
+                    vm_cost = cost_value
+
+            associated_resources.append(
+                {
+                    "id": item.get("id") if item else f"/{normalized_id}",
+                    "name": (
+                        (item.get("name") if item else "")
+                        or self._resource_display_name(item.get("id") if item else normalized_id)
+                    ),
+                    "resource_type": item.get("resource_type") if item else "",
+                    "relationship": relationship,
+                    "subscription_id": item.get("subscription_id") if item else "",
+                    "subscription_name": item.get("subscription_name") if item else "",
+                    "resource_group": item.get("resource_group") if item else "",
+                    "location": item.get("location") if item else "",
+                    "state": item.get("state") if item else "",
+                    "cost": cost_value,
+                    "currency": str((cost_row or {}).get("currency") or "USD"),
+                    "_priority": priority,
+                }
+            )
+
+        associated_resources.sort(
+            key=lambda item: (
+                -int(item.pop("_priority", 0)),
+                -(float(item.get("cost") or 0.0) if item.get("cost") is not None else -1.0),
+                str(item.get("name") or "").lower(),
+            )
+        )
+
+        vm_row = dict(vm_item)
+        vm_row["size"] = self._vm_size(vm_item)
+        vm_row["power_state"] = self._vm_power_state(vm_item)
+
+        cost_summary = self.get_cost_summary()
+        total_cost_value = round(total_cost, 2) if resource_cost_status["available"] else None
+        vm_cost_value = round(vm_cost, 2) if resource_cost_status["available"] else None
+        related_resource_cost = (
+            round(total_cost - vm_cost, 2)
+            if resource_cost_status["available"]
+            else None
+        )
+
+        return {
+            "vm": vm_row,
+            "associated_resources": associated_resources,
+            "cost": {
+                "lookback_days": int(cost_summary.get("lookback_days") or AZURE_COST_LOOKBACK_DAYS),
+                "currency": str(cost_summary.get("currency") or "USD"),
+                "cost_data_available": bool(resource_cost_status["available"]),
+                "cost_error": resource_cost_status.get("error"),
+                "total_cost": total_cost_value,
+                "vm_cost": vm_cost_value,
+                "related_resource_cost": related_resource_cost,
+                "priced_resource_count": known_cost_count,
+            },
         }
 
     def get_grounding_context(self) -> dict[str, Any]:

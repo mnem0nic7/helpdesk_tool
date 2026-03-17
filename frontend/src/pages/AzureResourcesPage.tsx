@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
+import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 
 export default function AzureResourcesPage() {
   const [search, setSearch] = useState("");
@@ -54,6 +55,9 @@ export default function AzureResourcesPage() {
     if (state && item.state !== state) return false;
     return true;
   });
+  const filterKey = [search, subscriptionId, resourceType, location, state].join("|");
+  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(filtered.length, 20, filterKey);
+  const visibleResources = filtered.slice(0, visibleCount);
 
   return (
     <div className="space-y-5">
@@ -91,11 +95,13 @@ export default function AzureResourcesPage() {
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 px-4 py-3 text-sm text-slate-500">
-          Showing <span className="font-semibold text-slate-900">{filtered.length.toLocaleString()}</span> of {data.total_count.toLocaleString()} resources
+          Showing <span className="font-semibold text-slate-900">{visibleResources.length.toLocaleString()}</span> of {filtered.length.toLocaleString()} filtered resources
+          <span className="text-slate-400"> | </span>
+          {data.total_count.toLocaleString()} total resources
         </div>
-        <div className="overflow-x-auto">
+        <div className="max-h-[70vh] overflow-auto">
           <table className="min-w-full text-left text-sm">
-            <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-3">Name</th>
                 <th className="px-4 py-3">Type</th>
@@ -107,7 +113,7 @@ export default function AzureResourcesPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((item, index) => (
+              {visibleResources.map((item, index) => (
                 <tr key={item.id} className={index % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-900">{item.name}</div>
@@ -123,6 +129,11 @@ export default function AzureResourcesPage() {
               ))}
             </tbody>
           </table>
+          {hasMore ? (
+            <div ref={sentinelRef} className="border-t border-slate-200 px-4 py-3 text-center text-xs text-slate-400">
+              Showing {visibleResources.length.toLocaleString()} of {filtered.length.toLocaleString()} resources — scroll for more
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

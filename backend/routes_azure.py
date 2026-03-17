@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import os
+import tempfile
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from starlette.background import BackgroundTask
 
 from ai_client import (
     answer_azure_cost_question,
@@ -14,15 +22,94 @@ from ai_client import (
 )
 from auth import require_admin
 from azure_cache import azure_cache
-from models import AzureCostChatRequest
+from models import AzureCostChatRequest, AzureVirtualMachineDetailResponse
 from site_context import get_current_site_scope
 
 router = APIRouter(prefix="/api/azure")
+
+_HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
+_HEADER_FILL = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+_HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center")
 
 
 def _ensure_azure_site() -> None:
     if get_current_site_scope() != "azure":
         raise HTTPException(status_code=404, detail="Azure portal APIs are only available on azure.movedocs.com")
+
+
+def _safe_export_text(value: Any) -> str:
+    text = str(value or "")
+    if text and text[0] in ("=", "+", "-", "@"):
+        return "\t" + text
+    return text
+
+
+def _coverage_label(delta: Any) -> str:
+    if delta is None:
+        return "Unavailable"
+    try:
+        amount = int(delta)
+    except (TypeError, ValueError):
+        return "Unavailable"
+    if amount > 0:
+        return f"{amount} needed"
+    if amount < 0:
+        return f"{abs(amount)} excess"
+    return "Balanced"
+
+
+def _vm_coverage_export_rows() -> list[dict[str, Any]]:
+    payload = azure_cache.list_virtual_machines()
+    rows: list[dict[str, Any]] = []
+    for item in payload.get("by_size") or []:
+        rows.append(
+            {
+                "SKU": _safe_export_text(item.get("label") or ""),
+                "Region": _safe_export_text(item.get("region") or ""),
+                "VMs": int(item.get("vm_count") or 0),
+                "Reserved Instances (RI)": (
+                    int(item.get("reserved_instance_count") or 0)
+                    if item.get("reserved_instance_count") is not None
+                    else ""
+                ),
+                "Needed / Excess": _safe_export_text(_coverage_label(item.get("delta"))),
+            }
+        )
+    return rows
+
+
+def _vm_excess_export_rows() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in azure_cache.get_vm_excess_reservation_report():
+        rows.append(
+            {
+                "SKU": _safe_export_text(item.get("label") or ""),
+                "Region": _safe_export_text(item.get("region") or ""),
+                "VMs": int(item.get("vm_count") or 0),
+                "Reserved Instances (RI)": int(item.get("reserved_instance_count") or 0),
+                "Excess": int(item.get("excess_count") or 0),
+                "Active Reservation Names": _safe_export_text(
+                    "; ".join(item.get("active_reservation_names") or [])
+                ),
+            }
+        )
+    return rows
+
+
+def _delete_file(path: str) -> None:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def _build_vm_coverage_file_response(path: str, filename: str, media_type: str) -> FileResponse:
+    return FileResponse(
+        path,
+        filename=filename,
+        media_type=media_type,
+        background=BackgroundTask(_delete_file, path),
+    )
 
 
 @router.get("/status")
@@ -134,6 +221,137 @@ async def get_virtual_machines(
         location=location,
         state=state,
         size=size,
+    )
+
+
+@router.get("/vms/detail")
+async def get_virtual_machine_detail(resource_id: str = Query(default="")) -> AzureVirtualMachineDetailResponse:
+    _ensure_azure_site()
+    detail = azure_cache.get_virtual_machine_detail(resource_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Virtual machine was not found in the Azure cache")
+    return AzureVirtualMachineDetailResponse.model_validate(detail)
+
+
+@router.get("/vms/coverage/export.csv")
+async def export_virtual_machine_coverage_csv() -> FileResponse:
+    _ensure_azure_site()
+    rows = _vm_coverage_export_rows()
+    now = datetime.now(timezone.utc)
+    filename = f"azure_vm_coverage_{now.strftime('%Y%m%d_%H%M')}.csv"
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8")
+    fieldnames = ["SKU", "Region", "VMs", "Reserved Instances (RI)", "Needed / Excess"]
+    try:
+        writer = csv.DictWriter(tmp, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+        tmp.flush()
+    finally:
+        tmp.close()
+    return _build_vm_coverage_file_response(tmp.name, filename, "text/csv; charset=utf-8")
+
+
+@router.get("/vms/coverage/export.xlsx")
+async def export_virtual_machine_coverage_excel() -> FileResponse:
+    _ensure_azure_site()
+    rows = _vm_coverage_export_rows()
+    now = datetime.now(timezone.utc)
+    filename = f"azure_vm_coverage_{now.strftime('%Y%m%d_%H%M')}.xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "VM Coverage"
+    headers = ["SKU", "Region", "VMs", "Reserved Instances (RI)", "Needed / Excess"]
+    for column_index, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=column_index, value=header)
+        cell.font = _HEADER_FONT
+        cell.fill = _HEADER_FILL
+        cell.alignment = _HEADER_ALIGNMENT
+
+    for row_index, row in enumerate(rows, 2):
+        ws.cell(row=row_index, column=1, value=row["SKU"])
+        ws.cell(row=row_index, column=2, value=row["Region"])
+        ws.cell(row=row_index, column=3, value=row["VMs"])
+        ws.cell(row=row_index, column=4, value=row["Reserved Instances (RI)"])
+        ws.cell(row=row_index, column=5, value=row["Needed / Excess"])
+
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 14
+    ws.column_dimensions["C"].width = 10
+    ws.column_dimensions["D"].width = 24
+    ws.column_dimensions["E"].width = 18
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    try:
+        wb.save(tmp.name)
+    finally:
+        tmp.close()
+    return _build_vm_coverage_file_response(
+        tmp.name,
+        filename,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@router.get("/vms/excess/export.csv")
+async def export_virtual_machine_excess_csv() -> FileResponse:
+    _ensure_azure_site()
+    rows = _vm_excess_export_rows()
+    now = datetime.now(timezone.utc)
+    filename = f"azure_vm_ri_excess_{now.strftime('%Y%m%d_%H%M')}.csv"
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8")
+    fieldnames = ["SKU", "Region", "VMs", "Reserved Instances (RI)", "Excess", "Active Reservation Names"]
+    try:
+        writer = csv.DictWriter(tmp, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+        tmp.flush()
+    finally:
+        tmp.close()
+    return _build_vm_coverage_file_response(tmp.name, filename, "text/csv; charset=utf-8")
+
+
+@router.get("/vms/excess/export.xlsx")
+async def export_virtual_machine_excess_excel() -> FileResponse:
+    _ensure_azure_site()
+    rows = _vm_excess_export_rows()
+    now = datetime.now(timezone.utc)
+    filename = f"azure_vm_ri_excess_{now.strftime('%Y%m%d_%H%M')}.xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "VM RI Excess"
+    headers = ["SKU", "Region", "VMs", "Reserved Instances (RI)", "Excess", "Active Reservation Names"]
+    for column_index, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=column_index, value=header)
+        cell.font = _HEADER_FONT
+        cell.fill = _HEADER_FILL
+        cell.alignment = _HEADER_ALIGNMENT
+
+    for row_index, row in enumerate(rows, 2):
+        ws.cell(row=row_index, column=1, value=row["SKU"])
+        ws.cell(row=row_index, column=2, value=row["Region"])
+        ws.cell(row=row_index, column=3, value=row["VMs"])
+        ws.cell(row=row_index, column=4, value=row["Reserved Instances (RI)"])
+        ws.cell(row=row_index, column=5, value=row["Excess"])
+        ws.cell(row=row_index, column=6, value=row["Active Reservation Names"])
+
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 14
+    ws.column_dimensions["C"].width = 10
+    ws.column_dimensions["D"].width = 24
+    ws.column_dimensions["E"].width = 10
+    ws.column_dimensions["F"].width = 56
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    try:
+        wb.save(tmp.name)
+    finally:
+        tmp.close()
+    return _build_vm_coverage_file_response(
+        tmp.name,
+        filename,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 
