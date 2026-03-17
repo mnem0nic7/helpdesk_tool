@@ -43,6 +43,9 @@ export default function AzureCostPage() {
     queryFn: () => api.getAzureAdvisor(),
     refetchInterval: 60_000,
   });
+  const advisorRows = advisor.data ?? [];
+  const advisorScroll = useInfiniteScrollCount(advisorRows.length, 20, "advisor");
+  const visibleAdvisorRows = advisorRows.slice(0, advisorScroll.visibleCount);
 
   const loading = [summary, trend, byService, bySubscription, byResourceGroup, advisor].some((query) => query.isLoading);
   const failure = [summary, trend, byService, bySubscription, byResourceGroup, advisor].find((query) => query.isError);
@@ -58,10 +61,6 @@ export default function AzureCostPage() {
       </div>
     );
   }
-
-  const advisorRows = advisor.data ?? [];
-  const advisorScroll = useInfiniteScrollCount(advisorRows.length, 20, "advisor");
-  const visibleAdvisorRows = advisorRows.slice(0, advisorScroll.visibleCount);
 
   return (
     <div className="space-y-6">

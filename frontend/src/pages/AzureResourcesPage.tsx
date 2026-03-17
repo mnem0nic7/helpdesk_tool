@@ -15,25 +15,12 @@ export default function AzureResourcesPage() {
     queryFn: () => api.getAzureResources(),
     refetchInterval: 30_000,
   });
-
-  if (isLoading) {
-    return <div className="text-sm text-slate-500">Loading Azure resources...</div>;
-  }
-
-  if (isError || !data) {
-    return (
-      <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-        Failed to load Azure resources: {error instanceof Error ? error.message : "Unknown error"}
-      </div>
-    );
-  }
-
-  const subscriptions = Array.from(new Set(data.resources.map((item) => item.subscription_name || item.subscription_id))).sort();
-  const resourceTypes = Array.from(new Set(data.resources.map((item) => item.resource_type).filter(Boolean))).sort();
-  const locations = Array.from(new Set(data.resources.map((item) => item.location).filter(Boolean))).sort();
-  const states = Array.from(new Set(data.resources.map((item) => item.state).filter(Boolean))).sort();
-
-  const filtered = data.resources.filter((item) => {
+  const resources = data?.resources ?? [];
+  const subscriptions = Array.from(new Set(resources.map((item) => item.subscription_name || item.subscription_id))).sort();
+  const resourceTypes = Array.from(new Set(resources.map((item) => item.resource_type).filter(Boolean))).sort();
+  const locations = Array.from(new Set(resources.map((item) => item.location).filter(Boolean))).sort();
+  const states = Array.from(new Set(resources.map((item) => item.state).filter(Boolean))).sort();
+  const filtered = resources.filter((item) => {
     const searchLower = search.trim().toLowerCase();
     if (searchLower) {
       const haystack = [
@@ -58,6 +45,18 @@ export default function AzureResourcesPage() {
   const filterKey = [search, subscriptionId, resourceType, location, state].join("|");
   const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(filtered.length, 20, filterKey);
   const visibleResources = filtered.slice(0, visibleCount);
+
+  if (isLoading) {
+    return <div className="text-sm text-slate-500">Loading Azure resources...</div>;
+  }
+
+  if (isError || !data) {
+    return (
+      <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        Failed to load Azure resources: {error instanceof Error ? error.message : "Unknown error"}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
@@ -97,7 +96,7 @@ export default function AzureResourcesPage() {
         <div className="border-b border-slate-200 px-4 py-3 text-sm text-slate-500">
           Showing <span className="font-semibold text-slate-900">{visibleResources.length.toLocaleString()}</span> of {filtered.length.toLocaleString()} filtered resources
           <span className="text-slate-400"> | </span>
-          {data.total_count.toLocaleString()} total resources
+          {(data.total_count ?? resources.length).toLocaleString()} total resources
         </div>
         <div className="max-h-[70vh] overflow-auto">
           <table className="min-w-full text-left text-sm">
