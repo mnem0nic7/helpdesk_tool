@@ -148,6 +148,8 @@ describe("azure api methods", () => {
       summary: { total_vms: 0, running_vms: 0, deallocated_vms: 0, distinct_sizes: 0 },
       by_size: [],
       by_state: [],
+      reservation_data_available: false,
+      reservation_error: null,
     });
     await api.getAzureVMs({ search: "wvd", state: "Running", size: "Standard_E2as_v4" });
     const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;

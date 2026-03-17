@@ -28,7 +28,7 @@ _DATASET_CONFIG: dict[str, dict[str, Any]] = {
     "inventory": {
         "label": "Inventory",
         "interval_minutes": AZURE_INVENTORY_REFRESH_MINUTES,
-        "snapshots": ["subscriptions", "management_groups", "resources", "role_assignments"],
+        "snapshots": ["subscriptions", "management_groups", "resources", "role_assignments", "reservations"],
     },
     "directory": {
         "label": "Identity",
@@ -299,12 +299,25 @@ class AzureCache:
             for item in resources:
                 item["subscription_name"] = sub_name_by_id.get(item.get("subscription_id", ""), "")
             role_assignments = self._client.list_role_assignments(list(sub_name_by_id))
+            reservations: list[dict[str, Any]] = []
+            reservation_status = {"available": False, "error": None}
+            try:
+                reservations = self._client.list_reservations()
+                reservation_status = {"available": True, "error": None}
+            except AzureApiError as exc:
+                logger.warning(
+                    "Azure reservations unavailable for this principal; continuing inventory refresh without them: %s",
+                    exc,
+                )
+                reservation_status = {"available": False, "error": str(exc)}
             self._update_snapshots(
                 {
                     "subscriptions": subscriptions,
                     "management_groups": management_groups,
                     "resources": resources,
                     "role_assignments": role_assignments,
+                    "reservations": reservations,
+                    "reservation_status": reservation_status,
                 }
             )
             updated_at = datetime.now(timezone.utc).isoformat()
@@ -636,14 +649,12 @@ class AzureCache:
             if power_state.lower() == "deallocated":
                 deallocated_vms += 1
 
-        by_size = [
-            {"label": label, "count": count}
-            for label, count in sorted(by_size_counts.items(), key=lambda item: (-item[1], item[0].lower()))
-        ]
+        by_size = self.get_vm_coverage_by_sku()[:20]
         by_state = [
             {"label": label, "count": count}
             for label, count in sorted(by_state_counts.items(), key=lambda item: (-item[1], item[0].lower()))
         ]
+        reservation_status = self._get_reservation_status()
 
         return {
             "vms": matched,
@@ -653,10 +664,12 @@ class AzureCache:
                 "total_vms": len(all_vms),
                 "running_vms": running_vms,
                 "deallocated_vms": deallocated_vms,
-                "distinct_sizes": len(by_size),
+                "distinct_sizes": len(by_size_counts),
             },
             "by_size": by_size[:20],
             "by_state": by_state,
+            "reservation_data_available": bool(reservation_status["available"]),
+            "reservation_error": reservation_status.get("error"),
         }
 
     def list_directory_objects(self, snapshot_name: str, *, search: str = "") -> list[dict[str, Any]]:
@@ -705,6 +718,102 @@ class AzureCache:
     def get_advisor(self) -> list[dict[str, Any]]:
         return self._snapshot("advisor") or []
 
+    def _get_reservation_status(self) -> dict[str, Any]:
+        status = self._snapshot("reservation_status")
+        if isinstance(status, dict):
+            return {
+                "available": bool(status.get("available")),
+                "error": status.get("error"),
+            }
+        return {"available": False, "error": None}
+
+    def get_vm_reservations_by_sku(self) -> list[dict[str, Any]]:
+        reservations = self._snapshot("reservations") or []
+        counts: dict[str, int] = defaultdict(int)
+        for item in reservations:
+            sku = str(item.get("sku") or "").strip() or "Unknown"
+            try:
+                quantity = int(item.get("quantity") or 0)
+            except (TypeError, ValueError):
+                quantity = 0
+            if quantity <= 0:
+                continue
+            counts[sku] += quantity
+
+        return [
+            {"sku": sku, "reserved_instance_count": count}
+            for sku, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))
+        ]
+
+    def get_vm_coverage_by_sku(self) -> list[dict[str, Any]]:
+        vm_rows = self.get_vm_inventory_by_sku()
+        vm_counts: dict[str, int] = defaultdict(int)
+        for item in vm_rows:
+            sku = str(item.get("sku") or "Unknown")
+            vm_counts[sku] += int(item.get("count") or 0)
+
+        reservation_status = self._get_reservation_status()
+        reservation_counts: dict[str, int] = defaultdict(int)
+        if reservation_status["available"]:
+            for item in self.get_vm_reservations_by_sku():
+                sku = str(item.get("sku") or "Unknown")
+                reservation_counts[sku] += int(item.get("reserved_instance_count") or 0)
+
+        skus = set(vm_counts)
+        if reservation_status["available"]:
+            skus.update(reservation_counts)
+
+        rows: list[dict[str, Any]] = []
+        for sku in skus:
+            vm_count = int(vm_counts.get(sku) or 0)
+            reserved_instance_count = (
+                int(reservation_counts.get(sku) or 0)
+                if reservation_status["available"]
+                else None
+            )
+            delta = (
+                vm_count - reserved_instance_count
+                if reserved_instance_count is not None
+                else None
+            )
+            if delta is None:
+                coverage_status = "unavailable"
+            elif delta > 0:
+                coverage_status = "needed"
+            elif delta < 0:
+                coverage_status = "excess"
+            else:
+                coverage_status = "balanced"
+            rows.append(
+                {
+                    "label": sku,
+                    "vm_count": vm_count,
+                    "reserved_instance_count": reserved_instance_count,
+                    "delta": delta,
+                    "coverage_status": coverage_status,
+                }
+            )
+
+        if reservation_status["available"]:
+            rows.sort(
+                key=lambda item: (
+                    -abs(int(item.get("delta") or 0)),
+                    -max(
+                        int(item.get("vm_count") or 0),
+                        int(item.get("reserved_instance_count") or 0),
+                    ),
+                    str(item.get("label") or "").lower(),
+                )
+            )
+        else:
+            rows.sort(
+                key=lambda item: (
+                    -int(item.get("vm_count") or 0),
+                    str(item.get("label") or "").lower(),
+                )
+            )
+        return rows
+
     def get_vm_inventory_by_sku(self) -> list[dict[str, Any]]:
         resources = self._snapshot("resources") or []
         counts: dict[tuple[str, str], dict[str, Any]] = {}
@@ -739,6 +848,8 @@ class AzureCache:
 
     def get_vm_inventory_summary(self) -> dict[str, Any]:
         rows = self.get_vm_inventory_by_sku()
+        coverage_rows = self.get_vm_coverage_by_sku()
+        reservation_status = self._get_reservation_status()
         total_vm_count = sum(int(item.get("count") or 0) for item in rows)
         by_sku: dict[str, int] = defaultdict(int)
         by_subscription: dict[str, int] = defaultdict(int)
@@ -765,6 +876,14 @@ class AzureCache:
             "by_sku": sku_rows,
             "by_subscription": subscription_rows,
             "by_subscription_and_sku": rows,
+            "reservation_data_available": bool(reservation_status["available"]),
+            "reservation_error": reservation_status.get("error"),
+            "total_reserved_instances": (
+                sum(int(item.get("reserved_instance_count") or 0) for item in coverage_rows)
+                if reservation_status["available"]
+                else None
+            ),
+            "by_sku_coverage": coverage_rows,
         }
 
     def get_grounding_context(self) -> dict[str, Any]:

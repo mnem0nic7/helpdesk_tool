@@ -272,6 +272,8 @@ def test_client(mock_cache, freeze_time, monkeypatch):
         },
         "by_size": [],
         "by_state": [],
+        "reservation_data_available": False,
+        "reservation_error": None,
     }
     mock_azure_cache.list_directory_objects.return_value = []
     mock_azure_cache.get_grounding_context.return_value = {}

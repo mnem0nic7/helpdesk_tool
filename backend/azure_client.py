@@ -134,6 +134,23 @@ class AzureClient:
         return items
 
     @staticmethod
+    def _parse_datetime(value: Any) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if len(text) == 10:
+            text = f"{text}T00:00:00+00:00"
+        elif text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    @staticmethod
     def _strip_resource_id(value: str) -> str:
         return value.strip().strip("/")
 
@@ -221,6 +238,79 @@ class AzureClient:
                     }
                 )
         return assignments
+
+    def list_reservations(self) -> list[dict[str, Any]]:
+        rows = self._paged_get(
+            f"{_ARM_BASE}/providers/Microsoft.Capacity/reservations",
+            scope=_ARM_SCOPE,
+            params={"api-version": "2022-11-01"},
+        )
+
+        now = datetime.now(timezone.utc)
+        results: list[dict[str, Any]] = []
+        for item in rows:
+            properties = item.get("properties") or {}
+            reserved_resource_type = str(properties.get("reservedResourceType") or "").strip()
+            if reserved_resource_type.lower() != "virtualmachines":
+                continue
+
+            sku_payload = item.get("sku") or {}
+            sku_name = ""
+            if isinstance(sku_payload, dict):
+                sku_name = str(sku_payload.get("name") or "").strip()
+            elif sku_payload:
+                sku_name = str(sku_payload).strip()
+            if not sku_name:
+                sku_name = str(properties.get("skuName") or "").strip() or "Unknown"
+
+            quantity_raw = properties.get("quantity") or 0
+            try:
+                quantity = int(float(quantity_raw))
+            except (TypeError, ValueError):
+                quantity = 0
+            if quantity <= 0:
+                continue
+
+            expiry = self._parse_datetime(
+                properties.get("expiryDateTime")
+                or properties.get("expiryDate")
+            )
+            if expiry and expiry <= now:
+                continue
+
+            if bool(properties.get("archived")):
+                continue
+
+            provisioning_state = str(
+                properties.get("provisioningState")
+                or properties.get("displayProvisioningState")
+                or ""
+            ).strip()
+            if provisioning_state and provisioning_state.lower() not in {"succeeded"}:
+                continue
+
+            reserved_properties = properties.get("reservedResourceProperties") or {}
+            applied_scopes = properties.get("appliedScopes") or []
+            results.append(
+                {
+                    "id": item.get("id") or "",
+                    "name": item.get("name") or "",
+                    "display_name": properties.get("displayName") or item.get("name") or "",
+                    "sku": sku_name,
+                    "quantity": quantity,
+                    "location": item.get("location") or "",
+                    "reserved_resource_type": reserved_resource_type,
+                    "applied_scope_type": properties.get("appliedScopeType") or "",
+                    "display_provisioning_state": properties.get("displayProvisioningState") or "",
+                    "provisioning_state": properties.get("provisioningState") or "",
+                    "term": properties.get("term") or "",
+                    "renew": bool(properties.get("renew")),
+                    "expiry_date_time": expiry.isoformat() if expiry else "",
+                    "instance_flexibility": reserved_properties.get("instanceFlexibility") or "",
+                    "applied_scopes": [scope for scope in applied_scopes if isinstance(scope, str)],
+                }
+            )
+        return results
 
     def query_resources(self, subscription_ids: list[str]) -> list[dict[str, Any]]:
         if not subscription_ids:

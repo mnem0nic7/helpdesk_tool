@@ -677,13 +677,23 @@ export interface AzureVirtualMachineSummary {
   distinct_sizes: number;
 }
 
+export interface AzureVirtualMachineSizeCoverageRow {
+  label: string;
+  vm_count: number;
+  reserved_instance_count: number | null;
+  delta: number | null;
+  coverage_status: "needed" | "excess" | "balanced" | "unavailable";
+}
+
 export interface AzureVirtualMachineListResponse {
   vms: AzureVirtualMachineRow[];
   matched_count: number;
   total_count: number;
   summary: AzureVirtualMachineSummary;
-  by_size: AzureCountByLabel[];
+  by_size: AzureVirtualMachineSizeCoverageRow[];
   by_state: AzureCountByLabel[];
+  reservation_data_available: boolean;
+  reservation_error: string | null;
 }
 
 export interface AzureDirectoryObject {

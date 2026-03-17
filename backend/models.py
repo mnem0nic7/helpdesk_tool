@@ -457,6 +457,16 @@ class AzureVirtualMachineSummary(BaseModel):
     distinct_sizes: int = 0
 
 
+class AzureVirtualMachineSizeCoverageRow(BaseModel):
+    """Tenant-wide VM vs reserved-instance coverage for one exact SKU."""
+
+    label: str
+    vm_count: int = 0
+    reserved_instance_count: Optional[int] = None
+    delta: Optional[int] = None
+    coverage_status: str = "unavailable"
+
+
 class AzureVirtualMachineListResponse(BaseModel):
     """Filtered virtual machine explorer response."""
 
@@ -464,8 +474,10 @@ class AzureVirtualMachineListResponse(BaseModel):
     matched_count: int = 0
     total_count: int = 0
     summary: AzureVirtualMachineSummary = Field(default_factory=AzureVirtualMachineSummary)
-    by_size: list[AzureCountByLabel] = Field(default_factory=list)
+    by_size: list[AzureVirtualMachineSizeCoverageRow] = Field(default_factory=list)
     by_state: list[AzureCountByLabel] = Field(default_factory=list)
+    reservation_data_available: bool = False
+    reservation_error: Optional[str] = None
 
 
 class AzureDirectoryObject(BaseModel):
