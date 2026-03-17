@@ -282,7 +282,18 @@ class AzureCache:
                 item["subscription_id"]: item["display_name"]
                 for item in subscriptions
             }
-            management_groups = self._client.list_management_groups()
+            management_groups: list[dict[str, Any]] = []
+            try:
+                management_groups = self._client.list_management_groups()
+            except AzureApiError as exc:
+                message = str(exc)
+                if "managementGroups/read" in message or "AuthorizationFailed" in message:
+                    logger.warning(
+                        "Azure management groups unavailable for this principal; continuing inventory refresh without them: %s",
+                        exc,
+                    )
+                else:
+                    raise
             resources = self._client.query_resources(list(sub_name_by_id))
             for item in resources:
                 item["subscription_name"] = sub_name_by_id.get(item.get("subscription_id", ""), "")
