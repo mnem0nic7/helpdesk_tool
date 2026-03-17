@@ -290,34 +290,49 @@ Resources
         params = {"$select": ",".join(select), "$top": "999"}
         return self._paged_get(url, scope=_GRAPH_SCOPE, params=params)
 
+    def list_graph_collection_custom(
+        self,
+        path: str,
+        *,
+        select: list[str],
+        page_size: int | None = 999,
+    ) -> list[dict[str, Any]]:
+        url = f"{_GRAPH_BASE}/{path}"
+        params = {"$select": ",".join(select)}
+        if page_size is not None:
+            params["$top"] = str(page_size)
+        return self._paged_get(url, scope=_GRAPH_SCOPE, params=params)
+
     def list_users(self) -> list[dict[str, Any]]:
-        return self.list_graph_collection(
+        return self.list_graph_collection_custom(
             "users",
             select=["id", "displayName", "userPrincipalName", "mail", "accountEnabled"],
         )
 
     def list_groups(self) -> list[dict[str, Any]]:
-        return self.list_graph_collection(
+        return self.list_graph_collection_custom(
             "groups",
             select=["id", "displayName", "mail", "securityEnabled", "groupTypes"],
         )
 
     def list_service_principals(self) -> list[dict[str, Any]]:
-        return self.list_graph_collection(
+        return self.list_graph_collection_custom(
             "servicePrincipals",
             select=["id", "appId", "displayName", "servicePrincipalType", "accountEnabled"],
         )
 
     def list_applications(self) -> list[dict[str, Any]]:
-        return self.list_graph_collection(
+        return self.list_graph_collection_custom(
             "applications",
             select=["id", "appId", "displayName", "signInAudience"],
         )
 
     def list_directory_roles(self) -> list[dict[str, Any]]:
-        return self.list_graph_collection(
+        # Graph directoryRoles rejects custom page sizes, so omit $top.
+        return self.list_graph_collection_custom(
             "directoryRoles",
             select=["id", "displayName", "description"],
+            page_size=None,
         )
 
     @staticmethod
