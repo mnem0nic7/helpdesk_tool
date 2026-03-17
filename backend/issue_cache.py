@@ -126,10 +126,10 @@ class IssueCache:
                 result["refresh_progress"] = dict(self._refresh_progress)
             return result
 
-    def update_cached_field(self, key: str, field: str, value: str) -> None:
+    def update_cached_field(self, key: str, field: str, value: str | dict[str, str] | None) -> None:
         """Update a field in the cached issue data (in-memory + SQLite).
 
-        Supports: summary, description, priority, request_type, status, assignee, updated.
+        Supports: summary, description, priority, request_type, status, assignee, reporter, updated.
         """
         from datetime import datetime, timezone
         with self._lock:
@@ -153,15 +153,42 @@ class IssueCache:
                     status_obj["name"] = value
                     fields["status"] = status_obj
                 elif field == "assignee":
-                    if value:
+                    if isinstance(value, dict):
+                        display_name = value.get("displayName", "")
+                        account_id = value.get("accountId", "")
+                    else:
+                        display_name = value or ""
+                        account_id = ""
+                    if display_name or account_id:
                         assignee_obj = fields.get("assignee") or {}
                         if isinstance(assignee_obj, dict):
-                            assignee_obj["displayName"] = value
+                            assignee_obj["displayName"] = display_name
+                            if account_id:
+                                assignee_obj["accountId"] = account_id
                         else:
-                            assignee_obj = {"displayName": value}
+                            assignee_obj = {"displayName": display_name}
+                            if account_id:
+                                assignee_obj["accountId"] = account_id
                         fields["assignee"] = assignee_obj
                     else:
                         fields["assignee"] = None
+                elif field == "reporter":
+                    if isinstance(value, dict):
+                        display_name = value.get("displayName", "")
+                        account_id = value.get("accountId", "")
+                    else:
+                        display_name = value or ""
+                        account_id = ""
+                    reporter_obj = fields.get("reporter") or {}
+                    if isinstance(reporter_obj, dict):
+                        reporter_obj["displayName"] = display_name
+                        if account_id:
+                            reporter_obj["accountId"] = account_id
+                    else:
+                        reporter_obj = {"displayName": display_name}
+                        if account_id:
+                            reporter_obj["accountId"] = account_id
+                    fields["reporter"] = reporter_obj
                 # Always bump updated timestamp
                 fields["updated"] = datetime.now(timezone.utc).isoformat()
         # Persist the updated issue to SQLite
@@ -703,9 +730,10 @@ class IssueCache:
                 result.suggestions = validate_suggestions(key, result.suggestions)
                 store.save(result)
 
-                # Auto-apply priority and request_type with confidence >= 0.7
+                # Auto-apply priority, request_type, and explicit reporter hints when safe.
                 priority_updated = False
                 request_type_updated = False
+                reporter_updated = False
                 applied_fields: list[str] = []
                 for s in result.suggestions:
                     try:
@@ -744,6 +772,27 @@ class IssueCache:
                                     "Auto-triage: %s request_type %s → %s (conf=%.2f)",
                                     key, s.current_value, s.suggested_value, s.confidence,
                                 )
+                        elif s.field == "reporter" and s.confidence >= 0.95:
+                            account_id = client.find_user_account_id(s.suggested_value)
+                            if account_id:
+                                await loop.run_in_executor(
+                                    None, client.update_reporter, key, account_id
+                                )
+                                store.log_change(
+                                    key, "reporter", s.current_value, s.suggested_value,
+                                    s.confidence, AUTO_TRIAGE_MODEL,
+                                )
+                                self.update_cached_field(
+                                    key,
+                                    "reporter",
+                                    {"displayName": s.suggested_value, "accountId": account_id},
+                                )
+                                reporter_updated = True
+                                applied_fields.append("reporter")
+                                logger.info(
+                                    "Auto-triage: %s reporter %s → %s (conf=%.2f)",
+                                    key, s.current_value, s.suggested_value, s.confidence,
+                                )
                     except Exception:
                         logger.exception("Auto-triage: failed to apply %s for %s", s.field, key)
 
@@ -761,6 +810,8 @@ class IssueCache:
                 # clutter the manual Triage tab since auto-triage has already made a decision.
                 for field in ("priority", "request_type"):
                     store.remove_field(key, field)
+                if reporter_updated:
+                    store.remove_field(key, "reporter")
 
                 store.mark_auto_triaged(key, priority_updated=priority_updated, request_type_updated=request_type_updated)
                 seen.add(key)

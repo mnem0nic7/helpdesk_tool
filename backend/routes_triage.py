@@ -404,10 +404,27 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
                         break
                 if account_id:
                     _client.assign_issue(req.key, account_id)
-                    cache.update_cached_field(req.key, "assignee", s.suggested_value)
+                    cache.update_cached_field(
+                        req.key,
+                        "assignee",
+                        {"displayName": s.suggested_value, "accountId": account_id},
+                    )
                     applied.append(field_name)
                 else:
                     errors.append({"field": field_name, "error": f"Could not find user: {s.suggested_value}"})
+
+            elif field_name == "reporter":
+                account_id = _client.find_user_account_id(s.suggested_value)
+                if account_id:
+                    _client.update_reporter(req.key, account_id)
+                    cache.update_cached_field(
+                        req.key,
+                        "reporter",
+                        {"displayName": s.suggested_value, "accountId": account_id},
+                    )
+                    applied.append(field_name)
+                else:
+                    errors.append({"field": field_name, "error": f"Could not find reporter: {s.suggested_value}"})
 
             elif field_name == "status":
                 transitions = _client.get_transitions(req.key)
@@ -495,7 +512,22 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
             if not account_id:
                 raise HTTPException(status_code=400, detail=f"Could not find user: {s.suggested_value}")
             _client.assign_issue(req.key, account_id)
-            cache.update_cached_field(req.key, "assignee", s.suggested_value)
+            cache.update_cached_field(
+                req.key,
+                "assignee",
+                {"displayName": s.suggested_value, "accountId": account_id},
+            )
+
+        elif req.field == "reporter":
+            account_id = _client.find_user_account_id(s.suggested_value)
+            if not account_id:
+                raise HTTPException(status_code=400, detail=f"Could not find reporter: {s.suggested_value}")
+            _client.update_reporter(req.key, account_id)
+            cache.update_cached_field(
+                req.key,
+                "reporter",
+                {"displayName": s.suggested_value, "accountId": account_id},
+            )
 
         elif req.field == "status":
             transitions = _client.get_transitions(req.key)

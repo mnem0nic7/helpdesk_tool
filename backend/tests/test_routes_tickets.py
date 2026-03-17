@@ -221,6 +221,33 @@ class TestTicketsEndpoint:
         }
         mock_cache.refresh_issue_keys.assert_called_once_with(["OIT-123"])
 
+    def test_refresh_visible_tickets_updates_reporter_from_ticket_text(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        issue["fields"]["reporter"] = {"displayName": "OSIJIRAOCC", "accountId": "acct-occ"}
+        issue["fields"]["description"] = _adf("OCC Ticket Created By: Raza Abidi |\n*Caution* External email.")
+        mock_cache.refresh_issue_keys.return_value = [issue]
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+
+        updated: list[tuple[str, str]] = []
+        monkeypatch.setattr(routes_tickets._client, "find_user_account_id", lambda name: "acct-raza")
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "update_reporter",
+            lambda key, account_id: updated.append((key, account_id)),
+        )
+
+        resp = test_client.post("/api/tickets/refresh-visible", json={"keys": ["OIT-123"]})
+
+        assert resp.status_code == 200
+        assert updated == [("OIT-123", "acct-raza")]
+        mock_cache.update_cached_field.assert_called_with(
+            "OIT-123",
+            "reporter",
+            {"displayName": "Raza Abidi", "accountId": "acct-raza"},
+        )
+
     def test_refresh_visible_tickets_rejects_invalid_keys(self, test_client):
         resp = test_client.post("/api/tickets/refresh-visible", json={"keys": ["not-a-jira-key"]})
         assert resp.status_code == 400
@@ -371,6 +398,27 @@ class TestTicketDetailAndActions:
             {"id": "122", "name": "Business Application Support", "description": "Apps"}
         ]
 
+    def test_search_users_returns_sorted_jira_matches(self, test_client, monkeypatch):
+        import routes_tickets
+
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "search_users",
+            lambda query: [
+                {"accountId": "acct-2", "displayName": "Raza Abidi", "emailAddress": "raza@example.com", "active": True},
+                {"accountId": "acct-1", "displayName": "Alan Turing", "emailAddress": "alan@example.com", "active": True},
+                {"accountId": "acct-3", "displayName": "Disabled User", "emailAddress": "disabled@example.com", "active": False},
+            ],
+        )
+
+        resp = test_client.get("/api/users/search?q=ra")
+
+        assert resp.status_code == 200
+        assert resp.json() == [
+            {"account_id": "acct-1", "display_name": "Alan Turing", "email_address": "alan@example.com"},
+            {"account_id": "acct-2", "display_name": "Raza Abidi", "email_address": "raza@example.com"},
+        ]
+
     def test_update_ticket_writes_supported_fields(self, test_client, mock_cache, monkeypatch):
         import routes_tickets
 
@@ -379,6 +427,7 @@ class TestTicketDetailAndActions:
         issue["fields"]["summary"] = "Updated summary"
         issue["fields"]["priority"] = {"name": "Medium"}
         issue["fields"]["assignee"] = {"displayName": "Bob Builder", "accountId": "acc-bob"}
+        issue["fields"]["reporter"] = {"displayName": "Raza Abidi", "accountId": "acct-raza"}
         issue["fields"]["description"] = _adf("Updated description")
         issue["fields"]["customfield_11102"]["requestType"]["name"] = "Access"
 
@@ -387,11 +436,17 @@ class TestTicketDetailAndActions:
         monkeypatch.setattr(routes_tickets._client, "update_description", lambda key, value: calls.append(("description", key, value)))
         monkeypatch.setattr(routes_tickets._client, "update_priority", lambda key, value: calls.append(("priority", key, value)))
         monkeypatch.setattr(routes_tickets._client, "assign_issue", lambda key, value: calls.append(("assignee", key, value)))
+        monkeypatch.setattr(routes_tickets._client, "update_reporter", lambda key, value: calls.append(("reporter", key, value)))
         monkeypatch.setattr(routes_tickets._client, "set_request_type", lambda key, value: calls.append(("request_type", key, value)))
         monkeypatch.setattr(
             routes_tickets._client,
             "get_users_assignable",
             lambda project: [{"accountId": "acc-bob", "displayName": "Bob Builder"}],
+        )
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_user",
+            lambda account_id: {"accountId": account_id, "displayName": "Raza Abidi"},
         )
         monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
         monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
@@ -403,6 +458,8 @@ class TestTicketDetailAndActions:
                 "description": "Updated description",
                 "priority": "Medium",
                 "assignee_account_id": "acc-bob",
+                "reporter_account_id": "acct-raza",
+                "reporter_display_name": "Raza Abidi",
                 "request_type_id": "122",
             },
         )
@@ -413,12 +470,22 @@ class TestTicketDetailAndActions:
             ("description", "OIT-123", "Updated description"),
             ("priority", "OIT-123", "Medium"),
             ("assignee", "OIT-123", "acc-bob"),
+            ("reporter", "OIT-123", "acct-raza"),
             ("request_type", "OIT-123", "122"),
         ]
         assert ("OIT-123", "summary", "Updated summary") in [c.args for c in mock_cache.update_cached_field.call_args_list]
         assert ("OIT-123", "description", "Updated description") in [c.args for c in mock_cache.update_cached_field.call_args_list]
         assert ("OIT-123", "priority", "Medium") in [c.args for c in mock_cache.update_cached_field.call_args_list]
-        assert ("OIT-123", "assignee", "Bob Builder") in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        assert (
+            "OIT-123",
+            "assignee",
+            {"displayName": "Bob Builder", "accountId": "acc-bob"},
+        ) in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        assert (
+            "OIT-123",
+            "reporter",
+            {"displayName": "Raza Abidi", "accountId": "acct-raza"},
+        ) in [c.args for c in mock_cache.update_cached_field.call_args_list]
         assert ("OIT-123", "request_type", "Access") in [c.args for c in mock_cache.update_cached_field.call_args_list]
         mock_cache.upsert_issue.assert_called_once_with(issue)
         assert resp.json()["ticket"]["summary"] == "Updated summary"

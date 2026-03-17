@@ -445,6 +445,10 @@ class JiraClient:
         """PUT /rest/api/3/issue/{key} to change priority."""
         self.update_issue_fields(key, {"priority": {"name": priority_name}})
 
+    def update_reporter(self, key: str, account_id: str) -> None:
+        """PUT /rest/api/3/issue/{key} to change reporter."""
+        self.update_issue_fields(key, {"reporter": {"id": account_id}})
+
     @staticmethod
     def _plain_text_to_adf(text: str) -> dict[str, Any]:
         """Convert plain text into a minimal Atlassian Document Format payload."""
@@ -535,6 +539,36 @@ class JiraClient:
         url = f"{self.base_url}/rest/api/3/user/assignable/search"
         params = {"project": project}
         resp = self.session.get(url, params=params, timeout=self._TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+
+    def search_users(self, query: str, max_results: int = 20) -> list[dict[str, Any]]:
+        """GET /rest/api/3/user/search?query=... for broad user lookup."""
+        url = f"{self.base_url}/rest/api/3/user/search"
+        params = {"query": query, "maxResults": max_results}
+        resp = self.session.get(url, params=params, timeout=self._TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+
+    def find_user_account_id(self, display_name: str) -> str | None:
+        """Return the exact-match accountId for a display name, if one exists."""
+        target = display_name.strip().lower()
+        if not target:
+            return None
+        users = self.search_users(display_name)
+        exact_matches = [
+            user.get("accountId", "")
+            for user in users
+            if (user.get("displayName", "").strip().lower() == target) and user.get("accountId")
+        ]
+        if len(exact_matches) == 1:
+            return exact_matches[0]
+        return None
+
+    def get_user(self, account_id: str) -> dict[str, Any]:
+        """GET /rest/api/3/user?accountId=... for a specific Jira user."""
+        url = f"{self.base_url}/rest/api/3/user"
+        resp = self.session.get(url, params={"accountId": account_id}, timeout=self._TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 

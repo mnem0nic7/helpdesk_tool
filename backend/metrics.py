@@ -813,6 +813,7 @@ def issue_to_row(
     # Reporter
     reporter_obj = fields.get("reporter") or {}
     reporter_name: str = reporter_obj.get("displayName", "") if isinstance(reporter_obj, dict) else ""
+    reporter_id: str = reporter_obj.get("accountId", "") if isinstance(reporter_obj, dict) else ""
 
     # Dates
     created_str: str = fields.get("created") or ""
@@ -874,6 +875,7 @@ def issue_to_row(
         "assignee": assignee_name,
         "assignee_account_id": assignee_id,
         "reporter": reporter_name,
+        "reporter_account_id": reporter_id,
         "created": created_str,
         "updated": updated_str,
         "resolved": resolved_str,

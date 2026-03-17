@@ -97,6 +97,7 @@ class TicketRow(BaseModel):
     assignee: str
     assignee_account_id: str
     reporter: str
+    reporter_account_id: str = ""
     created: str
     updated: str
     resolved: str
@@ -206,6 +207,8 @@ class TicketUpdateRequest(BaseModel):
     description: Optional[str] = None
     priority: Optional[str] = None
     assignee_account_id: Optional[str] = None
+    reporter_account_id: Optional[str] = None
+    reporter_display_name: Optional[str] = None
     request_type_id: Optional[str] = None
 
 
