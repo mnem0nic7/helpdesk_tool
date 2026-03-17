@@ -419,6 +419,45 @@ class TestTicketDetailAndActions:
             {"account_id": "acct-2", "display_name": "Raza Abidi", "email_address": "raza@example.com"},
         ]
 
+    def test_sync_ticket_reporter_updates_from_occ_created_by_line(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        issue_before = _detail_issue()
+        issue_before["fields"]["reporter"] = {"displayName": "OSIJIRAOCC", "accountId": "acct-occ"}
+        issue_before["fields"]["description"] = _adf(
+            "OCC Ticket Created By: Raza Abidi | OCC Ticket ID: LIBRA-SR-074744"
+        )
+        issue_after = _detail_issue()
+        issue_after["fields"]["reporter"] = {"displayName": "Raza Abidi", "accountId": "acct-raza"}
+        issue_after["fields"]["description"] = issue_before["fields"]["description"]
+
+        issues = [issue_before, issue_after]
+        updated: list[tuple[str, str]] = []
+
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issues.pop(0))
+        monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
+        monkeypatch.setattr(routes_tickets._client, "find_user_account_id", lambda name: "acct-raza")
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "update_reporter",
+            lambda key, account_id: updated.append((key, account_id)),
+        )
+
+        resp = test_client.post("/api/tickets/OIT-123/sync-reporter")
+
+        assert resp.status_code == 200
+        assert updated == [("OIT-123", "acct-raza")]
+        assert resp.json()["updated"] is True
+        assert resp.json()["message"] == "Reporter updated to Raza Abidi."
+        assert resp.json()["detail"]["ticket"]["reporter"] == "Raza Abidi"
+        mock_cache.update_cached_field.assert_called_with(
+            "OIT-123",
+            "reporter",
+            {"displayName": "Raza Abidi", "accountId": "acct-raza"},
+        )
+        mock_cache.upsert_issue.assert_called_once_with(issue_after)
+
     def test_update_ticket_writes_supported_fields(self, test_client, mock_cache, monkeypatch):
         import routes_tickets
 

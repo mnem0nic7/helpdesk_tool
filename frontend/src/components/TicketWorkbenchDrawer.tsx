@@ -291,6 +291,20 @@ export default function TicketWorkbenchDrawer({
     },
   });
 
+  const syncReporterMutation = useMutation({
+    mutationFn: () => {
+      if (!ticketKey) {
+        throw new Error("No ticket selected");
+      }
+      return api.syncTicketReporter(ticketKey);
+    },
+    onSuccess: (result) => handleUpdated(result.detail, result.message),
+    onError: (error) => {
+      setErrorText(error instanceof Error ? error.message : "Failed to update reporter");
+      setFeedback(null);
+    },
+  });
+
   const transitionMutation = useMutation({
     mutationFn: () => {
       if (!ticketKey || !selectedTransitionId) {
@@ -511,9 +525,15 @@ export default function TicketWorkbenchDrawer({
                     </select>
                   </label>
 
-                  <label className="block xl:col-span-2">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reporter</span>
+                  <div className="block xl:col-span-2">
+                    <label
+                      htmlFor="ticket-reporter-input"
+                      className="text-xs font-medium uppercase tracking-wide text-slate-500"
+                    >
+                      Reporter
+                    </label>
                     <input
+                      id="ticket-reporter-input"
                       aria-label="Reporter"
                       type="text"
                       value={reporterSearch}
@@ -564,7 +584,20 @@ export default function TicketWorkbenchDrawer({
                         ))}
                       </select>
                     )}
-                  </label>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => syncReporterMutation.mutate()}
+                        disabled={syncReporterMutation.isPending}
+                        className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {syncReporterMutation.isPending ? "Updating..." : "Update Reporter"}
+                      </button>
+                      <span className="text-xs text-slate-500">
+                        Uses the saved description line like "OCC Ticket Created By: Jane Doe".
+                      </span>
+                    </div>
+                  </div>
 
                   <label className="block">
                     <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Request Type</span>

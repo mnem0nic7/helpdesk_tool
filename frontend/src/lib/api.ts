@@ -176,6 +176,12 @@ export interface VisibleTicketRefreshResponse {
   missing_keys: string[];
 }
 
+export interface SyncTicketReporterResponse {
+  detail: TicketDetail;
+  updated: boolean;
+  message: string;
+}
+
 /** SLA timer summary for a single timer type. */
 export interface SLATimerSummary {
   timer_name: string;
@@ -689,6 +695,11 @@ export const api = {
   /** Refresh the currently displayed ticket rows from live Jira data. */
   refreshVisibleTickets(keys: string[]): Promise<VisibleTicketRefreshResponse> {
     return postJSON<VisibleTicketRefreshResponse>("/api/tickets/refresh-visible", { keys });
+  },
+
+  /** Update a ticket reporter from the OCC creator line in the saved description. */
+  syncTicketReporter(key: string): Promise<SyncTicketReporterResponse> {
+    return postJSON<SyncTicketReporterResponse>(`/api/tickets/${encodeURIComponent(key)}/sync-reporter`, {});
   },
 
   getPriorities(): Promise<PriorityOption[]> {

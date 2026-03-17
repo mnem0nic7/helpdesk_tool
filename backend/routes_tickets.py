@@ -27,7 +27,11 @@ _client = JiraClient()
 _STALE_DAYS = 1
 
 
-def _sync_reporter_from_ticket_text(issue: dict[str, Any]) -> bool:
+def _sync_reporter_from_ticket_text(
+    issue: dict[str, Any],
+    *,
+    source: str = "Reporter sync",
+) -> tuple[bool, str]:
     """Update Jira reporter when the ticket text explicitly names a creator.
 
     This is used by live refresh flows so cached list views can reconcile
@@ -36,13 +40,13 @@ def _sync_reporter_from_ticket_text(issue: dict[str, Any]) -> bool:
     """
     key = issue.get("key", "")
     if not key:
-        return False
+        return False, "Ticket key missing."
 
     fields = issue.get("fields", {})
     description = extract_adf_text(fields.get("description"))
     reporter_hint = _extract_reporter_hint_from_text(description)
     if not reporter_hint:
-        return False
+        return False, "Ticket description does not contain a recognizable 'OCC Ticket Created By' line."
 
     reporter_obj = fields.get("reporter") or {}
     current_name = (
@@ -56,25 +60,27 @@ def _sync_reporter_from_ticket_text(issue: dict[str, Any]) -> bool:
         else ""
     )
     if current_name.lower() == reporter_hint.lower():
-        return False
+        return False, f"Reporter already matches {reporter_hint}."
 
     try:
         account_id = _client.find_user_account_id(reporter_hint)
         if not account_id:
             logger.info(
-                "Refresh visible: leaving %s reporter as '%s' because '%s' did not resolve to one Jira user",
+                "%s: leaving %s reporter as '%s' because '%s' did not resolve to one Jira user",
+                source,
                 key,
                 current_name or "(blank)",
                 reporter_hint,
             )
-            return False
+            return False, f"Could not find an exact Jira user for {reporter_hint}."
         if account_id == current_account_id:
             cache.update_cached_field(
                 key,
                 "reporter",
                 {"displayName": reporter_hint, "accountId": account_id},
             )
-            return True
+            logger.info("%s: refreshed cached reporter display name for %s -> %s", source, key, reporter_hint)
+            return True, f"Reporter updated to {reporter_hint}."
         _client.update_reporter(key, account_id)
         cache.update_cached_field(
             key,
@@ -82,15 +88,16 @@ def _sync_reporter_from_ticket_text(issue: dict[str, Any]) -> bool:
             {"displayName": reporter_hint, "accountId": account_id},
         )
         logger.info(
-            "Refresh visible: updated %s reporter %s -> %s",
+            "%s: updated %s reporter %s -> %s",
+            source,
             key,
             current_name or "(blank)",
             reporter_hint,
         )
-        return True
+        return True, f"Reporter updated to {reporter_hint}."
     except Exception:
-        logger.exception("Refresh visible: failed to update reporter for %s", key)
-        return False
+        logger.exception("%s: failed to update reporter for %s", source, key)
+        return False, "Failed to update reporter from ticket description."
 
 
 def _match(issue: dict[str, Any], **filters: Any) -> bool:
@@ -556,7 +563,7 @@ async def refresh_visible_tickets(body: TicketRefreshRequest) -> dict[str, Any]:
     refreshed_keys = [issue.get("key", "") for issue in refreshed_issues if issue.get("key")]
     refreshed_key_set = set(refreshed_keys)
     for issue in refreshed_issues:
-        _sync_reporter_from_ticket_text(issue)
+        _sync_reporter_from_ticket_text(issue, source="Refresh visible")
 
     return {
         "requested_count": len(requested_keys),
@@ -579,6 +586,34 @@ async def get_ticket(key: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
     except Exception:
         raise HTTPException(status_code=404, detail=f"Issue {key} not found")
+
+
+@router.post("/tickets/{key}/sync-reporter")
+async def sync_ticket_reporter(
+    key: str,
+    _admin: dict = Depends(require_admin),
+) -> dict[str, Any]:
+    """Update reporter from an OCC Ticket Created By line in the description."""
+    try:
+        validate_jira_key(key)
+        _ensure_ticket_visible(key)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
+
+    try:
+        issue = _client.get_issue(key)
+        updated, message = _sync_reporter_from_ticket_text(issue, source="Update reporter button")
+        detail = _load_ticket_detail(key) if updated else _load_ticket_detail(key, issue=issue)
+        return {
+            "detail": detail,
+            "updated": updated,
+            "message": message,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to sync reporter for ticket %s", key)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/tickets/{key}")
