@@ -191,6 +191,38 @@ class IssueCache:
         if issue:
             self._upsert_to_db([issue])
 
+    def upsert_issue(self, issue: dict[str, Any]) -> None:
+        """Merge one fresh Jira issue into memory and SQLite.
+
+        This is used for live Jira reads outside the background refresh loop,
+        such as opening the ticket drawer. It intentionally does not advance
+        ``last_refresh`` because it only updates one issue, not the dataset.
+        """
+        key = issue.get("key", "")
+        if not key:
+            return
+
+        fields = issue.setdefault("fields", {})
+        if not has_request_type(fields):
+            with self._lock:
+                cached = self._all_issues.get(key, {})
+            cached_fields = cached.get("fields", {})
+            cached_name = extract_request_type_name_from_fields(cached_fields)
+            if cached_name:
+                fields["customfield_10010"] = (
+                    cached_fields.get("customfield_10010")
+                    or {"requestType": {"name": cached_name}}
+                )
+
+        with self._lock:
+            self._all_issues[key] = issue
+            if JiraClient.is_excluded(issue):
+                self._issues.pop(key, None)
+            else:
+                self._issues[key] = issue
+
+        self._upsert_to_db([issue])
+
     # ------------------------------------------------------------------
     # SQLite persistence
     # ------------------------------------------------------------------
