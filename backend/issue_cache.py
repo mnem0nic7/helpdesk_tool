@@ -231,6 +231,10 @@ class IssueCache:
         tickets currently displayed in the UI. It intentionally does not
         advance ``last_refresh`` because it only updates part of the dataset.
         """
+        # Use a fresh Jira client for targeted refreshes so these requests do
+        # not share a requests.Session with the background refresh thread.
+        client = JiraClient() if isinstance(self._client, JiraClient) else self._client
+
         normalized_keys: list[str] = []
         seen: set[str] = set()
         for raw_key in keys:
@@ -250,9 +254,9 @@ class IssueCache:
         for i in range(0, len(normalized_keys), _KEY_REFRESH_BATCH_SIZE):
             batch = normalized_keys[i:i + _KEY_REFRESH_BATCH_SIZE]
             jql = f"key in ({','.join(batch)}) ORDER BY key ASC"
-            refreshed_batch = self._client.search_all(jql)
+            refreshed_batch = client.search_all(jql)
             if refreshed_batch:
-                self._client.enrich_request_types(refreshed_batch, existing_cache=existing_cache)
+                client.enrich_request_types(refreshed_batch, existing_cache=existing_cache)
             for issue in refreshed_batch:
                 key = issue.get("key", "")
                 if not key:

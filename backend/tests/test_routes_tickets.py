@@ -226,6 +226,17 @@ class TestTicketsEndpoint:
         assert resp.status_code == 400
         assert "Invalid Jira key format" in resp.json()["detail"]
 
+    def test_refresh_visible_tickets_returns_502_on_jira_failure(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        mock_cache.refresh_issue_keys.side_effect = RuntimeError("jira blew up")
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+
+        resp = test_client.post("/api/tickets/refresh-visible", json={"keys": ["OIT-123"]})
+
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == "Jira refresh failed. Please try again in a moment."
+
 
 def _adf(text: str) -> dict[str, Any]:
     return {
