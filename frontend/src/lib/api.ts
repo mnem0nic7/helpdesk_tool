@@ -679,6 +679,7 @@ export interface AzureVirtualMachineSummary {
 
 export interface AzureVirtualMachineSizeCoverageRow {
   label: string;
+  region: string;
   vm_count: number;
   reserved_instance_count: number | null;
   delta: number | null;
@@ -694,6 +695,37 @@ export interface AzureVirtualMachineListResponse {
   by_state: AzureCountByLabel[];
   reservation_data_available: boolean;
   reservation_error: string | null;
+}
+
+export interface AzureVirtualMachineAssociatedResource {
+  id: string;
+  name: string;
+  resource_type: string;
+  relationship: string;
+  subscription_id: string;
+  subscription_name: string;
+  resource_group: string;
+  location: string;
+  state: string;
+  cost: number | null;
+  currency: string;
+}
+
+export interface AzureVirtualMachineCostDetails {
+  lookback_days: number;
+  currency: string;
+  cost_data_available: boolean;
+  cost_error: string | null;
+  total_cost: number | null;
+  vm_cost: number | null;
+  related_resource_cost: number | null;
+  priced_resource_count: number;
+}
+
+export interface AzureVirtualMachineDetailResponse {
+  vm: AzureVirtualMachineRow;
+  associated_resources: AzureVirtualMachineAssociatedResource[];
+  cost: AzureVirtualMachineCostDetails;
 }
 
 export interface AzureDirectoryObject {
@@ -1112,6 +1144,26 @@ export const api = {
 
   getAzureVMs(params: AzureVirtualMachineQueryParams = {}): Promise<AzureVirtualMachineListResponse> {
     return fetchJSON<AzureVirtualMachineListResponse>(`/api/azure/vms${buildQuery(params)}`);
+  },
+
+  getAzureVMDetail(resource_id: string): Promise<AzureVirtualMachineDetailResponse> {
+    return fetchJSON<AzureVirtualMachineDetailResponse>(`/api/azure/vms/detail${buildQuery({ resource_id })}`);
+  },
+
+  exportAzureVMCoverageCsv(): string {
+    return "/api/azure/vms/coverage/export.csv";
+  },
+
+  exportAzureVMCoverageExcel(): string {
+    return "/api/azure/vms/coverage/export.xlsx";
+  },
+
+  exportAzureVMExcessCsv(): string {
+    return "/api/azure/vms/excess/export.csv";
+  },
+
+  exportAzureVMExcessExcel(): string {
+    return "/api/azure/vms/excess/export.xlsx";
   },
 
   getAzureUsers(search = ""): Promise<AzureDirectoryObject[]> {

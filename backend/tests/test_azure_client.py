@@ -55,6 +55,13 @@ def test_query_resources_captures_vm_size_and_sku(monkeypatch):
             "id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1",
             "name": "vm-1",
             "resource_type": "Microsoft.Compute/virtualMachines",
+            "parent_resource_id": "",
+            "managed_by": "",
+            "attached_vm_id": "",
+            "network_interface_ids": [],
+            "os_disk_id": "",
+            "data_disk_ids": [],
+            "public_ip_ids": [],
             "kind": "",
             "location": "eastus",
             "subscription_id": "sub-1",
@@ -65,6 +72,99 @@ def test_query_resources_captures_vm_size_and_sku(monkeypatch):
             "tags": {"env": "prod"},
         }
     ]
+
+
+def test_query_resources_extracts_vm_relationship_fields(monkeypatch):
+    client = AzureClient()
+
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, url, *, scope, params=None, json_body=None, headers=None: {
+            "data": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1",
+                    "name": "vm-1",
+                    "type": "Microsoft.Compute/virtualMachines",
+                    "kind": "",
+                    "location": "eastus",
+                    "subscriptionId": "sub-1",
+                    "resourceGroup": "rg-prod",
+                    "managedBy": "",
+                    "virtualMachineId": "",
+                    "networkInterfaces": [{"id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/networkInterfaces/nic-1"}],
+                    "osDiskId": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/osdisk-1",
+                    "dataDisks": [{"managedDisk": {"id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/datadisk-1"}}],
+                    "ipConfigurations": [],
+                    "skuName": "Standard_D4s_v5",
+                    "vmSize": "Standard_D4s_v5",
+                    "powerState": "PowerState/running",
+                    "tags": {"env": "prod"},
+                },
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/networkInterfaces/nic-1",
+                    "name": "nic-1",
+                    "type": "Microsoft.Network/networkInterfaces",
+                    "kind": "",
+                    "location": "eastus",
+                    "subscriptionId": "sub-1",
+                    "resourceGroup": "rg-prod",
+                    "managedBy": "",
+                    "virtualMachineId": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1",
+                    "networkInterfaces": [],
+                    "osDiskId": "",
+                    "dataDisks": [],
+                    "ipConfigurations": [
+                        {
+                            "properties": {
+                                "publicIPAddress": {
+                                    "id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/publicIPAddresses/pip-1"
+                                }
+                            }
+                        }
+                    ],
+                    "skuName": "",
+                    "vmSize": "",
+                    "powerState": "",
+                    "tags": {},
+                },
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/osdisk-1",
+                    "name": "osdisk-1",
+                    "type": "Microsoft.Compute/disks",
+                    "kind": "",
+                    "location": "eastus",
+                    "subscriptionId": "sub-1",
+                    "resourceGroup": "rg-prod",
+                    "managedBy": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1",
+                    "virtualMachineId": "",
+                    "networkInterfaces": [],
+                    "osDiskId": "",
+                    "dataDisks": [],
+                    "ipConfigurations": [],
+                    "skuName": "Premium_LRS",
+                    "vmSize": "",
+                    "powerState": "",
+                    "tags": {},
+                },
+            ]
+        },
+    )
+
+    rows = client.query_resources(["sub-1"])
+
+    assert rows[0]["network_interface_ids"] == [
+        "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/networkInterfaces/nic-1"
+    ]
+    assert rows[0]["os_disk_id"] == "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/osdisk-1"
+    assert rows[0]["data_disk_ids"] == [
+        "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/datadisk-1"
+    ]
+    assert rows[1]["attached_vm_id"] == "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1"
+    assert rows[1]["public_ip_ids"] == [
+        "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/publicIPAddresses/pip-1"
+    ]
+    assert rows[2]["managed_by"] == "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1"
 
 
 def test_list_reservations_normalizes_active_vm_reservations(monkeypatch):

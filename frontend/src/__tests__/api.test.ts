@@ -114,6 +114,11 @@ describe("api.exportExcel", () => {
     const url = api.exportExcel();
     expect(url).toBe("/api/export/excel");
   });
+
+  it("returns Azure VM coverage export URLs", () => {
+    expect(api.exportAzureVMCoverageCsv()).toBe("/api/azure/vms/coverage/export.csv");
+    expect(api.exportAzureVMCoverageExcel()).toBe("/api/azure/vms/coverage/export.xlsx");
+  });
 });
 
 describe("azure api methods", () => {
@@ -157,5 +162,46 @@ describe("azure api methods", () => {
     expect(url).toContain("search=wvd");
     expect(url).toContain("state=Running");
     expect(url).toContain("size=Standard_E2as_v4");
+  });
+
+  it("returns Azure VM excess export URLs", () => {
+    expect(api.exportAzureVMExcessCsv()).toBe("/api/azure/vms/excess/export.csv");
+    expect(api.exportAzureVMExcessExcel()).toBe("/api/azure/vms/excess/export.xlsx");
+  });
+
+  it("calls the Azure VM detail endpoint with the resource id", async () => {
+    mockFetch({
+      vm: {
+        id: "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1",
+        name: "vm-1",
+        resource_type: "Microsoft.Compute/virtualMachines",
+        subscription_id: "sub-1",
+        subscription_name: "Prod",
+        resource_group: "rg-prod",
+        location: "eastus",
+        kind: "",
+        sku_name: "",
+        vm_size: "Standard_D4s_v5",
+        state: "PowerState/running",
+        tags: {},
+        size: "Standard_D4s_v5",
+        power_state: "Running",
+      },
+      associated_resources: [],
+      cost: {
+        lookback_days: 30,
+        currency: "USD",
+        cost_data_available: true,
+        cost_error: null,
+        total_cost: 100,
+        vm_cost: 80,
+        related_resource_cost: 20,
+        priced_resource_count: 2,
+      },
+    });
+    await api.getAzureVMDetail("/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1");
+    const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(url).toContain("/api/azure/vms/detail");
+    expect(url).toContain("resource_id=%2Fsubscriptions%2Fsub-1%2FresourceGroups%2Frg-prod%2Fproviders%2FMicrosoft.Compute%2FvirtualMachines%2Fvm-1");
   });
 });

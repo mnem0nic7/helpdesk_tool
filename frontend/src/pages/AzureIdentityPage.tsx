@@ -1,14 +1,20 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
+import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 
 function DirectorySection({
+  search,
   title,
   rows,
 }: {
+  search: string;
   title: string;
   rows: Awaited<ReturnType<typeof api.getAzureUsers>>;
 }) {
+  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(rows.length, 20, `${title}|${search}`);
+  const visibleRows = rows.slice(0, visibleCount);
+
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between">
@@ -17,8 +23,8 @@ function DirectorySection({
           {rows.length.toLocaleString()}
         </span>
       </div>
-      <div className="mt-4 space-y-3">
-        {rows.slice(0, 12).map((item) => (
+      <div className="mt-4 max-h-[38rem] space-y-3 overflow-y-auto">
+        {visibleRows.map((item) => (
           <div key={item.id} className="rounded-xl border border-slate-200 p-3">
             <div className="font-medium text-slate-900">{item.display_name || "(Unnamed)"}</div>
             <div className="mt-1 text-xs text-slate-500">
@@ -31,6 +37,11 @@ function DirectorySection({
             No matching entries.
           </div>
         )}
+        {hasMore ? (
+          <div ref={sentinelRef} className="py-2 text-center text-xs text-slate-400">
+            Showing {visibleRows.length.toLocaleString()} of {rows.length.toLocaleString()} — scroll for more
+          </div>
+        ) : null}
       </div>
     </section>
   );
@@ -99,11 +110,11 @@ export default function AzureIdentityPage() {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <DirectorySection title="Users" rows={users.data ?? []} />
-        <DirectorySection title="Groups" rows={groups.data ?? []} />
-        <DirectorySection title="Enterprise Apps" rows={enterpriseApps.data ?? []} />
-        <DirectorySection title="App Registrations" rows={appRegistrations.data ?? []} />
-        <DirectorySection title="Directory Roles" rows={roles.data ?? []} />
+        <DirectorySection search={search} title="Users" rows={users.data ?? []} />
+        <DirectorySection search={search} title="Groups" rows={groups.data ?? []} />
+        <DirectorySection search={search} title="Enterprise Apps" rows={enterpriseApps.data ?? []} />
+        <DirectorySection search={search} title="App Registrations" rows={appRegistrations.data ?? []} />
+        <DirectorySection search={search} title="Directory Roles" rows={roles.data ?? []} />
       </div>
     </div>
   );

@@ -458,9 +458,10 @@ class AzureVirtualMachineSummary(BaseModel):
 
 
 class AzureVirtualMachineSizeCoverageRow(BaseModel):
-    """Tenant-wide VM vs reserved-instance coverage for one exact SKU."""
+    """Tenant-wide VM vs reserved-instance coverage for one exact SKU and region."""
 
     label: str
+    region: str = ""
     vm_count: int = 0
     reserved_instance_count: Optional[int] = None
     delta: Optional[int] = None
@@ -478,6 +479,43 @@ class AzureVirtualMachineListResponse(BaseModel):
     by_state: list[AzureCountByLabel] = Field(default_factory=list)
     reservation_data_available: bool = False
     reservation_error: Optional[str] = None
+
+
+class AzureVirtualMachineAssociatedResource(BaseModel):
+    """One resource associated with a virtual machine detail view."""
+
+    id: str
+    name: str
+    resource_type: str
+    relationship: str
+    subscription_id: str = ""
+    subscription_name: str = ""
+    resource_group: str = ""
+    location: str = ""
+    state: str = ""
+    cost: Optional[float] = None
+    currency: str = "USD"
+
+
+class AzureVirtualMachineCostDetails(BaseModel):
+    """Cost rollup for a VM and its directly associated resources."""
+
+    lookback_days: int
+    currency: str = "USD"
+    cost_data_available: bool = False
+    cost_error: Optional[str] = None
+    total_cost: Optional[float] = None
+    vm_cost: Optional[float] = None
+    related_resource_cost: Optional[float] = None
+    priced_resource_count: int = 0
+
+
+class AzureVirtualMachineDetailResponse(BaseModel):
+    """Detailed VM drill-down with related resources and cost."""
+
+    vm: AzureVirtualMachineRow
+    associated_resources: list[AzureVirtualMachineAssociatedResource] = Field(default_factory=list)
+    cost: AzureVirtualMachineCostDetails
 
 
 class AzureDirectoryObject(BaseModel):

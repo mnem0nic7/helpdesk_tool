@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "../lib/api.ts";
+import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 
 function formatCurrency(value: number): string {
   return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
@@ -57,6 +58,10 @@ export default function AzureCostPage() {
       </div>
     );
   }
+
+  const advisorRows = advisor.data ?? [];
+  const advisorScroll = useInfiniteScrollCount(advisorRows.length, 20, "advisor");
+  const visibleAdvisorRows = advisorRows.slice(0, advisorScroll.visibleCount);
 
   return (
     <div className="space-y-6">
@@ -148,12 +153,12 @@ export default function AzureCostPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-slate-900">Advisor Savings Opportunities</h2>
           <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-            {(advisor.data ?? []).length.toLocaleString()} recommendations
+            {advisorRows.length.toLocaleString()} recommendations
           </span>
         </div>
-        <div className="mt-4 overflow-x-auto">
+        <div className="mt-4 max-h-[70vh] overflow-auto">
           <table className="min-w-full text-left text-sm">
-            <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-3">Recommendation</th>
                 <th className="px-4 py-3">Subscription</th>
@@ -162,7 +167,7 @@ export default function AzureCostPage() {
               </tr>
             </thead>
             <tbody>
-              {(advisor.data ?? []).map((item, index) => (
+              {visibleAdvisorRows.map((item, index) => (
                 <tr key={item.id} className={index % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-900">{item.title}</div>
@@ -175,6 +180,11 @@ export default function AzureCostPage() {
               ))}
             </tbody>
           </table>
+          {advisorScroll.hasMore ? (
+            <div ref={advisorScroll.sentinelRef} className="border-t border-slate-200 px-4 py-3 text-center text-xs text-slate-400">
+              Showing {visibleAdvisorRows.length.toLocaleString()} of {advisorRows.length.toLocaleString()} recommendations — scroll for more
+            </div>
+          ) : null}
         </div>
       </section>
     </div>
