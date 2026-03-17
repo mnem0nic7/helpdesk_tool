@@ -11,6 +11,7 @@ import Pagination from "../components/Pagination.tsx";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import TicketViewToggle, { type TicketListView } from "../components/TicketViewToggle.tsx";
 import { getSiteBranding } from "../lib/siteContext.ts";
+import { activeTicketListQueryOptions } from "../lib/ticketQueryOptions.ts";
 
 const PAGE_SIZE = 250;
 
@@ -117,6 +118,7 @@ export default function TicketsPage() {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["tickets", queryParams],
     queryFn: () => api.getTickets(queryParams),
+    ...activeTicketListQueryOptions,
   });
 
   const tickets = data?.tickets ?? [];

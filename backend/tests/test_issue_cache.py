@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from issue_cache import IssueCache
 
 
@@ -20,8 +22,10 @@ class _FakeClient:
     def __init__(self, updated_issues: list[dict]) -> None:
         self.updated_issues = updated_issues
         self.enriched_batches: list[list[str]] = []
+        self.search_jqls: list[str] = []
 
     def search_all(self, jql: str, progress_callback=None) -> list[dict]:
+        self.search_jqls.append(jql)
         return list(self.updated_issues)
 
     def enrich_request_types(self, issues: list[dict], existing_cache=None) -> None:
@@ -47,21 +51,6 @@ def _build_cache(tmp_path, updated_issues: list[dict]) -> IssueCache:
     return cache
 
 
-def test_background_incremental_refresh_skips_oasisdev_updates(tmp_path):
-    updated_issues = [
-        _issue("OIT-100", "Primary new"),
-        _issue("OIT-500", "Oasis new", labels=["oasisdev"]),
-    ]
-    cache = _build_cache(tmp_path, updated_issues)
-
-    untriaged = cache._incremental_refresh(include_excluded_updates=False)
-
-    assert cache._all_issues["OIT-100"]["fields"]["summary"] == "Primary new"
-    assert cache._all_issues["OIT-500"]["fields"]["summary"] == "Oasis old"
-    assert untriaged == ["OIT-100"]
-    assert cache._client.enriched_batches == [["OIT-100"]]
-
-
 def test_manual_incremental_refresh_updates_oasisdev_tickets(tmp_path):
     updated_issues = [
         _issue("OIT-100", "Primary new"),
@@ -75,3 +64,19 @@ def test_manual_incremental_refresh_updates_oasisdev_tickets(tmp_path):
     assert cache._all_issues["OIT-500"]["fields"]["summary"] == "Oasis new"
     assert untriaged == ["OIT-100"]
     assert cache._client.enriched_batches == [["OIT-100", "OIT-500"]]
+
+
+def test_incremental_refresh_expands_lookback_from_last_refresh_gap(tmp_path):
+    updated_issues = [_issue("OIT-100", "Primary new")]
+    cache = _build_cache(tmp_path, updated_issues)
+    cache._last_refresh = datetime.now(timezone.utc) - timedelta(minutes=7, seconds=5)
+
+    cache._incremental_refresh()
+
+    assert cache._client.search_jqls
+    jql = cache._client.search_jqls[-1]
+    marker = 'updated >= "-'
+    start = jql.index(marker) + len(marker)
+    end = jql.index('m"', start)
+    lookback_minutes = int(jql[start:end])
+    assert lookback_minutes >= 10

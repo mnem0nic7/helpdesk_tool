@@ -14,6 +14,7 @@ import Pagination from "../components/Pagination.tsx";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
 import TicketViewToggle, { type TicketListView } from "../components/TicketViewToggle.tsx";
+import { activeTicketListQueryOptions } from "../lib/ticketQueryOptions.ts";
 
 // Quick-filter preset definitions
 type QuickFilter = "triage" | "all_open" | null;
@@ -92,6 +93,7 @@ export default function ManagePage() {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["manage-tickets", queryParams],
     queryFn: () => api.getTickets(queryParams),
+    ...activeTicketListQueryOptions,
   });
 
   const tickets = data?.tickets ?? [];

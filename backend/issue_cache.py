@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import sqlite3
 import threading
@@ -29,8 +30,9 @@ _FILTERED_JQL = (
 )
 
 # Refresh interval in seconds
-_REFRESH_INTERVAL = 60  # 1 minute
+_REFRESH_INTERVAL = 15
 _INCREMENTAL_LOOKBACK_MINUTES = 2
+_INCREMENTAL_OVERLAP_MINUTES = 2
 
 
 class IssueCache:
@@ -383,18 +385,36 @@ class IssueCache:
     # Incremental refresh
     # ------------------------------------------------------------------
 
-    def _incremental_refresh(self, lookback_minutes: int = _INCREMENTAL_LOOKBACK_MINUTES) -> list[str]:
+    def _get_incremental_lookback_minutes(self, minimum_minutes: int = _INCREMENTAL_LOOKBACK_MINUTES) -> int:
+        """Return a safe incremental lookback based on the last successful sync.
+
+        We keep a small overlap so slow loops, brief outages, or Jira indexing lag
+        do not create a gap that misses updates.
+        """
+        if not self._last_refresh:
+            return minimum_minutes
+        elapsed_minutes = math.ceil(
+            max(0.0, (datetime.now(timezone.utc) - self._last_refresh).total_seconds()) / 60
+        )
+        return max(minimum_minutes, elapsed_minutes + _INCREMENTAL_OVERLAP_MINUTES)
+
+    def _incremental_refresh(self, lookback_minutes: int | None = None) -> list[str]:
         """Fetch only issues updated in the last lookback_minutes and merge.
 
         Updates both primary and oasisdev scopes from the single shared Jira source.
         Returns a list of issue keys that need auto-triage (not yet processed).
         """
+        effective_lookback_minutes = (
+            lookback_minutes
+            if lookback_minutes is not None
+            else self._get_incremental_lookback_minutes()
+        )
         self._refreshing = True
         self._cancel_refresh = False
         self._refresh_progress = {"phase": "starting", "current": 0, "total": 0}
         try:
             jql = (
-                f'project = {JIRA_PROJECT} AND updated >= "-{lookback_minutes}m" '
+                f'project = {JIRA_PROJECT} AND updated >= "-{effective_lookback_minutes}m" '
                 "ORDER BY key ASC"
             )
             logger.info("Cache: incremental refresh with JQL: %s", jql)
@@ -449,7 +469,7 @@ class IssueCache:
         self._full_fetch()
 
     def trigger_incremental_refresh(self) -> None:
-        """Trigger an incremental refresh (last 10 min of changes)."""
+        """Trigger an incremental refresh using the last successful sync watermark."""
         self._incremental_refresh()
 
     def enrich_missing_request_types(self) -> int:
@@ -703,10 +723,8 @@ class IssueCache:
             if not first:
                 await asyncio.sleep(_REFRESH_INTERVAL)
             if first:
-                # Compute lookback from actual downtime so a normal 2-5 min redeploy
-                # fetches almost nothing instead of a full 24-hour sweep.
-                # Cap at 120 min; if downtime exceeded that, a manual full-refresh
-                # will catch the gap (rare scenario).
+                # Compute lookback from actual downtime so startup catches the gap
+                # since the last successful sync without assuming the loop ran on time.
                 if self._last_refresh:
                     downtime_minutes = (
                         datetime.now(timezone.utc) - self._last_refresh
@@ -719,16 +737,17 @@ class IssueCache:
                         )
                         first = False
                         continue
-                    lookback = min(int(downtime_minutes) + 5, 120)
+                    lookback = self._get_incremental_lookback_minutes()
                 else:
                     lookback = 60 * 24  # No prior timestamp — cold start, use large lookback
                 logger.info("Cache: startup lookback = %d min (downtime-based)", lookback)
             else:
-                lookback = _INCREMENTAL_LOOKBACK_MINUTES
+                lookback = None
             first = False
             try:
+                refresh_args: tuple[int, ...] = () if lookback is None else (lookback,)
                 new_keys = await asyncio.get_running_loop().run_in_executor(
-                    None, self._incremental_refresh, lookback
+                    None, self._incremental_refresh, *refresh_args
                 )
                 if new_keys:
                     await self._auto_triage_new_tickets(new_keys)
