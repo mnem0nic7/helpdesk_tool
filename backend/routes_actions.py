@@ -95,7 +95,11 @@ async def bulk_assign(req: BulkAssignRequest, _admin: dict = Depends(require_adm
         try:
             _client.assign_issue(key, req.account_id)
             success.append(key)
-            cache.update_cached_field(key, "assignee", display_name)
+            cache.update_cached_field(
+                key,
+                "assignee",
+                {"displayName": display_name, "accountId": req.account_id},
+            )
         except Exception as exc:
             failed.append({"key": key, "error": str(exc)})
 

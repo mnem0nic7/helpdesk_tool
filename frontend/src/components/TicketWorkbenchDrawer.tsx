@@ -1,4 +1,4 @@
-import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useDeferredValue, useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
@@ -78,6 +78,8 @@ export default function TicketWorkbenchDrawer({
   const [isResizing, setIsResizing] = useState(false);
   const [selectedPriority, setSelectedPriority] = useState("");
   const [selectedAssignee, setSelectedAssignee] = useState("");
+  const [reporterSearch, setReporterSearch] = useState("");
+  const [selectedReporterAccountId, setSelectedReporterAccountId] = useState("");
   const [selectedRequestTypeId, setSelectedRequestTypeId] = useState("");
   const [selectedTransitionId, setSelectedTransitionId] = useState("");
   const [comment, setComment] = useState("");
@@ -97,6 +99,19 @@ export default function TicketWorkbenchDrawer({
     queryFn: () => api.getAssignees(),
     staleTime: 5 * 60 * 1000,
     enabled: !!ticketKey,
+  });
+
+  const deferredReporterSearch = useDeferredValue(reporterSearch.trim());
+  const currentReporterName = (detail?.ticket.reporter ?? initialTicket?.reporter ?? "").trim();
+  const showReporterMatches =
+    deferredReporterSearch.length >= 2 &&
+    deferredReporterSearch.toLowerCase() !== currentReporterName.toLowerCase();
+
+  const { data: reporterOptions = [], isFetching: isSearchingReporters } = useQuery({
+    queryKey: ["user-search", deferredReporterSearch],
+    queryFn: () => api.searchUsers(deferredReporterSearch),
+    staleTime: 30 * 1000,
+    enabled: !!ticketKey && showReporterMatches,
   });
 
   const { data: priorities = [] } = useQuery({
@@ -125,6 +140,8 @@ export default function TicketWorkbenchDrawer({
     setDescription(detail.description);
     setSelectedPriority(detail.ticket.priority);
     setSelectedAssignee(detail.ticket.assignee_account_id ?? "");
+    setReporterSearch(detail.ticket.reporter ?? "");
+    setSelectedReporterAccountId(detail.ticket.reporter_account_id ?? "");
     setComment("");
     setCommentAudience("internal");
     setSelectedTransitionId("");
@@ -136,6 +153,19 @@ export default function TicketWorkbenchDrawer({
     const current = requestTypes.find((option) => option.name === detail.ticket.request_type);
     setSelectedRequestTypeId(current?.id ?? "");
   }, [detail, requestTypes]);
+
+  useEffect(() => {
+    if (!showReporterMatches) return;
+    const normalized = reporterSearch.trim().toLowerCase();
+    const exactMatches = reporterOptions.filter((option) => {
+      const displayName = option.display_name.trim().toLowerCase();
+      const email = (option.email_address ?? "").trim().toLowerCase();
+      return displayName === normalized || (!!email && email === normalized);
+    });
+    if (exactMatches.length === 1) {
+      setSelectedReporterAccountId(exactMatches[0].account_id);
+    }
+  }, [reporterOptions, reporterSearch, showReporterMatches]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -226,6 +256,24 @@ export default function TicketWorkbenchDrawer({
       if ((selectedAssignee || "") !== (detail.ticket.assignee_account_id || "")) {
         payload.assignee_account_id = selectedAssignee || null;
       }
+      const trimmedReporter = reporterSearch.trim();
+      const currentReporterAccountId = detail.ticket.reporter_account_id ?? "";
+      const reporterChanged =
+        trimmedReporter !== (detail.ticket.reporter ?? "").trim() ||
+        selectedReporterAccountId !== currentReporterAccountId;
+      if (reporterChanged) {
+        if (!trimmedReporter) {
+          throw new Error("Reporter cannot be empty");
+        }
+        if (!selectedReporterAccountId) {
+          throw new Error("Select a Jira user for the reporter before saving");
+        }
+        const selectedReporterOption = reporterOptions.find(
+          (option) => option.account_id === selectedReporterAccountId,
+        );
+        payload.reporter_account_id = selectedReporterAccountId;
+        payload.reporter_display_name = selectedReporterOption?.display_name ?? trimmedReporter;
+      }
       const currentRequestTypeId =
         requestTypes.find((option) => option.name === detail.ticket.request_type)?.id ?? "";
       if (selectedRequestTypeId && selectedRequestTypeId !== currentRequestTypeId) {
@@ -291,6 +339,9 @@ export default function TicketWorkbenchDrawer({
 
   const ticket = detail?.ticket ?? initialTicket;
   const sortedAssignees = [...assignees].sort((a: Assignee, b: Assignee) =>
+    a.display_name.localeCompare(b.display_name)
+  );
+  const sortedReporterOptions = [...reporterOptions].sort((a: Assignee, b: Assignee) =>
     a.display_name.localeCompare(b.display_name)
   );
   const sortedRequestTypes = [...requestTypes].sort((a: RequestTypeOption, b: RequestTypeOption) =>
@@ -427,7 +478,7 @@ export default function TicketWorkbenchDrawer({
                   <span className="text-xs text-slate-500">All changes write directly to Jira</span>
                 </div>
 
-                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                   <label className="block">
                     <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Priority</span>
                     <select
@@ -458,6 +509,61 @@ export default function TicketWorkbenchDrawer({
                         </option>
                       ))}
                     </select>
+                  </label>
+
+                  <label className="block xl:col-span-2">
+                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reporter</span>
+                    <input
+                      aria-label="Reporter"
+                      type="text"
+                      value={reporterSearch}
+                      onChange={(e) => {
+                        const nextValue = e.target.value;
+                        setReporterSearch(nextValue);
+                        const normalized = nextValue.trim().toLowerCase();
+                        if (normalized === currentReporterName.toLowerCase()) {
+                          setSelectedReporterAccountId(detail.ticket.reporter_account_id ?? "");
+                        } else {
+                          setSelectedReporterAccountId("");
+                        }
+                      }}
+                      placeholder="Search Jira users by name or email"
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                    <div className="mt-1 text-xs text-slate-500">
+                      {showReporterMatches
+                        ? "Pick the correct Jira user below before saving."
+                        : "Edit this only when you need to manually change the reporter."}
+                    </div>
+                    {showReporterMatches && (
+                      <select
+                        aria-label="Reporter Matches"
+                        value={selectedReporterAccountId}
+                        onChange={(e) => {
+                          const accountId = e.target.value;
+                          setSelectedReporterAccountId(accountId);
+                          const selectedOption = sortedReporterOptions.find((option) => option.account_id === accountId);
+                          if (selectedOption) {
+                            setReporterSearch(selectedOption.display_name);
+                          }
+                        }}
+                        className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      >
+                        <option value="">
+                          {isSearchingReporters
+                            ? "Searching Jira users..."
+                            : sortedReporterOptions.length > 0
+                              ? "Select reporter match"
+                              : "No Jira users found"}
+                        </option>
+                        {sortedReporterOptions.map((reporter) => (
+                          <option key={reporter.account_id} value={reporter.account_id}>
+                            {reporter.display_name}
+                            {reporter.email_address ? ` (${reporter.email_address})` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </label>
 
                   <label className="block">
@@ -555,7 +661,7 @@ export default function TicketWorkbenchDrawer({
                     {saveMutation.isPending ? "Saving..." : "Save Ticket Details"}
                   </button>
                   <span className="text-xs text-slate-500">
-                    Summary, description, assignee, priority, and request type save here. Status updates separately.
+                    Summary, description, reporter, assignee, priority, and request type save here. Status updates separately.
                   </span>
                 </div>
               </section>

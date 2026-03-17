@@ -59,6 +59,7 @@ function SuggestionCard({
     priority: "Priority",
     status: "Status",
     assignee: "Assignee",
+    reporter: "Reporter",
     comment: "Comment",
     request_type: "Request Type",
   };

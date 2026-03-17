@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -91,15 +92,19 @@ KNOWN_STATUSES = [
 _SECURITY_ALERT_REQUEST_TYPE = "Security Alert"
 _SECURITY_PRIORITY_REASONING = "Security Alert tickets must be triaged at High priority."
 _HIGH_ENOUGH_SECURITY_PRIORITIES = {"High", "Highest"}
+_REPORTER_HINT_PATTERNS = [
+    re.compile(r"(?im)\b(?:occ\s+)?ticket\s+created\s+by\s*:\s*([^\n\r|*]+)"),
+]
 
 SYSTEM_PROMPT = """You are an IT helpdesk triage assistant for a Jira Service Management project (OIT).
-Your job is to analyze tickets and suggest improvements for: priority, request_type, status, assignee, and an optional comment.
+Your job is to analyze tickets and suggest improvements for: priority, request_type, status, assignee, reporter, and an optional comment.
 
 ## General Rules
 - Only suggest changes where you see a clear improvement. If a field looks correct, omit it — EXCEPT for request_type which you MUST always suggest.
 - Priority must be one of: {priorities}
 - Status must be one of: {statuses}
 - For assignee, suggest a name only if you can identify the right person from context. Otherwise omit.
+- For reporter, only suggest a person when the ticket explicitly names who created the OCC/help desk request, such as "Ticket Created By: Jane Doe". Otherwise omit.
 - For comments, suggest a brief triage note only if it would help the agent handling the ticket.
 - Relevant internal knowledge base articles may be included. Use them as context for classification and handling notes, but do not assume facts not present in the ticket or KB excerpts.
 - Provide a confidence score (0.0-1.0) and brief reasoning for each suggestion.
@@ -317,6 +322,7 @@ def _build_ticket_context(
         if isinstance(reporter_obj, dict)
         else "Unknown"
     )
+    reporter_hint = _extract_reporter_hint_from_text(description)
 
     # Dates
     created = fields.get("created", "")
@@ -363,6 +369,7 @@ def _build_ticket_context(
         f"Status: {status}",
         f"Priority: {priority}",
         f"Reporter: {reporter}",
+        *([f"Reporter Hint From Ticket Text: {reporter_hint}"] if reporter_hint else []),
         f"Assignee: {assignee}",
         f"Labels: {', '.join(labels) if labels else 'None'}",
         f"Components: {', '.join(components) if components else 'None'}",
@@ -558,6 +565,11 @@ def _parse_suggestions(raw: str, issue: dict[str, Any]) -> list[TriageSuggestion
             if isinstance(fields_data.get("assignee"), dict)
             else "Unassigned"
         ),
+        "reporter": (
+            (fields_data.get("reporter") or {}).get("displayName", "Unknown")
+            if isinstance(fields_data.get("reporter"), dict)
+            else "Unknown"
+        ),
         "comment": "",
     }
 
@@ -576,6 +588,67 @@ def _parse_suggestions(raw: str, issue: dict[str, Any]) -> list[TriageSuggestion
             )
         )
     return suggestions
+
+
+def _extract_reporter_hint_from_text(text: str) -> str:
+    """Extract a reporter name from ticket text when an OCC-created-by hint exists."""
+    if not text:
+        return ""
+    for pattern in _REPORTER_HINT_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        candidate = re.sub(r"\s+", " ", match.group(1)).strip(" \t|:-")
+        if candidate:
+            return candidate
+    return ""
+
+
+def _enforce_reporter_hint(issue: dict[str, Any], suggestions: list[TriageSuggestion]) -> list[TriageSuggestion]:
+    """Inject or replace reporter suggestions from explicit OCC-created-by text."""
+    fields = issue.get("fields", {})
+    description = extract_adf_text(fields.get("description"))
+    reporter_hint = _extract_reporter_hint_from_text(description)
+    if not reporter_hint:
+        return suggestions
+
+    reporter_obj = fields.get("reporter") or {}
+    current_reporter = (
+        reporter_obj.get("displayName", "Unknown")
+        if isinstance(reporter_obj, dict)
+        else "Unknown"
+    )
+    if reporter_hint.lower() == current_reporter.strip().lower():
+        return [s for s in suggestions if s.field != "reporter"]
+
+    normalized: list[TriageSuggestion] = []
+    replaced = False
+    for suggestion in suggestions:
+        if suggestion.field != "reporter":
+            normalized.append(suggestion)
+            continue
+        if not replaced:
+            normalized.append(
+                TriageSuggestion(
+                    field="reporter",
+                    current_value=current_reporter,
+                    suggested_value=reporter_hint,
+                    reasoning=f'Ticket description explicitly says "Ticket Created By: {reporter_hint}".',
+                    confidence=max(suggestion.confidence, 0.99),
+                )
+            )
+            replaced = True
+    if not replaced:
+        normalized.append(
+            TriageSuggestion(
+                field="reporter",
+                current_value=current_reporter,
+                suggested_value=reporter_hint,
+                reasoning=f'Ticket description explicitly says "Ticket Created By: {reporter_hint}".',
+                confidence=0.99,
+            )
+        )
+    return normalized
 
 
 def _enforce_security_priority(issue: dict[str, Any], suggestions: list[TriageSuggestion]) -> list[TriageSuggestion]:
@@ -676,7 +749,10 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
-    suggestions = _enforce_security_priority(issue, _parse_suggestions(raw, issue))
+    suggestions = _enforce_reporter_hint(
+        issue,
+        _enforce_security_priority(issue, _parse_suggestions(raw, issue)),
+    )
 
     return TriageResult(
         key=issue.get("key", ""),
@@ -1127,6 +1203,21 @@ def validate_suggestions(key: str, suggestions: list[TriageSuggestion]) -> list[
                 logger.warning(
                     "Validation: dropping %s assignee suggestion '%s' — "
                     "not an assignable user",
+                    key, s.suggested_value,
+                )
+                continue
+
+        elif s.field == "reporter":
+            from jira_client import JiraClient
+            try:
+                account_id = JiraClient().find_user_account_id(s.suggested_value)
+            except Exception:
+                logger.exception("Validation: failed to resolve reporter '%s' for %s", s.suggested_value, key)
+                continue
+            if not account_id:
+                logger.warning(
+                    "Validation: dropping %s reporter suggestion '%s' — "
+                    "no exact Jira user match found",
                     key, s.suggested_value,
                 )
                 continue

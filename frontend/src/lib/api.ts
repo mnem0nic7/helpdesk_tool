@@ -135,6 +135,7 @@ export interface TicketRow {
   assignee: string;
   assignee_account_id: string;
   reporter: string;
+  reporter_account_id?: string;
   created: string;
   updated: string;
   resolved: string;
@@ -192,6 +193,7 @@ export interface SLATimerSummary {
 export interface Assignee {
   account_id: string;
   display_name: string;
+  email_address?: string;
 }
 
 /** Available status transition for an issue. */
@@ -289,6 +291,8 @@ export interface TicketUpdatePayload {
   description?: string;
   priority?: string;
   assignee_account_id?: string | null;
+  reporter_account_id?: string | null;
+  reporter_display_name?: string;
   request_type_id?: string;
 }
 
@@ -751,6 +755,11 @@ export const api = {
   /** Fetch assignable users for the project. */
   getAssignees(): Promise<Assignee[]> {
     return fetchJSON<Assignee[]>("/api/assignees");
+  },
+
+  /** Search Jira users by name or email for reporter changes. */
+  searchUsers(query: string): Promise<Assignee[]> {
+    return fetchJSON<Assignee[]>(`/api/users/search${buildQuery({ q: query })}`);
   },
 
   /** Fetch available status transitions for a given issue. */

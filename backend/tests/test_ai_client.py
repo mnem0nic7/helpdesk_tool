@@ -1,14 +1,33 @@
 import ai_client
-from ai_client import _enforce_security_priority, draft_kb_article, score_closed_ticket
+from ai_client import (
+    _enforce_reporter_hint,
+    _enforce_security_priority,
+    _extract_reporter_hint_from_text,
+    draft_kb_article,
+    score_closed_ticket,
+)
 from models import KnowledgeBaseArticle, TriageSuggestion
 
 
-def _issue(priority: str = "Medium", request_type: str | None = None) -> dict:
+def _issue(
+    priority: str = "Medium",
+    request_type: str | None = None,
+    reporter: str = "OSIJIRAOCC",
+    description: str | None = None,
+) -> dict:
     fields = {
         "priority": {"name": priority},
+        "reporter": {"displayName": reporter},
     }
     if request_type is not None:
         fields["customfield_10010"] = {"requestType": {"name": request_type}}
+    if description is not None:
+        fields["description"] = {
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": description}]}
+            ],
+        }
     return {
         "key": "OIT-1",
         "fields": fields,
@@ -83,6 +102,22 @@ def test_existing_high_security_ticket_does_not_get_priority_change():
     normalized = _enforce_security_priority(issue, suggestions)
 
     assert all(s.field != "priority" for s in normalized)
+
+
+def test_extract_reporter_hint_from_occ_created_by_text():
+    text = "OCC Ticket Created By: Raza Abidi |\n*Caution* External email."
+    assert _extract_reporter_hint_from_text(text) == "Raza Abidi"
+
+
+def test_enforce_reporter_hint_adds_reporter_suggestion():
+    issue = _issue(description="OCC Ticket Created By: Raza Abidi |")
+
+    normalized = _enforce_reporter_hint(issue, [])
+
+    reporter = next(s for s in normalized if s.field == "reporter")
+    assert reporter.current_value == "OSIJIRAOCC"
+    assert reporter.suggested_value == "Raza Abidi"
+    assert reporter.confidence >= 0.99
 
 
 def test_score_closed_ticket_parses_scores(monkeypatch):

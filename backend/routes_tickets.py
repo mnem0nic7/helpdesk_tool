@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ai_client import extract_adf_text
+from ai_client import _extract_reporter_hint_from_text, extract_adf_text
 from auth import require_admin
 from config import JIRA_BASE_URL, JIRA_PROJECT
 from issue_cache import cache
@@ -25,6 +25,72 @@ router = APIRouter(prefix="/api")
 
 _client = JiraClient()
 _STALE_DAYS = 1
+
+
+def _sync_reporter_from_ticket_text(issue: dict[str, Any]) -> bool:
+    """Update Jira reporter when the ticket text explicitly names a creator.
+
+    This is used by live refresh flows so cached list views can reconcile
+    integration-created tickets back to the real reporter without waiting for
+    background auto-triage.
+    """
+    key = issue.get("key", "")
+    if not key:
+        return False
+
+    fields = issue.get("fields", {})
+    description = extract_adf_text(fields.get("description"))
+    reporter_hint = _extract_reporter_hint_from_text(description)
+    if not reporter_hint:
+        return False
+
+    reporter_obj = fields.get("reporter") or {}
+    current_name = (
+        reporter_obj.get("displayName", "").strip()
+        if isinstance(reporter_obj, dict)
+        else ""
+    )
+    current_account_id = (
+        reporter_obj.get("accountId", "").strip()
+        if isinstance(reporter_obj, dict)
+        else ""
+    )
+    if current_name.lower() == reporter_hint.lower():
+        return False
+
+    try:
+        account_id = _client.find_user_account_id(reporter_hint)
+        if not account_id:
+            logger.info(
+                "Refresh visible: leaving %s reporter as '%s' because '%s' did not resolve to one Jira user",
+                key,
+                current_name or "(blank)",
+                reporter_hint,
+            )
+            return False
+        if account_id == current_account_id:
+            cache.update_cached_field(
+                key,
+                "reporter",
+                {"displayName": reporter_hint, "accountId": account_id},
+            )
+            return True
+        _client.update_reporter(key, account_id)
+        cache.update_cached_field(
+            key,
+            "reporter",
+            {"displayName": reporter_hint, "accountId": account_id},
+        )
+        logger.info(
+            "Refresh visible: updated %s reporter %s -> %s",
+            key,
+            current_name or "(blank)",
+            reporter_hint,
+        )
+        return True
+    except Exception:
+        logger.exception("Refresh visible: failed to update reporter for %s", key)
+        return False
 
 
 def _match(issue: dict[str, Any], **filters: Any) -> bool:
@@ -247,6 +313,18 @@ def _get_assignable_display_name(account_id: str | None) -> str:
     return ""
 
 
+def _get_user_display_name(account_id: str | None) -> str:
+    if not account_id:
+        return ""
+    display_name = _get_assignable_display_name(account_id)
+    if display_name:
+        return display_name
+    try:
+        return (_client.get_user(account_id) or {}).get("displayName", "")
+    except Exception:
+        return ""
+
+
 def _load_ticket_detail(key: str, issue: dict[str, Any] | None = None) -> dict[str, Any]:
     issue = issue or _client.get_issue(key)
     cache.upsert_issue(issue)
@@ -394,6 +472,37 @@ async def get_assignees() -> list[dict[str, Any]]:
     return sorted(seen.values(), key=lambda x: x["display_name"])
 
 
+@router.get("/users/search")
+async def search_users(q: str = Query(default="", max_length=100)) -> list[dict[str, Any]]:
+    """Search Jira users by name or email for manual ticket edits."""
+    query = q.strip()
+    if len(query) < 2:
+        return []
+    try:
+        raw_users = _client.search_users(query)
+    except Exception as exc:
+        logger.exception("Failed Jira user search for query '%s'", query)
+        raise HTTPException(
+            status_code=502,
+            detail="User search failed. Please try again in a moment.",
+        ) from exc
+
+    seen: dict[str, dict[str, Any]] = {}
+    for user in raw_users:
+        account_id = str(user.get("accountId", "")).strip()
+        display_name = str(user.get("displayName", "")).strip()
+        if not account_id or not display_name or account_id in seen:
+            continue
+        if user.get("active") is False:
+            continue
+        seen[account_id] = {
+            "account_id": account_id,
+            "display_name": display_name,
+            "email_address": str(user.get("emailAddress", "")).strip(),
+        }
+    return sorted(seen.values(), key=lambda x: x["display_name"])
+
+
 @router.get("/statuses/{key}")
 async def get_statuses(key: str) -> list[dict[str, Any]]:
     """Return available transitions for a given issue."""
@@ -446,6 +555,8 @@ async def refresh_visible_tickets(body: TicketRefreshRequest) -> dict[str, Any]:
         ) from exc
     refreshed_keys = [issue.get("key", "") for issue in refreshed_issues if issue.get("key")]
     refreshed_key_set = set(refreshed_keys)
+    for issue in refreshed_issues:
+        _sync_reporter_from_ticket_text(issue)
 
     return {
         "requested_count": len(requested_keys),
@@ -483,7 +594,7 @@ async def update_ticket(
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
 
-    fields = body.model_fields_set
+    fields = set(body.model_fields_set) - {"reporter_display_name"}
     if not fields:
         raise HTTPException(status_code=400, detail="No updates requested")
 
@@ -507,7 +618,28 @@ async def update_ticket(
         if "assignee_account_id" in fields:
             account_id = body.assignee_account_id or None
             _client.assign_issue(key, account_id)
-            cache.update_cached_field(key, "assignee", _get_assignable_display_name(account_id))
+            cache.update_cached_field(
+                key,
+                "assignee",
+                {
+                    "displayName": _get_assignable_display_name(account_id),
+                    "accountId": account_id or "",
+                },
+            )
+
+        if "reporter_account_id" in fields:
+            account_id = body.reporter_account_id or None
+            if not account_id:
+                raise HTTPException(status_code=400, detail="reporter_account_id cannot be empty")
+            _client.update_reporter(key, account_id)
+            cache.update_cached_field(
+                key,
+                "reporter",
+                {
+                    "displayName": (body.reporter_display_name or _get_user_display_name(account_id)),
+                    "accountId": account_id,
+                },
+            )
 
         if "request_type_id" in fields:
             if not body.request_type_id:

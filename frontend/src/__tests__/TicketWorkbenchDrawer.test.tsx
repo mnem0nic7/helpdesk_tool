@@ -7,6 +7,7 @@ const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     getTicket: vi.fn(),
     getAssignees: vi.fn(),
+    searchUsers: vi.fn(),
     getPriorities: vi.fn(),
     getRequestTypes: vi.fn(),
     getTransitions: vi.fn(),
@@ -32,6 +33,7 @@ const ticketRow = {
   assignee: "Ada Lovelace",
   assignee_account_id: "acct-1",
   reporter: "Grace Hopper",
+  reporter_account_id: "acct-grace",
   created: "2026-03-01T10:00:00Z",
   updated: "2026-03-02T12:00:00Z",
   resolved: "",
@@ -104,6 +106,7 @@ describe("TicketWorkbenchDrawer", () => {
     });
     mockApi.getTicket.mockResolvedValue(ticketDetail);
     mockApi.getAssignees.mockResolvedValue([]);
+    mockApi.searchUsers.mockResolvedValue([]);
     mockApi.getPriorities.mockResolvedValue([{ id: "1", name: "High" }]);
     mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Hardware", description: "" }]);
     mockApi.getTransitions.mockResolvedValue([]);
@@ -169,5 +172,49 @@ describe("TicketWorkbenchDrawer", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("Customer Reply").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Internal Note").length).toBeGreaterThan(0);
+  });
+
+  it("lets the user manually change the reporter before saving", async () => {
+    mockApi.searchUsers.mockResolvedValue([
+      { account_id: "acct-raza", display_name: "Raza Abidi", email_address: "raza@example.com" },
+    ]);
+    mockApi.updateTicket.mockResolvedValue({
+      ...ticketDetail,
+      ticket: {
+        ...ticketRow,
+        reporter: "Raza Abidi",
+        reporter_account_id: "acct-raza",
+      },
+    });
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Ticket Actions");
+
+    fireEvent.change(screen.getByLabelText("Reporter"), {
+      target: { value: "Raza Abidi" },
+    });
+
+    await waitFor(() => {
+      expect(mockApi.searchUsers).toHaveBeenCalledWith("Raza Abidi");
+    });
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Reporter Matches" }), {
+      target: { value: "acct-raza" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Ticket Details" }));
+
+    await waitFor(() => {
+      expect(mockApi.updateTicket).toHaveBeenCalledWith("OIT-1", {
+        reporter_account_id: "acct-raza",
+        reporter_display_name: "Raza Abidi",
+      });
+    });
   });
 });
