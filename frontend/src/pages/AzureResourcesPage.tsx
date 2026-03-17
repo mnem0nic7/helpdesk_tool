@@ -41,6 +41,8 @@ export default function AzureResourcesPage() {
         item.subscription_name,
         item.resource_group,
         item.location,
+        item.sku_name,
+        item.vm_size,
         item.state,
         ...Object.entries(item.tags || {}).map(([key, value]) => `${key}:${value}`),
       ].join(" ").toLowerCase();
@@ -100,6 +102,7 @@ export default function AzureResourcesPage() {
                 <th className="px-4 py-3">Subscription</th>
                 <th className="px-4 py-3">Resource Group</th>
                 <th className="px-4 py-3">Location</th>
+                <th className="px-4 py-3">SKU / Size</th>
                 <th className="px-4 py-3">State</th>
               </tr>
             </thead>
@@ -114,6 +117,7 @@ export default function AzureResourcesPage() {
                   <td className="px-4 py-3 text-slate-700">{item.subscription_name || item.subscription_id}</td>
                   <td className="px-4 py-3 text-slate-700">{item.resource_group || "—"}</td>
                   <td className="px-4 py-3 text-slate-700">{item.location || "—"}</td>
+                  <td className="px-4 py-3 text-slate-700">{item.vm_size || item.sku_name || "—"}</td>
                   <td className="px-4 py-3 text-slate-700">{item.state || "—"}</td>
                 </tr>
               ))}

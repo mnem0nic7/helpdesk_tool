@@ -236,6 +236,8 @@ Resources
     location,
     subscriptionId,
     resourceGroup,
+    skuName = tostring(sku.name),
+    vmSize = tostring(properties.hardwareProfile.vmSize),
     tags,
     provisioningState = tostring(properties.provisioningState),
     powerState = tostring(properties.extended.instanceView.powerState.code),
@@ -271,6 +273,8 @@ Resources
                         "location": item.get("location") or "",
                         "subscription_id": item.get("subscriptionId") or "",
                         "resource_group": item.get("resourceGroup") or "",
+                        "sku_name": item.get("skuName") or "",
+                        "vm_size": item.get("vmSize") or "",
                         "state": (
                             item.get("powerState")
                             or item.get("provisioningState")

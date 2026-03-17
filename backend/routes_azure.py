@@ -117,6 +117,26 @@ async def get_resources(
     )
 
 
+@router.get("/vms")
+async def get_virtual_machines(
+    search: str = Query(default=""),
+    subscription_id: str = Query(default=""),
+    resource_group: str = Query(default=""),
+    location: str = Query(default=""),
+    state: str = Query(default=""),
+    size: str = Query(default=""),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    return azure_cache.list_virtual_machines(
+        search=search,
+        subscription_id=subscription_id,
+        resource_group=resource_group,
+        location=location,
+        state=state,
+        size=size,
+    )
+
+
 @router.get("/directory/users")
 async def get_users(search: str = Query(default="")) -> list[dict[str, Any]]:
     _ensure_azure_site()

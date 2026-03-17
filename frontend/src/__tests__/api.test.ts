@@ -139,4 +139,21 @@ describe("azure api methods", () => {
     expect(call[1].method).toBe("POST");
     expect(JSON.parse(call[1].body)).toEqual({ question: "Where can we save?" });
   });
+
+  it("calls the Azure VM endpoint with query params", async () => {
+    mockFetch({
+      vms: [],
+      matched_count: 0,
+      total_count: 0,
+      summary: { total_vms: 0, running_vms: 0, deallocated_vms: 0, distinct_sizes: 0 },
+      by_size: [],
+      by_state: [],
+    });
+    await api.getAzureVMs({ search: "wvd", state: "Running", size: "Standard_E2as_v4" });
+    const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(url).toContain("/api/azure/vms");
+    expect(url).toContain("search=wvd");
+    expect(url).toContain("state=Running");
+    expect(url).toContain("size=Standard_E2as_v4");
+  });
 });

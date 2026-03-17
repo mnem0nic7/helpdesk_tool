@@ -61,6 +61,7 @@ def test_azure_cost_chat_returns_grounded_answer(test_client, monkeypatch):
         "cost_summary": {"lookback_days": 30, "total_cost": 200.0},
         "cost_trend": [],
         "cost_by_service": [],
+        "vm_inventory_summary": {"total_vm_count": 3, "by_sku": [{"sku": "Standard_D4s_v5", "count": 2}]},
         "advisor": [],
     }
     monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
@@ -99,6 +100,7 @@ def test_azure_cost_chat_uses_preferred_default_model(test_client, monkeypatch):
         "cost_summary": {"lookback_days": 30, "total_cost": 200.0},
         "cost_trend": [],
         "cost_by_service": [],
+        "vm_inventory_summary": {"total_vm_count": 3, "by_sku": [{"sku": "Standard_D4s_v5", "count": 2}]},
         "advisor": [],
     }
     monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
@@ -133,3 +135,47 @@ def test_azure_cost_chat_uses_preferred_default_model(test_client, monkeypatch):
 
     assert resp.status_code == 200
     assert seen["model_id"] == "gpt-5.4-mini"
+
+
+def test_azure_vms_returns_cached_vm_inventory(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.list_virtual_machines.return_value = {
+        "vms": [
+            {
+                "id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1",
+                "name": "vm-1",
+                "resource_type": "Microsoft.Compute/virtualMachines",
+                "subscription_id": "sub-1",
+                "subscription_name": "Prod",
+                "resource_group": "rg-prod",
+                "location": "eastus",
+                "kind": "",
+                "sku_name": "",
+                "vm_size": "Standard_D4s_v5",
+                "state": "PowerState/running",
+                "tags": {},
+                "size": "Standard_D4s_v5",
+                "power_state": "Running",
+            }
+        ],
+        "matched_count": 1,
+        "total_count": 2,
+        "summary": {
+            "total_vms": 2,
+            "running_vms": 1,
+            "deallocated_vms": 1,
+            "distinct_sizes": 2,
+        },
+        "by_size": [{"label": "Standard_D4s_v5", "count": 1}],
+        "by_state": [{"label": "Running", "count": 1}, {"label": "Deallocated", "count": 1}],
+    }
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get("/api/azure/vms", headers={"host": "azure.movedocs.com"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["summary"]["total_vms"] == 2
+    assert body["vms"][0]["size"] == "Standard_D4s_v5"

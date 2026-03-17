@@ -23,6 +23,50 @@ def test_list_directory_roles_omits_custom_page_size(monkeypatch):
     assert captured["params"] == {"$select": "id,displayName,description"}
 
 
+def test_query_resources_captures_vm_size_and_sku(monkeypatch):
+    client = AzureClient()
+
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, url, *, scope, params=None, json_body=None, headers=None: {
+            "data": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1",
+                    "name": "vm-1",
+                    "type": "Microsoft.Compute/virtualMachines",
+                    "kind": "",
+                    "location": "eastus",
+                    "subscriptionId": "sub-1",
+                    "resourceGroup": "rg-prod",
+                    "skuName": "Standard_D4s_v5",
+                    "vmSize": "Standard_D4s_v5",
+                    "powerState": "PowerState/running",
+                    "tags": {"env": "prod"},
+                }
+            ]
+        },
+    )
+
+    rows = client.query_resources(["sub-1"])
+
+    assert rows == [
+        {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1",
+            "name": "vm-1",
+            "resource_type": "Microsoft.Compute/virtualMachines",
+            "kind": "",
+            "location": "eastus",
+            "subscription_id": "sub-1",
+            "resource_group": "rg-prod",
+            "sku_name": "Standard_D4s_v5",
+            "vm_size": "Standard_D4s_v5",
+            "state": "PowerState/running",
+            "tags": {"env": "prod"},
+        }
+    ]
+
+
 def test_inventory_refresh_continues_when_management_groups_are_unauthorized(tmp_path, monkeypatch):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
 

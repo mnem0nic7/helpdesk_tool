@@ -14,6 +14,7 @@ const AILogPage = lazy(() => import("./pages/AILogPage"));
 const AlertsPage = lazy(() => import("./pages/AlertsPage"));
 const KnowledgeBasePage = lazy(() => import("./pages/KnowledgeBasePage"));
 const AzureOverviewPage = lazy(() => import("./pages/AzureOverviewPage"));
+const AzureVMsPage = lazy(() => import("./pages/AzureVMsPage"));
 const AzureResourcesPage = lazy(() => import("./pages/AzureResourcesPage"));
 const AzureIdentityPage = lazy(() => import("./pages/AzureIdentityPage"));
 const AzureCostPage = lazy(() => import("./pages/AzureCostPage"));
@@ -42,6 +43,7 @@ export default function App() {
             {isAzureSite ? (
               <>
                 <Route index element={<AzureOverviewPage />} />
+                <Route path="vms" element={<AzureVMsPage />} />
                 <Route path="resources" element={<AzureResourcesPage />} />
                 <Route path="identity" element={<AzureIdentityPage />} />
                 <Route path="cost" element={<AzureCostPage />} />
