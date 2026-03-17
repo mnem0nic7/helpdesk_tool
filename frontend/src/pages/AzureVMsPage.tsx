@@ -232,6 +232,13 @@ export default function AzureVMsPage() {
     enabled: !!selectedVm?.id,
     refetchInterval: selectedVm ? 60_000 : false,
   });
+  const vmRows = data?.vms ?? [];
+  const coverageRows = data?.by_size ?? [];
+  const filterKey = [search, subscriptionId, size, location, state].join("|");
+  const coverageScroll = useInfiniteScrollCount(coverageRows.length, 20, filterKey);
+  const visibleCoverage = coverageRows.slice(0, coverageScroll.visibleCount);
+  const vmScroll = useInfiniteScrollCount(vmRows.length, 20, filterKey);
+  const visibleVMs = vmRows.slice(0, vmScroll.visibleCount);
 
   if (isLoading) {
     return <div className="text-sm text-slate-500">Loading Azure virtual machines...</div>;
@@ -245,15 +252,10 @@ export default function AzureVMsPage() {
     );
   }
 
-  const subscriptions = Array.from(new Set(data.vms.map((item) => item.subscription_name || item.subscription_id))).sort();
-  const sizes = Array.from(new Set(data.vms.map((item) => item.size).filter(Boolean))).sort();
-  const locations = Array.from(new Set(data.vms.map((item) => item.location).filter(Boolean))).sort();
-  const states = Array.from(new Set(data.vms.map((item) => item.power_state).filter(Boolean))).sort();
-  const filterKey = [search, subscriptionId, size, location, state].join("|");
-  const coverageScroll = useInfiniteScrollCount(data.by_size.length, 20, filterKey);
-  const visibleCoverage = data.by_size.slice(0, coverageScroll.visibleCount);
-  const vmScroll = useInfiniteScrollCount(data.vms.length, 20, filterKey);
-  const visibleVMs = data.vms.slice(0, vmScroll.visibleCount);
+  const subscriptions = Array.from(new Set(vmRows.map((item) => item.subscription_name || item.subscription_id))).sort();
+  const sizes = Array.from(new Set(vmRows.map((item) => item.size).filter(Boolean))).sort();
+  const locations = Array.from(new Set(vmRows.map((item) => item.location).filter(Boolean))).sort();
+  const states = Array.from(new Set(vmRows.map((item) => item.power_state).filter(Boolean))).sort();
 
   return (
     <div className="space-y-6">
