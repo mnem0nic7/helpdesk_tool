@@ -281,7 +281,7 @@ def _request_comments() -> list[dict[str, Any]]:
 
 
 class TestTicketDetailAndActions:
-    def test_get_ticket_detail_returns_full_payload(self, test_client, monkeypatch):
+    def test_get_ticket_detail_returns_full_payload(self, test_client, mock_cache, monkeypatch):
         import routes_tickets
 
         issue = _detail_issue()
@@ -304,6 +304,7 @@ class TestTicketDetailAndActions:
         assert data["comments"][0]["public"] is False
         assert data["attachments"][0]["filename"] == "screenshot.png"
         assert data["issue_links"][0]["key"] == "OIT-456"
+        mock_cache.upsert_issue.assert_called_once_with(issue)
 
     def test_get_priorities_and_request_types(self, test_client, monkeypatch):
         import routes_tickets
@@ -380,6 +381,7 @@ class TestTicketDetailAndActions:
         assert ("OIT-123", "priority", "Medium") in [c.args for c in mock_cache.update_cached_field.call_args_list]
         assert ("OIT-123", "assignee", "Bob Builder") in [c.args for c in mock_cache.update_cached_field.call_args_list]
         assert ("OIT-123", "request_type", "Access") in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        mock_cache.upsert_issue.assert_called_once_with(issue)
         assert resp.json()["ticket"]["summary"] == "Updated summary"
         assert resp.json()["description"] == "Updated description"
 
@@ -405,6 +407,7 @@ class TestTicketDetailAndActions:
         assert resp.status_code == 200
         assert calls == [("OIT-123", "31")]
         assert ("OIT-123", "status", "In Progress") in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        mock_cache.upsert_issue.assert_called_once_with(issue)
         assert resp.json()["ticket"]["status"] == "In Progress"
 
     def test_comment_ticket_updates_detail(self, test_client, mock_cache, monkeypatch):
@@ -441,5 +444,6 @@ class TestTicketDetailAndActions:
         assert resp.status_code == 200
         assert calls == [("OIT-123", "Please retry now.", True)]
         assert ("OIT-123", "updated", "") in [c.args for c in mock_cache.update_cached_field.call_args_list]
+        mock_cache.upsert_issue.assert_called_once_with(issue)
         assert resp.json()["comments"][-1]["body"] == "Please retry now."
         assert resp.json()["comments"][-1]["public"] is True

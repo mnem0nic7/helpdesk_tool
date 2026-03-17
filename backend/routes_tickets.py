@@ -246,8 +246,9 @@ def _get_assignable_display_name(account_id: str | None) -> str:
     return ""
 
 
-def _load_ticket_detail(key: str) -> dict[str, Any]:
-    issue = _client.get_issue(key)
+def _load_ticket_detail(key: str, issue: dict[str, Any] | None = None) -> dict[str, Any]:
+    issue = issue or _client.get_issue(key)
+    cache.upsert_issue(issue)
     comments = _client.get_request_comments(key)
     return _ticket_detail(issue, comments)
 
@@ -467,8 +468,7 @@ async def update_ticket(
     request_type = extract_request_type_name_from_fields(issue.get("fields", {}))
     if request_type:
         cache.update_cached_field(key, "request_type", request_type)
-    comments = _client.get_request_comments(key)
-    return _ticket_detail(issue, comments)
+    return _load_ticket_detail(key, issue=issue)
 
 
 @router.post("/tickets/{key}/transition")
