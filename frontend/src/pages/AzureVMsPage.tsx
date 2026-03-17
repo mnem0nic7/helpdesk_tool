@@ -286,22 +286,10 @@ export default function AzureVMsPage() {
             </button>
             <div className="flex flex-wrap items-center justify-end gap-2">
               <a
-                href={api.exportAzureVMCoverageCsv()}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
-              >
-                Export CSV
-              </a>
-              <a
                 href={api.exportAzureVMCoverageExcel()}
                 className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
               >
                 Export Excel
-              </a>
-              <a
-                href={api.exportAzureVMExcessCsv()}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
-              >
-                Excess CSV
               </a>
               <a
                 href={api.exportAzureVMExcessExcel()}
