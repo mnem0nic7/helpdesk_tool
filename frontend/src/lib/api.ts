@@ -166,6 +166,15 @@ export interface TicketsResponse {
   total_count?: number;
 }
 
+export interface VisibleTicketRefreshResponse {
+  requested_count: number;
+  visible_count: number;
+  refreshed_count: number;
+  refreshed_keys: string[];
+  skipped_keys: string[];
+  missing_keys: string[];
+}
+
 /** SLA timer summary for a single timer type. */
 export interface SLATimerSummary {
   timer_name: string;
@@ -671,6 +680,11 @@ export const api = {
   /** Fetch a single ticket by its Jira key with full detail payload. */
   getTicket(key: string): Promise<TicketDetail> {
     return fetchJSON<TicketDetail>(`/api/tickets/${encodeURIComponent(key)}`);
+  },
+
+  /** Refresh the currently displayed ticket rows from live Jira data. */
+  refreshVisibleTickets(keys: string[]): Promise<VisibleTicketRefreshResponse> {
+    return postJSON<VisibleTicketRefreshResponse>("/api/tickets/refresh-visible", { keys });
   },
 
   getPriorities(): Promise<PriorityOption[]> {

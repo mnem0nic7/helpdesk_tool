@@ -491,27 +491,13 @@ def _refresh_tickets(tickets: list[dict]) -> list[dict]:
         return tickets
 
     try:
-        from jira_client import JiraClient
-        from config import JIRA_EMAIL, JIRA_API_TOKEN, JIRA_BASE_URL
         from issue_cache import cache
 
-        client = JiraClient(JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN)
-
-        # Fetch in batches of 50 using JQL key in (...)
-        refreshed: dict[str, dict] = {}
-        for i in range(0, len(keys), 50):
-            batch = keys[i:i + 50]
-            jql = f"key in ({','.join(batch)})"
-            fresh_issues = client.search_all(jql)
-            for iss in fresh_issues:
-                k = iss.get("key", "")
-                if k:
-                    refreshed[k] = iss
-                    # Also update the cache so dashboard reflects current data
-                    with cache._lock:
-                        cache._all_issues[k] = iss
-                        if not JiraClient.is_excluded(iss):
-                            cache._issues[k] = iss
+        refreshed = {
+            iss.get("key", ""): iss
+            for iss in cache.refresh_issue_keys(keys)
+            if iss.get("key")
+        }
 
         logger.info("Alert refresh: re-fetched %d/%d tickets from Jira", len(refreshed), len(keys))
 

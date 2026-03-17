@@ -7,6 +7,7 @@ import TicketsPage from "../pages/TicketsPage.tsx";
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     getTickets: vi.fn(),
+    refreshVisibleTickets: vi.fn(),
     getFilterOptions: vi.fn(),
     getAssignees: vi.fn(),
     getCacheStatus: vi.fn(),
@@ -81,6 +82,14 @@ describe("TicketsPage", () => {
       matched_count: 1,
       total_count: 1,
     });
+    mockApi.refreshVisibleTickets.mockResolvedValue({
+      requested_count: 1,
+      visible_count: 1,
+      refreshed_count: 1,
+      refreshed_keys: ["OIT-1"],
+      skipped_keys: [],
+      missing_keys: [],
+    });
     mockApi.getFilterOptions.mockResolvedValue({
       statuses: ["Open"],
       priorities: ["High"],
@@ -137,5 +146,18 @@ describe("TicketsPage", () => {
     });
     await screen.findByText("Ticket Actions");
     expect(mockApi.getTicket).toHaveBeenCalledWith("OIT-1");
+  });
+
+  it("refreshes the displayed tickets from Jira", async () => {
+    const user = userEvent.setup();
+
+    render(<TicketsPage />);
+
+    const refreshButton = await screen.findByRole("button", { name: "Refresh Visible" });
+    await user.click(refreshButton);
+
+    await waitFor(() => {
+      expect(mockApi.refreshVisibleTickets).toHaveBeenCalledWith(["OIT-1"]);
+    });
   });
 });

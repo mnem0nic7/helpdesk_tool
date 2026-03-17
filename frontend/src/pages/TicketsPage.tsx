@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api.ts";
 import type { TicketQueryParams, TicketRow } from "../lib/api.ts";
@@ -34,6 +34,7 @@ function filtersFromParams(sp: URLSearchParams): TicketFilterValues {
 export default function TicketsPage() {
   const branding = getSiteBranding();
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
 
   const filterParamsKey = useMemo(() => {
     const next = new URLSearchParams(searchParams);
@@ -127,6 +128,19 @@ export default function TicketsPage() {
   const hasMore = page * PAGE_SIZE < matchedCount;
   const hasFilters = !!(filters.search || filters.status || filters.priority || filters.issue_type || filters.label || filters.stale_only || filters.assignee || filters.created_after || filters.created_before);
 
+  const refreshVisibleMutation = useMutation({
+    mutationFn: (keys: string[]) => api.refreshVisibleTickets(keys),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      queryClient.invalidateQueries({ queryKey: ["ticket-detail"] });
+      queryClient.invalidateQueries({ queryKey: ["filter-options"] });
+      queryClient.invalidateQueries({ queryKey: ["metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["sla-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["sla-breaches"] });
+      queryClient.invalidateQueries({ queryKey: ["cache-status"] });
+    },
+  });
+
   useEffect(() => {
     if (!ticketKey) {
       setOpenTicket(null);
@@ -139,6 +153,13 @@ export default function TicketsPage() {
     }
     setOpenTicket((current) => (current?.key === ticketKey ? current : null));
   }, [ticketKey, tickets]);
+
+  const handleRefreshVisible = useCallback(() => {
+    if (!tickets.length) return;
+    refreshVisibleMutation.mutate(tickets.map((ticket) => ticket.key));
+  }, [refreshVisibleMutation, tickets]);
+
+  const isRefreshingVisible = refreshVisibleMutation.isPending;
 
   return (
     <div className="space-y-4">
@@ -166,6 +187,18 @@ export default function TicketsPage() {
               )}
             </div>
           )}
+          <button
+            type="button"
+            onClick={handleRefreshVisible}
+            disabled={isRefreshingVisible || isLoading || tickets.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Re-fetch the tickets currently shown on this page from Jira"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className={`${isRefreshingVisible ? "animate-spin" : ""} h-4 w-4`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m14.836 2A8.001 8.001 0 005.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-14.837-2m14.837 2H15" />
+            </svg>
+            {isRefreshingVisible ? "Refreshing..." : "Refresh Visible"}
+          </button>
           <TicketViewToggle value={view} onChange={handleViewChange} />
           <a
             href={api.exportAll()}
@@ -186,6 +219,12 @@ export default function TicketsPage() {
       {isError && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           Failed to load tickets: {error instanceof Error ? error.message : "Unknown error"}
+        </div>
+      )}
+
+      {refreshVisibleMutation.isError && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          Failed to refresh displayed tickets: {refreshVisibleMutation.error instanceof Error ? refreshVisibleMutation.error.message : "Unknown error"}
         </div>
       )}
 

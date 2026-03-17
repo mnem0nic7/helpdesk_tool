@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -14,7 +15,7 @@ from config import JIRA_BASE_URL, JIRA_PROJECT
 from issue_cache import cache
 from jira_client import JiraClient, validate_jira_key
 from metrics import _is_open, issue_to_row
-from models import TicketCommentRequest, TicketTransitionRequest, TicketUpdateRequest
+from models import TicketCommentRequest, TicketRefreshRequest, TicketTransitionRequest, TicketUpdateRequest
 from request_type import extract_request_type_name_from_fields
 from site_context import get_scoped_issues, key_is_visible_in_scope
 
@@ -258,6 +259,18 @@ def _ensure_ticket_visible(key: str) -> None:
         raise HTTPException(status_code=404, detail=f"Issue {key} not found")
 
 
+def _unique_ticket_keys(keys: list[str]) -> list[str]:
+    unique_keys: list[str] = []
+    seen: set[str] = set()
+    for raw_key in keys:
+        key = str(raw_key or "").strip().upper()
+        if not key or key in seen:
+            continue
+        unique_keys.append(key)
+        seen.add(key)
+    return unique_keys
+
+
 @router.get("/tickets")
 async def list_tickets(
     status: Optional[str] = Query(None),
@@ -400,6 +413,41 @@ async def get_statuses(key: str) -> list[dict[str, Any]]:
         }
         for t in transitions
     ]
+
+
+@router.post("/tickets/refresh-visible")
+async def refresh_visible_tickets(body: TicketRefreshRequest) -> dict[str, Any]:
+    """Refresh the currently displayed ticket rows from live Jira data."""
+    requested_keys = _unique_ticket_keys(body.keys)
+    visible_keys: list[str] = []
+    skipped_keys: list[str] = []
+
+    for key in requested_keys:
+        try:
+            validate_jira_key(key)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if key_is_visible_in_scope(key):
+            visible_keys.append(key)
+        else:
+            skipped_keys.append(key)
+
+    refreshed_issues = await asyncio.get_running_loop().run_in_executor(
+        None,
+        cache.refresh_issue_keys,
+        visible_keys,
+    )
+    refreshed_keys = [issue.get("key", "") for issue in refreshed_issues if issue.get("key")]
+    refreshed_key_set = set(refreshed_keys)
+
+    return {
+        "requested_count": len(requested_keys),
+        "visible_count": len(visible_keys),
+        "refreshed_count": len(refreshed_keys),
+        "refreshed_keys": refreshed_keys,
+        "skipped_keys": skipped_keys,
+        "missing_keys": [key for key in visible_keys if key not in refreshed_key_set],
+    }
 
 
 @router.get("/tickets/{key}")
