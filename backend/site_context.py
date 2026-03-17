@@ -1,4 +1,4 @@
-"""Host-aware site scope helpers for the primary and OasisDev dashboard hosts."""
+"""Host-aware site scope helpers for the helpdesk and Azure dashboard hosts."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from typing import Any, Literal
 
 from fastapi import Request
 
-from config import OASISDEV_APP_HOST, PRIMARY_APP_HOST
+from config import AZURE_APP_HOST, OASISDEV_APP_HOST, PRIMARY_APP_HOST
 from jira_client import JiraClient
 
-SiteScope = Literal["primary", "oasisdev"]
+SiteScope = Literal["primary", "oasisdev", "azure"]
 
 _site_scope_var: ContextVar[SiteScope] = ContextVar("site_scope", default="primary")
 
@@ -31,6 +31,14 @@ _SITE_PROFILES: dict[SiteScope, dict[str, str]] = {
         "alert_prefix": "OasisDev",
         "report_prefix": "OasisDev",
     },
+    "azure": {
+        "scope": "azure",
+        "host": AZURE_APP_HOST,
+        "app_name": "MoveDocs Azure Portal",
+        "dashboard_name": "Azure Control Center",
+        "alert_prefix": "Azure",
+        "report_prefix": "Azure",
+    },
 }
 
 
@@ -46,7 +54,10 @@ def normalize_host(host: str | None) -> str:
 
 def get_site_scope_for_host(host: str | None) -> SiteScope:
     """Map a request host to the configured dashboard site scope."""
-    if normalize_host(host) == normalize_host(OASISDEV_APP_HOST):
+    normalized = normalize_host(host)
+    if normalized == normalize_host(AZURE_APP_HOST):
+        return "azure"
+    if normalized == normalize_host(OASISDEV_APP_HOST):
         return "oasisdev"
     return "primary"
 
@@ -82,6 +93,8 @@ def get_site_profile(scope: SiteScope | None = None) -> dict[str, str]:
 
 def issue_matches_scope(issue: dict[str, Any], scope: SiteScope) -> bool:
     """Return True when an issue belongs on the given site."""
+    if scope == "azure":
+        return False
     is_oasisdev_issue = JiraClient.is_excluded(issue)
     if scope == "oasisdev":
         return is_oasisdev_issue
@@ -108,6 +121,8 @@ def get_scoped_issues(*, include_excluded_on_primary: bool = False) -> list[dict
 
     all_issues = cache.get_all_issues()
     scope = get_current_site_scope()
+    if scope == "azure":
+        return []
     if scope == "primary" and include_excluded_on_primary:
         return all_issues
     return filter_issues_for_scope(all_issues, scope)

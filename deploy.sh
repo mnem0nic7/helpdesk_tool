@@ -45,6 +45,7 @@ for i in $(seq 1 120); do
         echo "=== DEPLOYED SUCCESSFULLY ==="
         echo "  Dashboard: https://it-app.movedocs.com"
         echo "  OasisDev:  https://oasisdev.movedocs.com"
+        echo "  Azure:     https://azure.movedocs.com"
         echo "  Health:    https://it-app.movedocs.com/api/health"
         echo ""
         docker compose ps

@@ -1,11 +1,20 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import CacheStatusBar from "./CacheStatusBar.tsx";
+import AzureStatusBar from "./AzureStatusBar.tsx";
 import { api } from "../lib/api.ts";
+import { hasNewFrontendBuild } from "../lib/deployVersion.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
 
-const navItems = [
+interface NavItem {
+  to: string;
+  label: string;
+  icon: string;
+  primaryOnly?: boolean;
+}
+
+const helpdeskNavItems: NavItem[] = [
   { to: "/", label: "Dashboard", icon: "\u25A3" },
   { to: "/tickets", label: "Tickets", icon: "\u25C9" },
   { to: "/manage", label: "Manage", icon: "\u2699" },
@@ -18,8 +27,20 @@ const navItems = [
   { to: "/knowledge-base", label: "Knowledge Base", icon: "\u25A9", primaryOnly: true },
 ];
 
+const azureNavItems: NavItem[] = [
+  { to: "/", label: "Overview", icon: "\u25A3" },
+  { to: "/resources", label: "Resources", icon: "\u25C8" },
+  { to: "/identity", label: "Identity", icon: "\u25A6" },
+  { to: "/cost", label: "Cost", icon: "\u25A4" },
+  { to: "/copilot", label: "Copilot", icon: "\u25C6" },
+];
+
 export default function Layout() {
   const branding = getSiteBranding();
+  const navItems = branding.scope === "azure" ? azureNavItems : helpdeskNavItems;
+  const location = useLocation();
+  const versionCheckInFlight = useRef(false);
+  const lastVersionCheckAt = useRef(0);
   const { data: user, isLoading } = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => api.getMe(),
@@ -30,6 +51,37 @@ export default function Layout() {
   useEffect(() => {
     document.title = branding.appName;
   }, [branding.appName]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return undefined;
+
+    async function checkForNewBuild(force = false) {
+      if (versionCheckInFlight.current) return;
+      const now = Date.now();
+      if (!force && now - lastVersionCheckAt.current < 15_000) return;
+
+      versionCheckInFlight.current = true;
+      lastVersionCheckAt.current = now;
+      try {
+        if (await hasNewFrontendBuild(document, window)) {
+          window.location.reload();
+        }
+      } catch {
+        // Ignore version-check failures and keep the current app running.
+      } finally {
+        versionCheckInFlight.current = false;
+      }
+    }
+
+    void checkForNewBuild(true);
+
+    const handleFocus = () => {
+      void checkForNewBuild();
+    };
+
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, [location.key]);
 
   // While checking auth, show nothing to avoid layout flash
   if (isLoading) {
@@ -106,7 +158,11 @@ export default function Layout() {
 
       {/* Main content */}
       <main className="flex-1 overflow-y-auto bg-gray-50 p-6">
-        <CacheStatusBar />
+        {branding.scope === "azure" ? (
+          <AzureStatusBar isAdmin={!!user?.is_admin} />
+        ) : (
+          <CacheStatusBar />
+        )}
         <Outlet />
       </main>
     </div>

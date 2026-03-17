@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -106,6 +106,8 @@ class TestAuthMiddleware:
         import routes_chart
         import routes_export
         import routes_cache
+        import routes_azure
+        import azure_cache as azure_cache_module
 
         mock_cache = MagicMock()
         mock_cache.get_filtered_issues.return_value = []
@@ -121,6 +123,53 @@ class TestAuthMiddleware:
         for mod in [issue_cache, routes_metrics, routes_tickets, routes_chart, routes_export, routes_cache]:
             monkeypatch.setattr(mod, "cache", mock_cache)
 
+        mock_azure_cache = MagicMock()
+        mock_azure_cache.start_background_refresh = AsyncMock()
+        mock_azure_cache.stop_background_refresh = AsyncMock()
+        mock_azure_cache.status.return_value = {
+            "configured": False,
+            "initialized": True,
+            "refreshing": False,
+            "last_refresh": None,
+            "datasets": [],
+        }
+        mock_azure_cache.get_overview.return_value = {
+            "subscriptions": 0,
+            "management_groups": 0,
+            "resources": 0,
+            "role_assignments": 0,
+            "users": 0,
+            "groups": 0,
+            "enterprise_apps": 0,
+            "app_registrations": 0,
+            "directory_roles": 0,
+            "cost": {
+                "lookback_days": 30,
+                "total_cost": 0.0,
+                "currency": "USD",
+                "top_service": "",
+                "top_subscription": "",
+                "top_resource_group": "",
+                "recommendation_count": 0,
+                "potential_monthly_savings": 0.0,
+            },
+            "datasets": [],
+            "last_refresh": None,
+        }
+        mock_azure_cache.get_cost_summary.return_value = mock_azure_cache.get_overview.return_value["cost"]
+        mock_azure_cache.get_cost_trend.return_value = []
+        mock_azure_cache.get_cost_breakdown.return_value = []
+        mock_azure_cache.get_advisor.return_value = []
+        mock_azure_cache.list_resources.return_value = {
+            "resources": [],
+            "matched_count": 0,
+            "total_count": 0,
+        }
+        mock_azure_cache.list_directory_objects.return_value = []
+        mock_azure_cache.get_grounding_context.return_value = {}
+        monkeypatch.setattr(azure_cache_module, "azure_cache", mock_azure_cache)
+        monkeypatch.setattr(routes_azure, "azure_cache", mock_azure_cache)
+
         from main import app
         from starlette.testclient import TestClient
         return TestClient(app)
@@ -135,6 +184,11 @@ class TestAuthMiddleware:
         resp = auth_client.get("/api/health", headers={"host": "oasisdev.movedocs.com"})
         assert resp.status_code == 200
         assert resp.json()["site_scope"] == "oasisdev"
+
+    def test_health_uses_azure_host_scope(self, auth_client):
+        resp = auth_client.get("/api/health", headers={"host": "azure.movedocs.com"})
+        assert resp.status_code == 200
+        assert resp.json()["site_scope"] == "azure"
 
     def test_health_uses_forwarded_host_scope(self, auth_client):
         resp = auth_client.get(
@@ -178,6 +232,7 @@ class TestAuthMiddleware:
         data = resp.json()
         assert data["email"] == "test@example.com"
         assert data["name"] == "Test User"
+        assert data["is_admin"] is True
 
     def test_logout_clears_session(self, auth_client):
         from auth import create_session, get_session

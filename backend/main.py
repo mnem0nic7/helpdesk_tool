@@ -29,7 +29,9 @@ from routes_auth import router as auth_router
 from routes_sla import router as sla_router
 from routes_alerts import router as alerts_router
 from routes_kb import router as kb_router
+from routes_azure import router as azure_router
 from issue_cache import cache
+from azure_cache import azure_cache
 from knowledge_base import kb_store
 from site_context import (
     get_current_site_scope,
@@ -44,7 +46,9 @@ async def lifespan(app: FastAPI):
     """Start background cache refresh on startup, stop on shutdown."""
     kb_store.ensure_seed_articles()
     await cache.start_background_refresh()
+    await azure_cache.start_background_refresh()
     yield
+    await azure_cache.stop_background_refresh()
     await cache.stop_background_refresh()
 
 
@@ -103,6 +107,7 @@ _cors_origins = [
     "http://localhost:3002",  # Docker (nginx, alternate port)
     "https://it-app.movedocs.com",
     "https://oasisdev.movedocs.com",
+    "https://azure.movedocs.com",
 ]
 _extra_origin = os.getenv("CORS_ORIGIN", "")
 if _extra_origin:
@@ -130,6 +135,7 @@ app.include_router(triage_router)
 app.include_router(sla_router)
 app.include_router(alerts_router)
 app.include_router(kb_router)
+app.include_router(azure_router)
 
 # ---------------------------------------------------------------------------
 # Routes

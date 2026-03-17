@@ -115,3 +115,28 @@ describe("api.exportExcel", () => {
     expect(url).toBe("/api/export/excel");
   });
 });
+
+describe("azure api methods", () => {
+  it("calls the Azure resource endpoint with query params", async () => {
+    mockFetch({ resources: [], matched_count: 0, total_count: 0 });
+    await api.getAzureResources({ search: "vm", location: "eastus" });
+    const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(url).toContain("/api/azure/resources");
+    expect(url).toContain("search=vm");
+    expect(url).toContain("location=eastus");
+  });
+
+  it("posts Azure copilot questions", async () => {
+    mockFetch({
+      answer: "Use Advisor recommendations first.",
+      model_used: "gpt-4o-mini",
+      generated_at: "2026-03-17T18:00:00Z",
+      citations: [],
+    });
+    await api.askAzureCostCopilot("Where can we save?");
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/azure/ai/cost-chat");
+    expect(call[1].method).toBe("POST");
+    expect(JSON.parse(call[1].body)).toEqual({ question: "Where can we save?" });
+  });
+});

@@ -14,6 +14,7 @@ from request_type import extract_request_type_name_from_fields, has_request_type
 
 # Validate Jira issue keys to prevent path traversal / SSRF
 _JIRA_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
+_NAME_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 def validate_jira_key(key: str) -> str:
@@ -550,19 +551,67 @@ class JiraClient:
         resp.raise_for_status()
         return resp.json()
 
+    @staticmethod
+    def _display_name_tokens(value: str) -> list[str]:
+        """Normalize a display name into lowercase alphanumeric tokens."""
+        return _NAME_TOKEN_RE.findall((value or "").strip().lower())
+
+    @classmethod
+    def _matches_with_optional_middle_names(cls, target: str, candidate: str) -> bool:
+        """Return True when a candidate adds only middle-name tokens.
+
+        Examples:
+        - "Raza Abidi" -> "Raza Ali Abidi" : True
+        - "Raza Abidi" -> "Mohammed Raza Abidi" : False
+        - "Raza Abidi" -> "Raza Abidi Khan" : False
+        """
+        target_tokens = cls._display_name_tokens(target)
+        candidate_tokens = cls._display_name_tokens(candidate)
+        if len(target_tokens) < 2 or len(candidate_tokens) <= len(target_tokens):
+            return False
+        if target_tokens[0] != candidate_tokens[0] or target_tokens[-1] != candidate_tokens[-1]:
+            return False
+
+        index = 0
+        for token in candidate_tokens:
+            if index < len(target_tokens) and token == target_tokens[index]:
+                index += 1
+        return index == len(target_tokens)
+
     def find_user_account_id(self, display_name: str) -> str | None:
-        """Return the exact-match accountId for a display name, if one exists."""
+        """Return a unique Jira accountId for a display name.
+
+        Prefers an exact displayName match. If none exists, allows a single
+        candidate whose display name only adds middle-name tokens, such as
+        "Raza Abidi" matching "Raza Ali Abidi".
+        """
         target = display_name.strip().lower()
         if not target:
             return None
         users = self.search_users(display_name)
+        candidates = [
+            user
+            for user in users
+            if user.get("accountId") and user.get("active") is not False
+        ]
+
         exact_matches = [
             user.get("accountId", "")
-            for user in users
-            if (user.get("displayName", "").strip().lower() == target) and user.get("accountId")
+            for user in candidates
+            if user.get("displayName", "").strip().lower() == target
         ]
         if len(exact_matches) == 1:
             return exact_matches[0]
+        if len(exact_matches) > 1:
+            return None
+
+        middle_name_matches = [
+            user.get("accountId", "")
+            for user in candidates
+            if self._matches_with_optional_middle_names(display_name, user.get("displayName", ""))
+        ]
+        if len(middle_name_matches) == 1:
+            return middle_name_matches[0]
         return None
 
     def get_user(self, account_id: str) -> dict[str, Any]:
