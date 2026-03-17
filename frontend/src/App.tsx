@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
+import { getSiteBranding } from "./lib/siteContext";
 
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const TicketsPage = lazy(() => import("./pages/TicketsPage"));
@@ -12,6 +13,11 @@ const TriagePage = lazy(() => import("./pages/TriagePage"));
 const AILogPage = lazy(() => import("./pages/AILogPage"));
 const AlertsPage = lazy(() => import("./pages/AlertsPage"));
 const KnowledgeBasePage = lazy(() => import("./pages/KnowledgeBasePage"));
+const AzureOverviewPage = lazy(() => import("./pages/AzureOverviewPage"));
+const AzureResourcesPage = lazy(() => import("./pages/AzureResourcesPage"));
+const AzureIdentityPage = lazy(() => import("./pages/AzureIdentityPage"));
+const AzureCostPage = lazy(() => import("./pages/AzureCostPage"));
+const AzureCopilotPage = lazy(() => import("./pages/AzureCopilotPage"));
 
 function PageFallback() {
   return (
@@ -25,21 +31,38 @@ function PageFallback() {
 }
 
 export default function App() {
+  const branding = getSiteBranding();
+  const isAzureSite = branding.scope === "azure";
+
   return (
     <BrowserRouter>
       <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route element={<Layout />}>
-            <Route index element={<DashboardPage />} />
-            <Route path="tickets" element={<TicketsPage />} />
-            <Route path="manage" element={<ManagePage />} />
-            <Route path="sla" element={<SLAPage />} />
-            <Route path="visualizations" element={<VisualizationsPage />} />
-            <Route path="reports" element={<ReportsPage />} />
-            <Route path="triage" element={<TriagePage />} />
-            <Route path="ai-log" element={<AILogPage />} />
-            <Route path="alerts" element={<AlertsPage />} />
-            <Route path="knowledge-base" element={<KnowledgeBasePage />} />
+            {isAzureSite ? (
+              <>
+                <Route index element={<AzureOverviewPage />} />
+                <Route path="resources" element={<AzureResourcesPage />} />
+                <Route path="identity" element={<AzureIdentityPage />} />
+                <Route path="cost" element={<AzureCostPage />} />
+                <Route path="copilot" element={<AzureCopilotPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </>
+            ) : (
+              <>
+                <Route index element={<DashboardPage />} />
+                <Route path="tickets" element={<TicketsPage />} />
+                <Route path="manage" element={<ManagePage />} />
+                <Route path="sla" element={<SLAPage />} />
+                <Route path="visualizations" element={<VisualizationsPage />} />
+                <Route path="reports" element={<ReportsPage />} />
+                <Route path="triage" element={<TriagePage />} />
+                <Route path="ai-log" element={<AILogPage />} />
+                <Route path="alerts" element={<AlertsPage />} />
+                <Route path="knowledge-base" element={<KnowledgeBasePage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </>
+            )}
           </Route>
         </Routes>
       </Suspense>

@@ -1,4 +1,4 @@
-it-app.movedocs.com, oasisdev.movedocs.com {
+it-app.movedocs.com, oasisdev.movedocs.com, azure.movedocs.com {
 	tls {
 		issuer acme {
 			dns cloudflare {env.CLOUDFLARE_API_TOKEN}

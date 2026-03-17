@@ -15,6 +15,7 @@ JIRA_PROJECT: str = os.getenv("JIRA_PROJECT", "OIT")
 DATA_DIR: str = os.getenv("DATA_DIR", "/app/data")
 PRIMARY_APP_HOST: str = os.getenv("PRIMARY_APP_HOST", "it-app.movedocs.com")
 OASISDEV_APP_HOST: str = os.getenv("OASISDEV_APP_HOST", "oasisdev.movedocs.com")
+AZURE_APP_HOST: str = os.getenv("AZURE_APP_HOST", "azure.movedocs.com")
 
 # AI provider API keys
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
@@ -30,6 +31,13 @@ ENTRA_CLIENT_SECRET: str = os.getenv("ENTRA_CLIENT_SECRET", "")
 ALLOWED_USERS: str = os.getenv("ALLOWED_USERS", "")  # comma-separated emails, empty = all
 ADMIN_USERS: str = os.getenv("ADMIN_USERS", "")  # comma-separated emails for write operations, empty = all authenticated
 APP_SECRET_KEY: str = os.getenv("APP_SECRET_KEY", "change-me-in-production")
+
+# Azure portal integration
+AZURE_ROOT_MANAGEMENT_GROUP_ID: str = os.getenv("AZURE_ROOT_MANAGEMENT_GROUP_ID", "")
+AZURE_INVENTORY_REFRESH_MINUTES: int = int(os.getenv("AZURE_INVENTORY_REFRESH_MINUTES", "15"))
+AZURE_DIRECTORY_REFRESH_MINUTES: int = int(os.getenv("AZURE_DIRECTORY_REFRESH_MINUTES", "15"))
+AZURE_COST_REFRESH_MINUTES: int = int(os.getenv("AZURE_COST_REFRESH_MINUTES", "60"))
+AZURE_COST_LOOKBACK_DAYS: int = int(os.getenv("AZURE_COST_LOOKBACK_DAYS", "30"))
 if APP_SECRET_KEY == "change-me-in-production":
     import warnings
     warnings.warn(

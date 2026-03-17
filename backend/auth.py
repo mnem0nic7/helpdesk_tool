@@ -107,6 +107,15 @@ def require_admin(request: Request) -> dict[str, Any]:
     return session
 
 
+def session_to_public_user(session: dict[str, Any]) -> dict[str, Any]:
+    """Return the frontend-safe user payload for the current session."""
+    return {
+        "email": session["email"],
+        "name": session["name"],
+        "is_admin": is_admin_user(session["email"]),
+    }
+
+
 # ---------------------------------------------------------------------------
 # OAuth client (Entra ID / Azure AD via OIDC)
 # ---------------------------------------------------------------------------

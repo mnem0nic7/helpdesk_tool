@@ -12,6 +12,8 @@ from typing import Any
 from config import OPENAI_API_KEY, ANTHROPIC_API_KEY
 from models import (
     AIModel,
+    AzureCitation,
+    AzureCostChatResponse,
     KnowledgeBaseArticle,
     KnowledgeBaseDraft,
     TechnicianScore,
@@ -35,6 +37,35 @@ MODELS: list[dict[str, str]] = [
     {"id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5", "provider": "anthropic"},
 ]
 
+_OPENAI_COPILOT_MODEL_CACHE_TTL_SECONDS = 300
+_OPENAI_COPILOT_MODEL_CACHE: tuple[float, list[AIModel]] | None = None
+_OPENAI_TEXT_MODEL_PREFIXES = ("gpt-", "o1", "o3", "o4")
+_OPENAI_EXCLUDED_MODEL_TOKENS = (
+    "audio",
+    "image",
+    "tts",
+    "transcribe",
+    "realtime",
+    "search",
+    "moderation",
+    "embedding",
+    "whisper",
+    "dall-e",
+    "sora",
+)
+_DEFAULT_COPILOT_MODEL_ORDER = (
+    "gpt-5.4-mini",
+    "gpt-5.4",
+    "gpt-5-mini",
+    "gpt-5",
+    "gpt-4.1",
+    "gpt-4o-mini",
+    "gpt-4o",
+    "claude-sonnet-4-20250514",
+    "claude-haiku-4-5-20251001",
+)
+_DEFAULT_COPILOT_MODEL_RANK = {model_id: index for index, model_id in enumerate(_DEFAULT_COPILOT_MODEL_ORDER)}
+
 
 def get_available_models() -> list[AIModel]:
     """Return models filtered by which API keys are configured."""
@@ -47,10 +78,88 @@ def get_available_models() -> list[AIModel]:
     return available
 
 
+def _is_openai_text_model(model_id: str) -> bool:
+    lowered = model_id.strip().lower()
+    if not lowered.startswith(_OPENAI_TEXT_MODEL_PREFIXES):
+        return False
+    return not any(token in lowered for token in _OPENAI_EXCLUDED_MODEL_TOKENS)
+
+
+def _is_model_snapshot(model_id: str) -> bool:
+    return bool(re.search(r"-20\d{2}-\d{2}-\d{2}$", model_id))
+
+
+def _copilot_model_sort_key(model: AIModel) -> tuple[int, int, int, str]:
+    provider_rank = 0 if model.provider == "openai" else 1
+    default_rank = _DEFAULT_COPILOT_MODEL_RANK.get(model.id, len(_DEFAULT_COPILOT_MODEL_RANK) + 1)
+    snapshot_rank = 1 if _is_model_snapshot(model.id) else 0
+    return (provider_rank, default_rank, snapshot_rank, model.id.lower())
+
+
+def _list_openai_copilot_models_from_api() -> list[AIModel]:
+    from openai import OpenAI
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    seen: dict[str, AIModel] = {}
+    for model in client.models.list().data:
+        model_id = getattr(model, "id", "").strip()
+        if not model_id or not _is_openai_text_model(model_id):
+            continue
+        seen[model_id] = AIModel(id=model_id, name=model_id, provider="openai")
+    return sorted(seen.values(), key=_copilot_model_sort_key)
+
+
+def get_available_copilot_models() -> list[AIModel]:
+    """Return Azure Copilot models, including the live OpenAI catalog when available."""
+    global _OPENAI_COPILOT_MODEL_CACHE
+
+    available: list[AIModel] = []
+
+    if OPENAI_API_KEY:
+        now = time.time()
+        cached = _OPENAI_COPILOT_MODEL_CACHE
+        if cached and now - cached[0] < _OPENAI_COPILOT_MODEL_CACHE_TTL_SECONDS:
+            openai_models = list(cached[1])
+        else:
+            try:
+                openai_models = _list_openai_copilot_models_from_api()
+                _OPENAI_COPILOT_MODEL_CACHE = (now, list(openai_models))
+            except Exception:
+                logger.exception("Failed to fetch live OpenAI models for Azure Copilot; falling back to curated defaults")
+                openai_models = [
+                    AIModel(**model)
+                    for model in MODELS
+                    if model["provider"] == "openai"
+                ]
+        available.extend(openai_models)
+
+    if ANTHROPIC_API_KEY:
+        available.extend(
+            AIModel(**model)
+            for model in MODELS
+            if model["provider"] == "anthropic"
+        )
+
+    unique = {model.id: model for model in available}
+    return sorted(unique.values(), key=_copilot_model_sort_key)
+
+
+def get_default_copilot_model_id(available: list[AIModel]) -> str | None:
+    if not available:
+        return None
+    available_ids = {model.id for model in available}
+    for model_id in _DEFAULT_COPILOT_MODEL_ORDER:
+        if model_id in available_ids:
+            return model_id
+    return available[0].id
+
+
 def _get_model_provider(model_id: str) -> str | None:
     for m in MODELS:
         if m["id"] == model_id:
             return m["provider"]
+    if OPENAI_API_KEY and _is_openai_text_model(model_id):
+        return "openai"
     return None
 
 
@@ -246,6 +355,17 @@ Respond with ONLY valid JSON:
   "recommended_action": "update_existing",
   "change_summary": "What this draft adds or changes."
 }
+"""
+
+AZURE_COST_COPILOT_PROMPT = """You are an Azure cost and governance copilot for an internal IT operations portal.
+Answer only from the provided cached Azure data.
+
+Rules:
+- Be concrete and action-oriented.
+- If the data suggests likely savings opportunities, say why.
+- Call out uncertainty when the cached data is incomplete or stale.
+- Do not claim any action was performed.
+- Keep the answer concise and executive-readable.
 """
 
 TECHNICIAN_SCORE_PROMPT = """You are a QA reviewer for closed IT helpdesk tickets.
@@ -508,16 +628,47 @@ def _call_openai(model_id: str, system: str, user_msg: str) -> str:
     from openai import OpenAI
 
     client = OpenAI(api_key=OPENAI_API_KEY)
-    resp = client.chat.completions.create(
+    resp = client.responses.create(
         model=model_id,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_msg},
-        ],
-        temperature=0.3,
-        max_tokens=1000,
+        instructions=system,
+        input=user_msg,
+        max_output_tokens=2000,
     )
-    return resp.choices[0].message.content or ""
+    text = (getattr(resp, "output_text", "") or "").strip()
+    if text:
+        return text
+
+    parts: list[str] = []
+    for output_item in getattr(resp, "output", []) or []:
+        content = getattr(output_item, "content", None)
+        if content is None and isinstance(output_item, dict):
+            content = output_item.get("content")
+        for content_item in content or []:
+            item_type = getattr(content_item, "type", None)
+            if item_type is None and isinstance(content_item, dict):
+                item_type = content_item.get("type")
+            if item_type not in {"text", "output_text"}:
+                continue
+            value = getattr(content_item, "text", None)
+            if value is None and isinstance(content_item, dict):
+                value = content_item.get("text")
+            if isinstance(value, dict):
+                value = value.get("value") or value.get("text")
+            if value:
+                parts.append(str(value))
+
+    text = "".join(parts).strip()
+    if text:
+        return text
+
+    incomplete_details = getattr(resp, "incomplete_details", None)
+    incomplete_reason = getattr(incomplete_details, "reason", None)
+    if incomplete_reason is None and isinstance(incomplete_details, dict):
+        incomplete_reason = incomplete_details.get("reason")
+    raise RuntimeError(
+        f"OpenAI model '{model_id}' returned no text output"
+        + (f" (status={getattr(resp, 'status', 'unknown')}, reason={incomplete_reason or 'unknown'})" if incomplete_reason or getattr(resp, "status", None) else "")
+    )
 
 
 def _call_anthropic(model_id: str, system: str, user_msg: str) -> str:
@@ -991,6 +1142,60 @@ def reformat_kb_article_content(article: KnowledgeBaseArticle, model_id: str) ->
         max_tokens=3000,
     )
     return resp.content[0].text.strip()
+
+
+def answer_azure_cost_question(
+    question: str,
+    context: dict[str, Any],
+    model_id: str,
+) -> AzureCostChatResponse:
+    """Answer an Azure cost-management question from grounded cached data."""
+    provider = _get_model_provider(model_id)
+    if not provider:
+        raise ValueError(f"Unknown model: {model_id}")
+
+    user_msg = (
+        f"Question:\n{question.strip()}\n\n"
+        "Grounding data:\n"
+        f"{json.dumps(context, indent=2)}"
+    )
+
+    logger.info("Answering Azure cost question with %s (%s)", model_id, provider)
+    if provider == "openai":
+        raw = _call_openai(model_id, AZURE_COST_COPILOT_PROMPT, user_msg)
+    elif provider == "anthropic":
+        raw = _call_anthropic(model_id, AZURE_COST_COPILOT_PROMPT, user_msg)
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
+
+    citations = [
+        AzureCitation(
+            source_type="summary",
+            label="Cost summary",
+            detail=f"Lookback {context.get('cost_summary', {}).get('lookback_days', '')} days",
+        ),
+        AzureCitation(
+            source_type="trend",
+            label="Daily trend",
+            detail=f"{len(context.get('cost_trend') or [])} daily points",
+        ),
+        AzureCitation(
+            source_type="breakdown",
+            label="Top services",
+            detail=f"{len(context.get('cost_by_service') or [])} grouped rows",
+        ),
+        AzureCitation(
+            source_type="advisor",
+            label="Advisor recommendations",
+            detail=f"{len(context.get('advisor') or [])} recommendations",
+        ),
+    ]
+    return AzureCostChatResponse(
+        answer=raw.strip(),
+        model_used=model_id,
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        citations=citations,
+    )
 
 
 # ---------------------------------------------------------------------------

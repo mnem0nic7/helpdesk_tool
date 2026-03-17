@@ -4,9 +4,11 @@ from ai_client import (
     _enforce_security_priority,
     _extract_reporter_hint_from_text,
     draft_kb_article,
+    get_available_copilot_models,
+    get_default_copilot_model_id,
     score_closed_ticket,
 )
-from models import KnowledgeBaseArticle, TriageSuggestion
+from models import AIModel, KnowledgeBaseArticle, TriageSuggestion
 
 
 def _issue(
@@ -118,6 +120,38 @@ def test_enforce_reporter_hint_adds_reporter_suggestion():
     assert reporter.current_value == "OSIJIRAOCC"
     assert reporter.suggested_value == "Raza Abidi"
     assert reporter.confidence >= 0.99
+
+
+def test_get_available_copilot_models_uses_live_openai_catalog(monkeypatch):
+    monkeypatch.setattr(ai_client, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_client, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(ai_client, "_OPENAI_COPILOT_MODEL_CACHE", None)
+    monkeypatch.setattr(
+        ai_client,
+        "_list_openai_copilot_models_from_api",
+        lambda: [
+            AIModel(id="gpt-4o-mini", name="gpt-4o-mini", provider="openai"),
+            AIModel(id="gpt-5.4-mini", name="gpt-5.4-mini", provider="openai"),
+            AIModel(id="gpt-5.4-mini-2026-03-17", name="gpt-5.4-mini-2026-03-17", provider="openai"),
+        ],
+    )
+
+    models = get_available_copilot_models()
+
+    assert [model.id for model in models[:3]] == [
+        "gpt-5.4-mini",
+        "gpt-4o-mini",
+        "gpt-5.4-mini-2026-03-17",
+    ]
+
+
+def test_get_default_copilot_model_id_prefers_supported_default():
+    models = [
+        AIModel(id="gpt-3.5-turbo", name="gpt-3.5-turbo", provider="openai"),
+        AIModel(id="gpt-5.4-mini", name="gpt-5.4-mini", provider="openai"),
+    ]
+
+    assert get_default_copilot_model_id(models) == "gpt-5.4-mini"
 
 
 def test_score_closed_ticket_parses_scores(monkeypatch):

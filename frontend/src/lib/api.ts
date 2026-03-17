@@ -564,6 +564,150 @@ export interface CacheStatus {
 export interface UserInfo {
   email: string;
   name: string;
+  is_admin: boolean;
+}
+
+export interface AzureDatasetStatus {
+  key: string;
+  label: string;
+  configured: boolean;
+  refreshing: boolean;
+  interval_minutes: number;
+  item_count: number;
+  last_refresh: string | null;
+  error?: string | null;
+}
+
+export interface AzureStatus {
+  configured: boolean;
+  initialized: boolean;
+  refreshing: boolean;
+  last_refresh: string | null;
+  datasets: AzureDatasetStatus[];
+}
+
+export interface AzureCostSummary {
+  lookback_days: number;
+  total_cost: number;
+  currency: string;
+  top_service: string;
+  top_subscription: string;
+  top_resource_group: string;
+  recommendation_count: number;
+  potential_monthly_savings: number;
+}
+
+export interface AzureOverviewResponse {
+  subscriptions: number;
+  management_groups: number;
+  resources: number;
+  role_assignments: number;
+  users: number;
+  groups: number;
+  enterprise_apps: number;
+  app_registrations: number;
+  directory_roles: number;
+  cost: AzureCostSummary;
+  datasets: AzureDatasetStatus[];
+  last_refresh: string | null;
+}
+
+export interface AzureSubscription {
+  subscription_id: string;
+  display_name: string;
+  state: string;
+  tenant_id: string;
+  authorization_source: string;
+}
+
+export interface AzureManagementGroup {
+  id: string;
+  name: string;
+  display_name: string;
+  parent_id: string;
+  parent_display_name: string;
+  group_type: string;
+}
+
+export interface AzureRoleAssignment {
+  id: string;
+  scope: string;
+  subscription_id: string;
+  principal_id: string;
+  principal_type: string;
+  role_definition_id: string;
+  role_name: string;
+}
+
+export interface AzureResourceRow {
+  id: string;
+  name: string;
+  resource_type: string;
+  subscription_id: string;
+  subscription_name: string;
+  resource_group: string;
+  location: string;
+  kind: string;
+  state: string;
+  tags: Record<string, string>;
+}
+
+export interface AzureResourceListResponse {
+  resources: AzureResourceRow[];
+  matched_count: number;
+  total_count: number;
+}
+
+export interface AzureDirectoryObject {
+  id: string;
+  display_name: string;
+  object_type: "user" | "group" | "enterprise_app" | "app_registration" | "directory_role";
+  principal_name: string;
+  mail: string;
+  app_id: string;
+  enabled: boolean | null;
+  extra: Record<string, string>;
+}
+
+export interface AzureCostPoint {
+  date: string;
+  cost: number;
+  currency: string;
+}
+
+export interface AzureCostBreakdownItem {
+  label: string;
+  amount: number;
+  currency: string;
+  share: number;
+}
+
+export interface AzureAdvisorRecommendation {
+  id: string;
+  category: string;
+  impact: string;
+  recommendation_type: string;
+  title: string;
+  description: string;
+  subscription_id: string;
+  subscription_name: string;
+  resource_id: string;
+  annual_savings: number;
+  monthly_savings: number;
+  currency: string;
+}
+
+export interface AzureCitation {
+  source_type: string;
+  label: string;
+  detail: string;
+}
+
+export interface AzureCostChatResponse {
+  answer: string;
+  model_used: string;
+  generated_at: string;
+  citations: AzureCitation[];
 }
 
 export interface KnowledgeBaseArticle {
@@ -625,6 +769,17 @@ export interface TicketQueryParams {
 export interface MetricsQueryParams {
   date_from?: string;
   date_to?: string;
+}
+
+export interface AzureResourceQueryParams {
+  search?: string;
+  subscription_id?: string;
+  resource_group?: string;
+  resource_type?: string;
+  location?: string;
+  state?: string;
+  tag_key?: string;
+  tag_value?: string;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -873,6 +1028,83 @@ export const api = {
   /** Fetch current cache status. */
   getCacheStatus(): Promise<CacheStatus> {
     return fetchJSON<CacheStatus>("/api/cache/status");
+  },
+
+  /** Fetch Azure portal cache status. */
+  getAzureStatus(): Promise<AzureStatus> {
+    return fetchJSON<AzureStatus>("/api/azure/status");
+  },
+
+  /** Trigger an admin-only Azure cache refresh. */
+  refreshAzure(): Promise<AzureStatus> {
+    return postJSON<AzureStatus>("/api/azure/refresh", {});
+  },
+
+  /** Fetch Azure overview metrics. */
+  getAzureOverview(): Promise<AzureOverviewResponse> {
+    return fetchJSON<AzureOverviewResponse>("/api/azure/overview");
+  },
+
+  getAzureSubscriptions(): Promise<AzureSubscription[]> {
+    return fetchJSON<AzureSubscription[]>("/api/azure/subscriptions");
+  },
+
+  getAzureManagementGroups(): Promise<AzureManagementGroup[]> {
+    return fetchJSON<AzureManagementGroup[]>("/api/azure/management-groups");
+  },
+
+  getAzureRoleAssignments(search = "", subscriptionId = ""): Promise<AzureRoleAssignment[]> {
+    return fetchJSON<AzureRoleAssignment[]>(
+      `/api/azure/role-assignments${buildQuery({ search, subscription_id: subscriptionId })}`,
+    );
+  },
+
+  getAzureResources(params: AzureResourceQueryParams = {}): Promise<AzureResourceListResponse> {
+    return fetchJSON<AzureResourceListResponse>(`/api/azure/resources${buildQuery(params)}`);
+  },
+
+  getAzureUsers(search = ""): Promise<AzureDirectoryObject[]> {
+    return fetchJSON<AzureDirectoryObject[]>(`/api/azure/directory/users${buildQuery({ search })}`);
+  },
+
+  getAzureGroups(search = ""): Promise<AzureDirectoryObject[]> {
+    return fetchJSON<AzureDirectoryObject[]>(`/api/azure/directory/groups${buildQuery({ search })}`);
+  },
+
+  getAzureEnterpriseApps(search = ""): Promise<AzureDirectoryObject[]> {
+    return fetchJSON<AzureDirectoryObject[]>(`/api/azure/directory/enterprise-apps${buildQuery({ search })}`);
+  },
+
+  getAzureAppRegistrations(search = ""): Promise<AzureDirectoryObject[]> {
+    return fetchJSON<AzureDirectoryObject[]>(`/api/azure/directory/app-registrations${buildQuery({ search })}`);
+  },
+
+  getAzureDirectoryRoles(search = ""): Promise<AzureDirectoryObject[]> {
+    return fetchJSON<AzureDirectoryObject[]>(`/api/azure/directory/roles${buildQuery({ search })}`);
+  },
+
+  getAzureCostSummary(): Promise<AzureCostSummary> {
+    return fetchJSON<AzureCostSummary>("/api/azure/cost/summary");
+  },
+
+  getAzureCostTrend(): Promise<AzureCostPoint[]> {
+    return fetchJSON<AzureCostPoint[]>("/api/azure/cost/trend");
+  },
+
+  getAzureCostBreakdown(groupBy: "service" | "subscription" | "resource_group" = "service"): Promise<AzureCostBreakdownItem[]> {
+    return fetchJSON<AzureCostBreakdownItem[]>(`/api/azure/cost/breakdown${buildQuery({ group_by: groupBy })}`);
+  },
+
+  getAzureAdvisor(): Promise<AzureAdvisorRecommendation[]> {
+    return fetchJSON<AzureAdvisorRecommendation[]>("/api/azure/advisor");
+  },
+
+  getAzureAIModels(): Promise<AIModel[]> {
+    return fetchJSON<AIModel[]>("/api/azure/ai/models");
+  },
+
+  askAzureCostCopilot(question: string, model?: string): Promise<AzureCostChatResponse> {
+    return postJSON<AzureCostChatResponse>("/api/azure/ai/cost-chat", { question, model });
   },
 
   // -------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -358,3 +358,182 @@ class KnowledgeBaseDraft(BaseModel):
     suggested_article_title: str = ""
     recommended_action: str = "create_new"
     change_summary: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Azure portal models
+# ---------------------------------------------------------------------------
+
+
+class AzureDatasetStatus(BaseModel):
+    """Refresh status metadata for one cached Azure dataset group."""
+
+    key: str
+    label: str
+    configured: bool
+    refreshing: bool
+    interval_minutes: int
+    item_count: int
+    last_refresh: Optional[str] = None
+    error: Optional[str] = None
+
+
+class AzureStatus(BaseModel):
+    """Overall Azure cache state for the site banner."""
+
+    configured: bool
+    initialized: bool
+    refreshing: bool
+    last_refresh: Optional[str] = None
+    datasets: list[AzureDatasetStatus] = Field(default_factory=list)
+
+
+class AzureSubscription(BaseModel):
+    """Azure subscription metadata returned by the inventory APIs."""
+
+    subscription_id: str
+    display_name: str
+    state: str = ""
+    tenant_id: str = ""
+    authorization_source: str = ""
+
+
+class AzureManagementGroup(BaseModel):
+    """Azure management group entry."""
+
+    id: str
+    name: str
+    display_name: str
+    parent_id: str = ""
+    parent_display_name: str = ""
+    group_type: str = ""
+
+
+class AzureResourceRow(BaseModel):
+    """Flat Azure resource row for the resource explorer."""
+
+    id: str
+    name: str
+    resource_type: str
+    subscription_id: str
+    subscription_name: str = ""
+    resource_group: str = ""
+    location: str = ""
+    kind: str = ""
+    state: str = ""
+    tags: dict[str, str] = Field(default_factory=dict)
+
+
+class AzureResourceListResponse(BaseModel):
+    """Filtered resource explorer response."""
+
+    resources: list[AzureResourceRow] = Field(default_factory=list)
+    matched_count: int = 0
+    total_count: int = 0
+
+
+class AzureDirectoryObject(BaseModel):
+    """Normalized Entra directory object row."""
+
+    id: str
+    display_name: str
+    object_type: Literal[
+        "user",
+        "group",
+        "enterprise_app",
+        "app_registration",
+        "directory_role",
+    ]
+    principal_name: str = ""
+    mail: str = ""
+    app_id: str = ""
+    enabled: Optional[bool] = None
+    extra: dict[str, str] = Field(default_factory=dict)
+
+
+class AzureCostPoint(BaseModel):
+    """Daily cost trend point."""
+
+    date: str
+    cost: float
+    currency: str = "USD"
+
+
+class AzureCostBreakdownItem(BaseModel):
+    """Cost grouped by a chosen Azure dimension."""
+
+    label: str
+    amount: float
+    currency: str = "USD"
+    share: float = 0.0
+
+
+class AzureAdvisorRecommendation(BaseModel):
+    """Normalized Azure Advisor recommendation."""
+
+    id: str
+    category: str
+    impact: str
+    recommendation_type: str = ""
+    title: str
+    description: str
+    subscription_id: str = ""
+    subscription_name: str = ""
+    resource_id: str = ""
+    annual_savings: float = 0.0
+    monthly_savings: float = 0.0
+    currency: str = "USD"
+
+
+class AzureCostSummary(BaseModel):
+    """Top-line Azure spend summary for the current lookback window."""
+
+    lookback_days: int
+    total_cost: float
+    currency: str = "USD"
+    top_service: str = ""
+    top_subscription: str = ""
+    top_resource_group: str = ""
+    recommendation_count: int = 0
+    potential_monthly_savings: float = 0.0
+
+
+class AzureOverviewResponse(BaseModel):
+    """Azure portal overview payload."""
+
+    subscriptions: int
+    management_groups: int
+    resources: int
+    role_assignments: int
+    users: int
+    groups: int
+    enterprise_apps: int
+    app_registrations: int
+    directory_roles: int
+    cost: AzureCostSummary
+    datasets: list[AzureDatasetStatus] = Field(default_factory=list)
+    last_refresh: Optional[str] = None
+
+
+class AzureCostChatRequest(BaseModel):
+    """User question for the Azure cost copilot."""
+
+    question: str
+    model: Optional[str] = None
+
+
+class AzureCitation(BaseModel):
+    """Grounding citation attached to an Azure AI response."""
+
+    source_type: str
+    label: str
+    detail: str = ""
+
+
+class AzureCostChatResponse(BaseModel):
+    """Grounded Azure cost copilot answer."""
+
+    answer: str
+    model_used: str
+    generated_at: str
+    citations: list[AzureCitation] = Field(default_factory=list)
