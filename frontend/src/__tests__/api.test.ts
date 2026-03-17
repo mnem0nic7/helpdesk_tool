@@ -84,6 +84,22 @@ describe("api POST methods", () => {
     expect(body.keys).toEqual(["OIT-1", "OIT-2"]);
     expect(body.transition_id).toBe("31");
   });
+
+  it("sends correct body for refreshVisibleTickets", async () => {
+    mockFetch({
+      requested_count: 2,
+      visible_count: 2,
+      refreshed_count: 2,
+      refreshed_keys: ["OIT-1", "OIT-2"],
+      skipped_keys: [],
+      missing_keys: [],
+    });
+    await api.refreshVisibleTickets(["OIT-1", "OIT-2"]);
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/tickets/refresh-visible");
+    expect(call[1].method).toBe("POST");
+    expect(JSON.parse(call[1].body)).toEqual({ keys: ["OIT-1", "OIT-2"] });
+  });
 });
 
 describe("error handling", () => {

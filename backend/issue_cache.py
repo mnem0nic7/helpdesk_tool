@@ -33,6 +33,7 @@ _FILTERED_JQL = (
 _REFRESH_INTERVAL = 15
 _INCREMENTAL_LOOKBACK_MINUTES = 2
 _INCREMENTAL_OVERLAP_MINUTES = 2
+_KEY_REFRESH_BATCH_SIZE = 50
 
 
 class IssueCache:
@@ -222,6 +223,67 @@ class IssueCache:
                 self._issues[key] = issue
 
         self._upsert_to_db([issue])
+
+    def refresh_issue_keys(self, keys: list[str]) -> list[dict[str, Any]]:
+        """Re-fetch a specific set of Jira issues and persist the fresh results.
+
+        This is used by targeted live refresh flows, such as refreshing the
+        tickets currently displayed in the UI. It intentionally does not
+        advance ``last_refresh`` because it only updates part of the dataset.
+        """
+        normalized_keys: list[str] = []
+        seen: set[str] = set()
+        for raw_key in keys:
+            key = str(raw_key or "").strip().upper()
+            if not key or key in seen:
+                continue
+            normalized_keys.append(key)
+            seen.add(key)
+
+        if not normalized_keys:
+            return []
+
+        with self._lock:
+            existing_cache = dict(self._all_issues)
+
+        refreshed_by_key: dict[str, dict[str, Any]] = {}
+        for i in range(0, len(normalized_keys), _KEY_REFRESH_BATCH_SIZE):
+            batch = normalized_keys[i:i + _KEY_REFRESH_BATCH_SIZE]
+            jql = f"key in ({','.join(batch)}) ORDER BY key ASC"
+            refreshed_batch = self._client.search_all(jql)
+            if refreshed_batch:
+                self._client.enrich_request_types(refreshed_batch, existing_cache=existing_cache)
+            for issue in refreshed_batch:
+                key = issue.get("key", "")
+                if not key:
+                    continue
+                refreshed_by_key[key] = issue
+                existing_cache[key] = issue
+
+        refreshed_issues = [
+            refreshed_by_key[key]
+            for key in normalized_keys
+            if key in refreshed_by_key
+        ]
+        if not refreshed_issues:
+            return []
+
+        with self._lock:
+            for issue in refreshed_issues:
+                key = issue.get("key", "")
+                self._all_issues[key] = issue
+                if JiraClient.is_excluded(issue):
+                    self._issues.pop(key, None)
+                else:
+                    self._issues[key] = issue
+
+        self._upsert_to_db(refreshed_issues)
+        logger.info(
+            "Cache: refreshed %d/%d specific issues from Jira",
+            len(refreshed_issues),
+            len(normalized_keys),
+        )
+        return refreshed_issues
 
     # ------------------------------------------------------------------
     # SQLite persistence

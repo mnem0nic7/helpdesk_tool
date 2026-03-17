@@ -198,6 +198,34 @@ class TestTicketsEndpoint:
         assert data["total_count"] == 2
         assert [ticket["key"] for ticket in data["tickets"]] == ["OIT-600", "OIT-500"]
 
+    def test_refresh_visible_tickets_refreshes_current_keys(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        mock_cache.refresh_issue_keys.return_value = [issue]
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: key == "OIT-123")
+
+        resp = test_client.post(
+            "/api/tickets/refresh-visible",
+            json={"keys": ["oit-123", "OIT-123", "OIT-404"]},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "requested_count": 2,
+            "visible_count": 1,
+            "refreshed_count": 1,
+            "refreshed_keys": ["OIT-123"],
+            "skipped_keys": ["OIT-404"],
+            "missing_keys": [],
+        }
+        mock_cache.refresh_issue_keys.assert_called_once_with(["OIT-123"])
+
+    def test_refresh_visible_tickets_rejects_invalid_keys(self, test_client):
+        resp = test_client.post("/api/tickets/refresh-visible", json={"keys": ["not-a-jira-key"]})
+        assert resp.status_code == 400
+        assert "Invalid Jira key format" in resp.json()["detail"]
+
 
 def _adf(text: str) -> dict[str, Any]:
     return {

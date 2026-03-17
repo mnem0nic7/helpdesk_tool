@@ -222,6 +222,12 @@ class TicketCommentRequest(BaseModel):
     public: bool = False
 
 
+class TicketRefreshRequest(BaseModel):
+    """Refresh a specific set of displayed tickets from Jira."""
+
+    keys: list[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # AI Triage models
 # ---------------------------------------------------------------------------
