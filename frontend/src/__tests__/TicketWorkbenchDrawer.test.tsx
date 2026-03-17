@@ -11,6 +11,7 @@ const { mockApi } = vi.hoisted(() => ({
     getPriorities: vi.fn(),
     getRequestTypes: vi.fn(),
     getTransitions: vi.fn(),
+    syncTicketReporter: vi.fn(),
     updateTicket: vi.fn(),
     transitionTicket: vi.fn(),
     addTicketComment: vi.fn(),
@@ -110,6 +111,11 @@ describe("TicketWorkbenchDrawer", () => {
     mockApi.getPriorities.mockResolvedValue([{ id: "1", name: "High" }]);
     mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Hardware", description: "" }]);
     mockApi.getTransitions.mockResolvedValue([]);
+    mockApi.syncTicketReporter.mockResolvedValue({
+      updated: false,
+      message: "Reporter already matches Grace Hopper.",
+      detail: ticketDetail,
+    });
   });
 
   it("resizes wider when the drag handle is moved left", async () => {
@@ -216,5 +222,38 @@ describe("TicketWorkbenchDrawer", () => {
         reporter_display_name: "Raza Abidi",
       });
     });
+  });
+
+  it("updates the reporter from the OCC creator line with one click", async () => {
+    mockApi.syncTicketReporter.mockResolvedValue({
+      updated: true,
+      message: "Reporter updated to Raza Abidi.",
+      detail: {
+        ...ticketDetail,
+        ticket: {
+          ...ticketRow,
+          reporter: "Raza Abidi",
+          reporter_account_id: "acct-raza",
+        },
+      },
+    });
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Ticket Actions");
+
+    fireEvent.click(screen.getByRole("button", { name: "Update Reporter" }));
+
+    await waitFor(() => {
+      expect(mockApi.syncTicketReporter).toHaveBeenCalledWith("OIT-1");
+    });
+
+    expect(await screen.findByText("Reporter updated to Raza Abidi.")).toBeInTheDocument();
   });
 });
