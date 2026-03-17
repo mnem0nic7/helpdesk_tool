@@ -260,6 +260,19 @@ def test_client(mock_cache, freeze_time, monkeypatch):
         "matched_count": 0,
         "total_count": 0,
     }
+    mock_azure_cache.list_virtual_machines.return_value = {
+        "vms": [],
+        "matched_count": 0,
+        "total_count": 0,
+        "summary": {
+            "total_vms": 0,
+            "running_vms": 0,
+            "deallocated_vms": 0,
+            "distinct_sizes": 0,
+        },
+        "by_size": [],
+        "by_state": [],
+    }
     mock_azure_cache.list_directory_objects.return_value = []
     mock_azure_cache.get_grounding_context.return_value = {}
 

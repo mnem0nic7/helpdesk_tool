@@ -420,6 +420,8 @@ class AzureResourceRow(BaseModel):
     resource_group: str = ""
     location: str = ""
     kind: str = ""
+    sku_name: str = ""
+    vm_size: str = ""
     state: str = ""
     tags: dict[str, str] = Field(default_factory=dict)
 
@@ -430,6 +432,40 @@ class AzureResourceListResponse(BaseModel):
     resources: list[AzureResourceRow] = Field(default_factory=list)
     matched_count: int = 0
     total_count: int = 0
+
+
+class AzureVirtualMachineRow(AzureResourceRow):
+    """Azure virtual machine row for the dedicated VM explorer."""
+
+    size: str = ""
+    power_state: str = ""
+
+
+class AzureCountByLabel(BaseModel):
+    """Simple label/count breakdown row."""
+
+    label: str
+    count: int
+
+
+class AzureVirtualMachineSummary(BaseModel):
+    """Headline VM inventory summary."""
+
+    total_vms: int = 0
+    running_vms: int = 0
+    deallocated_vms: int = 0
+    distinct_sizes: int = 0
+
+
+class AzureVirtualMachineListResponse(BaseModel):
+    """Filtered virtual machine explorer response."""
+
+    vms: list[AzureVirtualMachineRow] = Field(default_factory=list)
+    matched_count: int = 0
+    total_count: int = 0
+    summary: AzureVirtualMachineSummary = Field(default_factory=AzureVirtualMachineSummary)
+    by_size: list[AzureCountByLabel] = Field(default_factory=list)
+    by_state: list[AzureCountByLabel] = Field(default_factory=list)
 
 
 class AzureDirectoryObject(BaseModel):

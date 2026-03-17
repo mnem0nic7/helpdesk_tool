@@ -362,6 +362,7 @@ Answer only from the provided cached Azure data.
 
 Rules:
 - Be concrete and action-oriented.
+- If the grounding data includes VM inventory by SKU, use it directly for exact VM count questions.
 - If the data suggests likely savings opportunities, say why.
 - Call out uncertainty when the cached data is incomplete or stale.
 - Do not claim any action was performed.
@@ -1183,6 +1184,14 @@ def answer_azure_cost_question(
             source_type="breakdown",
             label="Top services",
             detail=f"{len(context.get('cost_by_service') or [])} grouped rows",
+        ),
+        AzureCitation(
+            source_type="inventory",
+            label="VM inventory by SKU",
+            detail=(
+                f"{len((context.get('vm_inventory_summary') or {}).get('by_sku') or [])} SKU rows"
+                f" across {int((context.get('vm_inventory_summary') or {}).get('total_vm_count') or 0)} VMs"
+            ),
         ),
         AzureCitation(
             source_type="advisor",

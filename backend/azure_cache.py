@@ -8,6 +8,7 @@ import logging
 import os
 import sqlite3
 import threading
+from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -518,7 +519,7 @@ class AzureCache:
             if search_lower:
                 haystack = " ".join(
                     str(item.get(field) or "")
-                    for field in ("name", "resource_type", "subscription_name", "resource_group", "location")
+                    for field in ("name", "resource_type", "subscription_name", "resource_group", "location", "sku_name", "vm_size")
                 ).lower()
                 haystack += " " + " ".join(
                     f"{key}:{value}" for key, value in (item.get("tags") or {}).items()
@@ -546,6 +547,116 @@ class AzureCache:
             "resources": matched,
             "matched_count": len(matched),
             "total_count": len(all_resources),
+        }
+
+    @staticmethod
+    def _is_virtual_machine(item: dict[str, Any]) -> bool:
+        return str(item.get("resource_type") or "").lower() == "microsoft.compute/virtualmachines"
+
+    @staticmethod
+    def _vm_size(item: dict[str, Any]) -> str:
+        return str(item.get("vm_size") or item.get("sku_name") or "").strip() or "Unknown"
+
+    @staticmethod
+    def _vm_power_state(item: dict[str, Any]) -> str:
+        raw = str(item.get("state") or "").strip()
+        if not raw:
+            return "Unknown"
+        value = raw.split("/", 1)[-1] if "/" in raw else raw
+        value = value.replace("_", " ").replace("-", " ").strip()
+        return value.title() if value else "Unknown"
+
+    def list_virtual_machines(
+        self,
+        *,
+        search: str = "",
+        subscription_id: str = "",
+        resource_group: str = "",
+        location: str = "",
+        state: str = "",
+        size: str = "",
+    ) -> dict[str, Any]:
+        all_resources = self._snapshot("resources") or []
+        all_vms = [item for item in all_resources if self._is_virtual_machine(item)]
+
+        search_lower = search.strip().lower()
+        subscription_filter = subscription_id.strip().lower()
+        group_filter = resource_group.strip().lower()
+        location_filter = location.strip().lower()
+        state_filter = state.strip().lower()
+        size_filter = size.strip().lower()
+
+        matched: list[dict[str, Any]] = []
+        for item in all_vms:
+            vm_size = self._vm_size(item)
+            power_state = self._vm_power_state(item)
+            if search_lower:
+                haystack = " ".join(
+                    [
+                        str(item.get("name") or ""),
+                        str(item.get("subscription_name") or ""),
+                        str(item.get("resource_group") or ""),
+                        str(item.get("location") or ""),
+                        vm_size,
+                        power_state,
+                    ]
+                ).lower()
+                haystack += " " + " ".join(
+                    f"{key}:{value}" for key, value in (item.get("tags") or {}).items()
+                ).lower()
+                if search_lower not in haystack:
+                    continue
+            if subscription_filter and str(item.get("subscription_id") or "").lower() != subscription_filter:
+                continue
+            if group_filter and str(item.get("resource_group") or "").lower() != group_filter:
+                continue
+            if location_filter and str(item.get("location") or "").lower() != location_filter:
+                continue
+            if state_filter and state_filter not in power_state.lower():
+                continue
+            if size_filter and size_filter != vm_size.lower():
+                continue
+
+            row = dict(item)
+            row["size"] = vm_size
+            row["power_state"] = power_state
+            matched.append(row)
+
+        by_size_counts: dict[str, int] = defaultdict(int)
+        by_state_counts: dict[str, int] = defaultdict(int)
+        running_vms = 0
+        deallocated_vms = 0
+        for item in all_vms:
+            vm_size = self._vm_size(item)
+            power_state = self._vm_power_state(item)
+            by_size_counts[vm_size] += 1
+            by_state_counts[power_state] += 1
+            if power_state.lower() == "running":
+                running_vms += 1
+            if power_state.lower() == "deallocated":
+                deallocated_vms += 1
+
+        by_size = [
+            {"label": label, "count": count}
+            for label, count in sorted(by_size_counts.items(), key=lambda item: (-item[1], item[0].lower()))
+        ]
+        by_state = [
+            {"label": label, "count": count}
+            for label, count in sorted(by_state_counts.items(), key=lambda item: (-item[1], item[0].lower()))
+        ]
+
+        return {
+            "vms": matched,
+            "matched_count": len(matched),
+            "total_count": len(all_vms),
+            "summary": {
+                "total_vms": len(all_vms),
+                "running_vms": running_vms,
+                "deallocated_vms": deallocated_vms,
+                "distinct_sizes": len(by_size),
+            },
+            "by_size": by_size[:20],
+            "by_state": by_state,
         }
 
     def list_directory_objects(self, snapshot_name: str, *, search: str = "") -> list[dict[str, Any]]:
@@ -594,6 +705,68 @@ class AzureCache:
     def get_advisor(self) -> list[dict[str, Any]]:
         return self._snapshot("advisor") or []
 
+    def get_vm_inventory_by_sku(self) -> list[dict[str, Any]]:
+        resources = self._snapshot("resources") or []
+        counts: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in resources:
+            resource_type = str(item.get("resource_type") or "").lower()
+            if resource_type != "microsoft.compute/virtualmachines":
+                continue
+
+            sku = str(item.get("vm_size") or item.get("sku_name") or "").strip() or "Unknown"
+            subscription_id = str(item.get("subscription_id") or "").strip()
+            subscription_name = str(item.get("subscription_name") or "").strip()
+            key = (subscription_id, sku)
+            row = counts.setdefault(
+                key,
+                {
+                    "subscription_id": subscription_id,
+                    "subscription_name": subscription_name,
+                    "sku": sku,
+                    "count": 0,
+                },
+            )
+            row["count"] += 1
+
+        return sorted(
+            counts.values(),
+            key=lambda item: (
+                -(int(item.get("count") or 0)),
+                str(item.get("subscription_name") or item.get("subscription_id") or "").lower(),
+                str(item.get("sku") or "").lower(),
+            ),
+        )
+
+    def get_vm_inventory_summary(self) -> dict[str, Any]:
+        rows = self.get_vm_inventory_by_sku()
+        total_vm_count = sum(int(item.get("count") or 0) for item in rows)
+        by_sku: dict[str, int] = defaultdict(int)
+        by_subscription: dict[str, int] = defaultdict(int)
+
+        for item in rows:
+            sku = str(item.get("sku") or "Unknown")
+            subscription_name = str(item.get("subscription_name") or item.get("subscription_id") or "Unknown")
+            count = int(item.get("count") or 0)
+            by_sku[sku] += count
+            by_subscription[subscription_name] += count
+
+        sku_rows = [
+            {"sku": sku, "count": count}
+            for sku, count in sorted(by_sku.items(), key=lambda item: (-item[1], item[0].lower()))
+        ]
+        subscription_rows = [
+            {"subscription_name": subscription_name, "count": count}
+            for subscription_name, count in sorted(by_subscription.items(), key=lambda item: (-item[1], item[0].lower()))
+        ]
+
+        return {
+            "total_vm_count": total_vm_count,
+            "sku_count": len(sku_rows),
+            "by_sku": sku_rows,
+            "by_subscription": subscription_rows,
+            "by_subscription_and_sku": rows,
+        }
+
     def get_grounding_context(self) -> dict[str, Any]:
         return {
             "overview": self.get_overview(),
@@ -602,6 +775,7 @@ class AzureCache:
             "cost_by_service": (self.get_cost_breakdown("service") or [])[:8],
             "cost_by_subscription": (self.get_cost_breakdown("subscription") or [])[:8],
             "cost_by_resource_group": (self.get_cost_breakdown("resource_group") or [])[:8],
+            "vm_inventory_summary": self.get_vm_inventory_summary(),
             "advisor": (self.get_advisor() or [])[:10],
         }
 

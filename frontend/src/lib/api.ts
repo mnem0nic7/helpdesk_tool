@@ -648,6 +648,8 @@ export interface AzureResourceRow {
   resource_group: string;
   location: string;
   kind: string;
+  sku_name: string;
+  vm_size: string;
   state: string;
   tags: Record<string, string>;
 }
@@ -656,6 +658,32 @@ export interface AzureResourceListResponse {
   resources: AzureResourceRow[];
   matched_count: number;
   total_count: number;
+}
+
+export interface AzureCountByLabel {
+  label: string;
+  count: number;
+}
+
+export interface AzureVirtualMachineRow extends AzureResourceRow {
+  size: string;
+  power_state: string;
+}
+
+export interface AzureVirtualMachineSummary {
+  total_vms: number;
+  running_vms: number;
+  deallocated_vms: number;
+  distinct_sizes: number;
+}
+
+export interface AzureVirtualMachineListResponse {
+  vms: AzureVirtualMachineRow[];
+  matched_count: number;
+  total_count: number;
+  summary: AzureVirtualMachineSummary;
+  by_size: AzureCountByLabel[];
+  by_state: AzureCountByLabel[];
 }
 
 export interface AzureDirectoryObject {
@@ -780,6 +808,15 @@ export interface AzureResourceQueryParams {
   state?: string;
   tag_key?: string;
   tag_value?: string;
+}
+
+export interface AzureVirtualMachineQueryParams {
+  search?: string;
+  subscription_id?: string;
+  resource_group?: string;
+  location?: string;
+  state?: string;
+  size?: string;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1061,6 +1098,10 @@ export const api = {
 
   getAzureResources(params: AzureResourceQueryParams = {}): Promise<AzureResourceListResponse> {
     return fetchJSON<AzureResourceListResponse>(`/api/azure/resources${buildQuery(params)}`);
+  },
+
+  getAzureVMs(params: AzureVirtualMachineQueryParams = {}): Promise<AzureVirtualMachineListResponse> {
+    return fetchJSON<AzureVirtualMachineListResponse>(`/api/azure/vms${buildQuery(params)}`);
   },
 
   getAzureUsers(search = ""): Promise<AzureDirectoryObject[]> {
