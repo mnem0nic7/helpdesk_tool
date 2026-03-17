@@ -432,11 +432,18 @@ async def refresh_visible_tickets(body: TicketRefreshRequest) -> dict[str, Any]:
         else:
             skipped_keys.append(key)
 
-    refreshed_issues = await asyncio.get_running_loop().run_in_executor(
-        None,
-        cache.refresh_issue_keys,
-        visible_keys,
-    )
+    try:
+        refreshed_issues = await asyncio.get_running_loop().run_in_executor(
+            None,
+            cache.refresh_issue_keys,
+            visible_keys,
+        )
+    except Exception as exc:
+        logger.exception("Failed to refresh visible tickets from Jira")
+        raise HTTPException(
+            status_code=502,
+            detail="Jira refresh failed. Please try again in a moment.",
+        ) from exc
     refreshed_keys = [issue.get("key", "") for issue in refreshed_issues if issue.get("key")]
     refreshed_key_set = set(refreshed_keys)
 
