@@ -153,6 +153,15 @@ class ReportConfig(BaseModel):
     include_excluded: bool = False
 
 
+class OasisDevWorkloadReportRequest(BaseModel):
+    """Request body for the OasisDev workload summary report."""
+
+    assignee: Optional[str] = None
+    report_start: Optional[str] = None
+    report_end: Optional[str] = None
+    last_report_date: Optional[str] = None
+
+
 class ChartDataRequest(BaseModel):
     """Request body for the grouped chart data endpoint."""
 

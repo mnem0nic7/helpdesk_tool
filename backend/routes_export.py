@@ -6,11 +6,11 @@ import logging
 import os
 import statistics
 import tempfile
-from collections import defaultdict
-from datetime import datetime, timezone
+from collections import Counter, defaultdict
+from datetime import date, datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from openpyxl import Workbook
@@ -19,9 +19,9 @@ from openpyxl.utils import get_column_letter
 
 from issue_cache import cache
 from metrics import issue_to_row, _extract_description, _all_comments_text
-from models import ReportConfig
+from models import OasisDevWorkloadReportRequest, ReportConfig
 from routes_tickets import _match
-from site_context import get_scoped_issues, get_site_profile
+from site_context import get_current_site_scope, get_scoped_issues, get_site_profile
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +195,364 @@ def _cell_value(value: Any) -> Any:
     return value
 
 
+def _ensure_oasisdev_site() -> None:
+    """Restrict OasisDev-only reports to the OasisDev host."""
+    if get_current_site_scope() != "oasisdev":
+        raise HTTPException(status_code=404, detail="Report not available on this site.")
+
+
+def _parse_iso_date(raw: str | None, *, field_name: str, default: date) -> date:
+    """Parse an ISO date or return the provided default."""
+    if not raw:
+        return default
+    try:
+        return date.fromisoformat(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}: {raw}") from exc
+
+
+def _parse_issue_date(issue: dict[str, Any], field_name: str) -> date | None:
+    """Return the Jira field as a date, ignoring malformed values."""
+    raw = ((issue.get("fields") or {}).get(field_name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def _month_key(value: date) -> str:
+    """Return a stable YYYY-MM bucket key."""
+    return value.strftime("%Y-%m")
+
+
+def _month_label(month_key: str) -> str:
+    """Return a human-readable month label."""
+    return datetime.strptime(month_key, "%Y-%m").strftime("%b %Y")
+
+
+def _iter_month_keys(start: date, end: date) -> list[str]:
+    """Return inclusive month buckets for a date window."""
+    month_keys: list[str] = []
+    cursor = date(start.year, start.month, 1)
+    last = date(end.year, end.month, 1)
+    while cursor <= last:
+        month_keys.append(_month_key(cursor))
+        if cursor.month == 12:
+            cursor = date(cursor.year + 1, 1, 1)
+        else:
+            cursor = date(cursor.year, cursor.month + 1, 1)
+    return month_keys
+
+
+def _autofit_columns(ws, widths: dict[int, int]) -> None:
+    """Apply simple explicit widths to a worksheet."""
+    for idx, width in widths.items():
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+
+def _write_header_row(ws, row_idx: int, headers: list[str]) -> None:
+    """Write a styled header row."""
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=row_idx, column=col_idx, value=header)
+        cell.font = _HEADER_FONT
+        cell.fill = _HEADER_FILL
+        cell.alignment = _HEADER_ALIGNMENT
+
+
+def _build_oasisdev_workload_report(
+    request: OasisDevWorkloadReportRequest,
+) -> dict[str, Any]:
+    """Build the OasisDev workload summary and export payload."""
+    _ensure_oasisdev_site()
+
+    today = datetime.now(timezone.utc).date()
+    default_start = date(today.year, 1, 1)
+    report_start = _parse_iso_date(request.report_start, field_name="report_start", default=default_start)
+    report_end = _parse_iso_date(request.report_end, field_name="report_end", default=today)
+    last_report_date = _parse_iso_date(
+        request.last_report_date,
+        field_name="last_report_date",
+        default=report_start,
+    )
+    if report_start > report_end:
+        raise HTTPException(status_code=400, detail="report_start must be on or before report_end.")
+    if last_report_date > report_end:
+        raise HTTPException(status_code=400, detail="last_report_date must be on or before report_end.")
+
+    issues = get_scoped_issues()
+    filtered_records: list[dict[str, Any]] = []
+    for issue in issues:
+        if request.assignee and not _match(issue, assignee=request.assignee):
+            continue
+        created_date = _parse_issue_date(issue, "created")
+        if not created_date:
+            continue
+        resolved_date = _parse_issue_date(issue, "resolutiondate")
+        row = issue_to_row(issue)
+        filtered_records.append(
+            {
+                "issue": issue,
+                "row": row,
+                "created_date": created_date,
+                "resolved_date": resolved_date,
+            }
+        )
+
+    month_keys = _iter_month_keys(report_start, report_end)
+    month_labels = [{"key": key, "label": _month_label(key)} for key in month_keys]
+
+    created_window_records = [
+        record
+        for record in filtered_records
+        if report_start <= record["created_date"] <= report_end
+    ]
+    created_since_last_report = [
+        record
+        for record in filtered_records
+        if last_report_date <= record["created_date"] <= report_end
+    ]
+
+    created_by_month = {key: 0 for key in month_keys}
+    resolved_by_month = {key: 0 for key in month_keys}
+    status_month_counts: dict[str, Counter[str]] = defaultdict(Counter)
+
+    for record in filtered_records:
+        created_date = record["created_date"]
+        resolved_date = record["resolved_date"]
+        if report_start <= created_date <= report_end:
+            created_key = _month_key(created_date)
+            created_by_month[created_key] += 1
+            status = record["row"].get("status") or "Unknown"
+            status_month_counts[status][created_key] += 1
+        if resolved_date and report_start <= resolved_date <= report_end:
+            resolved_by_month[_month_key(resolved_date)] += 1
+
+    status_rows = []
+    for status in sorted(status_month_counts.keys()):
+        counts = [status_month_counts[status].get(month_key, 0) for month_key in month_keys]
+        status_rows.append(
+            {
+                "status": status,
+                "counts": counts,
+                "total": sum(counts),
+            }
+        )
+
+    month_totals = [created_by_month[month_key] for month_key in month_keys]
+    created_vs_resolved = [
+        {
+            "month_key": month_key,
+            "month_label": _month_label(month_key),
+            "created": created_by_month[month_key],
+            "resolved": resolved_by_month[month_key],
+            "net_flow": created_by_month[month_key] - resolved_by_month[month_key],
+        }
+        for month_key in month_keys
+    ]
+
+    since_status_counts = Counter(
+        (record["row"].get("status") or "Unknown")
+        for record in created_since_last_report
+    )
+    resolved_since_last_report = sum(
+        1
+        for record in created_since_last_report
+        if record["resolved_date"] and record["resolved_date"] <= report_end
+    )
+    created_count = len(created_since_last_report)
+    open_count = max(created_count - resolved_since_last_report, 0)
+    resolution_rate = round((resolved_since_last_report / created_count) * 100, 1) if created_count else 0.0
+
+    detail_rows = []
+    for record in sorted(created_since_last_report, key=lambda item: item["created_date"], reverse=True):
+        row = record["row"]
+        detail_rows.append(
+            {
+                "key": row.get("key", ""),
+                "summary": row.get("summary", ""),
+                "status": row.get("status", ""),
+                "priority": row.get("priority", ""),
+                "assignee": row.get("assignee", ""),
+                "reporter": row.get("reporter", ""),
+                "created": row.get("created", ""),
+                "resolved": row.get("resolved", ""),
+                "request_type": row.get("request_type", ""),
+                "application": ", ".join(row.get("components") or []),
+                "operational_categorization": row.get("work_category", ""),
+            }
+        )
+
+    status_breakdown = [
+        {"status": status, "count": count}
+        for status, count in sorted(
+            since_status_counts.items(),
+            key=lambda item: (-item[1], item[0].lower()),
+        )
+    ]
+
+    assignee_label = request.assignee or "All assignees"
+    return {
+        "summary": {
+            "assignee": assignee_label,
+            "report_start": report_start.isoformat(),
+            "report_end": report_end.isoformat(),
+            "last_report_date": last_report_date.isoformat(),
+            "tickets_created_in_window": len(created_window_records),
+            "tickets_resolved_in_window": sum(resolved_by_month.values()),
+        },
+        "monthly_status": {
+            "months": month_labels,
+            "rows": status_rows,
+            "grand_total": month_totals,
+            "grand_total_overall": sum(month_totals),
+        },
+        "created_vs_resolved": created_vs_resolved,
+        "since_last_report": {
+            "created_count": created_count,
+            "resolved_count": resolved_since_last_report,
+            "open_count": open_count,
+            "resolution_rate": resolution_rate,
+            "status_breakdown": status_breakdown,
+            "tickets": detail_rows,
+        },
+    }
+
+
+def _build_oasisdev_workload_workbook(report: dict[str, Any]) -> Workbook:
+    """Render the OasisDev workload report to Excel."""
+    wb = Workbook()
+
+    summary = report["summary"]
+    monthly_status = report["monthly_status"]
+    created_vs_resolved = report["created_vs_resolved"]
+    since_last_report = report["since_last_report"]
+
+    ws = wb.active
+    ws.title = "Monthly Status"
+    ws["A1"] = "Assignee"
+    ws["B1"] = summary["assignee"]
+    ws["A2"] = "Report Window"
+    ws["B2"] = f"{summary['report_start']} to {summary['report_end']}"
+    ws["A3"] = "Last Report Date"
+    ws["B3"] = summary["last_report_date"]
+    for cell_ref in ("A1", "A2", "A3"):
+        ws[cell_ref].font = Font(bold=True)
+
+    month_headers = [month["label"] for month in monthly_status["months"]]
+    header_row_idx = 5
+    _write_header_row(ws, header_row_idx, ["Status", *month_headers, "Total"])
+    current_row = header_row_idx + 1
+    for row in monthly_status["rows"]:
+        ws.cell(row=current_row, column=1, value=row["status"])
+        for col_idx, count in enumerate(row["counts"], 2):
+            ws.cell(row=current_row, column=col_idx, value=count)
+        ws.cell(row=current_row, column=len(month_headers) + 2, value=row["total"])
+        current_row += 1
+    ws.cell(row=current_row, column=1, value="Grand Total").font = Font(bold=True)
+    for col_idx, count in enumerate(monthly_status["grand_total"], 2):
+        ws.cell(row=current_row, column=col_idx, value=count).font = Font(bold=True)
+    ws.cell(
+        row=current_row,
+        column=len(month_headers) + 2,
+        value=monthly_status["grand_total_overall"],
+    ).font = Font(bold=True)
+    ws.freeze_panes = "A6"
+    _autofit_columns(
+        ws,
+        {
+            1: 24,
+            **{idx + 2: 14 for idx in range(len(month_headers))},
+            len(month_headers) + 2: 12,
+        },
+    )
+
+    flow_ws = wb.create_sheet("Created vs Resolved")
+    _write_header_row(flow_ws, 1, ["Month", "Created", "Resolved", "Net Flow"])
+    for row_idx, row in enumerate(created_vs_resolved, 2):
+        flow_ws.cell(row=row_idx, column=1, value=row["month_label"])
+        flow_ws.cell(row=row_idx, column=2, value=row["created"])
+        flow_ws.cell(row=row_idx, column=3, value=row["resolved"])
+        flow_ws.cell(row=row_idx, column=4, value=row["net_flow"])
+    flow_ws.freeze_panes = "A2"
+    _autofit_columns(flow_ws, {1: 18, 2: 12, 3: 12, 4: 12})
+
+    since_ws = wb.create_sheet("Since Last Report")
+    since_ws["A1"] = "Assignee"
+    since_ws["B1"] = summary["assignee"]
+    since_ws["A2"] = "Last Report Date"
+    since_ws["B2"] = summary["last_report_date"]
+    since_ws["A3"] = "New Tickets"
+    since_ws["B3"] = since_last_report["created_count"]
+    since_ws["A4"] = "Resolved"
+    since_ws["B4"] = since_last_report["resolved_count"]
+    since_ws["A5"] = "Still Open"
+    since_ws["B5"] = since_last_report["open_count"]
+    since_ws["A6"] = "Resolution Rate"
+    since_ws["B6"] = since_last_report["resolution_rate"] / 100 if since_last_report["created_count"] else 0
+    since_ws["B6"].number_format = "0.0%"
+    for cell_ref in ("A1", "A2", "A3", "A4", "A5", "A6"):
+        since_ws[cell_ref].font = Font(bold=True)
+
+    breakdown_start = 8
+    _write_header_row(since_ws, breakdown_start, ["Current Status", "Count"])
+    for row_idx, row in enumerate(since_last_report["status_breakdown"], breakdown_start + 1):
+        since_ws.cell(row=row_idx, column=1, value=row["status"])
+        since_ws.cell(row=row_idx, column=2, value=row["count"])
+
+    detail_start = breakdown_start + len(since_last_report["status_breakdown"]) + 3
+    detail_headers = [
+        "Key",
+        "Summary",
+        "Status",
+        "Priority",
+        "Assignee",
+        "Reporter",
+        "Created",
+        "Resolved",
+        "Request Type",
+        "Application",
+        "Operational Categorization",
+    ]
+    _write_header_row(since_ws, detail_start, detail_headers)
+    for row_idx, row in enumerate(since_last_report["tickets"], detail_start + 1):
+        since_ws.cell(row=row_idx, column=1, value=_cell_value(row["key"]))
+        since_ws.cell(row=row_idx, column=2, value=_cell_value(row["summary"]))
+        since_ws.cell(row=row_idx, column=3, value=_cell_value(row["status"]))
+        since_ws.cell(row=row_idx, column=4, value=_cell_value(row["priority"]))
+        since_ws.cell(row=row_idx, column=5, value=_cell_value(row["assignee"]))
+        since_ws.cell(row=row_idx, column=6, value=_cell_value(row["reporter"]))
+        since_ws.cell(row=row_idx, column=7, value=_cell_value(row["created"]))
+        since_ws.cell(row=row_idx, column=8, value=_cell_value(row["resolved"]))
+        since_ws.cell(row=row_idx, column=9, value=_cell_value(row["request_type"]))
+        since_ws.cell(row=row_idx, column=10, value=_cell_value(row["application"]))
+        since_ws.cell(
+            row=row_idx,
+            column=11,
+            value=_cell_value(row["operational_categorization"]),
+        )
+    since_ws.freeze_panes = f"A{detail_start + 1}"
+    _autofit_columns(
+        since_ws,
+        {
+            1: 12,
+            2: 48,
+            3: 20,
+            4: 12,
+            5: 24,
+            6: 24,
+            7: 22,
+            8: 22,
+            9: 24,
+            10: 28,
+            11: 24,
+        },
+    )
+
+    return wb
+
+
 # ---------------------------------------------------------------------------
 # Report builder endpoints
 # ---------------------------------------------------------------------------
@@ -294,6 +652,37 @@ async def report_export(config: ReportConfig) -> FileResponse:
     tmp.close()
     wb.save(tmp_path)
     logger.info("Report export saved to %s (%d rows)", tmp_path, len(rows))
+
+    return FileResponse(
+        path=tmp_path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        background=BackgroundTask(os.unlink, tmp_path),
+    )
+
+
+@router.post("/report/oasisdev-workload")
+async def oasisdev_workload_report_preview(
+    request: OasisDevWorkloadReportRequest,
+) -> dict[str, Any]:
+    """Return the OasisDev workload report preview payload."""
+    return _build_oasisdev_workload_report(request)
+
+
+@router.post("/report/oasisdev-workload/export")
+async def oasisdev_workload_report_export(
+    request: OasisDevWorkloadReportRequest,
+) -> FileResponse:
+    """Generate and return the OasisDev workload report workbook."""
+    report = _build_oasisdev_workload_report(request)
+    wb = _build_oasisdev_workload_workbook(report)
+    now = datetime.now(timezone.utc)
+    filename = f"OasisDev_Workload_Report_{now.strftime('%Y%m%d_%H%M')}.xlsx"
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    wb.save(tmp_path)
+    logger.info("OasisDev workload export saved to %s", tmp_path)
 
     return FileResponse(
         path=tmp_path,

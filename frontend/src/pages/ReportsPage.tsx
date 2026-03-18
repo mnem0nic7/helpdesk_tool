@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { ReportConfig, ReportPreviewResponse } from "../lib/api.ts";
+import type {
+  Assignee,
+  OasisDevWorkloadReportRequest,
+  OasisDevWorkloadReportResponse,
+  ReportConfig,
+  ReportPreviewResponse,
+} from "../lib/api.ts";
 import TicketFilters, {
   emptyFilters,
 } from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
+import { getSiteBranding } from "../lib/siteContext.ts";
 
 // ---------------------------------------------------------------------------
 // Field metadata — all 21 TicketRow fields with categories
@@ -187,6 +194,24 @@ function formatCellValue(value: unknown, field?: string): string {
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   }
   return String(value);
+}
+
+function toDateInputValue(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatPlainDate(value: string): string {
+  if (!value) return "\u2014";
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +467,33 @@ function Section({
   );
 }
 
+function WorkloadStatCard({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: "blue" | "emerald" | "amber" | "slate";
+}) {
+  const accentClass =
+    accent === "emerald"
+      ? "text-emerald-700"
+      : accent === "amber"
+        ? "text-amber-700"
+        : accent === "slate"
+          ? "text-slate-700"
+          : "text-blue-700";
+  return (
+    <div className="rounded-lg border border-gray-200 bg-gray-50/60 px-4 py-3">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+        {label}
+      </div>
+      <div className={`mt-1 text-2xl font-semibold tabular-nums ${accentClass}`}>{value}</div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Accent color map for presets
 // ---------------------------------------------------------------------------
@@ -459,6 +511,14 @@ const ACCENT_CLASSES: Record<string, { bg: string; border: string; text: string;
 // ---------------------------------------------------------------------------
 
 export default function ReportsPage() {
+  const site = getSiteBranding();
+  const isOasisDev = site.scope === "oasisdev";
+  const todayInput = useMemo(() => toDateInputValue(new Date()), []);
+  const startOfYearInput = useMemo(() => {
+    const today = new Date();
+    return `${today.getFullYear()}-01-01`;
+  }, []);
+
   // Config state
   const [filters, setFilters] = useState<TicketFilterValues>({ ...emptyFilters });
   const [columns, setColumns] = useState<string[]>([...DEFAULT_COLUMNS]);
@@ -468,6 +528,11 @@ export default function ReportsPage() {
   const [includeExcluded, setIncludeExcluded] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [workloadAssignee, setWorkloadAssignee] = useState("");
+  const [workloadReportStart, setWorkloadReportStart] = useState(startOfYearInput);
+  const [workloadReportEnd, setWorkloadReportEnd] = useState(todayInput);
+  const [workloadLastReportDate, setWorkloadLastReportDate] = useState(startOfYearInput);
+  const [workloadExporting, setWorkloadExporting] = useState(false);
 
   // Build config object for API
   const config: ReportConfig = useMemo(() => ({
@@ -495,6 +560,34 @@ export default function ReportsPage() {
   const { data: preview, isLoading, isFetching, isError } = useQuery<ReportPreviewResponse>({
     queryKey: ["report-preview", debouncedConfig],
     queryFn: () => api.previewReport(debouncedConfig),
+  });
+
+  const workloadRequest: OasisDevWorkloadReportRequest = useMemo(
+    () => ({
+      assignee: workloadAssignee || undefined,
+      report_start: workloadReportStart || undefined,
+      report_end: workloadReportEnd || undefined,
+      last_report_date: workloadLastReportDate || undefined,
+    }),
+    [workloadAssignee, workloadLastReportDate, workloadReportEnd, workloadReportStart],
+  );
+
+  const { data: assignees = [] } = useQuery<Assignee[]>({
+    queryKey: ["assignees", isOasisDev ? "oasisdev-reports" : "reports"],
+    queryFn: () => api.getAssignees(),
+    enabled: isOasisDev,
+  });
+
+  const {
+    data: workloadPreview,
+    isLoading: isWorkloadLoading,
+    isFetching: isWorkloadFetching,
+    isError: isWorkloadError,
+    error: workloadError,
+  } = useQuery<OasisDevWorkloadReportResponse>({
+    queryKey: ["oasisdev-workload-report", workloadRequest],
+    queryFn: () => api.previewOasisDevWorkloadReport(workloadRequest),
+    enabled: isOasisDev,
   });
 
   // Preset handler
@@ -540,6 +633,17 @@ export default function ReportsPage() {
     }
   }
 
+  async function handleWorkloadExport() {
+    setWorkloadExporting(true);
+    try {
+      await api.exportOasisDevWorkloadReport(workloadRequest);
+    } catch (err) {
+      console.error("OasisDev workload export failed:", err);
+    } finally {
+      setWorkloadExporting(false);
+    }
+  }
+
   // Determine preview columns and headers
   const previewColumns = groupBy
     ? ["group", "count", "open", "avg_ttr_hours"]
@@ -559,9 +663,13 @@ export default function ReportsPage() {
       {/* Page header */}
       <div className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Report Builder</h1>
+          <h1 className="text-2xl font-bold text-gray-900">
+            {isOasisDev ? "Reports" : "Report Builder"}
+          </h1>
           <p className="mt-1 text-sm text-gray-500">
-            Configure filters, select columns, and preview before exporting.
+            {isOasisDev
+              ? "Run the OasisDev workload report for Dave, or build your own custom export below."
+              : "Configure filters, select columns, and preview before exporting."}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -596,6 +704,308 @@ export default function ReportsPage() {
           </button>
         </div>
       </div>
+
+      {isOasisDev && (
+        <Section
+          title="Workload Report"
+          badge={workloadPreview ? `${workloadPreview.since_last_report.tickets.length} tickets since last report` : undefined}
+          defaultOpen={true}
+          actions={
+            <button
+              onClick={handleWorkloadExport}
+              disabled={workloadExporting}
+              className="inline-flex items-center gap-1.5 rounded-md bg-slate-800 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <DownloadIcon className="h-3.5 w-3.5" />
+              {workloadExporting ? "Exporting..." : "Export Dave Report"}
+            </button>
+          }
+        >
+          <div className="space-y-5">
+            <div className="grid gap-4 lg:grid-cols-[1.2fr_repeat(3,minmax(0,1fr))]">
+              <label className="space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Assignee
+                </span>
+                <select
+                  value={workloadAssignee}
+                  onChange={(e) => setWorkloadAssignee(e.target.value)}
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                >
+                  <option value="">All assignees</option>
+                  {assignees.map((assignee) => (
+                    <option key={assignee.account_id} value={assignee.display_name}>
+                      {assignee.display_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Report Start
+                </span>
+                <input
+                  type="date"
+                  value={workloadReportStart}
+                  onChange={(e) => setWorkloadReportStart(e.target.value)}
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Report End
+                </span>
+                <input
+                  type="date"
+                  value={workloadReportEnd}
+                  onChange={(e) => setWorkloadReportEnd(e.target.value)}
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Since Last Report
+                </span>
+                <input
+                  type="date"
+                  value={workloadLastReportDate}
+                  onChange={(e) => setWorkloadLastReportDate(e.target.value)}
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                />
+              </label>
+            </div>
+
+            {isWorkloadLoading && !workloadPreview ? (
+              <div className="rounded-lg border border-gray-200 bg-gray-50/60 px-4 py-10 text-center text-sm text-gray-500">
+                Loading workload report...
+              </div>
+            ) : isWorkloadError ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {workloadError instanceof Error ? workloadError.message : "Failed to load workload report."}
+              </div>
+            ) : workloadPreview ? (
+              <>
+                <div className="flex items-center justify-between gap-4 rounded-lg border border-gray-200 bg-gray-50/60 px-4 py-3 text-sm text-gray-600">
+                  <div>
+                    Reporting window:{" "}
+                    <span className="font-semibold text-gray-800">
+                      {formatPlainDate(workloadPreview.summary.report_start)}
+                    </span>{" "}
+                    to{" "}
+                    <span className="font-semibold text-gray-800">
+                      {formatPlainDate(workloadPreview.summary.report_end)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <span>Assignee:</span>
+                    <span className="rounded-full bg-white px-2 py-1 font-semibold text-gray-700 shadow-sm ring-1 ring-gray-200">
+                      {workloadPreview.summary.assignee}
+                    </span>
+                    {isWorkloadFetching && (
+                      <span className="rounded-full bg-blue-50 px-2 py-1 font-medium text-blue-600 ring-1 ring-blue-200">
+                        Refreshing...
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <WorkloadStatCard
+                    label="New Since Last Report"
+                    value={workloadPreview.since_last_report.created_count.toLocaleString()}
+                    accent="blue"
+                  />
+                  <WorkloadStatCard
+                    label="Resolved Since Last Report"
+                    value={workloadPreview.since_last_report.resolved_count.toLocaleString()}
+                    accent="emerald"
+                  />
+                  <WorkloadStatCard
+                    label="Still Open"
+                    value={workloadPreview.since_last_report.open_count.toLocaleString()}
+                    accent="amber"
+                  />
+                  <WorkloadStatCard
+                    label="Resolution Rate"
+                    value={`${workloadPreview.since_last_report.resolution_rate.toFixed(1)}%`}
+                    accent="slate"
+                  />
+                </div>
+
+                <div className="grid gap-5 xl:grid-cols-[1.6fr_1fr]">
+                  <div className="overflow-x-auto rounded-lg border border-gray-200">
+                    <table className="w-full min-w-[640px] text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200 bg-gray-50/70">
+                          <th className="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-500">
+                            Status
+                          </th>
+                          {workloadPreview.monthly_status.months.map((month) => (
+                            <th
+                              key={month.key}
+                              className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-500"
+                            >
+                              {month.label}
+                            </th>
+                          ))}
+                          <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-500">
+                            Total
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {workloadPreview.monthly_status.rows.map((row) => (
+                          <tr key={row.status} className="border-b border-gray-100 last:border-b-0">
+                            <td className="px-4 py-2.5 font-medium text-gray-800">{row.status}</td>
+                            {row.counts.map((count, index) => (
+                              <td key={`${row.status}-${index}`} className="px-3 py-2.5 text-right tabular-nums text-gray-700">
+                                {count.toLocaleString()}
+                              </td>
+                            ))}
+                            <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-gray-900">
+                              {row.total.toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                        <tr className="bg-gray-50/80">
+                          <td className="px-4 py-2.5 font-semibold text-gray-900">Grand Total</td>
+                          {workloadPreview.monthly_status.grand_total.map((count, index) => (
+                            <td key={`grand-total-${index}`} className="px-3 py-2.5 text-right font-semibold tabular-nums text-gray-900">
+                              {count.toLocaleString()}
+                            </td>
+                          ))}
+                          <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-gray-900">
+                            {workloadPreview.monthly_status.grand_total_overall.toLocaleString()}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="rounded-lg border border-gray-200">
+                      <div className="border-b border-gray-100 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                        Created vs Resolved
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="bg-gray-50/70">
+                              <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-500">Month</th>
+                              <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-500">Created</th>
+                              <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-500">Resolved</th>
+                              <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-500">Net</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {workloadPreview.created_vs_resolved.map((row) => (
+                              <tr key={row.month_key} className="border-t border-gray-100">
+                                <td className="px-4 py-2.5 font-medium text-gray-800">{row.month_label}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-gray-700">{row.created.toLocaleString()}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-gray-700">{row.resolved.toLocaleString()}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-gray-700">{row.net_flow.toLocaleString()}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 bg-gray-50/40 px-4 py-4">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                        Current Status Breakdown
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        {workloadPreview.since_last_report.status_breakdown.length ? (
+                          workloadPreview.since_last_report.status_breakdown.map((row) => (
+                            <div key={row.status} className="flex items-center justify-between rounded-md border border-gray-200 bg-white px-3 py-2 text-sm">
+                              <span className="font-medium text-gray-700">{row.status}</span>
+                              <span className="tabular-nums text-gray-900">{row.count.toLocaleString()}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="rounded-md border border-dashed border-gray-200 bg-white px-3 py-4 text-sm text-gray-500">
+                            No tickets created since the selected report date.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-gray-200">
+                  <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50/70 px-4 py-2.5">
+                    <div>
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                        Since Last Report Ticket Detail
+                      </div>
+                      <div className="mt-1 text-xs text-gray-500">
+                        Includes the fields Dave needs for workload and reporting follow-up.
+                      </div>
+                    </div>
+                    <div className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-700 ring-1 ring-gray-200">
+                      {workloadPreview.since_last_report.tickets.length.toLocaleString()} tickets
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[1120px] text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200 bg-white">
+                          {[
+                            "Key",
+                            "Summary",
+                            "Status",
+                            "Priority",
+                            "Assignee",
+                            "Reporter",
+                            "Created",
+                            "Resolved",
+                            "Request Type",
+                            "Application",
+                            "Operational Categorization",
+                          ].map((header) => (
+                            <th
+                              key={header}
+                              className="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-500"
+                            >
+                              {header}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {workloadPreview.since_last_report.tickets.length ? (
+                          workloadPreview.since_last_report.tickets.map((ticket) => (
+                            <tr key={ticket.key} className="border-t border-gray-100 align-top">
+                              <td className="px-4 py-2.5 font-mono text-xs font-semibold text-slate-700">{ticket.key}</td>
+                              <td className="px-4 py-2.5 text-gray-800">{ticket.summary}</td>
+                              <td className="px-4 py-2.5 text-gray-700">{ticket.status || "\u2014"}</td>
+                              <td className="px-4 py-2.5 text-gray-700">{ticket.priority || "\u2014"}</td>
+                              <td className="px-4 py-2.5 text-gray-700">{ticket.assignee || "\u2014"}</td>
+                              <td className="px-4 py-2.5 text-gray-700">{ticket.reporter || "\u2014"}</td>
+                              <td className="px-4 py-2.5 text-gray-700">{formatCellValue(ticket.created, "created")}</td>
+                              <td className="px-4 py-2.5 text-gray-700">{formatCellValue(ticket.resolved, "resolved")}</td>
+                              <td className="px-4 py-2.5 text-gray-700">{ticket.request_type || "\u2014"}</td>
+                              <td className="px-4 py-2.5 text-gray-700">{ticket.application || "\u2014"}</td>
+                              <td className="px-4 py-2.5 text-gray-700">{ticket.operational_categorization || "\u2014"}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={11} className="px-4 py-10 text-center text-sm text-gray-500">
+                              No tickets were created in this reporting slice.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </Section>
+      )}
 
       {/* Presets */}
       <div className="grid grid-cols-5 gap-3">
