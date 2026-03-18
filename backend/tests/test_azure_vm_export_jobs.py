@@ -152,3 +152,61 @@ def test_send_notification_marks_job_notified(tmp_path, monkeypatch):
     assert updated is not None
     assert updated["notified_at"] is not None
     assert updated["notification_error"] is None
+
+
+def test_process_job_marks_export_failed_without_workbook_on_timeout(tmp_path, monkeypatch):
+    manager = AzureVMExportJobManager(db_path=str(tmp_path / "azure_vm_export_jobs.db"))
+    job = manager.create_job(
+        recipient_email="user@example.com",
+        requester_name="Example User",
+        scope="all",
+        lookback_days=30,
+        filters={},
+    )
+
+    monkeypatch.setattr(
+        "azure_vm_export_jobs.azure_cache.build_virtual_machine_cost_export",
+        lambda **kwargs: (_ for _ in ()).throw(
+            TimeoutError("Azure Cost throttling prevented export completion within 45 minutes")
+        ),
+    )
+
+    manager._process_job(job["job_id"])
+    updated = manager.get_job(job["job_id"])
+
+    assert updated is not None
+    assert updated["status"] == "failed"
+    assert updated["file_name"] is None
+    assert updated["file_ready"] is False
+    assert "throttling prevented export completion" in str(updated["error"])
+
+
+def test_send_failure_notification_calls_out_throttling(tmp_path, monkeypatch):
+    manager = AzureVMExportJobManager(db_path=str(tmp_path / "azure_vm_export_jobs.db"))
+    job = manager.create_job(
+        recipient_email="user@example.com",
+        requester_name="Example User",
+        scope="all",
+        lookback_days=30,
+        filters={},
+    )
+    manager._update_job(
+        job["job_id"],
+        status="failed",
+        completed_at=datetime.now(timezone.utc).isoformat(),
+        error="Azure Cost throttling prevented export completion within 45 minutes after repeated 429 responses",
+    )
+
+    async def fake_send_email(to, subject, html_body, sender="it-ai@librasolutionsgroup.com", cc=None):
+        assert to == ["user@example.com"]
+        assert "failed" in subject.lower()
+        assert "throttled" in html_body.lower()
+        return True
+
+    monkeypatch.setattr("azure_vm_export_jobs.send_email", fake_send_email)
+
+    asyncio.run(manager._send_notification(manager.get_job(job["job_id"])))
+    updated = manager.get_job(job["job_id"])
+
+    assert updated is not None
+    assert updated["notified_at"] is not None

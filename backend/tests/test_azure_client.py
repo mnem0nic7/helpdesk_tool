@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import threading
+import time
+
 from azure_cache import AzureCache
-from azure_client import AzureApiError, AzureClient
+from azure_client import AzureApiError, AzureClient, AzureCostQueryCoordinator
 
 
 def test_list_directory_roles_omits_custom_page_size(monkeypatch):
@@ -304,6 +307,76 @@ def test_get_cost_by_resource_ids_uses_resourceid_filter(monkeypatch):
     ]
 
 
+def test_cost_query_coordinator_serializes_queries():
+    coordinator = AzureCostQueryCoordinator()
+    events: list[str] = []
+
+    def worker(name: str, hold_seconds: float) -> None:
+        with coordinator.claim(name):
+            events.append(f"start:{name}")
+            time.sleep(hold_seconds)
+            events.append(f"end:{name}")
+
+    first = threading.Thread(target=worker, args=("detail", 0.05))
+    second = threading.Thread(target=worker, args=("detail-2", 0.0))
+    first.start()
+    time.sleep(0.01)
+    second.start()
+    first.join()
+    second.join()
+
+    assert events == ["start:detail", "end:detail", "start:detail-2", "end:detail-2"]
+
+
+def test_cost_query_coordinator_prioritizes_waiting_export_queries():
+    coordinator = AzureCostQueryCoordinator()
+    events: list[str] = []
+    first_started = threading.Event()
+
+    def default_worker() -> None:
+        with coordinator.claim("detail"):
+            events.append("start:detail")
+            first_started.set()
+            time.sleep(0.05)
+            events.append("end:detail")
+
+    def export_worker() -> None:
+        with coordinator.claim("export"):
+            events.append("start:export")
+            events.append("end:export")
+
+    def background_worker() -> None:
+        with coordinator.claim("background"):
+            events.append("start:background")
+            events.append("end:background")
+
+    first = threading.Thread(target=default_worker)
+    background = threading.Thread(target=background_worker)
+    export = threading.Thread(target=export_worker)
+
+    first.start()
+    assert first_started.wait(timeout=1)
+    background.start()
+    time.sleep(0.01)
+    export.start()
+
+    first.join()
+    background.join()
+    export.join()
+
+    assert events[:4] == ["start:detail", "end:detail", "start:export", "end:export"]
+    assert events[4:] == ["start:background", "end:background"]
+
+
+def test_cost_query_coordinator_tracks_active_export_jobs():
+    coordinator = AzureCostQueryCoordinator()
+
+    assert coordinator.has_active_export_job() is False
+    with coordinator.export_job():
+        assert coordinator.has_active_export_job() is True
+    assert coordinator.has_active_export_job() is False
+
+
 def test_inventory_refresh_continues_when_management_groups_are_unauthorized(tmp_path, monkeypatch):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
 
@@ -349,6 +422,7 @@ def test_inventory_refresh_continues_when_management_groups_are_unauthorized(tmp
         "list_role_assignments",
         lambda subscription_ids: [],
     )
+    monkeypatch.setattr(cache._client, "list_reservations", lambda: [])
 
     cache._refresh_inventory()
 

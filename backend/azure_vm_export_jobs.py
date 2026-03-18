@@ -519,12 +519,13 @@ class AzureVMExportJobManager:
             )
 
         try:
-            payload = azure_cache.build_virtual_machine_cost_export(
-                scope=str(job.get("scope") or "all"),
-                filters=job.get("filters") or {},
-                lookback_days=int(job.get("lookback_days") or 30),
-                progress_callback=progress,
-            )
+            with azure_cache._client.cost_query_coordinator.export_job():
+                payload = azure_cache.build_virtual_machine_cost_export(
+                    scope=str(job.get("scope") or "all"),
+                    filters=job.get("filters") or {},
+                    lookback_days=int(job.get("lookback_days") or 30),
+                    progress_callback=progress,
+                )
             latest = self.get_job(job_id) or {}
             total = max(
                 int(latest.get("progress_total") or 0),
@@ -584,12 +585,17 @@ class AzureVMExportJobManager:
                 f"<p><a href=\"{html.escape(download_url)}\">Download the workbook</a></p>"
             )
         else:
+            error_text = str(job.get("error") or "Unknown error")
+            throttle_note = ""
+            if "429" in error_text or "throttl" in error_text.lower():
+                throttle_note = "<p>Azure Cost Management throttled the export before it could complete.</p>"
             subject = "Azure VM cost export failed"
             html_body = (
                 "<p>Your Azure VM cost export could not be completed.</p>"
                 f"<p><strong>Scope:</strong> {html.escape(scope)}<br>"
                 f"<strong>Lookback:</strong> {int(job.get('lookback_days') or 30)} days</p>"
-                f"<p><strong>Error:</strong> {html.escape(str(job.get('error') or 'Unknown error'))}</p>"
+                f"{throttle_note}"
+                f"<p><strong>Error:</strong> {html.escape(error_text)}</p>"
             )
 
         sent = await send_email([recipient], subject, html_body)
