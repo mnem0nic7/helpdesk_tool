@@ -56,6 +56,33 @@ async function putJSON<T>(url: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function downloadPost(url: string, body: unknown, fallbackFilename: string): Promise<void> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    window.location.href = "/api/auth/login";
+    throw new Error("Not authenticated");
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Export failed (${res.status}): ${text}`);
+  }
+  const blob = await res.blob();
+  const urlObject = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = urlObject;
+  const contentDisposition = res.headers.get("content-disposition");
+  const match = contentDisposition?.match(/filename="?([^"]+)"?/);
+  a.download = match?.[1] ?? fallbackFilename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(urlObject);
+}
+
 // ---------------------------------------------------------------------------
 // TypeScript interfaces – mirror the backend Pydantic models
 // ---------------------------------------------------------------------------
@@ -342,6 +369,77 @@ export interface ReportPreviewResponse {
   rows: Record<string, unknown>[];
   total_count: number;
   grouped: boolean;
+}
+
+export interface OasisDevWorkloadReportRequest {
+  assignee?: string;
+  report_start?: string;
+  report_end?: string;
+  last_report_date?: string;
+}
+
+export interface OasisDevWorkloadMonth {
+  key: string;
+  label: string;
+}
+
+export interface OasisDevWorkloadStatusRow {
+  status: string;
+  counts: number[];
+  total: number;
+}
+
+export interface OasisDevWorkloadFlowRow {
+  month_key: string;
+  month_label: string;
+  created: number;
+  resolved: number;
+  net_flow: number;
+}
+
+export interface OasisDevWorkloadBreakdownRow {
+  status: string;
+  count: number;
+}
+
+export interface OasisDevWorkloadTicketRow {
+  key: string;
+  summary: string;
+  status: string;
+  priority: string;
+  assignee: string;
+  reporter: string;
+  created: string;
+  resolved: string;
+  request_type: string;
+  application: string;
+  operational_categorization: string;
+}
+
+export interface OasisDevWorkloadReportResponse {
+  summary: {
+    assignee: string;
+    report_start: string;
+    report_end: string;
+    last_report_date: string;
+    tickets_created_in_window: number;
+    tickets_resolved_in_window: number;
+  };
+  monthly_status: {
+    months: OasisDevWorkloadMonth[];
+    rows: OasisDevWorkloadStatusRow[];
+    grand_total: number[];
+    grand_total_overall: number;
+  };
+  created_vs_resolved: OasisDevWorkloadFlowRow[];
+  since_last_report: {
+    created_count: number;
+    resolved_count: number;
+    open_count: number;
+    resolution_rate: number;
+    status_breakdown: OasisDevWorkloadBreakdownRow[];
+    tickets: OasisDevWorkloadTicketRow[];
+  };
 }
 
 /** Request body for grouped chart data. */
@@ -1115,31 +1213,21 @@ export const api = {
 
   /** Export a report as Excel — returns a Blob for download. */
   async exportReport(config: ReportConfig): Promise<void> {
-    const res = await fetch("/api/report/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(config),
-    });
-    if (res.status === 401) {
-      window.location.href = "/api/auth/login";
-      throw new Error("Not authenticated");
-    }
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Export failed (${res.status}): ${text}`);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    // Extract filename from Content-Disposition or use default
-    const cd = res.headers.get("content-disposition");
-    const match = cd?.match(/filename="?([^"]+)"?/);
-    a.download = match?.[1] ?? "OIT_Report.xlsx";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    await downloadPost("/api/report/export", config, "OIT_Report.xlsx");
+  },
+
+  previewOasisDevWorkloadReport(
+    request: OasisDevWorkloadReportRequest,
+  ): Promise<OasisDevWorkloadReportResponse> {
+    return postJSON<OasisDevWorkloadReportResponse>("/api/report/oasisdev-workload", request);
+  },
+
+  async exportOasisDevWorkloadReport(request: OasisDevWorkloadReportRequest): Promise<void> {
+    await downloadPost(
+      "/api/report/oasisdev-workload/export",
+      request,
+      "OasisDev_Workload_Report.xlsx",
+    );
   },
 
   /** Fetch current cache status. */
