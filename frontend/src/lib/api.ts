@@ -167,6 +167,7 @@ export interface TicketRow {
   updated: string;
   resolved: string;
   request_type: string;
+  request_type_id?: string;
   calendar_ttr_hours: number | null;
   age_days: number | null;
   days_since_update: number | null;

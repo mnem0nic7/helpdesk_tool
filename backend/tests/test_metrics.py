@@ -320,9 +320,10 @@ class TestIssueToRow:
             "fields": {
                 "customfield_10010": None,
                 "customfield_11102": {
-                    "requestType": {"name": "Business Application Support"}
+                    "requestType": {"id": "123", "name": "Business Application Support"}
                 },
             },
         }
         row = issue_to_row(issue)
         assert row["request_type"] == "Business Application Support"
+        assert row["request_type_id"] == "123"
