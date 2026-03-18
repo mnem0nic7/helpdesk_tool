@@ -444,7 +444,7 @@ export default function TicketWorkbenchDrawer({
         { label: "Created", value: formatDateTime(detail.ticket.created) },
         { label: "Updated", value: formatDateTime(detail.ticket.updated) },
         { label: "Resolved", value: formatDateTime(detail.ticket.resolved) },
-        { label: "Operational Categorization", value: detail.work_category || "—" },
+        { label: "Category", value: detail.work_category || "—" },
       ]
     : [];
   const historyItems = detail ? sortCommentsByCreated(detail.comments) : [];
@@ -575,7 +575,7 @@ export default function TicketWorkbenchDrawer({
                   <span className="text-xs text-slate-500">All changes write directly to Jira</span>
                 </div>
 
-                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-12">
                   <label className="block">
                     <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Priority</span>
                     <select
@@ -608,35 +608,45 @@ export default function TicketWorkbenchDrawer({
                     </select>
                   </label>
 
-                  <div className="block xl:col-span-2">
+                  <div className="block md:col-span-2 xl:col-span-5">
                     <label
                       htmlFor="ticket-reporter-input"
                       className="text-xs font-medium uppercase tracking-wide text-slate-500"
                     >
                       Reporter
                     </label>
-                    <input
-                      id="ticket-reporter-input"
-                      aria-label="Reporter"
-                      type="text"
-                      value={reporterSearch}
-                      onChange={(e) => {
-                        const nextValue = e.target.value;
-                        setReporterSearch(nextValue);
-                        const normalized = nextValue.trim().toLowerCase();
-                        if (normalized === currentReporterName.toLowerCase()) {
-                          setSelectedReporterAccountId(detail.ticket.reporter_account_id ?? "");
-                        } else {
-                          setSelectedReporterAccountId("");
-                        }
-                      }}
-                      placeholder="Search Jira users by name or email"
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
+                    <div className="mt-1 flex flex-col gap-2 xl:flex-row xl:items-start">
+                      <input
+                        id="ticket-reporter-input"
+                        aria-label="Reporter"
+                        type="text"
+                        value={reporterSearch}
+                        onChange={(e) => {
+                          const nextValue = e.target.value;
+                          setReporterSearch(nextValue);
+                          const normalized = nextValue.trim().toLowerCase();
+                          if (normalized === currentReporterName.toLowerCase()) {
+                            setSelectedReporterAccountId(detail.ticket.reporter_account_id ?? "");
+                          } else {
+                            setSelectedReporterAccountId("");
+                          }
+                        }}
+                        placeholder="Search Jira users by name or email"
+                        className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => syncReporterMutation.mutate()}
+                        disabled={syncReporterMutation.isPending}
+                        className="shrink-0 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {syncReporterMutation.isPending ? "Updating..." : "Update Reporter"}
+                      </button>
+                    </div>
                     <div className="mt-1 text-xs text-slate-500">
                       {showReporterMatches
                         ? "Pick the correct Jira user below before saving."
-                        : "Edit this only when you need to manually change the reporter."}
+                        : "Use this when you need to manually change the reporter."}
                     </div>
                     {showReporterMatches && (
                       <select
@@ -667,22 +677,12 @@ export default function TicketWorkbenchDrawer({
                         ))}
                       </select>
                     )}
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => syncReporterMutation.mutate()}
-                        disabled={syncReporterMutation.isPending}
-                        className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {syncReporterMutation.isPending ? "Updating..." : "Update Reporter"}
-                      </button>
-                      <span className="text-xs text-slate-500">
-                        Uses the saved description line like "OCC Ticket Created By: Jane Doe".
-                      </span>
+                    <div className="mt-1 text-xs text-slate-500">
+                      Uses the saved description line like "OCC Ticket Created By: Jane Doe".
                     </div>
                   </div>
 
-                  <label className="block">
+                  <label className="block xl:col-span-3">
                     <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Request Type</span>
                     <select
                       value={selectedRequestTypeId}
@@ -697,8 +697,10 @@ export default function TicketWorkbenchDrawer({
                       ))}
                     </select>
                   </label>
+                </div>
 
-                  <label className="block xl:col-span-2">
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-12">
+                  <label className="block md:col-span-2 xl:col-span-5">
                     <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Application</span>
                     <input
                       list="ticket-application-options"
@@ -713,13 +715,13 @@ export default function TicketWorkbenchDrawer({
                       ))}
                     </datalist>
                     <div className="mt-1 text-xs text-slate-500">
-                      Maps to Jira components. Use commas if a ticket needs more than one application.
+                      Jira components. Separate multiple applications with commas.
                     </div>
                   </label>
 
-                  <label className="block">
+                  <label className="block xl:col-span-3">
                     <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      Operational Categorization
+                      Category
                     </span>
                     <input
                       list="ticket-work-category-options"
@@ -735,30 +737,32 @@ export default function TicketWorkbenchDrawer({
                     </datalist>
                   </label>
 
-                  <div className="md:col-span-2 xl:col-span-2 flex flex-wrap items-end gap-3">
-                    <label className="min-w-[260px] flex-1">
+                  <div className="block md:col-span-2 xl:col-span-4">
+                    <label className="block">
                       <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Status</span>
-                      <select
-                        value={selectedTransitionId}
-                        onChange={(e) => setSelectedTransitionId(e.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      >
-                        <option value="">{detail.ticket.status || "Select status"}</option>
-                        {displayTransitions.map((transition: Transition) => (
-                          <option key={transition.id} value={transition.id}>
-                            {getTransitionLabel(transition)}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="mt-1 flex flex-col gap-2 sm:flex-row">
+                        <select
+                          value={selectedTransitionId}
+                          onChange={(e) => setSelectedTransitionId(e.target.value)}
+                          className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                          <option value="">{detail.ticket.status || "Select status"}</option>
+                          {displayTransitions.map((transition: Transition) => (
+                            <option key={transition.id} value={transition.id}>
+                              {getTransitionLabel(transition)}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => transitionMutation.mutate()}
+                          disabled={transitionMutation.isPending || !selectedTransitionId}
+                          className="shrink-0 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {transitionMutation.isPending ? "Updating..." : "Change Status"}
+                        </button>
+                      </div>
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => transitionMutation.mutate()}
-                      disabled={transitionMutation.isPending || !selectedTransitionId}
-                      className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {transitionMutation.isPending ? "Updating..." : "Change Status"}
-                    </button>
                   </div>
                 </div>
 
