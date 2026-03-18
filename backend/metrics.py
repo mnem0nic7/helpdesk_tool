@@ -11,7 +11,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from request_type import extract_request_type_name_from_fields
+from request_type import extract_request_type_id_from_fields, extract_request_type_name_from_fields
 
 
 # ---------------------------------------------------------------------------
@@ -826,6 +826,7 @@ def issue_to_row(
 
     # Request type (JSM custom fields)
     request_type = extract_request_type_name_from_fields(fields)
+    request_type_id = extract_request_type_id_from_fields(fields)
 
     # Calendar TTR
     calendar_ttr = _hours_between(created_dt, resolved_dt)
@@ -880,6 +881,7 @@ def issue_to_row(
         "updated": updated_str,
         "resolved": resolved_str,
         "request_type": request_type,
+        "request_type_id": request_type_id,
         "calendar_ttr_hours": _round_opt(calendar_ttr),
         "age_days": age_days,
         "days_since_update": days_since_update,

@@ -102,6 +102,7 @@ class TicketRow(BaseModel):
     updated: str
     resolved: str
     request_type: str
+    request_type_id: str = ""
     calendar_ttr_hours: Optional[float] = None
     age_days: Optional[float] = None
     days_since_update: Optional[float] = None

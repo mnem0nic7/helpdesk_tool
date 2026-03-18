@@ -40,6 +40,7 @@ const ticketRow = {
   updated: "2026-03-02T12:00:00Z",
   resolved: "",
   request_type: "Hardware",
+  request_type_id: "1",
   calendar_ttr_hours: null,
   age_days: 2,
   days_since_update: 1,
@@ -294,6 +295,33 @@ describe("TicketWorkbenchDrawer", () => {
         work_category: "Identity",
       });
     });
+  });
+
+  it("shows the current request type in the drawer when live detail loses it", async () => {
+    mockApi.getTicket.mockResolvedValue({
+      ...ticketDetail,
+      ticket: {
+        ...ticketRow,
+        request_type: "",
+        request_type_id: "",
+      },
+      request_type: "",
+    });
+    mockApi.getRequestTypes.mockResolvedValue([
+      { id: "2", name: "Account access", description: "" },
+    ]);
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Ticket Actions");
+
+    expect(screen.getByRole("combobox", { name: /request type/i })).toHaveDisplayValue("Hardware");
   });
 
   it("updates the reporter from the OCC creator line with one click", async () => {

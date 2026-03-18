@@ -34,12 +34,41 @@ def _extract_name_from_field_value(value: Any) -> str:
     return ""
 
 
+def _extract_id_from_field_value(value: Any) -> str:
+    """Return a request type id from a Jira custom-field payload."""
+    if not isinstance(value, dict):
+        return ""
+
+    request_type = value.get("requestType")
+    if isinstance(request_type, dict):
+        for key in ("id", "requestTypeId"):
+            request_type_id = request_type.get(key)
+            if request_type_id is not None and str(request_type_id).strip():
+                return str(request_type_id).strip()
+
+    for key in ("id", "requestTypeId"):
+        request_type_id = value.get(key)
+        if request_type_id is not None and str(request_type_id).strip():
+            return str(request_type_id).strip()
+
+    return ""
+
+
 def extract_request_type_name_from_fields(fields: Mapping[str, Any]) -> str:
     """Return request type name from known Jira custom fields."""
     for field_id in _REQUEST_TYPE_FIELD_IDS:
         name = _extract_name_from_field_value(fields.get(field_id))
         if name:
             return name
+    return ""
+
+
+def extract_request_type_id_from_fields(fields: Mapping[str, Any]) -> str:
+    """Return request type id from known Jira custom fields when available."""
+    for field_id in _REQUEST_TYPE_FIELD_IDS:
+        request_type_id = _extract_id_from_field_value(fields.get(field_id))
+        if request_type_id:
+            return request_type_id
     return ""
 
 

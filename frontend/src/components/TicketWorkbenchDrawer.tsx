@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useDeferredValue, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
@@ -92,6 +92,10 @@ function parseComponentInput(value: string): string[] {
     result.push(trimmed);
   }
   return result;
+}
+
+function normalizeRequestTypeName(name: string): string {
+  return name.trim().toLowerCase();
 }
 
 export default function TicketWorkbenchDrawer({
@@ -188,11 +192,46 @@ export default function TicketWorkbenchDrawer({
     setIsHistoryOpen(false);
   }, [detail]);
 
+  const effectiveRequestTypeName =
+    detail?.ticket.request_type?.trim() ||
+    detail?.request_type?.trim() ||
+    initialTicket?.request_type?.trim() ||
+    "";
+  const effectiveRequestTypeId =
+    detail?.ticket.request_type_id?.trim() ||
+    initialTicket?.request_type_id?.trim() ||
+    "";
+  const matchedCurrentRequestType = useMemo(() => {
+    if (!requestTypes.length) return null;
+    if (effectiveRequestTypeId) {
+      const exactIdMatch = requestTypes.find((option) => option.id === effectiveRequestTypeId);
+      if (exactIdMatch) {
+        return exactIdMatch;
+      }
+    }
+    if (!effectiveRequestTypeName) return null;
+    const normalizedCurrentName = normalizeRequestTypeName(effectiveRequestTypeName);
+    return (
+      requestTypes.find((option) => normalizeRequestTypeName(option.name) === normalizedCurrentName) ?? null
+    );
+  }, [effectiveRequestTypeId, effectiveRequestTypeName, requestTypes]);
+  const fallbackRequestTypeOption = useMemo(() => {
+    if (!effectiveRequestTypeName || matchedCurrentRequestType) return null;
+    return {
+      id: effectiveRequestTypeId || `__current__:${effectiveRequestTypeName}`,
+      name: effectiveRequestTypeName,
+      description: "",
+    };
+  }, [effectiveRequestTypeId, effectiveRequestTypeName, matchedCurrentRequestType]);
+
   useEffect(() => {
-    if (!detail) return;
-    const current = requestTypes.find((option) => option.name === detail.ticket.request_type);
-    setSelectedRequestTypeId(current?.id ?? "");
-  }, [detail, requestTypes]);
+    if (!ticketKey) return;
+    setSelectedRequestTypeId(
+      matchedCurrentRequestType?.id ??
+      fallbackRequestTypeOption?.id ??
+      "",
+    );
+  }, [fallbackRequestTypeOption, matchedCurrentRequestType, ticketKey]);
 
   useEffect(() => {
     if (!showReporterMatches) return;
@@ -324,8 +363,14 @@ export default function TicketWorkbenchDrawer({
         payload.reporter_display_name = selectedReporterOption?.display_name ?? trimmedReporter;
       }
       const currentRequestTypeId =
-        requestTypes.find((option) => option.name === detail.ticket.request_type)?.id ?? "";
-      if (selectedRequestTypeId && selectedRequestTypeId !== currentRequestTypeId) {
+        matchedCurrentRequestType?.id ??
+        fallbackRequestTypeOption?.id ??
+        "";
+      if (
+        selectedRequestTypeId &&
+        !selectedRequestTypeId.startsWith("__current__:") &&
+        selectedRequestTypeId !== currentRequestTypeId
+      ) {
         payload.request_type_id = selectedRequestTypeId;
       }
       const nextComponents = parseComponentInput(applicationInput);
@@ -420,6 +465,9 @@ export default function TicketWorkbenchDrawer({
   const sortedRequestTypes = [...requestTypes].sort((a: RequestTypeOption, b: RequestTypeOption) =>
     a.name.localeCompare(b.name)
   );
+  const visibleRequestTypes = fallbackRequestTypeOption
+    ? [...sortedRequestTypes, fallbackRequestTypeOption].sort((a, b) => a.name.localeCompare(b.name))
+    : sortedRequestTypes;
   const sortedPriorities = [...priorities].sort((a: PriorityOption, b: PriorityOption) =>
     a.name.localeCompare(b.name)
   );
@@ -689,8 +737,8 @@ export default function TicketWorkbenchDrawer({
                       onChange={(e) => setSelectedRequestTypeId(e.target.value)}
                       className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     >
-                      <option value="">Select request type</option>
-                      {sortedRequestTypes.map((requestType) => (
+                      <option value="">{effectiveRequestTypeName || "Select request type"}</option>
+                      {visibleRequestTypes.map((requestType) => (
                         <option key={requestType.id} value={requestType.id}>
                           {requestType.name}
                         </option>
