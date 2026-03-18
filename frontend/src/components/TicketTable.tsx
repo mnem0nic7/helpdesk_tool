@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../lib/api.ts";
 import type { TicketRow } from "../lib/api.ts";
+import { getSiteBranding } from "../lib/siteContext.ts";
 import {
   formatAge,
   formatDate,
@@ -35,7 +36,9 @@ function buildColumns(
   allKeys: string[],
   ticketHrefBuilder?: (key: string) => string,
   jiraBaseUrl?: string,
+  scope?: string,
 ) {
+  const isOasisDev = scope === "oasisdev";
   const cols = [];
 
   if (selectable) {
@@ -115,11 +118,11 @@ function buildColumns(
       },
       size: 320,
     }),
-    colHelper.accessor("issue_type", {
+    ...(!isOasisDev ? [colHelper.accessor("issue_type", {
       header: "Type",
       cell: (info) => <span className="text-gray-600">{info.getValue()}</span>,
       size: 100,
-    }),
+    })] : []),
     colHelper.accessor("request_type", {
       header: "Request Type",
       cell: (info) => <span className="text-gray-600">{info.getValue() || "—"}</span>,
@@ -157,6 +160,14 @@ function buildColumns(
       },
       size: 140,
     }),
+    ...(isOasisDev ? [colHelper.accessor("reporter", {
+      header: "Reporter",
+      cell: (info) => {
+        const val = info.getValue();
+        return <span className="text-gray-700">{val || "\u2014"}</span>;
+      },
+      size: 140,
+    })] : []),
     colHelper.accessor("created", {
       header: "Created",
       cell: (info) => (
@@ -166,7 +177,7 @@ function buildColumns(
       ),
       size: 100,
     }),
-    colHelper.accessor("calendar_ttr_hours", {
+    ...(!isOasisDev ? [colHelper.accessor("calendar_ttr_hours", {
       header: "TTR",
       cell: (info) => (
         <span className="whitespace-nowrap text-gray-600 text-xs">
@@ -174,7 +185,7 @@ function buildColumns(
         </span>
       ),
       size: 70,
-    }),
+    })] : []),
     colHelper.accessor("age_days", {
       header: "Age",
       cell: (info) => (
@@ -184,7 +195,7 @@ function buildColumns(
       ),
       size: 70,
     }),
-    colHelper.accessor("sla_resolution_status", {
+    ...(!isOasisDev ? [colHelper.accessor("sla_resolution_status", {
       header: "SLA",
       cell: (info) => {
         const val = info.getValue();
@@ -198,7 +209,7 @@ function buildColumns(
         );
       },
       size: 90,
-    }),
+    })] : []),
   );
 
   return cols;
@@ -227,6 +238,7 @@ export default function TicketTable({
   onRowOpen,
   ticketHrefBuilder,
 }: TicketTableProps) {
+  const { scope } = getSiteBranding();
   const { data: cacheStatus } = useQuery({
     queryKey: ["cache-status"],
     queryFn: () => api.getCacheStatus(),
@@ -266,9 +278,10 @@ export default function TicketTable({
         allKeys,
         ticketHrefBuilder,
         jiraBaseUrl,
+        scope,
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectable, selectedKeys, allKeys, ticketHrefBuilder, jiraBaseUrl],
+    [selectable, selectedKeys, allKeys, ticketHrefBuilder, jiraBaseUrl, scope],
   );
 
   const table = useReactTable({

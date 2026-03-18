@@ -914,7 +914,7 @@ def test_refresh_cost_uses_amortized_resource_level_breakdown(tmp_path, monkeypa
     )
     monkeypatch.setattr(cache._client, "get_cost_trend", lambda subscriptions: [])
 
-    def fake_breakdown(subscriptions, grouping_dimension, *, limit=20, cost_type="ActualCost"):
+    def fake_breakdown(subscriptions, grouping_dimension, *, limit=20, cost_type="ActualCost", force_subscription_scope=False):
         calls.append((grouping_dimension, cost_type, limit))
         return []
 

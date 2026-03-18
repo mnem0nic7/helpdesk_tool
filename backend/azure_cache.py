@@ -464,6 +464,7 @@ class AzureCache:
                         "ResourceId",
                         limit=None,
                         cost_type="AmortizedCost",
+                        force_subscription_scope=True,
                     )
                     by_resource_id_status = {"available": True, "error": None, "cost_basis": "amortized"}
                 except AzureApiError as exc:

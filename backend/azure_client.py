@@ -746,9 +746,15 @@ Resources
         *,
         limit: int | None = 20,
         cost_type: str = "ActualCost",
+        force_subscription_scope: bool = False,
     ) -> list[dict[str, Any]]:
         totals: dict[str, float] = {}
-        for scope_path in self._cost_scope_paths(subscriptions):
+        scope_paths = (
+            [f"/subscriptions/{item['subscription_id']}" for item in subscriptions if item.get("subscription_id")]
+            if force_subscription_scope
+            else self._cost_scope_paths(subscriptions)
+        )
+        for scope_path in scope_paths:
             for item in self._cost_query(
                 scope_path,
                 cost_type=cost_type,
