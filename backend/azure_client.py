@@ -616,7 +616,13 @@ Resources
     def list_users(self) -> list[dict[str, Any]]:
         return self.list_graph_collection_custom(
             "users",
-            select=["id", "displayName", "userPrincipalName", "mail", "accountEnabled"],
+            select=[
+                "id", "displayName", "userPrincipalName", "mail", "accountEnabled",
+                "jobTitle", "department", "officeLocation", "companyName",
+                "city", "country", "mobilePhone", "businessPhones",
+                "createdDateTime", "userType", "onPremisesSyncEnabled",
+                "lastPasswordChangeDateTime", "proxyAddresses",
+            ],
         )
 
     def list_groups(self) -> list[dict[str, Any]]:

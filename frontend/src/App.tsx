@@ -21,6 +21,7 @@ const AzureCostPage = lazy(() => import("./pages/AzureCostPage"));
 const AzureCopilotPage = lazy(() => import("./pages/AzureCopilotPage"));
 const AzureStoragePage = lazy(() => import("./pages/AzureStoragePage"));
 const AzureComputeOptimizationPage = lazy(() => import("./pages/AzureComputeOptimizationPage.tsx"));
+const AzureUsersPage = lazy(() => import("./pages/AzureUsersPage"));
 
 function PageFallback() {
   return (
@@ -48,6 +49,7 @@ export default function App() {
                 <Route path="vms" element={<AzureVMsPage />} />
                 <Route path="resources" element={<AzureResourcesPage />} />
                 <Route path="identity" element={<AzureIdentityPage />} />
+                <Route path="users" element={<AzureUsersPage />} />
                 <Route path="cost" element={<AzureCostPage />} />
                 <Route path="storage" element={<AzureStoragePage />} />
                 <Route path="compute" element={<AzureComputeOptimizationPage />} />

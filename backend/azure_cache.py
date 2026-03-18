@@ -344,7 +344,21 @@ class AzureCache:
             "mail": item.get("mail") or "",
             "enabled": item.get("accountEnabled"),
             "app_id": "",
-            "extra": {},
+            "extra": {
+                "job_title": item.get("jobTitle") or "",
+                "department": item.get("department") or "",
+                "office_location": item.get("officeLocation") or "",
+                "company_name": item.get("companyName") or "",
+                "city": item.get("city") or "",
+                "country": item.get("country") or "",
+                "mobile_phone": item.get("mobilePhone") or "",
+                "business_phones": ", ".join(item.get("businessPhones") or []),
+                "created_datetime": item.get("createdDateTime") or "",
+                "user_type": item.get("userType") or "Member",
+                "on_prem_sync": "true" if item.get("onPremisesSyncEnabled") else "",
+                "last_password_change": item.get("lastPasswordChangeDateTime") or "",
+                "proxy_addresses": ", ".join(item.get("proxyAddresses") or []),
+            },
         }
 
     @staticmethod
