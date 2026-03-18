@@ -489,6 +489,12 @@ async def get_storage() -> dict[str, Any]:
     return azure_cache.get_storage_summary()
 
 
+@router.get("/compute/optimization")
+async def get_compute_optimization() -> dict[str, Any]:
+    _ensure_azure_site()
+    return azure_cache.get_compute_optimization()
+
+
 @router.get("/ai/models")
 async def get_ai_models() -> list[dict[str, str]]:
     _ensure_azure_site()

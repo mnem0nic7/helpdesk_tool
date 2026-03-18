@@ -908,6 +908,25 @@ export interface AzureAdvisorRecommendation {
   currency: string;
 }
 
+export interface AzureComputeOptimizationSummary {
+  total_vms: number;
+  running_vms: number;
+  idle_vms: number;
+  total_running_cost: number | null;
+  total_advisor_savings: number;
+  ri_gap_count: number;
+}
+
+export interface AzureComputeOptimizationResponse {
+  summary: AzureComputeOptimizationSummary;
+  idle_vms: AzureVirtualMachineRow[];
+  top_cost_vms: AzureVirtualMachineRow[];
+  ri_coverage_gaps: AzureVirtualMachineSizeCoverageRow[];
+  advisor_recommendations: AzureAdvisorRecommendation[];
+  cost_available: boolean;
+  reservation_data_available: boolean;
+}
+
 export interface AzureStorageAccount {
   id: string;
   name: string;
@@ -1408,6 +1427,10 @@ export const api = {
 
   getAzureStorage(): Promise<AzureStorageSummary> {
     return fetchJSON<AzureStorageSummary>("/api/azure/storage");
+  },
+
+  getAzureComputeOptimization(): Promise<AzureComputeOptimizationResponse> {
+    return fetchJSON<AzureComputeOptimizationResponse>("/api/azure/compute/optimization");
   },
 
   getAzureAIModels(): Promise<AIModel[]> {

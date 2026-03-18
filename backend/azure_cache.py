@@ -2027,6 +2027,65 @@ class AzureCache:
             "cost_basis": cost_status.get("cost_basis"),
         }
 
+    def get_compute_optimization(self) -> dict[str, Any]:
+        """Synthesized compute optimization analysis from cached snapshots."""
+        all_resources = self._snapshot("resources") or []
+        all_vms = [item for item in all_resources if self._is_virtual_machine(item)]
+
+        cost_status = self._get_resource_cost_status()
+        cost_index = self._resource_cost_index() if cost_status["available"] else {}
+        reservation_status = self._get_reservation_status()
+
+        annotated: list[dict[str, Any]] = []
+        for item in all_vms:
+            row = dict(item)
+            row["size"] = self._vm_size(item)
+            row["power_state"] = self._vm_power_state(item)
+            cost_row = cost_index.get(self._normalize_resource_id(row.get("id"))) or {}
+            row["cost"] = round(float(cost_row["amount"]), 2) if cost_row else None
+            row["currency"] = cost_row.get("currency", "USD") if cost_row else "USD"
+            annotated.append(row)
+
+        idle_states = {"deallocated", "stopped"}
+        idle_vms = sorted(
+            [v for v in annotated if v["power_state"].lower() in idle_states],
+            key=lambda v: (v["cost"] is None, -(v["cost"] or 0)),
+        )
+        running_vms = [v for v in annotated if v["power_state"].lower() == "running"]
+        top_cost_vms = sorted(
+            running_vms, key=lambda v: (v["cost"] is None, -(v["cost"] or 0))
+        )[:20]
+
+        all_coverage = self.get_vm_coverage_by_sku()
+        ri_gaps = [c for c in all_coverage if c["coverage_status"] == "needed"]
+
+        advisor_recs = self._snapshot("advisor") or []
+
+        total_running_cost: float | None = None
+        if cost_status["available"]:
+            total_running_cost = round(
+                sum((v["cost"] or 0) for v in running_vms if v.get("cost") is not None), 2
+            )
+
+        return {
+            "summary": {
+                "total_vms": len(all_vms),
+                "running_vms": len(running_vms),
+                "idle_vms": len(idle_vms),
+                "total_running_cost": total_running_cost,
+                "total_advisor_savings": round(
+                    sum(r.get("monthly_savings", 0) for r in advisor_recs), 2
+                ),
+                "ri_gap_count": len(ri_gaps),
+            },
+            "idle_vms": idle_vms,
+            "top_cost_vms": top_cost_vms,
+            "ri_coverage_gaps": ri_gaps,
+            "advisor_recommendations": advisor_recs,
+            "cost_available": cost_status["available"],
+            "reservation_data_available": bool(reservation_status["available"]),
+        }
+
     def get_grounding_context(self) -> dict[str, Any]:
         return {
             "overview": self.get_overview(),
