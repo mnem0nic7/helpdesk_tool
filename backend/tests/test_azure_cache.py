@@ -697,6 +697,212 @@ def test_build_virtual_machine_cost_export_respects_filtered_scope(tmp_path, mon
     assert calls == [7]
 
 
+def test_build_virtual_machine_cost_export_excludes_other_vm_owned_resources_from_shared_candidates(
+    tmp_path,
+    monkeypatch,
+):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    vm_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1"
+    sibling_vm_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-2"
+    os_disk_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/osdisk-1"
+    sibling_disk_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/osdisk-2"
+    sibling_extension_id = f"{sibling_vm_id}/extensions/monitoring"
+    workspace_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.OperationalInsights/workspaces/la-prod"
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": vm_id,
+                    "name": "vm-1",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "parent_resource_id": "",
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": os_disk_id,
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {},
+                },
+                {
+                    "id": sibling_vm_id,
+                    "name": "vm-2",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "parent_resource_id": "",
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": sibling_disk_id,
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D2s_v5",
+                    "state": "PowerState/running",
+                    "tags": {},
+                },
+                {
+                    "id": os_disk_id,
+                    "name": "osdisk-1",
+                    "resource_type": "Microsoft.Compute/disks",
+                    "parent_resource_id": "",
+                    "managed_by": vm_id,
+                    "attached_vm_id": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "Premium_LRS",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "tags": {},
+                },
+                {
+                    "id": sibling_disk_id,
+                    "name": "osdisk-2",
+                    "resource_type": "Microsoft.Compute/disks",
+                    "parent_resource_id": "",
+                    "managed_by": sibling_vm_id,
+                    "attached_vm_id": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "Premium_LRS",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "tags": {},
+                },
+                {
+                    "id": sibling_extension_id,
+                    "name": "monitoring",
+                    "resource_type": "Microsoft.Compute/virtualMachines/extensions",
+                    "parent_resource_id": sibling_vm_id,
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "tags": {},
+                },
+                {
+                    "id": workspace_id,
+                    "name": "la-prod",
+                    "resource_type": "Microsoft.OperationalInsights/workspaces",
+                    "parent_resource_id": "",
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "tags": {},
+                },
+            ],
+            "cost_summary": {
+                "lookback_days": 30,
+                "currency": "USD",
+                "total_cost": 0.0,
+                "top_service": "",
+                "top_subscription": "",
+                "top_resource_group": "",
+                "recommendation_count": 0,
+                "potential_monthly_savings": 0.0,
+            },
+        }
+    )
+
+    requested_ids: list[str] = []
+
+    def fake_get_cost_by_resource_ids(
+        subscription_id,
+        resource_ids,
+        lookback_days=None,
+        chunk_size=20,
+        cost_type="AmortizedCost",
+        caller="default",
+        max_attempts=3,
+    ):
+        requested_ids.extend(resource_ids)
+        rows = []
+        normalized = {resource_id.lower() for resource_id in resource_ids}
+        if vm_id.lower() in normalized:
+            rows.append({"label": vm_id, "amount": 50.0, "currency": "USD", "share": 0.5})
+        if os_disk_id.lower() in normalized:
+            rows.append({"label": os_disk_id, "amount": 10.0, "currency": "USD", "share": 0.1})
+        if workspace_id.lower() in normalized:
+            rows.append({"label": workspace_id, "amount": 25.0, "currency": "USD", "share": 0.25})
+        return rows
+
+    monkeypatch.setattr(cache._client, "get_cost_by_resource_ids", fake_get_cost_by_resource_ids)
+
+    payload = cache.build_virtual_machine_cost_export(
+        scope="filtered",
+        filters={"search": "vm-1"},
+        lookback_days=30,
+    )
+
+    normalized_requested_ids = {resource_id.lower() for resource_id in requested_ids}
+    assert sibling_disk_id.lower() not in normalized_requested_ids
+    assert sibling_extension_id.lower() not in normalized_requested_ids
+    assert payload["summary_rows"][0]["shared_candidate_count"] == 1
+    assert payload["shared_rows"] == [
+        {
+            "resource_name": "la-prod",
+            "resource_id": workspace_id,
+            "resource_type": "Microsoft.OperationalInsights/workspaces",
+            "subscription": "Prod",
+            "resource_group": "rg-prod",
+            "region": "eastus",
+            "cost": 25.0,
+            "currency": "USD",
+            "candidate_vm_count": 1,
+            "candidate_vm_names": "vm-1",
+            "reason": "same resource group as selected VM(s)",
+        }
+    ]
+
+
 def test_refresh_cost_uses_amortized_resource_level_breakdown(tmp_path, monkeypatch):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     calls: list[tuple[str, str, int | None]] = []
@@ -846,6 +1052,119 @@ def test_fetch_live_resource_cost_index_fails_after_runtime_budget_is_exhausted(
         raise AssertionError("Expected export cost collection to fail once the runtime budget was exhausted")
 
     assert sleep_calls == [3]
+
+
+def test_build_virtual_machine_cost_export_continues_when_shared_candidates_time_out(tmp_path, monkeypatch):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    vm_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1"
+    os_disk_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/osdisk-1"
+    workspace_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.OperationalInsights/workspaces/la-prod"
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": vm_id,
+                    "name": "vm-1",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "parent_resource_id": "",
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": os_disk_id,
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {},
+                },
+                {
+                    "id": os_disk_id,
+                    "name": "osdisk-1",
+                    "resource_type": "Microsoft.Compute/disks",
+                    "parent_resource_id": "",
+                    "managed_by": vm_id,
+                    "attached_vm_id": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "Premium_LRS",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "tags": {},
+                },
+                {
+                    "id": workspace_id,
+                    "name": "la-prod",
+                    "resource_type": "Microsoft.OperationalInsights/workspaces",
+                    "parent_resource_id": "",
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "tags": {},
+                },
+            ],
+            "cost_summary": {
+                "lookback_days": 30,
+                "currency": "USD",
+                "total_cost": 0.0,
+                "top_service": "",
+                "top_subscription": "",
+                "top_resource_group": "",
+                "recommendation_count": 0,
+                "potential_monthly_savings": 0.0,
+            },
+        }
+    )
+
+    def fake_fetch(
+        resource_ids_by_subscription,
+        *,
+        lookback_days,
+        progress_callback=None,
+        phase_label="direct",
+        deadline_monotonic=None,
+    ):
+        ids = resource_ids_by_subscription["sub-1"]
+        if phase_label == "shared":
+            raise TimeoutError("Azure Cost throttling prevented export completion within 45 minutes")
+        return {
+            cache._normalize_resource_id(vm_id): {"label": vm_id, "amount": 50.0, "currency": "USD", "share": 0.5},
+            cache._normalize_resource_id(os_disk_id): {"label": os_disk_id, "amount": 10.0, "currency": "USD", "share": 0.1},
+        }
+
+    monkeypatch.setattr(cache, "_fetch_live_resource_cost_index", fake_fetch)
+
+    payload = cache.build_virtual_machine_cost_export(scope="all", filters={}, lookback_days=30)
+
+    assert payload["summary_rows"][0]["direct_total_cost"] == 60.0
+    assert payload["summary_rows"][0]["shared_candidate_count"] == 0
+    assert payload["summary_rows"][0]["shared_candidate_amount"] == 0.0
+    assert payload["summary_rows"][0]["cost_status"] == "Direct costs complete; shared candidates unavailable"
+    assert payload["shared_rows"] == []
 
 
 def test_list_virtual_machines_returns_vm_summary_and_filtered_rows(tmp_path):
