@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -56,16 +58,67 @@ class AzureApiError(RuntimeError):
         return None
 
 
+class AzureCostQueryCoordinator:
+    """Serialize Azure Cost Management queries and prioritize export work."""
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._active_caller: str | None = None
+        self._waiting_exports = 0
+        self._active_export_jobs = 0
+
+    @contextmanager
+    def claim(self, caller: str):
+        is_export = caller == "export"
+        with self._condition:
+            if is_export:
+                self._waiting_exports += 1
+            try:
+                while self._active_caller is not None or (caller != "export" and self._waiting_exports > 0):
+                    self._condition.wait()
+                self._active_caller = caller
+            finally:
+                if is_export:
+                    self._waiting_exports = max(0, self._waiting_exports - 1)
+
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._active_caller = None
+                self._condition.notify_all()
+
+    @contextmanager
+    def export_job(self):
+        with self._condition:
+            self._active_export_jobs += 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._active_export_jobs = max(0, self._active_export_jobs - 1)
+                self._condition.notify_all()
+
+    def has_active_export_job(self) -> bool:
+        with self._condition:
+            return self._active_export_jobs > 0
+
+
 class AzureClient:
     """Thin REST client for Azure ARM, Resource Graph, Cost, Advisor, and Graph."""
 
     def __init__(self) -> None:
         self._session = requests.Session()
         self._tokens: dict[str, dict[str, Any]] = {}
+        self._cost_query_coordinator = AzureCostQueryCoordinator()
 
     @property
     def configured(self) -> bool:
         return bool(ENTRA_TENANT_ID and ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET)
+
+    @property
+    def cost_query_coordinator(self) -> AzureCostQueryCoordinator:
+        return self._cost_query_coordinator
 
     def _get_token(self, scope: str) -> str:
         if not self.configured:
@@ -135,6 +188,24 @@ class AzureClient:
         if not resp.content:
             return {}
         return resp.json()
+
+    def _cost_management_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        caller: str = "default",
+    ) -> dict[str, Any]:
+        with self._cost_query_coordinator.claim(caller):
+            return self._request(
+                method,
+                url,
+                scope=_ARM_SCOPE,
+                params=params,
+                json_body=json_body,
+            )
 
     def _paged_get(
         self,
@@ -565,6 +636,7 @@ Resources
         lookback_days: int | None = None,
         filter_dimension: str | None = None,
         filter_values: list[str] | None = None,
+        caller: str = "default",
     ) -> list[dict[str, Any]]:
         start, end = self._cost_range(lookback_days)
         dataset: dict[str, Any] = {
@@ -591,10 +663,9 @@ Resources
                     "values": filter_values,
                 }
             }
-        payload = self._request(
+        payload = self._cost_management_request(
             "POST",
             f"{_ARM_BASE}{scope_path}/providers/Microsoft.CostManagement/query",
-            scope=_ARM_SCOPE,
             params={"api-version": "2025-03-01"},
             json_body={
                 "type": cost_type,
@@ -605,6 +676,7 @@ Resources
                 },
                 "dataset": dataset,
             },
+            caller=caller,
         )
         properties = payload.get("properties") or {}
         columns = [str(item.get("name") or "") for item in (properties.get("columns") or [])]
@@ -675,6 +747,8 @@ Resources
         lookback_days: int | None = None,
         chunk_size: int = 20,
         cost_type: str = "AmortizedCost",
+        caller: str = "default",
+        max_attempts: int = 3,
     ) -> list[dict[str, Any]]:
         normalized_ids: list[str] = []
         seen: set[str] = set()
@@ -694,9 +768,11 @@ Resources
         totals: dict[str, float] = {}
         currencies: dict[str, str] = {}
         scope_path = f"/subscriptions/{subscription_id}"
-        for index in range(0, len(normalized_ids), max(1, chunk_size)):
-            chunk = normalized_ids[index : index + max(1, chunk_size)]
-            for attempt in range(3):
+        attempts = max(1, int(max_attempts))
+        effective_chunk_size = max(1, int(chunk_size))
+        for index in range(0, len(normalized_ids), effective_chunk_size):
+            chunk = normalized_ids[index : index + effective_chunk_size]
+            for attempt in range(attempts):
                 try:
                     rows = self._cost_query(
                         scope_path,
@@ -706,6 +782,7 @@ Resources
                         lookback_days=lookback_days,
                         filter_dimension="ResourceId",
                         filter_values=chunk,
+                        caller=caller,
                     )
                     for item in rows:
                         label = str(item.get("ResourceId") or "Unspecified").strip() or "Unspecified"
@@ -713,7 +790,7 @@ Resources
                         currencies[label] = str(item.get("Currency") or currencies.get(label) or "USD")
                     break
                 except AzureApiError as exc:
-                    if exc.status_code == 429 and attempt < 2:
+                    if exc.status_code == 429 and attempt < attempts - 1:
                         delay_seconds = exc.retry_after_seconds() or (2 * (attempt + 1))
                         logger.warning(
                             "Azure targeted resource cost query hit throttling; retrying in %ss: %s",

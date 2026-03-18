@@ -20,6 +20,10 @@ from config import (
     AZURE_COST_REFRESH_MINUTES,
     AZURE_DIRECTORY_REFRESH_MINUTES,
     AZURE_INVENTORY_REFRESH_MINUTES,
+    AZURE_VM_EXPORT_COST_CHUNK_SIZE,
+    AZURE_VM_EXPORT_COST_INTER_CHUNK_DELAY_SECONDS,
+    AZURE_VM_EXPORT_MAX_RUNTIME_MINUTES,
+    AZURE_VM_EXPORT_RETRY_BUFFER_SECONDS,
     DATA_DIR,
 )
 
@@ -442,35 +446,44 @@ class AzureCache:
             by_service = self._client.get_cost_breakdown(subscriptions, "ServiceName")
             by_subscription = self._client.get_cost_breakdown(subscriptions, "SubscriptionName")
             by_resource_group = self._client.get_cost_breakdown(subscriptions, "ResourceGroupName")
-            by_resource_id: list[dict[str, Any]] = []
-            by_resource_id_status = {"available": False, "error": None, "cost_basis": "amortized"}
-            for attempt in range(3):
-                try:
-                    by_resource_id = self._client.get_cost_breakdown(
-                        subscriptions,
-                        "ResourceId",
-                        limit=None,
-                        cost_type="AmortizedCost",
-                    )
-                    by_resource_id_status = {"available": True, "error": None, "cost_basis": "amortized"}
-                    break
-                except AzureApiError as exc:
-                    message = str(exc)
-                    if exc.status_code == 429 and attempt < 2:
-                        delay_seconds = exc.retry_after_seconds() or (2 * (attempt + 1))
+            by_resource_id = self._snapshot("cost_by_resource_id") or []
+            by_resource_id_status = self._snapshot("cost_by_resource_id_status") or {
+                "available": False,
+                "error": None,
+                "cost_basis": "amortized",
+            }
+            if self._client.cost_query_coordinator.has_active_export_job():
+                logger.info("Skipping Azure cost-by-resource refresh while an Azure VM export is running")
+            else:
+                by_resource_id = []
+                by_resource_id_status = {"available": False, "error": None, "cost_basis": "amortized"}
+                for attempt in range(3):
+                    try:
+                        by_resource_id = self._client.get_cost_breakdown(
+                            subscriptions,
+                            "ResourceId",
+                            limit=None,
+                            cost_type="AmortizedCost",
+                        )
+                        by_resource_id_status = {"available": True, "error": None, "cost_basis": "amortized"}
+                        break
+                    except AzureApiError as exc:
+                        message = str(exc)
+                        if exc.status_code == 429 and attempt < 2:
+                            delay_seconds = exc.retry_after_seconds() or (2 * (attempt + 1))
+                            logger.warning(
+                                "Azure cost by resource id hit throttling; retrying in %ss: %s",
+                                delay_seconds,
+                                exc,
+                            )
+                            time.sleep(delay_seconds)
+                            continue
                         logger.warning(
-                            "Azure cost by resource id hit throttling; retrying in %ss: %s",
-                            delay_seconds,
+                            "Azure cost by resource id is unavailable for this principal; continuing cost refresh without it: %s",
                             exc,
                         )
-                        time.sleep(delay_seconds)
-                        continue
-                    logger.warning(
-                        "Azure cost by resource id is unavailable for this principal; continuing cost refresh without it: %s",
-                        exc,
-                    )
-                    by_resource_id_status = {"available": False, "error": message, "cost_basis": "amortized"}
-                    break
+                        by_resource_id_status = {"available": False, "error": message, "cost_basis": "amortized"}
+                        break
             advisor = self._client.list_advisor_recommendations(subscriptions)
             summary = {
                 "lookback_days": AZURE_COST_LOOKBACK_DAYS,
@@ -929,7 +942,13 @@ class AzureCache:
         rows: list[dict[str, Any]] = []
         try:
             for subscription_id, resource_ids in resource_ids_by_subscription.items():
-                rows.extend(self._client.get_cost_by_resource_ids(subscription_id, resource_ids))
+                rows.extend(
+                    self._client.get_cost_by_resource_ids(
+                        subscription_id,
+                        resource_ids,
+                        caller="detail",
+                    )
+                )
         except AzureApiError as exc:
             logger.warning(
                 "Azure targeted resource cost query is unavailable for VM detail: %s",
@@ -1232,39 +1251,117 @@ class AzureCache:
             "size": str(source.get("size") or "").strip(),
         }
 
+    @staticmethod
+    def _dedupe_resource_ids_by_subscription(
+        resource_ids_by_subscription: dict[str, list[str]],
+    ) -> dict[str, list[str]]:
+        deduped: dict[str, list[str]] = {}
+        for subscription_id, resource_ids in resource_ids_by_subscription.items():
+            normalized_subscription_id = str(subscription_id or "").strip()
+            if not normalized_subscription_id:
+                continue
+            seen: set[str] = set()
+            values: list[str] = []
+            for resource_id in resource_ids:
+                text = str(resource_id or "").strip()
+                if not text:
+                    continue
+                key = text.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                values.append(text)
+            if values:
+                deduped[normalized_subscription_id] = values
+        return deduped
+
+    @staticmethod
+    def _count_query_chunks(
+        resource_ids_by_subscription: dict[str, list[str]],
+        chunk_size: int,
+    ) -> int:
+        effective_chunk_size = max(1, int(chunk_size))
+        total = 0
+        for resource_ids in resource_ids_by_subscription.values():
+            if not resource_ids:
+                continue
+            total += (len(resource_ids) + effective_chunk_size - 1) // effective_chunk_size
+        return total
+
     def _fetch_live_resource_cost_index(
         self,
         resource_ids_by_subscription: dict[str, list[str]],
         *,
         lookback_days: int,
-    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        progress_callback: Callable[[str, int], None] | None = None,
+        phase_label: str = "direct",
+        deadline_monotonic: float | None = None,
+    ) -> dict[str, dict[str, Any]]:
         index: dict[str, dict[str, Any]] = {}
-        errors: dict[str, str] = {}
+        deduped_resource_ids = self._dedupe_resource_ids_by_subscription(resource_ids_by_subscription)
+        initial_chunk_size = max(1, int(AZURE_VM_EXPORT_COST_CHUNK_SIZE))
+        inter_chunk_delay = max(0.0, float(AZURE_VM_EXPORT_COST_INTER_CHUNK_DELAY_SECONDS))
+        retry_buffer_seconds = max(0, int(AZURE_VM_EXPORT_RETRY_BUFFER_SECONDS))
 
-        for subscription_id, resource_ids in resource_ids_by_subscription.items():
-            if not subscription_id or not resource_ids:
-                continue
-            try:
-                rows = self._client.get_cost_by_resource_ids(
-                    subscription_id,
-                    resource_ids,
-                    lookback_days=lookback_days,
-                )
-            except AzureApiError as exc:
-                logger.warning(
-                    "Azure live resource cost export lookup failed for subscription %s: %s",
-                    subscription_id,
-                    exc,
-                )
-                errors[subscription_id] = str(exc)
-                continue
+        for subscription_id, resource_ids in sorted(deduped_resource_ids.items()):
+            chunk_size = initial_chunk_size
+            offset = 0
+            chunk_index = 0
+            while offset < len(resource_ids):
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    raise TimeoutError(
+                        f"Azure Cost throttling prevented export completion within {AZURE_VM_EXPORT_MAX_RUNTIME_MINUTES} minutes"
+                    )
 
-            for item in rows:
-                key = self._normalize_resource_id(item.get("label"))
-                if key:
-                    index[key] = item
+                chunk = resource_ids[offset : offset + chunk_size]
+                try:
+                    rows = self._client.get_cost_by_resource_ids(
+                        subscription_id,
+                        chunk,
+                        lookback_days=lookback_days,
+                        chunk_size=len(chunk),
+                        caller="export",
+                        max_attempts=1,
+                    )
+                except AzureApiError as exc:
+                    if exc.status_code == 429:
+                        delay_seconds = (exc.retry_after_seconds() or 1) + retry_buffer_seconds
+                        chunk_size = max(1, chunk_size // 2)
+                        if progress_callback:
+                            progress_callback(
+                                f"Throttled by Azure, retrying in {delay_seconds}s "
+                                f"({phase_label} cost chunk {chunk_index + 1} for {subscription_id})",
+                                0,
+                            )
+                        logger.warning(
+                            "Azure %s export cost lookup throttled for subscription %s; retrying in %ss with chunk size %s: %s",
+                            phase_label,
+                            subscription_id,
+                            delay_seconds,
+                            chunk_size,
+                            exc,
+                        )
+                        time.sleep(delay_seconds)
+                        continue
+                    raise
 
-        return index, errors
+                for item in rows:
+                    key = self._normalize_resource_id(item.get("label"))
+                    if key:
+                        index[key] = item
+
+                offset += len(chunk)
+                chunk_index += 1
+                if progress_callback:
+                    progress_callback(
+                        f"Queried {phase_label} costs for subscription {subscription_id} "
+                        f"(chunk {chunk_index})",
+                        1,
+                    )
+                if inter_chunk_delay > 0 and offset < len(resource_ids):
+                    time.sleep(inter_chunk_delay)
+
+        return index
 
     def build_virtual_machine_cost_export(
         self,
@@ -1355,10 +1452,6 @@ class AzureCache:
                 advance=1,
             )
 
-        direct_subscription_count = sum(
-            1 for resource_ids in direct_cost_ids_by_subscription.values() if resource_ids
-        )
-
         shared_candidate_items: dict[str, dict[str, Any]] = {}
         shared_cost_ids_by_subscription: dict[str, list[str]] = defaultdict(list)
         for item in resources:
@@ -1379,42 +1472,34 @@ class AzureCache:
             shared_candidate_items[normalized_id] = item
             shared_cost_ids_by_subscription[subscription_id].append(str(item.get("id") or ""))
 
-        shared_subscription_count = sum(
-            1 for resource_ids in shared_cost_ids_by_subscription.values() if resource_ids
-        )
+        deduped_direct_cost_ids = self._dedupe_resource_ids_by_subscription(direct_cost_ids_by_subscription)
+        deduped_shared_cost_ids = self._dedupe_resource_ids_by_subscription(shared_cost_ids_by_subscription)
+        direct_chunk_count = self._count_query_chunks(deduped_direct_cost_ids, AZURE_VM_EXPORT_COST_CHUNK_SIZE)
+        shared_chunk_count = self._count_query_chunks(deduped_shared_cost_ids, AZURE_VM_EXPORT_COST_CHUNK_SIZE)
         progress_state["total"] = max(
             1,
-            len(selected_vms) + direct_subscription_count + shared_subscription_count + len(selected_vms) + 1,
+            len(selected_vms) + direct_chunk_count + shared_chunk_count + len(selected_vms) + 1,
         )
+        export_deadline = time.monotonic() + (max(1, int(AZURE_VM_EXPORT_MAX_RUNTIME_MINUTES)) * 60)
         report("Querying live direct Azure cost data")
 
-        direct_cost_index: dict[str, dict[str, Any]] = {}
-        direct_cost_errors: dict[str, str] = {}
-        for subscription_id, resource_ids in sorted(direct_cost_ids_by_subscription.items()):
-            if not resource_ids:
-                continue
-            rows, errors = self._fetch_live_resource_cost_index(
-                {subscription_id: resource_ids},
-                lookback_days=lookback_days,
-            )
-            direct_cost_index.update(rows)
-            direct_cost_errors.update(errors)
-            report(f"Queried direct costs for subscription {subscription_id}", advance=1)
+        direct_cost_index = self._fetch_live_resource_cost_index(
+            deduped_direct_cost_ids,
+            lookback_days=lookback_days,
+            progress_callback=report,
+            phase_label="direct",
+            deadline_monotonic=export_deadline,
+        )
 
         report("Querying shared cost candidates")
 
-        shared_cost_index: dict[str, dict[str, Any]] = {}
-        shared_cost_errors: dict[str, str] = {}
-        for subscription_id, resource_ids in sorted(shared_cost_ids_by_subscription.items()):
-            if not resource_ids:
-                continue
-            rows, errors = self._fetch_live_resource_cost_index(
-                {subscription_id: resource_ids},
-                lookback_days=lookback_days,
-            )
-            shared_cost_index.update(rows)
-            shared_cost_errors.update(errors)
-            report(f"Queried shared candidates for subscription {subscription_id}", advance=1)
+        shared_cost_index = self._fetch_live_resource_cost_index(
+            deduped_shared_cost_ids,
+            lookback_days=lookback_days,
+            progress_callback=report,
+            phase_label="shared",
+            deadline_monotonic=export_deadline,
+        )
 
         shared_rows: list[dict[str, Any]] = []
         shared_summary_by_group: dict[tuple[str, str], dict[str, Any]] = defaultdict(
@@ -1499,14 +1584,10 @@ class AzureCache:
                         attached_cost_total += amount
                 elif is_cost_candidate:
                     unpriced_resource_count += 1
-                    if subscription_id and subscription_id in direct_cost_errors:
-                        pricing_status = "cost_query_failed"
-                        pricing_error = direct_cost_errors[subscription_id]
-                    else:
-                        pricing_status = "unpriced"
-                        pricing_error = (
-                            f"No amortized cost row returned for the selected {lookback_days}-day range"
-                        )
+                    pricing_status = "unpriced"
+                    pricing_error = (
+                        f"No amortized cost row returned for the selected {lookback_days}-day range"
+                    )
 
                 detail_rows.append(
                     {
@@ -1538,15 +1619,10 @@ class AzureCache:
                 str(item.get("resource_group") or "").strip().lower(),
             )
             shared_group_summary = shared_summary_by_group.get(group_key, {"count": 0, "amount": 0.0})
-            shared_error = shared_cost_errors.get(subscription_id)
-            if subscription_id and subscription_id in direct_cost_errors:
-                cost_status = "Direct cost query failed"
-            elif unpriced_resource_count > 0:
+            if unpriced_resource_count > 0:
                 cost_status = "Direct costs partially priced"
             else:
                 cost_status = "Direct costs complete"
-            if shared_error:
-                cost_status = f"{cost_status}; shared candidates unavailable"
 
             direct_total_cost = None
             if priced_resource_count > 0:

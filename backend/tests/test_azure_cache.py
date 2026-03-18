@@ -371,7 +371,7 @@ def test_get_virtual_machine_detail_falls_back_to_targeted_cost_query_when_snaps
     monkeypatch.setattr(
         cache._client,
         "get_cost_by_resource_ids",
-        lambda subscription_id, resource_ids, lookback_days=None, chunk_size=20: [
+        lambda subscription_id, resource_ids, lookback_days=None, chunk_size=20, cost_type="AmortizedCost", caller="default", max_attempts=3: [
             {"label": vm_id, "amount": 82.5, "currency": "USD", "share": 0.9621},
             {"label": os_disk_id, "amount": 3.25, "currency": "USD", "share": 0.0379},
         ],
@@ -441,7 +441,7 @@ def test_get_virtual_machine_detail_falls_back_when_resource_cost_cache_uses_leg
     monkeypatch.setattr(
         cache._client,
         "get_cost_by_resource_ids",
-        lambda subscription_id, resource_ids, lookback_days=None, chunk_size=20, cost_type="AmortizedCost": [
+        lambda subscription_id, resource_ids, lookback_days=None, chunk_size=20, cost_type="AmortizedCost", caller="default", max_attempts=3: [
             {"label": vm_id, "amount": 14.25, "currency": "USD", "share": 1.0},
         ],
     )
@@ -563,9 +563,19 @@ def test_build_virtual_machine_cost_export_returns_summary_detail_and_shared_row
         }
     )
 
-    def fake_get_cost_by_resource_ids(subscription_id, resource_ids, lookback_days=None, chunk_size=20, cost_type="AmortizedCost"):
+    def fake_get_cost_by_resource_ids(
+        subscription_id,
+        resource_ids,
+        lookback_days=None,
+        chunk_size=20,
+        cost_type="AmortizedCost",
+        caller="default",
+        max_attempts=3,
+    ):
         assert subscription_id == "sub-1"
         assert lookback_days == 30
+        assert caller == "export"
+        assert max_attempts == 1
         normalized = {resource_id.lower() for resource_id in resource_ids}
         rows = []
         if vm_id.lower() in normalized:
@@ -660,8 +670,18 @@ def test_build_virtual_machine_cost_export_respects_filtered_scope(tmp_path, mon
     )
     calls: list[int | None] = []
 
-    def fake_get_cost_by_resource_ids(subscription_id, resource_ids, lookback_days=None, chunk_size=20, cost_type="AmortizedCost"):
+    def fake_get_cost_by_resource_ids(
+        subscription_id,
+        resource_ids,
+        lookback_days=None,
+        chunk_size=20,
+        cost_type="AmortizedCost",
+        caller="default",
+        max_attempts=3,
+    ):
         calls.append(lookback_days)
+        assert caller == "export"
+        assert max_attempts == 1
         return [{"label": "vm-east", "amount": 15.0, "currency": "USD", "share": 1.0}]
 
     monkeypatch.setattr(cache._client, "get_cost_by_resource_ids", fake_get_cost_by_resource_ids)
@@ -706,6 +726,126 @@ def test_refresh_cost_uses_amortized_resource_level_breakdown(tmp_path, monkeypa
         "error": None,
         "cost_basis": "amortized",
     }
+
+
+def test_refresh_cost_skips_resourceid_breakdown_while_export_is_running(tmp_path, monkeypatch):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    calls: list[tuple[str, str, int | None]] = []
+    previous_rows = [{"label": "vm-1", "amount": 12.0, "currency": "USD", "share": 1.0}]
+    previous_status = {"available": True, "error": None, "cost_basis": "amortized"}
+
+    cache._update_snapshots(
+        {
+            "cost_by_resource_id": previous_rows,
+            "cost_by_resource_id_status": previous_status,
+        }
+    )
+
+    monkeypatch.setattr(
+        cache._client,
+        "list_subscriptions",
+        lambda: [{"subscription_id": "sub-1", "display_name": "Prod"}],
+    )
+    monkeypatch.setattr(cache._client, "get_cost_trend", lambda subscriptions: [])
+
+    def fake_breakdown(subscriptions, grouping_dimension, *, limit=20, cost_type="ActualCost"):
+        calls.append((grouping_dimension, cost_type, limit))
+        if grouping_dimension == "ResourceId":
+            raise AssertionError("ResourceId breakdown should be skipped while an export is active")
+        return []
+
+    monkeypatch.setattr(cache._client, "get_cost_breakdown", fake_breakdown)
+    monkeypatch.setattr(cache._client, "list_advisor_recommendations", lambda subscriptions: [])
+
+    with cache._client.cost_query_coordinator.export_job():
+        cache._refresh_cost()
+
+    assert ("ServiceName", "ActualCost", 20) in calls
+    assert ("SubscriptionName", "ActualCost", 20) in calls
+    assert ("ResourceGroupName", "ActualCost", 20) in calls
+    assert cache._snapshot("cost_by_resource_id") == previous_rows
+    assert cache._snapshot("cost_by_resource_id_status") == previous_status
+
+
+def test_fetch_live_resource_cost_index_retries_throttled_chunks_without_requerying_successes(
+    tmp_path,
+    monkeypatch,
+):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    calls: list[list[str]] = []
+    sleep_calls: list[float] = []
+    vm_ids = [f"/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-{index}" for index in range(1, 7)]
+
+    def fake_get_cost_by_resource_ids(
+        subscription_id,
+        resource_ids,
+        lookback_days=None,
+        chunk_size=20,
+        cost_type="AmortizedCost",
+        caller="default",
+        max_attempts=3,
+    ):
+        calls.append(list(resource_ids))
+        assert caller == "export"
+        assert max_attempts == 1
+        if len(resource_ids) == 5:
+            raise AzureApiError(
+                "POST https://management.azure.com/... failed (429): throttled",
+                status_code=429,
+                headers={"retry-after": "3"},
+            )
+        return [
+            {"label": resource_id, "amount": 10.0, "currency": "USD", "share": 1.0}
+            for resource_id in resource_ids
+        ]
+
+    monkeypatch.setattr(cache._client, "get_cost_by_resource_ids", fake_get_cost_by_resource_ids)
+    monkeypatch.setattr("azure_cache.time.sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr("azure_cache.time.monotonic", lambda: 0.0)
+
+    rows = cache._fetch_live_resource_cost_index(
+        {"sub-1": vm_ids},
+        lookback_days=30,
+        deadline_monotonic=10_000.0,
+    )
+
+    assert len(rows) == 6
+    assert calls == [vm_ids[:5], vm_ids[:2], vm_ids[2:4], vm_ids[4:6]]
+    assert sleep_calls == [5, 2.0, 2.0]
+
+
+def test_fetch_live_resource_cost_index_fails_after_runtime_budget_is_exhausted(tmp_path, monkeypatch):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    vm_ids = [f"/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-{index}" for index in range(1, 3)]
+    timeline = iter([100.0, 102.0])
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr(
+        cache._client,
+        "get_cost_by_resource_ids",
+        lambda subscription_id, resource_ids, lookback_days=None, chunk_size=20, cost_type="AmortizedCost", caller="default", max_attempts=3: (_ for _ in ()).throw(
+            AzureApiError(
+                "POST https://management.azure.com/... failed (429): throttled",
+                status_code=429,
+                headers={"retry-after": "1"},
+            )
+        ),
+    )
+    monkeypatch.setattr("azure_cache.time.sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr("azure_cache.time.monotonic", lambda: next(timeline))
+
+    try:
+        cache._fetch_live_resource_cost_index(
+            {"sub-1": vm_ids},
+            lookback_days=30,
+            deadline_monotonic=101.5,
+        )
+    except TimeoutError as exc:
+        assert "Azure Cost throttling prevented export completion" in str(exc)
+    else:
+        raise AssertionError("Expected export cost collection to fail once the runtime budget was exhausted")
+
+    assert sleep_calls == [3]
 
 
 def test_list_virtual_machines_returns_vm_summary_and_filtered_rows(tmp_path):
@@ -881,7 +1021,7 @@ def test_list_virtual_machines_matches_reservations_by_sku_and_region(tmp_path):
 
     payload = cache.list_virtual_machines()
 
-    assert payload["by_size"] == [
+    assert sorted(payload["by_size"], key=lambda item: item["region"]) == [
         {
             "label": "Standard_E4as_v4",
             "region": "eastus",

@@ -14,6 +14,7 @@ frontend/dist/
 node_modules/
 
 # Data files (large / sensitive)
+data/
 backend/data/
 oit_all_issues.json
 oit_all_issues_full.json
