@@ -505,7 +505,12 @@ Resources
     tags,
     provisioningState = tostring(properties.provisioningState),
     powerState = tostring(properties.extended.instanceView.powerState.code),
-    status = tostring(properties.statusOfPrimary)
+    status           = tostring(properties.statusOfPrimary),
+    diskSizeGB       = toint(properties.diskSizeGB),
+    diskState        = tostring(properties.diskState),
+    accessTier       = tostring(properties.accessTier),
+    sourceResourceId = tostring(properties.creationData.sourceResourceId),
+    diskIOPS         = tolong(properties.diskIOPSReadWrite)
 """
         rows: list[dict[str, Any]] = []
         skip_token: str | None = None
@@ -556,6 +561,11 @@ Resources
                             or ""
                         ),
                         "tags": item.get("tags") or {},
+                        "disk_size_gb":       item.get("diskSizeGB"),
+                        "disk_state":         item.get("diskState") or "",
+                        "access_tier":        item.get("accessTier") or "",
+                        "source_resource_id": item.get("sourceResourceId") or "",
+                        "disk_iops":          item.get("diskIOPS"),
                     }
                 )
             skip_token = payload.get("$skipToken") or payload.get("skipToken")

@@ -813,6 +813,9 @@ class AzureCache:
         all_resources = self._snapshot("resources") or []
         all_vms = [item for item in all_resources if self._is_virtual_machine(item)]
 
+        cost_status = self._get_resource_cost_status()
+        cost_index = self._resource_cost_index() if cost_status["available"] else {}
+
         search_lower = search.strip().lower()
         subscription_filter = subscription_id.strip().lower()
         group_filter = resource_group.strip().lower()
@@ -854,6 +857,10 @@ class AzureCache:
             row = dict(item)
             row["size"] = vm_size
             row["power_state"] = power_state
+            norm_id = self._normalize_resource_id(row.get("id"))
+            cost_row = cost_index.get(norm_id) or {}
+            row["cost"] = round(float(cost_row["amount"]), 2) if cost_row else None
+            row["currency"] = cost_row.get("currency", "USD") if cost_row else "USD"
             matched.append(row)
 
         by_size_counts: dict[str, int] = defaultdict(int)
@@ -891,6 +898,8 @@ class AzureCache:
             "by_state": by_state,
             "reservation_data_available": bool(reservation_status["available"]),
             "reservation_error": reservation_status.get("error"),
+            "cost_available": cost_status["available"],
+            "cost_basis": cost_status.get("cost_basis"),
         }
 
     def list_directory_objects(self, snapshot_name: str, *, search: str = "") -> list[dict[str, Any]]:
@@ -1971,6 +1980,23 @@ class AzureCache:
             kind_counts[str(acct.get("kind") or "Unknown")] += 1
             tier_counts[str(acct.get("sku_name") or "Unknown")] += 1
 
+        total_disk_gb = sum((d.get("disk_size_gb") or 0) for d in annotated_disks)
+        total_snapshot_gb = sum((s.get("disk_size_gb") or 0) for s in annotated_snapshots)
+        total_provisioned_gb = total_disk_gb + total_snapshot_gb
+
+        avg_cost_per_gb: float | None = None
+        if cost_status["available"] and total_provisioned_gb > 0:
+            disk_and_snapshot_cost = sum(
+                (r["cost"] or 0) for r in annotated_disks + annotated_snapshots
+                if r.get("cost") is not None
+            )
+            avg_cost_per_gb = round(disk_and_snapshot_cost / total_provisioned_gb, 4)
+
+        disk_state_counts: dict[str, int] = defaultdict(int)
+        for disk in managed_disks:
+            state = str(disk.get("disk_state") or "").strip() or "Unknown"
+            disk_state_counts[state] += 1
+
         by_service = self._snapshot("cost_by_service") or []
         storage_services_cost = [
             item for item in by_service
@@ -1987,8 +2013,13 @@ class AzureCache:
                 "total_snapshots": len(snapshots),
                 "unattached_disks": unattached_disks,
                 "total_storage_cost": total_storage_cost,
+                "total_disk_gb": total_disk_gb,
+                "total_snapshot_gb": total_snapshot_gb,
+                "total_provisioned_gb": total_provisioned_gb,
+                "avg_cost_per_gb": avg_cost_per_gb,
             },
             "disk_by_sku": dict(sorted(disk_sku_counts.items(), key=lambda kv: -kv[1])),
+            "disk_by_state": dict(sorted(disk_state_counts.items(), key=lambda kv: -kv[1])),
             "accounts_by_kind": dict(sorted(kind_counts.items(), key=lambda kv: -kv[1])),
             "accounts_by_tier": dict(sorted(tier_counts.items(), key=lambda kv: -kv[1])),
             "storage_services_cost": storage_services_cost,

@@ -69,6 +69,7 @@ function AccountsTable({ accounts, costAvailable }: { accounts: AzureStorageAcco
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Kind</th>
               <th className="px-4 py-3">Tier / SKU</th>
+              <th className="px-4 py-3">Access Tier</th>
               <th className="px-4 py-3">Location</th>
               <th className="px-4 py-3">Subscription</th>
               <th className="px-4 py-3">Resource Group</th>
@@ -81,6 +82,7 @@ function AccountsTable({ accounts, costAvailable }: { accounts: AzureStorageAcco
                 <td className="px-4 py-3 font-medium text-slate-900">{item.name}</td>
                 <td className="px-4 py-3 text-slate-600">{item.kind || "—"}</td>
                 <td className="px-4 py-3 text-slate-600">{item.sku_name || "—"}</td>
+                <td className="px-4 py-3 text-slate-600">{item.access_tier || "—"}</td>
                 <td className="px-4 py-3 text-slate-600">{item.location}</td>
                 <td className="px-4 py-3 text-slate-600">{item.subscription_name || item.subscription_id}</td>
                 <td className="px-4 py-3 text-slate-600">{item.resource_group}</td>
@@ -151,37 +153,49 @@ function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costA
             <tr>
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">SKU</th>
+              <th className="px-4 py-3 text-right">Size</th>
               <th className="px-4 py-3">Location</th>
               <th className="px-4 py-3">Subscription</th>
               <th className="px-4 py-3">Resource Group</th>
-              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">State</th>
               {costAvailable ? <th className="px-4 py-3 text-right">Cost</th> : null}
+              {costAvailable ? <th className="px-4 py-3 text-right">Cost/GB</th> : null}
             </tr>
           </thead>
           <tbody>
             {visible.map((item, idx) => {
-              const attached = Boolean(item.managed_by);
+              const diskState = item.disk_state || (item.managed_by ? "Attached" : "Unattached");
+              const stateBadge: Record<string, string> = {
+                Attached: "bg-emerald-100 text-emerald-700",
+                Unattached: "bg-amber-100 text-amber-700",
+                Reserved: "bg-sky-100 text-sky-700",
+              };
+              const badgeClass = stateBadge[diskState] ?? "bg-slate-100 text-slate-600";
               return (
                 <tr key={item.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
                   <td className="px-4 py-3 font-medium text-slate-900">{item.name}</td>
                   <td className="px-4 py-3 text-slate-600">{item.sku_name || "—"}</td>
+                  <td className="px-4 py-3 text-right text-slate-600">
+                    {item.disk_size_gb !== null ? item.disk_size_gb.toLocaleString() + " GB" : "—"}
+                  </td>
                   <td className="px-4 py-3 text-slate-600">{item.location}</td>
                   <td className="px-4 py-3 text-slate-600">{item.subscription_name || item.subscription_id}</td>
                   <td className="px-4 py-3 text-slate-600">{item.resource_group}</td>
                   <td className="px-4 py-3">
-                    {attached ? (
-                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                        Attached
-                      </span>
-                    ) : (
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
-                        Unattached
-                      </span>
-                    )}
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${badgeClass}`}>
+                      {diskState}
+                    </span>
                   </td>
                   {costAvailable ? (
                     <td className="px-4 py-3 text-right font-semibold text-slate-900">
                       {formatCurrency(item.cost, item.currency)}
+                    </td>
+                  ) : null}
+                  {costAvailable ? (
+                    <td className="px-4 py-3 text-right text-slate-600">
+                      {item.cost !== null && item.disk_size_gb
+                        ? formatCurrency(item.cost / item.disk_size_gb) + "/GB"
+                        : "—"}
                     </td>
                   ) : null}
                 </tr>
@@ -231,6 +245,8 @@ function SnapshotsTable({ snapshots, costAvailable }: { snapshots: AzureManagedD
             <tr>
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">SKU</th>
+              <th className="px-4 py-3 text-right">Size</th>
+              <th className="px-4 py-3">Source Disk</th>
               <th className="px-4 py-3">Location</th>
               <th className="px-4 py-3">Subscription</th>
               <th className="px-4 py-3">Resource Group</th>
@@ -242,6 +258,12 @@ function SnapshotsTable({ snapshots, costAvailable }: { snapshots: AzureManagedD
               <tr key={item.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
                 <td className="px-4 py-3 font-medium text-slate-900">{item.name}</td>
                 <td className="px-4 py-3 text-slate-600">{item.sku_name || "—"}</td>
+                <td className="px-4 py-3 text-right text-slate-600">
+                  {item.disk_size_gb !== null ? item.disk_size_gb.toLocaleString() + " GB" : "—"}
+                </td>
+                <td className="px-4 py-3 text-slate-600">
+                  {item.source_resource_id ? item.source_resource_id.split("/").pop() : "—"}
+                </td>
                 <td className="px-4 py-3 text-slate-600">{item.location}</td>
                 <td className="px-4 py-3 text-slate-600">{item.subscription_name || item.subscription_id}</td>
                 <td className="px-4 py-3 text-slate-600">{item.resource_group}</td>
@@ -307,7 +329,7 @@ export default function AzureStoragePage() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-7">
         <StatCard label="Storage Accounts" value={summary.total_storage_accounts.toLocaleString()} />
         <StatCard label="Managed Disks" value={summary.total_managed_disks.toLocaleString()} />
         <StatCard label="Snapshots" value={summary.total_snapshots.toLocaleString()} />
@@ -317,6 +339,18 @@ export default function AzureStoragePage() {
           sub="Incurring cost with no VM"
           tone={summary.unattached_disks > 0 ? "text-amber-700" : "text-emerald-700"}
         />
+        <StatCard
+          label="Provisioned Storage"
+          value={summary.total_provisioned_gb.toLocaleString() + " GB"}
+          sub="Disks + snapshots"
+        />
+        {cost_available ? (
+          <StatCard
+            label="Avg Cost / GB"
+            value={summary.avg_cost_per_gb !== null ? formatCurrency(summary.avg_cost_per_gb) + "/GB" : "—"}
+            sub="Disks + snapshots"
+          />
+        ) : null}
         <StatCard
           label="Total Storage Cost"
           value={cost_available ? formatCurrency(summary.total_storage_cost) : "Unavailable"}

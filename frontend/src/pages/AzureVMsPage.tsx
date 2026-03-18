@@ -788,13 +788,19 @@ export default function AzureVMsPage() {
                 <th className="px-4 py-3">Subscription</th>
                 <th className="px-4 py-3">Resource Group</th>
                 <th className="px-4 py-3">Location</th>
+                {data.cost_available ? (
+                  <th className="px-4 py-3 text-right">
+                    Cost
+                    <span className="ml-1 font-normal text-slate-400">(VM only)</span>
+                  </th>
+                ) : null}
                 <th className="px-4 py-3">Manage</th>
               </tr>
             </thead>
             <tbody>
               {data.vms.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500">
+                  <td colSpan={data.cost_available ? 8 : 7} className="px-4 py-8 text-center text-sm text-slate-500">
                     No virtual machines matched the current filters.
                   </td>
                 </tr>
@@ -817,6 +823,11 @@ export default function AzureVMsPage() {
                   <td className="px-4 py-3 text-slate-700">{item.subscription_name || item.subscription_id}</td>
                   <td className="px-4 py-3 text-slate-700">{item.resource_group || "—"}</td>
                   <td className="px-4 py-3 text-slate-700">{item.location || "—"}</td>
+                  {data.cost_available ? (
+                    <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                      {formatCurrency(item.cost, item.currency)}
+                    </td>
+                  ) : null}
                   <td className="px-4 py-3">
                     <a
                       href={buildAzurePortalUrl(item.id)}

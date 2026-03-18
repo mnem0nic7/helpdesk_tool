@@ -73,6 +73,11 @@ def test_query_resources_captures_vm_size_and_sku(monkeypatch):
             "vm_size": "Standard_D4s_v5",
             "state": "PowerState/running",
             "tags": {"env": "prod"},
+            "disk_size_gb": None,
+            "disk_state": "",
+            "access_tier": "",
+            "source_resource_id": "",
+            "disk_iops": None,
         }
     ]
 

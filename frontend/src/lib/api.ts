@@ -778,6 +778,8 @@ export interface AzureCountByLabel {
 export interface AzureVirtualMachineRow extends AzureResourceRow {
   size: string;
   power_state: string;
+  cost: number | null;
+  currency: string;
 }
 
 export interface AzureVirtualMachineSummary {
@@ -805,6 +807,8 @@ export interface AzureVirtualMachineListResponse {
   by_state: AzureCountByLabel[];
   reservation_data_available: boolean;
   reservation_error: string | null;
+  cost_available: boolean;
+  cost_basis: string | null;
 }
 
 export interface AzureVirtualMachineAssociatedResource {
@@ -909,6 +913,7 @@ export interface AzureStorageAccount {
   name: string;
   kind: string;
   sku_name: string;
+  access_tier: string;
   location: string;
   subscription_id: string;
   subscription_name: string;
@@ -923,6 +928,10 @@ export interface AzureManagedDisk {
   id: string;
   name: string;
   sku_name: string;
+  disk_size_gb: number | null;
+  disk_state: string;
+  source_resource_id: string;
+  disk_iops: number | null;
   location: string;
   subscription_id: string;
   subscription_name: string;
@@ -944,8 +953,13 @@ export interface AzureStorageSummary {
     total_snapshots: number;
     unattached_disks: number;
     total_storage_cost: number | null;
+    total_disk_gb: number;
+    total_snapshot_gb: number;
+    total_provisioned_gb: number;
+    avg_cost_per_gb: number | null;
   };
   disk_by_sku: Record<string, number>;
+  disk_by_state: Record<string, number>;
   accounts_by_kind: Record<string, number>;
   accounts_by_tier: Record<string, number>;
   storage_services_cost: Array<{ label: string; amount: number; currency: string }>;
