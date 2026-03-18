@@ -29,6 +29,11 @@ function clampDrawerWidth(width: number): number {
   return Math.min(Math.max(width, minWidth), maxWidth);
 }
 
+function getExpandedDrawerWidth(): number {
+  if (typeof window === "undefined") return DEFAULT_DRAWER_WIDTH;
+  return clampDrawerWidth(window.innerWidth - VIEWPORT_MARGIN);
+}
+
 function formatDateTime(iso: string): string {
   if (!iso) return "—";
   const date = new Date(iso);
@@ -76,6 +81,7 @@ export default function TicketWorkbenchDrawer({
   const [description, setDescription] = useState("");
   const [drawerWidth, setDrawerWidth] = useState(() => clampDrawerWidth(DEFAULT_DRAWER_WIDTH));
   const [isResizing, setIsResizing] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [selectedPriority, setSelectedPriority] = useState("");
   const [selectedAssignee, setSelectedAssignee] = useState("");
   const [reporterSearch, setReporterSearch] = useState("");
@@ -170,11 +176,11 @@ export default function TicketWorkbenchDrawer({
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const handleResize = () => {
-      setDrawerWidth((current) => clampDrawerWidth(current));
+      setDrawerWidth((current) => (isExpanded ? getExpandedDrawerWidth() : clampDrawerWidth(current)));
     };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, []);
+  }, [isExpanded]);
 
   useEffect(() => {
     if (!isResizing) return undefined;
@@ -232,7 +238,16 @@ export default function TicketWorkbenchDrawer({
   function handleResizeStart(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
     event.stopPropagation();
+    setIsExpanded(false);
     setIsResizing(true);
+  }
+
+  function toggleExpanded() {
+    setIsExpanded((current) => {
+      const next = !current;
+      setDrawerWidth(next ? getExpandedDrawerWidth() : clampDrawerWidth(DEFAULT_DRAWER_WIDTH));
+      return next;
+    });
   }
 
   function handleUpdated(next: TicketDetail, message: string) {
@@ -397,7 +412,10 @@ export default function TicketWorkbenchDrawer({
             isResizing ? "bg-blue-200/70" : "bg-transparent hover:bg-slate-200/60",
           ].join(" ")}
           onPointerDown={handleResizeStart}
-          onDoubleClick={() => setDrawerWidth(clampDrawerWidth(DEFAULT_DRAWER_WIDTH))}
+          onDoubleClick={() => {
+            setIsExpanded(false);
+            setDrawerWidth(clampDrawerWidth(DEFAULT_DRAWER_WIDTH));
+          }}
         >
           <div className="absolute left-1/2 top-1/2 h-14 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-300" />
         </div>
@@ -452,6 +470,13 @@ export default function TicketWorkbenchDrawer({
                   Open in Jira
                 </a>
               )}
+              <button
+                type="button"
+                onClick={toggleExpanded}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                {isExpanded ? "Restore" : "Expand"}
+              </button>
               <button
                 type="button"
                 onClick={onClose}

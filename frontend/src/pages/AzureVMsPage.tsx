@@ -1,7 +1,23 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type AzureVirtualMachineDetailResponse, type AzureVirtualMachineRow } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+
+const DEFAULT_VM_DRAWER_WIDTH = 960;
+const VM_DRAWER_MIN_WIDTH = 720;
+const VM_DRAWER_VIEWPORT_MARGIN = 32;
+
+function clampVMDrawerWidth(width: number): number {
+  if (typeof window === "undefined") return DEFAULT_VM_DRAWER_WIDTH;
+  const maxWidth = Math.max(360, window.innerWidth - VM_DRAWER_VIEWPORT_MARGIN);
+  const minWidth = Math.min(VM_DRAWER_MIN_WIDTH, maxWidth);
+  return Math.min(Math.max(width, minWidth), maxWidth);
+}
+
+function getExpandedVMDrawerWidth(): number {
+  if (typeof window === "undefined") return DEFAULT_VM_DRAWER_WIDTH;
+  return clampVMDrawerWidth(window.innerWidth - VM_DRAWER_VIEWPORT_MARGIN);
+}
 
 function buildAzurePortalUrl(resourceId: string): string {
   return `https://portal.azure.com/#resource${resourceId}`;
@@ -71,12 +87,33 @@ function VMDetailDrawer({
   const associatedResources = detail?.associated_resources ?? [];
   const resourceScroll = useInfiniteScrollCount(associatedResources.length, 20, vm.id);
   const visibleResources = associatedResources.slice(0, resourceScroll.visibleCount);
+  const [drawerWidth, setDrawerWidth] = useState(() => clampVMDrawerWidth(DEFAULT_VM_DRAWER_WIDTH));
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handleResize = () => {
+      setDrawerWidth((current) => (isExpanded ? getExpandedVMDrawerWidth() : clampVMDrawerWidth(current)));
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [isExpanded]);
+
+  function toggleExpanded() {
+    setIsExpanded((current) => {
+      const next = !current;
+      setDrawerWidth(next ? getExpandedVMDrawerWidth() : clampVMDrawerWidth(DEFAULT_VM_DRAWER_WIDTH));
+      return next;
+    });
+  }
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/35" onClick={onClose}>
       <aside
-        className="flex h-full w-full max-w-3xl flex-col overflow-hidden bg-white shadow-2xl"
+        data-testid="azure-vm-detail-drawer"
+        className="flex h-full max-w-full flex-col overflow-hidden bg-white shadow-2xl"
         onClick={(event) => event.stopPropagation()}
+        style={{ width: `${drawerWidth}px` }}
       >
         <div className="border-b border-slate-200 px-6 py-4">
           <div className="flex items-start justify-between gap-4">
@@ -100,6 +137,13 @@ function VMDetailDrawer({
               >
                 Open in Azure
               </a>
+              <button
+                type="button"
+                onClick={toggleExpanded}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-50"
+              >
+                {isExpanded ? "Restore" : "Expand"}
+              </button>
               <button
                 type="button"
                 onClick={onClose}
