@@ -298,6 +298,99 @@ def test_get_virtual_machine_detail_returns_related_resources_and_costs(tmp_path
     assert relationships[extension_id] == "Child resource"
 
 
+def test_get_virtual_machine_detail_falls_back_to_targeted_cost_query_when_snapshot_unavailable(tmp_path, monkeypatch):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    vm_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1"
+    nic_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/networkInterfaces/nic-1"
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": vm_id,
+                    "name": "vm-1",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "parent_resource_id": "",
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "network_interface_ids": [nic_id],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {},
+                },
+                {
+                    "id": nic_id,
+                    "name": "nic-1",
+                    "resource_type": "Microsoft.Network/networkInterfaces",
+                    "parent_resource_id": "",
+                    "managed_by": "",
+                    "attached_vm_id": vm_id,
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "tags": {},
+                },
+            ],
+            "cost_summary": {
+                "lookback_days": 30,
+                "currency": "USD",
+                "total_cost": 0.0,
+                "top_service": "",
+                "top_subscription": "",
+                "top_resource_group": "",
+                "recommendation_count": 0,
+                "potential_monthly_savings": 0.0,
+            },
+            "cost_by_resource_id_status": {
+                "available": False,
+                "error": "POST https://management.azure.com/subscriptions/sub-1/providers/Microsoft.CostManagement/query failed (429): Too many requests",
+            },
+            "cost_by_resource_id": [],
+        }
+    )
+
+    monkeypatch.setattr(
+        cache._client,
+        "get_cost_by_resource_ids",
+        lambda subscription_id, resource_ids, lookback_days=None, chunk_size=20: [
+            {"label": vm_id, "amount": 82.5, "currency": "USD", "share": 0.9621},
+            {"label": nic_id, "amount": 3.25, "currency": "USD", "share": 0.0379},
+        ],
+    )
+
+    detail = cache.get_virtual_machine_detail(vm_id)
+
+    assert detail is not None
+    assert detail["cost"] == {
+        "lookback_days": 30,
+        "currency": "USD",
+        "cost_data_available": True,
+        "cost_error": None,
+        "total_cost": 85.75,
+        "vm_cost": 82.5,
+        "related_resource_cost": 3.25,
+        "priced_resource_count": 2,
+    }
+
+
 def test_list_virtual_machines_returns_vm_summary_and_filtered_rows(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     cache._update_snapshots(

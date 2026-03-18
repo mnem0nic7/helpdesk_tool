@@ -230,6 +230,80 @@ def test_list_reservations_normalizes_active_vm_reservations(monkeypatch):
     ]
 
 
+def test_get_cost_by_resource_ids_uses_resourceid_filter(monkeypatch):
+    client = AzureClient()
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_request(method, url, *, scope, params=None, json_body=None, headers=None):
+        captured_calls.append(
+            {
+                "method": method,
+                "url": url,
+                "scope": scope,
+                "params": params,
+                "json_body": json_body,
+            }
+        )
+        return {
+            "properties": {
+                "columns": [
+                    {"name": "PreTaxCost"},
+                    {"name": "ResourceId"},
+                ],
+                "rows": [
+                    [12.5, "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1"],
+                    [3.75, "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/networkInterfaces/nic-1"],
+                ],
+            }
+        }
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    rows = client.get_cost_by_resource_ids(
+        "sub-1",
+        [
+            "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1",
+            "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/networkInterfaces/nic-1",
+        ],
+    )
+
+    assert captured_calls[0]["method"] == "POST"
+    assert captured_calls[0]["url"] == (
+        "https://management.azure.com/subscriptions/sub-1/providers/Microsoft.CostManagement/query"
+    )
+    payload = captured_calls[0]["json_body"]
+    assert payload["type"] == "ActualCost"
+    assert payload["timeframe"] == "Custom"
+    assert payload["dataset"]["granularity"] == "None"
+    assert payload["dataset"]["grouping"] == [{"type": "Dimension", "name": "ResourceId"}]
+    assert payload["dataset"]["filter"] == {
+        "dimensions": {
+            "name": "ResourceId",
+            "operator": "In",
+            "values": [
+                "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1",
+                "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/networkInterfaces/nic-1",
+            ],
+        }
+    }
+    assert payload["timePeriod"]["from"]
+    assert payload["timePeriod"]["to"]
+    assert rows == [
+        {
+            "label": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1",
+            "amount": 12.5,
+            "currency": "USD",
+            "share": 0.7692,
+        },
+        {
+            "label": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/networkInterfaces/nic-1",
+            "amount": 3.75,
+            "currency": "USD",
+            "share": 0.2308,
+        },
+    ]
+
+
 def test_inventory_refresh_continues_when_management_groups_are_unauthorized(tmp_path, monkeypatch):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
 

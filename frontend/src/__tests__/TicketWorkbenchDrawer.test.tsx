@@ -149,6 +149,33 @@ describe("TicketWorkbenchDrawer", () => {
     fireEvent.mouseUp(window);
   });
 
+  it("toggles between default and expanded drawer widths", async () => {
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Ticket Actions");
+
+    const drawer = screen.getByTestId("ticket-workbench-drawer");
+    expect(drawer).toHaveStyle({ width: "768px" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+
+    await waitFor(() => {
+      expect(drawer).toHaveStyle({ width: "1368px" });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    await waitFor(() => {
+      expect(drawer).toHaveStyle({ width: "768px" });
+    });
+  });
+
   it("opens a history popout with the full notes and communication timeline", async () => {
     mockApi.getTicket.mockResolvedValue({
       ...ticketDetail,

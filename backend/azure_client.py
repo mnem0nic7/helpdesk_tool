@@ -30,6 +30,31 @@ _TOKEN_SKEW_SECONDS = 60
 class AzureApiError(RuntimeError):
     """Raised when an Azure REST call fails."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.headers = {str(key).lower(): str(value) for key, value in (headers or {}).items()}
+
+    def retry_after_seconds(self) -> int | None:
+        for header_name in (
+            "x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after",
+            "retry-after",
+        ):
+            raw_value = self.headers.get(header_name)
+            if not raw_value:
+                continue
+            try:
+                return max(1, int(float(raw_value)))
+            except (TypeError, ValueError):
+                continue
+        return None
+
 
 class AzureClient:
     """Thin REST client for Azure ARM, Resource Graph, Cost, Advisor, and Graph."""
@@ -102,7 +127,11 @@ class AzureClient:
             timeout=60,
         )
         if not resp.ok:
-            raise AzureApiError(f"{method} {url} failed ({resp.status_code}): {resp.text[:1000]}")
+            raise AzureApiError(
+                f"{method} {url} failed ({resp.status_code}): {resp.text[:1000]}",
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+            )
         if not resp.content:
             return {}
         return resp.json()
@@ -521,6 +550,8 @@ Resources
         grouping_dimension: str | None = None,
         granularity: str = "Daily",
         lookback_days: int | None = None,
+        filter_dimension: str | None = None,
+        filter_values: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         start, end = self._cost_range(lookback_days)
         dataset: dict[str, Any] = {
@@ -539,6 +570,14 @@ Resources
                     "name": grouping_dimension,
                 }
             ]
+        if filter_dimension and filter_values:
+            dataset["filter"] = {
+                "dimensions": {
+                    "name": filter_dimension,
+                    "operator": "In",
+                    "values": filter_values,
+                }
+            }
         payload = self._request(
             "POST",
             f"{_ARM_BASE}{scope_path}/providers/Microsoft.CostManagement/query",
@@ -608,6 +647,70 @@ Resources
         if limit is None:
             return rows
         return rows[:limit]
+
+    def get_cost_by_resource_ids(
+        self,
+        subscription_id: str,
+        resource_ids: list[str],
+        *,
+        lookback_days: int | None = None,
+        chunk_size: int = 20,
+    ) -> list[dict[str, Any]]:
+        normalized_ids: list[str] = []
+        seen: set[str] = set()
+        for resource_id in resource_ids:
+            value = str(resource_id or "").strip()
+            if not value:
+                continue
+            key = value.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized_ids.append(value)
+
+        if not subscription_id or not normalized_ids:
+            return []
+
+        totals: dict[str, float] = {}
+        scope_path = f"/subscriptions/{subscription_id}"
+        for index in range(0, len(normalized_ids), max(1, chunk_size)):
+            chunk = normalized_ids[index : index + max(1, chunk_size)]
+            for attempt in range(3):
+                try:
+                    rows = self._cost_query(
+                        scope_path,
+                        grouping_dimension="ResourceId",
+                        granularity="None",
+                        lookback_days=lookback_days,
+                        filter_dimension="ResourceId",
+                        filter_values=chunk,
+                    )
+                    for item in rows:
+                        label = str(item.get("ResourceId") or "Unspecified").strip() or "Unspecified"
+                        totals[label] = totals.get(label, 0.0) + float(item.get("totalCost") or 0.0)
+                    break
+                except AzureApiError as exc:
+                    if exc.status_code == 429 and attempt < 2:
+                        delay_seconds = exc.retry_after_seconds() or (2 * (attempt + 1))
+                        logger.warning(
+                            "Azure targeted resource cost query hit throttling; retrying in %ss: %s",
+                            delay_seconds,
+                            exc,
+                        )
+                        time.sleep(delay_seconds)
+                        continue
+                    raise
+
+        grand_total = sum(totals.values()) or 0.0
+        return [
+            {
+                "label": label,
+                "amount": round(amount, 2),
+                "currency": "USD",
+                "share": round((amount / grand_total) if grand_total else 0.0, 4),
+            }
+            for label, amount in sorted(totals.items(), key=lambda item: item[1], reverse=True)
+        ]
 
     def list_advisor_recommendations(
         self,

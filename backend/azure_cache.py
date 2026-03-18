@@ -455,8 +455,8 @@ class AzureCache:
                     break
                 except AzureApiError as exc:
                     message = str(exc)
-                    if "429" in message and attempt < 2:
-                        delay_seconds = 2 * (attempt + 1)
+                    if exc.status_code == 429 and attempt < 2:
+                        delay_seconds = exc.retry_after_seconds() or (2 * (attempt + 1))
                         logger.warning(
                             "Azure cost by resource id hit throttling; retrying in %ss: %s",
                             delay_seconds,
@@ -779,6 +779,39 @@ class AzureCache:
             if key:
                 index[key] = item
         return index
+
+    def _targeted_resource_cost_index(
+        self,
+        resources: list[dict[str, Any]],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+        resource_ids_by_subscription: dict[str, list[str]] = defaultdict(list)
+        for item in resources:
+            subscription_id = str(item.get("subscription_id") or "").strip()
+            resource_id = str(item.get("id") or "").strip()
+            if not subscription_id or not resource_id:
+                continue
+            resource_ids_by_subscription[subscription_id].append(resource_id)
+
+        if not resource_ids_by_subscription:
+            return {}, {"available": False, "error": "No subscription-scoped resources are available for targeted cost lookup"}
+
+        rows: list[dict[str, Any]] = []
+        try:
+            for subscription_id, resource_ids in resource_ids_by_subscription.items():
+                rows.extend(self._client.get_cost_by_resource_ids(subscription_id, resource_ids))
+        except AzureApiError as exc:
+            logger.warning(
+                "Azure targeted resource cost query is unavailable for VM detail: %s",
+                exc,
+            )
+            return {}, {"available": False, "error": str(exc)}
+
+        index: dict[str, dict[str, Any]] = {}
+        for item in rows:
+            key = self._normalize_resource_id(item.get("label"))
+            if key:
+                index[key] = item
+        return index, {"available": True, "error": None}
 
     def _get_reservation_status(self) -> dict[str, Any]:
         status = self._snapshot("reservation_status")
@@ -1126,8 +1159,16 @@ class AzureCache:
             for public_ip_id in nic.get("public_ip_ids") or []:
                 mark_related(public_ip_id, "Public IP")
 
+        associated_items = [
+            resource_by_id[normalized_id]
+            for normalized_id in associated_by_id
+            if normalized_id in resource_by_id
+        ]
+
         resource_cost_status = self._get_resource_cost_status()
         resource_cost_index = self._resource_cost_index() if resource_cost_status["available"] else {}
+        if not resource_cost_status["available"] and associated_items:
+            resource_cost_index, resource_cost_status = self._targeted_resource_cost_index(associated_items)
 
         associated_resources: list[dict[str, Any]] = []
         known_cost_count = 0
