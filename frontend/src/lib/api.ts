@@ -904,6 +904,55 @@ export interface AzureAdvisorRecommendation {
   currency: string;
 }
 
+export interface AzureStorageAccount {
+  id: string;
+  name: string;
+  kind: string;
+  sku_name: string;
+  location: string;
+  subscription_id: string;
+  subscription_name: string;
+  resource_group: string;
+  state: string;
+  tags: Record<string, string>;
+  cost: number | null;
+  currency: string;
+}
+
+export interface AzureManagedDisk {
+  id: string;
+  name: string;
+  sku_name: string;
+  location: string;
+  subscription_id: string;
+  subscription_name: string;
+  resource_group: string;
+  state: string;
+  managed_by: string;
+  tags: Record<string, string>;
+  cost: number | null;
+  currency: string;
+}
+
+export interface AzureStorageSummary {
+  storage_accounts: AzureStorageAccount[];
+  managed_disks: AzureManagedDisk[];
+  snapshots: AzureManagedDisk[];
+  summary: {
+    total_storage_accounts: number;
+    total_managed_disks: number;
+    total_snapshots: number;
+    unattached_disks: number;
+    total_storage_cost: number | null;
+  };
+  disk_by_sku: Record<string, number>;
+  accounts_by_kind: Record<string, number>;
+  accounts_by_tier: Record<string, number>;
+  storage_services_cost: Array<{ label: string; amount: number; currency: string }>;
+  cost_available: boolean;
+  cost_basis: string | null;
+}
+
 export interface AzureCitation {
   source_type: string;
   label: string;
@@ -1341,6 +1390,10 @@ export const api = {
 
   getAzureAdvisor(): Promise<AzureAdvisorRecommendation[]> {
     return fetchJSON<AzureAdvisorRecommendation[]>("/api/azure/advisor");
+  },
+
+  getAzureStorage(): Promise<AzureStorageSummary> {
+    return fetchJSON<AzureStorageSummary>("/api/azure/storage");
   },
 
   getAzureAIModels(): Promise<AIModel[]> {

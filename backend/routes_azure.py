@@ -483,6 +483,12 @@ async def get_advisor() -> list[dict[str, Any]]:
     return azure_cache.get_advisor()
 
 
+@router.get("/storage")
+async def get_storage() -> dict[str, Any]:
+    _ensure_azure_site()
+    return azure_cache.get_storage_summary()
+
+
 @router.get("/ai/models")
 async def get_ai_models() -> list[dict[str, str]]:
     _ensure_azure_site()
