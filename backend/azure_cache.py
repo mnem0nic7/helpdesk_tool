@@ -458,33 +458,20 @@ class AzureCache:
             else:
                 by_resource_id = []
                 by_resource_id_status = {"available": False, "error": None, "cost_basis": "amortized"}
-                for attempt in range(3):
-                    try:
-                        by_resource_id = self._client.get_cost_breakdown(
-                            subscriptions,
-                            "ResourceId",
-                            limit=None,
-                            cost_type="AmortizedCost",
-                        )
-                        by_resource_id_status = {"available": True, "error": None, "cost_basis": "amortized"}
-                        break
-                    except AzureApiError as exc:
-                        message = str(exc)
-                        if exc.status_code == 429 and attempt < 2:
-                            delay_seconds = exc.retry_after_seconds() or (2 * (attempt + 1))
-                            logger.warning(
-                                "Azure cost by resource id hit throttling; retrying in %ss: %s",
-                                delay_seconds,
-                                exc,
-                            )
-                            time.sleep(delay_seconds)
-                            continue
-                        logger.warning(
-                            "Azure cost by resource id is unavailable for this principal; continuing cost refresh without it: %s",
-                            exc,
-                        )
-                        by_resource_id_status = {"available": False, "error": message, "cost_basis": "amortized"}
-                        break
+                try:
+                    by_resource_id = self._client.get_cost_breakdown(
+                        subscriptions,
+                        "ResourceId",
+                        limit=None,
+                        cost_type="AmortizedCost",
+                    )
+                    by_resource_id_status = {"available": True, "error": None, "cost_basis": "amortized"}
+                except AzureApiError as exc:
+                    logger.warning(
+                        "Azure cost by resource id is unavailable for this principal; continuing cost refresh without it: %s",
+                        exc,
+                    )
+                    by_resource_id_status = {"available": False, "error": str(exc), "cost_basis": "amortized"}
             advisor = self._client.list_advisor_recommendations(subscriptions)
             summary = {
                 "lookback_days": AZURE_COST_LOOKBACK_DAYS,

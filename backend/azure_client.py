@@ -13,7 +13,9 @@ from typing import Any
 import requests
 
 from config import (
+    AZURE_COST_INTER_QUERY_DELAY_SECONDS,
     AZURE_COST_LOOKBACK_DAYS,
+    AZURE_COST_MAX_RETRIES,
     AZURE_ROOT_MANAGEMENT_GROUP_ID,
     ENTRA_CLIENT_ID,
     ENTRA_CLIENT_SECRET,
@@ -61,15 +63,18 @@ class AzureApiError(RuntimeError):
 class AzureCostQueryCoordinator:
     """Serialize Azure Cost Management queries and prioritize export work."""
 
-    def __init__(self) -> None:
+    def __init__(self, min_gap_seconds: float = 0.0) -> None:
         self._condition = threading.Condition()
         self._active_caller: str | None = None
         self._waiting_exports = 0
         self._active_export_jobs = 0
+        self._min_gap_seconds = min_gap_seconds
+        self._last_call_end: float | None = None
 
     @contextmanager
     def claim(self, caller: str):
         is_export = caller == "export"
+        gap_needed = 0.0
         with self._condition:
             if is_export:
                 self._waiting_exports += 1
@@ -77,14 +82,19 @@ class AzureCostQueryCoordinator:
                 while self._active_caller is not None or (caller != "export" and self._waiting_exports > 0):
                     self._condition.wait()
                 self._active_caller = caller
+                if self._min_gap_seconds > 0 and self._last_call_end is not None:
+                    elapsed = time.monotonic() - self._last_call_end
+                    gap_needed = max(0.0, self._min_gap_seconds - elapsed)
             finally:
                 if is_export:
                     self._waiting_exports = max(0, self._waiting_exports - 1)
-
+        if gap_needed > 0:
+            time.sleep(gap_needed)
         try:
             yield
         finally:
             with self._condition:
+                self._last_call_end = time.monotonic()
                 self._active_caller = None
                 self._condition.notify_all()
 
@@ -110,7 +120,9 @@ class AzureClient:
     def __init__(self) -> None:
         self._session = requests.Session()
         self._tokens: dict[str, dict[str, Any]] = {}
-        self._cost_query_coordinator = AzureCostQueryCoordinator()
+        self._cost_query_coordinator = AzureCostQueryCoordinator(
+            min_gap_seconds=AZURE_COST_INTER_QUERY_DELAY_SECONDS
+        )
 
     @property
     def configured(self) -> bool:
@@ -199,13 +211,23 @@ class AzureClient:
         caller: str = "default",
     ) -> dict[str, Any]:
         with self._cost_query_coordinator.claim(caller):
-            return self._request(
-                method,
-                url,
-                scope=_ARM_SCOPE,
-                params=params,
-                json_body=json_body,
-            )
+            for attempt in range(AZURE_COST_MAX_RETRIES):
+                try:
+                    return self._request(method, url, scope=_ARM_SCOPE, params=params, json_body=json_body)
+                except AzureApiError as exc:
+                    if exc.status_code == 429 and attempt < AZURE_COST_MAX_RETRIES - 1:
+                        delay = exc.retry_after_seconds() or (2 * (attempt + 1))
+                        logger.warning(
+                            "Azure Cost Management throttled (attempt %d/%d); retrying in %ss: %s",
+                            attempt + 1,
+                            AZURE_COST_MAX_RETRIES,
+                            delay,
+                            exc,
+                        )
+                        time.sleep(delay)
+                        continue
+                    raise
+            raise AssertionError("unreachable")
 
     def _paged_get(
         self,

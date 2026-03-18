@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import secrets
+import sqlite3
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Any
 
 from starlette.requests import Request
@@ -12,6 +14,7 @@ from starlette.requests import Request
 from authlib.integrations.starlette_client import OAuth
 
 from config import (
+    DATA_DIR,
     ENTRA_TENANT_ID,
     ENTRA_CLIENT_ID,
     ENTRA_CLIENT_SECRET,
@@ -22,56 +25,82 @@ from config import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# In-memory session store
+# SQLite-backed session store
 # ---------------------------------------------------------------------------
 
-_sessions: dict[str, dict[str, Any]] = {}
+_DB_PATH = Path(DATA_DIR) / "sessions.db"
 _SESSION_TTL = timedelta(hours=8)
 _last_cleanup: datetime = datetime.now(timezone.utc)
 _CLEANUP_INTERVAL = timedelta(minutes=30)
 
 
+def _init_session_db() -> None:
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                sid        TEXT PRIMARY KEY,
+                email      TEXT NOT NULL,
+                name       TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+        """)
+
+
+_init_session_db()
+
+
 def create_session(email: str, name: str) -> str:
-    """Create a new session and return the session ID."""
+    """Create a new session, persist it, and return the session ID."""
     sid = secrets.token_urlsafe(32)
-    _sessions[sid] = {
-        "email": email,
-        "name": name,
-        "expires_at": datetime.now(timezone.utc) + _SESSION_TTL,
-    }
+    expires_at = (datetime.now(timezone.utc) + _SESSION_TTL).isoformat()
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO sessions (sid, email, name, expires_at) VALUES (?, ?, ?, ?)",
+            (sid, email, name, expires_at),
+        )
     logger.info("Session created for %s", email)
     return sid
 
 
 def _cleanup_expired() -> None:
-    """Remove all expired sessions periodically to prevent memory leaks."""
+    """Remove expired sessions periodically."""
     global _last_cleanup
     now = datetime.now(timezone.utc)
     if now - _last_cleanup < _CLEANUP_INTERVAL:
         return
     _last_cleanup = now
-    expired = [sid for sid, s in _sessions.items() if now > s["expires_at"]]
-    for sid in expired:
-        del _sessions[sid]
-    if expired:
-        logger.info("Cleaned up %d expired sessions", len(expired))
+    with sqlite3.connect(_DB_PATH) as conn:
+        cur = conn.execute(
+            "DELETE FROM sessions WHERE expires_at < ?",
+            (now.isoformat(),),
+        )
+    if cur.rowcount:
+        logger.info("Cleaned up %d expired sessions", cur.rowcount)
 
 
 def get_session(session_id: str) -> dict[str, Any] | None:
     """Return session data if valid and not expired, else None."""
     _cleanup_expired()
-    session = _sessions.get(session_id)
-    if not session:
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT email, name, expires_at FROM sessions WHERE sid = ?",
+            (session_id,),
+        ).fetchone()
+    if not row:
         return None
-    if datetime.now(timezone.utc) > session["expires_at"]:
-        del _sessions[session_id]
+    expires_at = datetime.fromisoformat(row["expires_at"])
+    if datetime.now(timezone.utc) > expires_at:
+        delete_session(session_id)
         return None
-    return session
+    return {"email": row["email"], "name": row["name"], "expires_at": expires_at}
 
 
 def delete_session(session_id: str) -> None:
     """Remove a session."""
-    _sessions.pop(session_id, None)
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute("DELETE FROM sessions WHERE sid = ?", (session_id,))
 
 
 # ---------------------------------------------------------------------------
