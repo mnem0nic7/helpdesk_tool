@@ -624,7 +624,7 @@ export default function TicketWorkbenchDrawer({
                 </div>
 
                 <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-12">
-                  <label className="block">
+                  <label className="block xl:col-span-2">
                     <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Priority</span>
                     <select
                       value={selectedPriority}
@@ -640,7 +640,7 @@ export default function TicketWorkbenchDrawer({
                     </select>
                   </label>
 
-                  <label className="block">
+                  <label className="block xl:col-span-2">
                     <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Assignee</span>
                     <select
                       value={selectedAssignee}
@@ -656,7 +656,7 @@ export default function TicketWorkbenchDrawer({
                     </select>
                   </label>
 
-                  <div className="block md:col-span-2 xl:col-span-5">
+                  <div className="block md:col-span-2 xl:col-span-4">
                     <label
                       htmlFor="ticket-reporter-input"
                       className="text-xs font-medium uppercase tracking-wide text-slate-500"
@@ -730,7 +730,7 @@ export default function TicketWorkbenchDrawer({
                     </div>
                   </div>
 
-                  <label className="block xl:col-span-3">
+                  <label className="block xl:col-span-4">
                     <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Request Type</span>
                     <select
                       value={selectedRequestTypeId}

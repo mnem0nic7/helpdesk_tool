@@ -49,7 +49,7 @@ AZURE_VM_EXPORT_SHARED_MAX_RUNTIME_SECONDS: int = int(
     os.getenv("AZURE_VM_EXPORT_SHARED_MAX_RUNTIME_SECONDS", "90")
 )
 AZURE_COST_INTER_QUERY_DELAY_SECONDS: float = float(os.getenv("AZURE_COST_INTER_QUERY_DELAY_SECONDS", "2"))
-AZURE_COST_MAX_RETRIES: int = int(os.getenv("AZURE_COST_MAX_RETRIES", "3"))
+AZURE_COST_MAX_RETRIES: int = int(os.getenv("AZURE_COST_MAX_RETRIES", "5"))
 if APP_SECRET_KEY == "change-me-in-production":
     import warnings
     warnings.warn(

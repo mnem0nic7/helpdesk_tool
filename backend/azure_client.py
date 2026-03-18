@@ -216,7 +216,7 @@ class AzureClient:
                     return self._request(method, url, scope=_ARM_SCOPE, params=params, json_body=json_body)
                 except AzureApiError as exc:
                     if exc.status_code == 429 and attempt < AZURE_COST_MAX_RETRIES - 1:
-                        delay = exc.retry_after_seconds() or (2 * (attempt + 1))
+                        delay = exc.retry_after_seconds() or (2 ** (attempt + 1))
                         logger.warning(
                             "Azure Cost Management throttled (attempt %d/%d); retrying in %ss: %s",
                             attempt + 1,
@@ -829,7 +829,7 @@ Resources
                     break
                 except AzureApiError as exc:
                     if exc.status_code == 429 and attempt < attempts - 1:
-                        delay_seconds = exc.retry_after_seconds() or (2 * (attempt + 1))
+                        delay_seconds = exc.retry_after_seconds() or (2 ** (attempt + 1))
                         logger.warning(
                             "Azure targeted resource cost query hit throttling; retrying in %ss: %s",
                             delay_seconds,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from auth import require_admin
 from config import JIRA_BASE_URL
@@ -107,3 +107,16 @@ async def enrich_request_types(background_tasks: BackgroundTasks) -> dict[str, A
 async def enrich_status() -> dict[str, Any]:
     """Check enrichment progress."""
     return dict(_enrich_status)
+
+
+@router.delete("/cache/issue/{key}", dependencies=[Depends(require_admin)])
+async def evict_issue(key: str) -> dict[str, Any]:
+    """Remove a single issue from the cache (memory + SQLite).
+
+    Use when a ticket has been moved to a different Jira board and is no
+    longer returned by this project's JQL, leaving a stale entry in the cache.
+    """
+    removed = cache.evict_issue(key)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Issue {key.upper()} not found in cache")
+    return {"evicted": key.upper()}

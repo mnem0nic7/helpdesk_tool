@@ -251,6 +251,24 @@ class IssueCache:
 
         self._upsert_to_db([issue])
 
+    def evict_issue(self, key: str) -> bool:
+        """Remove a single issue from memory and SQLite.
+
+        Used when a ticket is moved to a different Jira board and no longer
+        appears in this project's JQL results, leaving a stale cache entry.
+        Returns True if the issue was present and removed, False if not found.
+        """
+        key = key.strip().upper()
+        with self._lock:
+            in_all = key in self._all_issues
+            self._all_issues.pop(key, None)
+            self._issues.pop(key, None)
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute("DELETE FROM issues WHERE key = ?", (key,))
+        if in_all:
+            logger.info("Cache: evicted issue %s", key)
+        return in_all
+
     def refresh_issue_keys(self, keys: list[str]) -> list[dict[str, Any]]:
         """Re-fetch a specific set of Jira issues and persist the fresh results.
 
@@ -296,6 +314,22 @@ class IssueCache:
             for key in normalized_keys
             if key in refreshed_by_key
         ]
+
+        # Keys not returned by Jira have been moved or deleted — evict them.
+        missing_keys = [k for k in normalized_keys if k not in refreshed_by_key]
+        if missing_keys:
+            logger.info(
+                "Cache: evicting %d issue(s) not found in Jira during visible refresh: %s",
+                len(missing_keys),
+                ", ".join(missing_keys),
+            )
+            with self._lock:
+                for key in missing_keys:
+                    self._all_issues.pop(key, None)
+                    self._issues.pop(key, None)
+            with sqlite3.connect(self._db_path) as conn:
+                conn.executemany("DELETE FROM issues WHERE key = ?", [(k,) for k in missing_keys])
+
         if not refreshed_issues:
             return []
 
