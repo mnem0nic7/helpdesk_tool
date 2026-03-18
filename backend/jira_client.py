@@ -450,6 +450,17 @@ class JiraClient:
         """PUT /rest/api/3/issue/{key} to change reporter."""
         self.update_issue_fields(key, {"reporter": {"id": account_id}})
 
+    def update_components(self, key: str, component_names: list[str]) -> None:
+        """PUT /rest/api/3/issue/{key} to change issue components."""
+        self.update_issue_fields(
+            key,
+            {"components": [{"name": name} for name in component_names]},
+        )
+
+    def update_work_category(self, key: str, work_category: str | None) -> None:
+        """PUT /rest/api/3/issue/{key} to change the work category field."""
+        self.update_issue_fields(key, {"customfield_11239": work_category})
+
     @staticmethod
     def _plain_text_to_adf(text: str) -> dict[str, Any]:
         """Convert plain text into a minimal Atlassian Document Format payload."""

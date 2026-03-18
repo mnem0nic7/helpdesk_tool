@@ -406,6 +406,8 @@ async def get_filter_options() -> dict[str, list[str]]:
     priorities: set[str] = set()
     issue_types: set[str] = set()
     labels: set[str] = set()
+    components: set[str] = set()
+    work_categories: set[str] = set()
     for iss in issues:
         fields = iss.get("fields", {})
         status_name = (fields.get("status") or {}).get("name")
@@ -420,6 +422,14 @@ async def get_filter_options() -> dict[str, list[str]]:
         for label in fields.get("labels") or []:
             if label:
                 labels.add(str(label))
+        for component in fields.get("components") or []:
+            if isinstance(component, dict):
+                component_name = str(component.get("name", "")).strip()
+                if component_name:
+                    components.add(component_name)
+        work_category = str(fields.get("customfield_11239") or "").strip()
+        if work_category:
+            work_categories.add(work_category)
     priority_order = ["Highest", "High", "Medium", "Low", "Lowest", "New"]
     sorted_priorities = [p for p in priority_order if p in priorities] + sorted(priorities - set(priority_order))
     return {
@@ -427,6 +437,8 @@ async def get_filter_options() -> dict[str, list[str]]:
         "priorities": sorted_priorities,
         "issue_types": sorted(issue_types),
         "labels": sorted(labels),
+        "components": sorted(components),
+        "work_categories": sorted(work_categories),
     }
 
 
@@ -680,6 +692,18 @@ async def update_ticket(
             if not body.request_type_id:
                 raise HTTPException(status_code=400, detail="request_type_id cannot be empty")
             _client.set_request_type(key, body.request_type_id)
+
+        if "components" in fields:
+            component_names = []
+            for component in body.components or []:
+                name = str(component).strip()
+                if name and name not in component_names:
+                    component_names.append(name)
+            _client.update_components(key, component_names)
+
+        if "work_category" in fields:
+            work_category = (body.work_category or "").strip() or None
+            _client.update_work_category(key, work_category)
     except HTTPException:
         raise
     except Exception as exc:

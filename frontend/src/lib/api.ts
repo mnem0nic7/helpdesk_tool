@@ -167,6 +167,15 @@ export interface TicketsResponse {
   total_count?: number;
 }
 
+export interface TicketFilterOptions {
+  statuses: string[];
+  priorities: string[];
+  issue_types: string[];
+  labels: string[];
+  components?: string[];
+  work_categories?: string[];
+}
+
 export interface VisibleTicketRefreshResponse {
   requested_count: number;
   visible_count: number;
@@ -300,6 +309,8 @@ export interface TicketUpdatePayload {
   reporter_account_id?: string | null;
   reporter_display_name?: string;
   request_type_id?: string;
+  components?: string[];
+  work_category?: string;
 }
 
 /** Filters for the report builder. */
@@ -944,8 +955,8 @@ export const api = {
   },
 
   /** Fetch distinct filter options (statuses, priorities, issue types) from cached data. */
-  getFilterOptions(): Promise<{ statuses: string[]; priorities: string[]; issue_types: string[]; labels: string[] }> {
-    return fetchJSON("/api/filter-options");
+  getFilterOptions(): Promise<TicketFilterOptions> {
+    return fetchJSON<TicketFilterOptions>("/api/filter-options");
   },
 
   /** Fetch a single ticket by its Jira key with full detail payload. */
