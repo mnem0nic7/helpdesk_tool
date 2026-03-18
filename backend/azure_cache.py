@@ -24,6 +24,7 @@ from config import (
     AZURE_VM_EXPORT_COST_INTER_CHUNK_DELAY_SECONDS,
     AZURE_VM_EXPORT_MAX_RUNTIME_MINUTES,
     AZURE_VM_EXPORT_RETRY_BUFFER_SECONDS,
+    AZURE_VM_EXPORT_SHARED_MAX_RUNTIME_SECONDS,
     DATA_DIR,
 )
 
@@ -766,6 +767,39 @@ class AzureCache:
             )
         return rows
 
+    def _collect_vm_related_resource_ids_for_group_keys(
+        self,
+        resources: list[dict[str, Any]],
+        resource_by_id: dict[str, dict[str, Any]],
+        children_by_parent: dict[str, list[dict[str, Any]]],
+        managed_by_index: dict[str, list[dict[str, Any]]],
+        attached_vm_index: dict[str, list[dict[str, Any]]],
+        group_keys: set[tuple[str, str]],
+    ) -> set[str]:
+        if not group_keys:
+            return set()
+
+        related_ids: set[str] = set()
+        for item in resources:
+            if not self._is_virtual_machine(item):
+                continue
+            group_key = (
+                str(item.get("subscription_id") or "").strip().lower(),
+                str(item.get("resource_group") or "").strip().lower(),
+            )
+            if group_key not in group_keys:
+                continue
+            related_ids.update(
+                self._collect_vm_relationships(
+                    item,
+                    resource_by_id,
+                    children_by_parent,
+                    managed_by_index,
+                    attached_vm_index,
+                ).keys()
+            )
+        return related_ids
+
     def list_virtual_machines(
         self,
         *,
@@ -1452,6 +1486,16 @@ class AzureCache:
                 advance=1,
             )
 
+        shared_group_keys = set(selected_vm_group_names)
+        all_vm_related_ids_in_selected_groups = self._collect_vm_related_resource_ids_for_group_keys(
+            resources,
+            resource_by_id,
+            children_by_parent,
+            managed_by_index,
+            attached_vm_index,
+            shared_group_keys,
+        )
+
         shared_candidate_items: dict[str, dict[str, Any]] = {}
         shared_cost_ids_by_subscription: dict[str, list[str]] = defaultdict(list)
         for item in resources:
@@ -1466,6 +1510,8 @@ class AzureCache:
             if group_key not in selected_vm_group_names:
                 continue
             if normalized_id in direct_associated_ids:
+                continue
+            if normalized_id in all_vm_related_ids_in_selected_groups:
                 continue
             if self._is_virtual_machine(item):
                 continue
@@ -1493,13 +1539,25 @@ class AzureCache:
 
         report("Querying shared cost candidates")
 
-        shared_cost_index = self._fetch_live_resource_cost_index(
-            deduped_shared_cost_ids,
-            lookback_days=lookback_days,
-            progress_callback=report,
-            phase_label="shared",
-            deadline_monotonic=export_deadline,
-        )
+        shared_cost_index: dict[str, dict[str, Any]] = {}
+        shared_cost_error: str | None = None
+        if deduped_shared_cost_ids:
+            shared_deadline = min(
+                export_deadline,
+                time.monotonic() + max(15, int(AZURE_VM_EXPORT_SHARED_MAX_RUNTIME_SECONDS)),
+            )
+            try:
+                shared_cost_index = self._fetch_live_resource_cost_index(
+                    deduped_shared_cost_ids,
+                    lookback_days=lookback_days,
+                    progress_callback=report,
+                    phase_label="shared",
+                    deadline_monotonic=shared_deadline,
+                )
+            except TimeoutError as exc:
+                shared_cost_error = str(exc)
+                logger.warning("Azure shared cost candidate export timed out; continuing with direct VM costs: %s", exc)
+                report("Shared cost candidates timed out; continuing with direct VM costs")
 
         shared_rows: list[dict[str, Any]] = []
         shared_summary_by_group: dict[tuple[str, str], dict[str, Any]] = defaultdict(
@@ -1623,6 +1681,8 @@ class AzureCache:
                 cost_status = "Direct costs partially priced"
             else:
                 cost_status = "Direct costs complete"
+            if shared_cost_error:
+                cost_status = f"{cost_status}; shared candidates unavailable"
 
             direct_total_cost = None
             if priced_resource_count > 0:
