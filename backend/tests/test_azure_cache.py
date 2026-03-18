@@ -263,7 +263,7 @@ def test_get_virtual_machine_detail_returns_related_resources_and_costs(tmp_path
                 "recommendation_count": 0,
                 "potential_monthly_savings": 0.0,
             },
-            "cost_by_resource_id_status": {"available": True, "error": None},
+            "cost_by_resource_id_status": {"available": True, "error": None, "cost_basis": "amortized"},
             "cost_by_resource_id": [
                 {"label": vm_id, "amount": 82.5, "currency": "USD", "share": 0.0},
                 {"label": nic_id, "amount": 3.25, "currency": "USD", "share": 0.0},
@@ -301,7 +301,7 @@ def test_get_virtual_machine_detail_returns_related_resources_and_costs(tmp_path
 def test_get_virtual_machine_detail_falls_back_to_targeted_cost_query_when_snapshot_unavailable(tmp_path, monkeypatch):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     vm_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1"
-    nic_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/networkInterfaces/nic-1"
+    os_disk_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/osdisk-1"
 
     cache._update_snapshots(
         {
@@ -313,8 +313,8 @@ def test_get_virtual_machine_detail_falls_back_to_targeted_cost_query_when_snaps
                     "parent_resource_id": "",
                     "managed_by": "",
                     "attached_vm_id": "",
-                    "network_interface_ids": [nic_id],
-                    "os_disk_id": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": os_disk_id,
                     "data_disk_ids": [],
                     "public_ip_ids": [],
                     "subscription_id": "sub-1",
@@ -328,12 +328,12 @@ def test_get_virtual_machine_detail_falls_back_to_targeted_cost_query_when_snaps
                     "tags": {},
                 },
                 {
-                    "id": nic_id,
-                    "name": "nic-1",
-                    "resource_type": "Microsoft.Network/networkInterfaces",
+                    "id": os_disk_id,
+                    "name": "osdisk-1",
+                    "resource_type": "Microsoft.Compute/disks",
                     "parent_resource_id": "",
-                    "managed_by": "",
-                    "attached_vm_id": vm_id,
+                    "managed_by": vm_id,
+                    "attached_vm_id": "",
                     "network_interface_ids": [],
                     "os_disk_id": "",
                     "data_disk_ids": [],
@@ -362,6 +362,7 @@ def test_get_virtual_machine_detail_falls_back_to_targeted_cost_query_when_snaps
             "cost_by_resource_id_status": {
                 "available": False,
                 "error": "POST https://management.azure.com/subscriptions/sub-1/providers/Microsoft.CostManagement/query failed (429): Too many requests",
+                "cost_basis": "amortized",
             },
             "cost_by_resource_id": [],
         }
@@ -372,7 +373,7 @@ def test_get_virtual_machine_detail_falls_back_to_targeted_cost_query_when_snaps
         "get_cost_by_resource_ids",
         lambda subscription_id, resource_ids, lookback_days=None, chunk_size=20: [
             {"label": vm_id, "amount": 82.5, "currency": "USD", "share": 0.9621},
-            {"label": nic_id, "amount": 3.25, "currency": "USD", "share": 0.0379},
+            {"label": os_disk_id, "amount": 3.25, "currency": "USD", "share": 0.0379},
         ],
     )
 
@@ -388,6 +389,100 @@ def test_get_virtual_machine_detail_falls_back_to_targeted_cost_query_when_snaps
         "vm_cost": 82.5,
         "related_resource_cost": 3.25,
         "priced_resource_count": 2,
+    }
+
+
+def test_get_virtual_machine_detail_falls_back_when_resource_cost_cache_uses_legacy_basis(tmp_path, monkeypatch):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    vm_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1"
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": vm_id,
+                    "name": "vm-1",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "parent_resource_id": "",
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {},
+                }
+            ],
+            "cost_summary": {
+                "lookback_days": 30,
+                "currency": "USD",
+                "total_cost": 0.0,
+                "top_service": "",
+                "top_subscription": "",
+                "top_resource_group": "",
+                "recommendation_count": 0,
+                "potential_monthly_savings": 0.0,
+            },
+            "cost_by_resource_id_status": {"available": True, "error": None},
+            "cost_by_resource_id": [
+                {"label": vm_id, "amount": 0.0, "currency": "USD", "share": 0.0},
+            ],
+        }
+    )
+
+    monkeypatch.setattr(
+        cache._client,
+        "get_cost_by_resource_ids",
+        lambda subscription_id, resource_ids, lookback_days=None, chunk_size=20, cost_type="AmortizedCost": [
+            {"label": vm_id, "amount": 14.25, "currency": "USD", "share": 1.0},
+        ],
+    )
+
+    detail = cache.get_virtual_machine_detail(vm_id)
+
+    assert detail is not None
+    assert detail["cost"]["cost_data_available"] is True
+    assert detail["cost"]["total_cost"] == 14.25
+    assert detail["cost"]["vm_cost"] == 14.25
+    assert detail["cost"]["priced_resource_count"] == 1
+
+
+def test_refresh_cost_uses_amortized_resource_level_breakdown(tmp_path, monkeypatch):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    calls: list[tuple[str, str, int | None]] = []
+
+    monkeypatch.setattr(
+        cache._client,
+        "list_subscriptions",
+        lambda: [{"subscription_id": "sub-1", "display_name": "Prod"}],
+    )
+    monkeypatch.setattr(cache._client, "get_cost_trend", lambda subscriptions: [])
+
+    def fake_breakdown(subscriptions, grouping_dimension, *, limit=20, cost_type="ActualCost"):
+        calls.append((grouping_dimension, cost_type, limit))
+        return []
+
+    monkeypatch.setattr(cache._client, "get_cost_breakdown", fake_breakdown)
+    monkeypatch.setattr(cache._client, "list_advisor_recommendations", lambda subscriptions: [])
+
+    cache._refresh_cost()
+
+    assert ("ServiceName", "ActualCost", 20) in calls
+    assert ("SubscriptionName", "ActualCost", 20) in calls
+    assert ("ResourceGroupName", "ActualCost", 20) in calls
+    assert ("ResourceId", "AmortizedCost", None) in calls
+    assert cache._snapshot("cost_by_resource_id_status") == {
+        "available": True,
+        "error": None,
+        "cost_basis": "amortized",
     }
 
 

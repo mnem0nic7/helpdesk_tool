@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type AzureVirtualMachineDetailResponse, type AzureVirtualMachineRow } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
@@ -88,6 +88,7 @@ function VMDetailDrawer({
   const resourceScroll = useInfiniteScrollCount(associatedResources.length, 20, vm.id);
   const visibleResources = associatedResources.slice(0, resourceScroll.visibleCount);
   const [drawerWidth, setDrawerWidth] = useState(() => clampVMDrawerWidth(DEFAULT_VM_DRAWER_WIDTH));
+  const [isResizing, setIsResizing] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
 
   useEffect(() => {
@@ -98,6 +99,53 @@ function VMDetailDrawer({
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [isExpanded]);
+
+  useEffect(() => {
+    if (!isResizing) return undefined;
+
+    const previousUserSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+    const updateWidth = (clientX: number) => {
+      setDrawerWidth(clampVMDrawerWidth(window.innerWidth - clientX));
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      event.preventDefault();
+      updateWidth(event.clientX);
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      event.preventDefault();
+      updateWidth(event.clientX);
+    };
+
+    const stopResizing = () => {
+      setIsResizing(false);
+    };
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("pointerup", stopResizing);
+    window.addEventListener("mouseup", stopResizing);
+
+    return () => {
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.cursor = previousCursor;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("pointerup", stopResizing);
+      window.removeEventListener("mouseup", stopResizing);
+    };
+  }, [isResizing]);
+
+  function handleResizeStart(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsExpanded(false);
+    setIsResizing(true);
+  }
 
   function toggleExpanded() {
     setIsExpanded((current) => {
@@ -111,10 +159,27 @@ function VMDetailDrawer({
     <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/35" onClick={onClose}>
       <aside
         data-testid="azure-vm-detail-drawer"
-        className="flex h-full max-w-full flex-col overflow-hidden bg-white shadow-2xl"
+        className="relative flex h-full max-w-full flex-col overflow-hidden bg-white shadow-2xl"
         onClick={(event) => event.stopPropagation()}
         style={{ width: `${drawerWidth}px` }}
       >
+        <div
+          role="separator"
+          aria-label="Resize VM detail drawer"
+          aria-orientation="vertical"
+          data-testid="azure-vm-detail-resizer"
+          className={[
+            "absolute inset-y-0 left-0 z-10 w-3 -translate-x-1/2 cursor-col-resize touch-none",
+            isResizing ? "bg-blue-200/70" : "bg-transparent hover:bg-slate-200/60",
+          ].join(" ")}
+          onPointerDown={handleResizeStart}
+          onDoubleClick={() => {
+            setIsExpanded(false);
+            setDrawerWidth(clampVMDrawerWidth(DEFAULT_VM_DRAWER_WIDTH));
+          }}
+        >
+          <div className="absolute left-1/2 top-1/2 h-14 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-300" />
+        </div>
         <div className="border-b border-slate-200 px-6 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
@@ -174,7 +239,7 @@ function VMDetailDrawer({
                 <div className="flex items-center justify-between">
                   <h3 className="text-lg font-semibold text-slate-900">Cost Rollup</h3>
                   <span className="text-xs font-medium text-slate-500">
-                    Last {detail?.cost.lookback_days ?? 0} days
+                    Last {detail?.cost.lookback_days ?? 0} days · amortized cost
                   </span>
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">

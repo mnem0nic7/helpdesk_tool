@@ -272,7 +272,7 @@ def test_get_cost_by_resource_ids_uses_resourceid_filter(monkeypatch):
         "https://management.azure.com/subscriptions/sub-1/providers/Microsoft.CostManagement/query"
     )
     payload = captured_calls[0]["json_body"]
-    assert payload["type"] == "ActualCost"
+    assert payload["type"] == "AmortizedCost"
     assert payload["timeframe"] == "Custom"
     assert payload["dataset"]["granularity"] == "None"
     assert payload["dataset"]["grouping"] == [{"type": "Dimension", "name": "ResourceId"}]
