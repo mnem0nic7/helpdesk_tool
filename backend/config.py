@@ -38,6 +38,7 @@ AZURE_INVENTORY_REFRESH_MINUTES: int = int(os.getenv("AZURE_INVENTORY_REFRESH_MI
 AZURE_DIRECTORY_REFRESH_MINUTES: int = int(os.getenv("AZURE_DIRECTORY_REFRESH_MINUTES", "15"))
 AZURE_COST_REFRESH_MINUTES: int = int(os.getenv("AZURE_COST_REFRESH_MINUTES", "60"))
 AZURE_COST_LOOKBACK_DAYS: int = int(os.getenv("AZURE_COST_LOOKBACK_DAYS", "30"))
+AZURE_VM_EXPORT_RETENTION_DAYS: int = int(os.getenv("AZURE_VM_EXPORT_RETENTION_DAYS", "7"))
 if APP_SECRET_KEY == "change-me-in-production":
     import warnings
     warnings.warn(

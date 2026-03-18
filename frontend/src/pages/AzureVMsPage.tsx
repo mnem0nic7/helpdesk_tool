@@ -1,11 +1,19 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api, type AzureVirtualMachineDetailResponse, type AzureVirtualMachineRow } from "../lib/api.ts";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import {
+  api,
+  type AzureVirtualMachineCostExportJobStatus,
+  type AzureVirtualMachineCostExportLookbackDays,
+  type AzureVirtualMachineCostExportScope,
+  type AzureVirtualMachineDetailResponse,
+  type AzureVirtualMachineRow,
+} from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 
 const DEFAULT_VM_DRAWER_WIDTH = 960;
 const VM_DRAWER_MIN_WIDTH = 720;
 const VM_DRAWER_VIEWPORT_MARGIN = 32;
+const VM_COST_EXPORT_LOOKBACK_OPTIONS: AzureVirtualMachineCostExportLookbackDays[] = [7, 30, 90];
 
 function clampVMDrawerWidth(width: number): number {
   if (typeof window === "undefined") return DEFAULT_VM_DRAWER_WIDTH;
@@ -314,6 +322,132 @@ function VMDetailDrawer({
   );
 }
 
+function VMCostExportDialog({
+  matchedVmCount,
+  onClose,
+  onSubmit,
+  recipientEmail,
+  scope,
+  lookbackDays,
+  onScopeChange,
+  onLookbackDaysChange,
+  isSubmitting,
+  submitError,
+}: {
+  matchedVmCount: number;
+  onClose: () => void;
+  onSubmit: () => void;
+  recipientEmail: string;
+  scope: AzureVirtualMachineCostExportScope;
+  lookbackDays: AzureVirtualMachineCostExportLookbackDays;
+  onScopeChange: (scope: AzureVirtualMachineCostExportScope) => void;
+  onLookbackDaysChange: (days: AzureVirtualMachineCostExportLookbackDays) => void;
+  isSubmitting: boolean;
+  submitError?: string | null;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4" onClick={onClose}>
+      <div
+        className="w-full max-w-xl rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">Export VM Costs</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Build a live Azure workbook and email the download link to {recipientEmail}.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mt-6 space-y-5">
+          <section>
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Scope</h3>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <label className="rounded-2xl border border-slate-200 p-4 text-sm text-slate-700">
+                <input
+                  type="radio"
+                  name="vm-export-scope"
+                  checked={scope === "all"}
+                  onChange={() => onScopeChange("all")}
+                  className="mr-3"
+                />
+                <span className="font-semibold text-slate-900">All cached VMs</span>
+                <div className="mt-1 text-xs text-slate-500">Export the full tenant-wide VM inventory from cache.</div>
+              </label>
+              <label className="rounded-2xl border border-slate-200 p-4 text-sm text-slate-700">
+                <input
+                  type="radio"
+                  name="vm-export-scope"
+                  checked={scope === "filtered"}
+                  onChange={() => onScopeChange("filtered")}
+                  className="mr-3"
+                />
+                <span className="font-semibold text-slate-900">Current filters</span>
+                <div className="mt-1 text-xs text-slate-500">
+                  Export the {matchedVmCount.toLocaleString()} VM{matchedVmCount === 1 ? "" : "s"} currently matching the page filters.
+                </div>
+              </label>
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Date Range</h3>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {VM_COST_EXPORT_LOOKBACK_OPTIONS.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => onLookbackDaysChange(option)}
+                  className={[
+                    "rounded-full border px-4 py-2 text-sm font-medium transition",
+                    lookbackDays === option
+                      ? "border-sky-500 bg-sky-50 text-sky-700"
+                      : "border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:bg-slate-50",
+                  ].join(" ")}
+                >
+                  Last {option} days
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {submitError ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              Failed to start the export: {submitError}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-6 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={isSubmitting}
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSubmitting ? "Starting export..." : "Start export"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AzureVMsPage() {
   const [search, setSearch] = useState("");
   const [subscriptionId, setSubscriptionId] = useState("");
@@ -322,6 +456,16 @@ export default function AzureVMsPage() {
   const [state, setState] = useState("");
   const [isCoverageOpen, setIsCoverageOpen] = useState(true);
   const [selectedVm, setSelectedVm] = useState<AzureVirtualMachineRow | null>(null);
+  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
+  const [exportScope, setExportScope] = useState<AzureVirtualMachineCostExportScope>("all");
+  const [exportLookbackDays, setExportLookbackDays] = useState<AzureVirtualMachineCostExportLookbackDays>(30);
+  const [activeExportJobId, setActiveExportJobId] = useState<string | null>(null);
+
+  const meQuery = useQuery({
+    queryKey: ["auth", "me"],
+    queryFn: () => api.getMe(),
+    staleTime: 5 * 60_000,
+  });
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["azure", "vms", { search, subscriptionId, size, location, state }],
@@ -341,6 +485,33 @@ export default function AzureVMsPage() {
     enabled: !!selectedVm?.id,
     refetchInterval: selectedVm ? 60_000 : false,
   });
+  const createExportJobMutation = useMutation({
+    mutationFn: () =>
+      api.createAzureVMCostExportJob({
+        scope: exportScope,
+        lookback_days: exportLookbackDays,
+        filters: {
+          search,
+          subscription_id: subscriptionId,
+          location,
+          state,
+          size,
+        },
+      }),
+    onSuccess: (job) => {
+      setActiveExportJobId(job.job_id);
+      setIsExportDialogOpen(false);
+    },
+  });
+  const exportJobQuery = useQuery({
+    queryKey: ["azure", "vms", "cost-export-job", activeExportJobId],
+    queryFn: () => api.getAzureVMCostExportJob(activeExportJobId!),
+    enabled: !!activeExportJobId,
+    refetchInterval: (query) => {
+      const status = (query.state.data as AzureVirtualMachineCostExportJobStatus | undefined)?.status;
+      return status === "completed" || status === "failed" ? false : 5_000;
+    },
+  });
   const vmRows = data?.vms ?? [];
   const coverageRows = data?.by_size ?? [];
   const filterKey = [search, subscriptionId, size, location, state].join("|");
@@ -348,6 +519,9 @@ export default function AzureVMsPage() {
   const visibleCoverage = coverageRows.slice(0, coverageScroll.visibleCount);
   const vmScroll = useInfiniteScrollCount(vmRows.length, 20, filterKey);
   const visibleVMs = vmRows.slice(0, vmScroll.visibleCount);
+  const exportJob = activeExportJobId
+    ? exportJobQuery.data ?? createExportJobMutation.data ?? null
+    : null;
 
   if (isLoading) {
     return <div className="text-sm text-slate-500">Loading Azure virtual machines...</div>;
@@ -361,19 +535,99 @@ export default function AzureVMsPage() {
     );
   }
 
-  const subscriptions = Array.from(new Set(vmRows.map((item) => item.subscription_name || item.subscription_id))).sort();
+  const subscriptionOptions = Array.from(
+    new Map(
+      vmRows.map((item) => [
+        item.subscription_id || item.subscription_name || item.name,
+        {
+          value: item.subscription_id || item.subscription_name || item.name,
+          label: item.subscription_name || item.subscription_id || item.name,
+        },
+      ]),
+    ).values(),
+  ).sort((left, right) => left.label.localeCompare(right.label));
   const sizes = Array.from(new Set(vmRows.map((item) => item.size).filter(Boolean))).sort();
   const locations = Array.from(new Set(vmRows.map((item) => item.location).filter(Boolean))).sort();
   const states = Array.from(new Set(vmRows.map((item) => item.power_state).filter(Boolean))).sort();
+  const exportProgressLabel = exportJob?.progress_total
+    ? `${Math.min(exportJob.progress_current, exportJob.progress_total).toLocaleString()} / ${exportJob.progress_total.toLocaleString()}`
+    : null;
+  const exportRecipient = meQuery.data?.email || "your signed-in email";
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-slate-900">VMs</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Review VM inventory here, then jump straight into Azure Portal for hands-on management.
-        </p>
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-900">VMs</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Review VM inventory here, then jump straight into Azure Portal for hands-on management.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            createExportJobMutation.reset();
+            setIsExportDialogOpen(true);
+          }}
+          className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+        >
+          Export VM Costs
+        </button>
       </div>
+
+      {exportJob ? (
+        <div
+          className={[
+            "rounded-2xl border px-4 py-3 text-sm",
+            exportJob.status === "failed"
+              ? "border-red-200 bg-red-50 text-red-800"
+              : exportJob.status === "completed"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-sky-200 bg-sky-50 text-sky-800",
+          ].join(" ")}
+        >
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div className="font-semibold">
+                VM cost export {exportJob.status === "queued" ? "queued" : exportJob.status === "running" ? "running" : exportJob.status === "completed" ? "ready" : "failed"}
+              </div>
+              <div className="mt-1 text-xs opacity-80">
+                {exportJob.scope === "filtered" ? "Current filters" : "All cached VMs"} | last {exportJob.lookback_days} days
+                {exportProgressLabel ? ` | ${exportProgressLabel}` : ""}
+                {exportJob.progress_message ? ` | ${exportJob.progress_message}` : ""}
+              </div>
+              {exportJob.status === "completed" ? (
+                <div className="mt-1 text-xs opacity-80">Completion email sent to {exportJob.recipient_email}.</div>
+              ) : null}
+              {exportJob.status === "failed" && exportJob.error ? (
+                <div className="mt-1 text-xs opacity-80">{exportJob.error}</div>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              {exportJob.file_ready ? (
+                <a
+                  href={api.downloadAzureVMCostExportJob(exportJob.job_id)}
+                  className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
+                >
+                  Download workbook
+                </a>
+              ) : null}
+              {exportJob.status === "completed" || exportJob.status === "failed" ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveExportJobId(null);
+                    createExportJobMutation.reset();
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-50"
+                >
+                  Dismiss
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Total VMs" value={data.summary.total_vms.toLocaleString()} />
@@ -502,7 +756,7 @@ export default function AzureVMsPage() {
         />
         <select value={subscriptionId} onChange={(event) => setSubscriptionId(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
           <option value="">All subscriptions</option>
-          {subscriptions.map((value) => <option key={value} value={value}>{value}</option>)}
+          {subscriptionOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
         <select value={size} onChange={(event) => setSize(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
           <option value="">All sizes</option>
@@ -593,6 +847,24 @@ export default function AzureVMsPage() {
           isLoading={vmDetailQuery.isLoading}
           error={vmDetailQuery.error instanceof Error ? vmDetailQuery.error : null}
           onClose={() => setSelectedVm(null)}
+        />
+      ) : null}
+
+      {isExportDialogOpen ? (
+        <VMCostExportDialog
+          matchedVmCount={data.matched_count}
+          onClose={() => {
+            setIsExportDialogOpen(false);
+            createExportJobMutation.reset();
+          }}
+          onSubmit={() => createExportJobMutation.mutate()}
+          recipientEmail={exportRecipient}
+          scope={exportScope}
+          lookbackDays={exportLookbackDays}
+          onScopeChange={setExportScope}
+          onLookbackDaysChange={setExportLookbackDays}
+          isSubmitting={createExportJobMutation.isPending}
+          submitError={createExportJobMutation.error instanceof Error ? createExportJobMutation.error.message : null}
         />
       ) : null}
     </div>

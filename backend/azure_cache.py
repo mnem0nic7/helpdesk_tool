@@ -12,7 +12,7 @@ import time
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from azure_client import AzureApiError, AzureClient
 from config import (
@@ -624,6 +624,135 @@ class AzureCache:
             return ""
         return text.split("/")[-1]
 
+    def _build_resource_graph_indexes(
+        self,
+        resources: list[dict[str, Any]],
+    ) -> tuple[
+        dict[str, dict[str, Any]],
+        dict[str, list[dict[str, Any]]],
+        dict[str, list[dict[str, Any]]],
+        dict[str, list[dict[str, Any]]],
+    ]:
+        resource_by_id: dict[str, dict[str, Any]] = {}
+        children_by_parent: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        managed_by_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        attached_vm_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+        for item in resources:
+            normalized_id = self._normalize_resource_id(item.get("id"))
+            if not normalized_id:
+                continue
+            resource_by_id[normalized_id] = item
+
+            parent_id = self._normalize_resource_id(item.get("parent_resource_id"))
+            if parent_id:
+                children_by_parent[parent_id].append(item)
+
+            managed_by = self._normalize_resource_id(item.get("managed_by"))
+            if managed_by:
+                managed_by_index[managed_by].append(item)
+
+            attached_vm_id = self._normalize_resource_id(item.get("attached_vm_id"))
+            if attached_vm_id:
+                attached_vm_index[attached_vm_id].append(item)
+
+        return resource_by_id, children_by_parent, managed_by_index, attached_vm_index
+
+    def _collect_vm_relationships(
+        self,
+        vm_item: dict[str, Any],
+        resource_by_id: dict[str, dict[str, Any]],
+        children_by_parent: dict[str, list[dict[str, Any]]],
+        managed_by_index: dict[str, list[dict[str, Any]]],
+        attached_vm_index: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, tuple[str, int]]:
+        normalized_vm_id = self._normalize_resource_id(vm_item.get("id"))
+        if not normalized_vm_id:
+            return {}
+
+        relationship_priority = {
+            "Virtual machine": 100,
+            "OS disk": 90,
+            "Data disk": 85,
+            "Network interface": 80,
+            "Public IP": 70,
+            "Child resource": 60,
+            "Managed by VM": 50,
+            "Attached VM resource": 40,
+            "Associated resource": 10,
+        }
+        associated_by_id: dict[str, tuple[str, int]] = {}
+
+        def mark_related(target_resource_id: Any, relationship: str) -> None:
+            normalized_target = self._normalize_resource_id(target_resource_id)
+            if not normalized_target:
+                return
+            priority = relationship_priority.get(relationship, 0)
+            current = associated_by_id.get(normalized_target)
+            if current and current[1] >= priority:
+                return
+            associated_by_id[normalized_target] = (relationship, priority)
+
+        mark_related(vm_item.get("id"), "Virtual machine")
+
+        network_interface_ids = list(vm_item.get("network_interface_ids") or [])
+        os_disk_id = vm_item.get("os_disk_id")
+        data_disk_ids = list(vm_item.get("data_disk_ids") or [])
+
+        for nic_id in network_interface_ids:
+            mark_related(nic_id, "Network interface")
+        if os_disk_id:
+            mark_related(os_disk_id, "OS disk")
+        for disk_id in data_disk_ids:
+            mark_related(disk_id, "Data disk")
+
+        for child in children_by_parent.get(normalized_vm_id, []):
+            mark_related(child.get("id"), "Child resource")
+        for item in managed_by_index.get(normalized_vm_id, []):
+            mark_related(item.get("id"), "Managed by VM")
+        for item in attached_vm_index.get(normalized_vm_id, []):
+            mark_related(item.get("id"), "Attached VM resource")
+
+        for nic_id in network_interface_ids:
+            nic = resource_by_id.get(self._normalize_resource_id(nic_id))
+            if not nic:
+                continue
+            for public_ip_id in nic.get("public_ip_ids") or []:
+                mark_related(public_ip_id, "Public IP")
+
+        return associated_by_id
+
+    def _build_vm_associated_resource_rows(
+        self,
+        associated_by_id: dict[str, tuple[str, int]],
+        resource_by_id: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for normalized_id, (relationship, priority) in associated_by_id.items():
+            item = resource_by_id.get(normalized_id)
+            rows.append(
+                {
+                    "id": item.get("id") if item else f"/{normalized_id}",
+                    "name": (
+                        (item.get("name") if item else "")
+                        or self._resource_display_name(item.get("id") if item else normalized_id)
+                    ),
+                    "resource_type": item.get("resource_type") if item else "",
+                    "relationship": relationship,
+                    "subscription_id": item.get("subscription_id") if item else "",
+                    "subscription_name": item.get("subscription_name") if item else "",
+                    "resource_group": item.get("resource_group") if item else "",
+                    "location": item.get("location") if item else "",
+                    "state": item.get("state") if item else "",
+                    "_priority": priority,
+                    "_normalized_id": normalized_id,
+                    "_cost_candidate": bool(
+                        item and self._should_query_direct_resource_cost(relationship, item)
+                    ),
+                }
+            )
+        return rows
+
     def list_virtual_machines(
         self,
         *,
@@ -1091,99 +1220,415 @@ class AzureCache:
             "by_sku_coverage": coverage_rows,
         }
 
+    @staticmethod
+    def _normalize_vm_export_filters(filters: dict[str, Any] | None) -> dict[str, str]:
+        source = filters or {}
+        return {
+            "search": str(source.get("search") or "").strip(),
+            "subscription_id": str(source.get("subscription_id") or "").strip(),
+            "resource_group": str(source.get("resource_group") or "").strip(),
+            "location": str(source.get("location") or "").strip(),
+            "state": str(source.get("state") or "").strip(),
+            "size": str(source.get("size") or "").strip(),
+        }
+
+    def _fetch_live_resource_cost_index(
+        self,
+        resource_ids_by_subscription: dict[str, list[str]],
+        *,
+        lookback_days: int,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        index: dict[str, dict[str, Any]] = {}
+        errors: dict[str, str] = {}
+
+        for subscription_id, resource_ids in resource_ids_by_subscription.items():
+            if not subscription_id or not resource_ids:
+                continue
+            try:
+                rows = self._client.get_cost_by_resource_ids(
+                    subscription_id,
+                    resource_ids,
+                    lookback_days=lookback_days,
+                )
+            except AzureApiError as exc:
+                logger.warning(
+                    "Azure live resource cost export lookup failed for subscription %s: %s",
+                    subscription_id,
+                    exc,
+                )
+                errors[subscription_id] = str(exc)
+                continue
+
+            for item in rows:
+                key = self._normalize_resource_id(item.get("label"))
+                if key:
+                    index[key] = item
+
+        return index, errors
+
+    def build_virtual_machine_cost_export(
+        self,
+        *,
+        scope: str,
+        filters: dict[str, Any] | None,
+        lookback_days: int,
+        progress_callback: Callable[[int, int, str], None] | None = None,
+    ) -> dict[str, Any]:
+        normalized_filters = self._normalize_vm_export_filters(filters)
+        vm_payload = (
+            self.list_virtual_machines(**normalized_filters)
+            if scope == "filtered"
+            else self.list_virtual_machines()
+        )
+        selected_vms = list(vm_payload.get("vms") or [])
+        resources = self._snapshot("resources") or []
+        resource_by_id, children_by_parent, managed_by_index, attached_vm_index = self._build_resource_graph_indexes(resources)
+        currency = str(self.get_cost_summary().get("currency") or "USD")
+
+        progress_state = {"current": 0, "total": max(1, (len(selected_vms) * 2) + 3)}
+
+        def report(message: str, advance: int = 0) -> None:
+            if advance:
+                progress_state["current"] = min(
+                    progress_state["total"],
+                    progress_state["current"] + advance,
+                )
+            if progress_callback:
+                progress_callback(
+                    int(progress_state["current"]),
+                    int(progress_state["total"]),
+                    message,
+                )
+
+        report("Preparing VM cost export")
+
+        if not selected_vms:
+            report("No virtual machines matched the export scope", advance=progress_state["total"])
+            return {
+                "summary_rows": [],
+                "detail_rows": [],
+                "shared_rows": [],
+                "vm_count": 0,
+                "lookback_days": lookback_days,
+                "currency": currency,
+                "scope": scope,
+                "filters": normalized_filters,
+            }
+
+        vm_associations: dict[str, list[dict[str, Any]]] = {}
+        selected_vm_group_names: dict[tuple[str, str], list[str]] = defaultdict(list)
+        direct_cost_ids_by_subscription: dict[str, list[str]] = defaultdict(list)
+        direct_associated_ids: set[str] = set()
+
+        for item in selected_vms:
+            normalized_vm_id = self._normalize_resource_id(item.get("id"))
+            if not normalized_vm_id:
+                continue
+
+            vm_item = resource_by_id.get(normalized_vm_id) or item
+            associated_by_id = self._collect_vm_relationships(
+                vm_item,
+                resource_by_id,
+                children_by_parent,
+                managed_by_index,
+                attached_vm_index,
+            )
+            associated_rows = self._build_vm_associated_resource_rows(associated_by_id, resource_by_id)
+            vm_associations[normalized_vm_id] = associated_rows
+
+            group_key = (
+                str(item.get("subscription_id") or "").strip().lower(),
+                str(item.get("resource_group") or "").strip().lower(),
+            )
+            if group_key[0] and group_key[1]:
+                selected_vm_group_names[group_key].append(
+                    str(item.get("name") or self._resource_display_name(item.get("id")) or "Unknown VM")
+                )
+
+            for associated in associated_rows:
+                direct_associated_ids.add(str(associated.get("_normalized_id") or ""))
+                if associated.get("_cost_candidate") and associated.get("subscription_id") and associated.get("id"):
+                    direct_cost_ids_by_subscription[str(associated["subscription_id"])].append(str(associated["id"]))
+
+            report(
+                f"Mapped associated resources for {item.get('name') or self._resource_display_name(item.get('id'))}",
+                advance=1,
+            )
+
+        direct_subscription_count = sum(
+            1 for resource_ids in direct_cost_ids_by_subscription.values() if resource_ids
+        )
+
+        shared_candidate_items: dict[str, dict[str, Any]] = {}
+        shared_cost_ids_by_subscription: dict[str, list[str]] = defaultdict(list)
+        for item in resources:
+            normalized_id = self._normalize_resource_id(item.get("id"))
+            subscription_id = str(item.get("subscription_id") or "").strip()
+            group_key = (
+                subscription_id.lower(),
+                str(item.get("resource_group") or "").strip().lower(),
+            )
+            if not normalized_id or not subscription_id or not group_key[1]:
+                continue
+            if group_key not in selected_vm_group_names:
+                continue
+            if normalized_id in direct_associated_ids:
+                continue
+            if self._is_virtual_machine(item):
+                continue
+            shared_candidate_items[normalized_id] = item
+            shared_cost_ids_by_subscription[subscription_id].append(str(item.get("id") or ""))
+
+        shared_subscription_count = sum(
+            1 for resource_ids in shared_cost_ids_by_subscription.values() if resource_ids
+        )
+        progress_state["total"] = max(
+            1,
+            len(selected_vms) + direct_subscription_count + shared_subscription_count + len(selected_vms) + 1,
+        )
+        report("Querying live direct Azure cost data")
+
+        direct_cost_index: dict[str, dict[str, Any]] = {}
+        direct_cost_errors: dict[str, str] = {}
+        for subscription_id, resource_ids in sorted(direct_cost_ids_by_subscription.items()):
+            if not resource_ids:
+                continue
+            rows, errors = self._fetch_live_resource_cost_index(
+                {subscription_id: resource_ids},
+                lookback_days=lookback_days,
+            )
+            direct_cost_index.update(rows)
+            direct_cost_errors.update(errors)
+            report(f"Queried direct costs for subscription {subscription_id}", advance=1)
+
+        report("Querying shared cost candidates")
+
+        shared_cost_index: dict[str, dict[str, Any]] = {}
+        shared_cost_errors: dict[str, str] = {}
+        for subscription_id, resource_ids in sorted(shared_cost_ids_by_subscription.items()):
+            if not resource_ids:
+                continue
+            rows, errors = self._fetch_live_resource_cost_index(
+                {subscription_id: resource_ids},
+                lookback_days=lookback_days,
+            )
+            shared_cost_index.update(rows)
+            shared_cost_errors.update(errors)
+            report(f"Queried shared candidates for subscription {subscription_id}", advance=1)
+
+        shared_rows: list[dict[str, Any]] = []
+        shared_summary_by_group: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+            lambda: {"count": 0, "amount": 0.0}
+        )
+        for normalized_id, item in shared_candidate_items.items():
+            cost_row = shared_cost_index.get(normalized_id)
+            if not cost_row:
+                continue
+            amount = round(float(cost_row.get("amount") or 0.0), 2)
+            group_key = (
+                str(item.get("subscription_id") or "").strip().lower(),
+                str(item.get("resource_group") or "").strip().lower(),
+            )
+            vm_names = sorted(set(selected_vm_group_names.get(group_key, [])), key=str.lower)
+            shared_summary_by_group[group_key]["count"] += 1
+            shared_summary_by_group[group_key]["amount"] += amount
+            shared_rows.append(
+                {
+                    "resource_name": str(item.get("name") or self._resource_display_name(item.get("id"))),
+                    "resource_id": str(item.get("id") or ""),
+                    "resource_type": str(item.get("resource_type") or ""),
+                    "subscription": str(item.get("subscription_name") or item.get("subscription_id") or ""),
+                    "resource_group": str(item.get("resource_group") or ""),
+                    "region": str(item.get("location") or ""),
+                    "cost": amount,
+                    "currency": str(cost_row.get("currency") or currency),
+                    "candidate_vm_count": len(vm_names),
+                    "candidate_vm_names": "; ".join(vm_names),
+                    "reason": "same resource group as selected VM(s)",
+                }
+            )
+
+        shared_rows.sort(
+            key=lambda item: (
+                -float(item.get("cost") or 0.0),
+                str(item.get("resource_group") or "").lower(),
+                str(item.get("resource_name") or "").lower(),
+            )
+        )
+
+        summary_rows: list[dict[str, Any]] = []
+        detail_rows: list[dict[str, Any]] = []
+
+        for item in selected_vms:
+            normalized_vm_id = self._normalize_resource_id(item.get("id"))
+            associated_rows = list(vm_associations.get(normalized_vm_id) or [])
+            associated_rows.sort(
+                key=lambda row: (
+                    -int(row.get("_priority") or 0),
+                    str(row.get("name") or "").lower(),
+                )
+            )
+
+            vm_cost: float | None = None
+            attached_cost_total = 0.0
+            priced_resource_count = 0
+            unpriced_resource_count = 0
+            subscription_id = str(item.get("subscription_id") or "").strip()
+            summary_currency = currency
+
+            for associated in associated_rows:
+                relationship = str(associated.get("relationship") or "")
+                is_cost_candidate = bool(associated.get("_cost_candidate"))
+                normalized_id = str(associated.get("_normalized_id") or "")
+                cost_row = direct_cost_index.get(normalized_id)
+                pricing_status = "not_applicable"
+                pricing_error = "Not included in direct VM cost attribution"
+                amount: float | None = None
+                row_currency = currency
+
+                if cost_row:
+                    amount = round(float(cost_row.get("amount") or 0.0), 2)
+                    row_currency = str(cost_row.get("currency") or currency)
+                    summary_currency = row_currency
+                    pricing_status = "priced"
+                    pricing_error = ""
+                    priced_resource_count += 1
+                    if relationship == "Virtual machine":
+                        vm_cost = amount
+                    else:
+                        attached_cost_total += amount
+                elif is_cost_candidate:
+                    unpriced_resource_count += 1
+                    if subscription_id and subscription_id in direct_cost_errors:
+                        pricing_status = "cost_query_failed"
+                        pricing_error = direct_cost_errors[subscription_id]
+                    else:
+                        pricing_status = "unpriced"
+                        pricing_error = (
+                            f"No amortized cost row returned for the selected {lookback_days}-day range"
+                        )
+
+                detail_rows.append(
+                    {
+                        "vm_name": str(item.get("name") or ""),
+                        "vm_resource_id": str(item.get("id") or ""),
+                        "associated_resource_name": str(associated.get("name") or ""),
+                        "associated_resource_id": str(associated.get("id") or ""),
+                        "relationship": relationship,
+                        "type": str(associated.get("resource_type") or ""),
+                        "subscription": str(
+                            associated.get("subscription_name")
+                            or associated.get("subscription_id")
+                            or item.get("subscription_name")
+                            or item.get("subscription_id")
+                            or ""
+                        ),
+                        "resource_group": str(associated.get("resource_group") or ""),
+                        "region": str(associated.get("location") or ""),
+                        "cost": amount,
+                        "currency": row_currency,
+                        "pricing_status": pricing_status,
+                        "pricing_error": pricing_error,
+                        "_priority": int(associated.get("_priority") or 0),
+                    }
+                )
+
+            group_key = (
+                subscription_id.lower(),
+                str(item.get("resource_group") or "").strip().lower(),
+            )
+            shared_group_summary = shared_summary_by_group.get(group_key, {"count": 0, "amount": 0.0})
+            shared_error = shared_cost_errors.get(subscription_id)
+            if subscription_id and subscription_id in direct_cost_errors:
+                cost_status = "Direct cost query failed"
+            elif unpriced_resource_count > 0:
+                cost_status = "Direct costs partially priced"
+            else:
+                cost_status = "Direct costs complete"
+            if shared_error:
+                cost_status = f"{cost_status}; shared candidates unavailable"
+
+            direct_total_cost = None
+            if priced_resource_count > 0:
+                direct_total_cost = round((vm_cost or 0.0) + attached_cost_total, 2)
+
+            summary_rows.append(
+                {
+                    "vm_name": str(item.get("name") or ""),
+                    "resource_id": str(item.get("id") or ""),
+                    "subscription": str(item.get("subscription_name") or item.get("subscription_id") or ""),
+                    "resource_group": str(item.get("resource_group") or ""),
+                    "region": str(item.get("location") or ""),
+                    "size": str(item.get("size") or self._vm_size(item)),
+                    "power_state": str(item.get("power_state") or self._vm_power_state(item)),
+                    "lookback_days": lookback_days,
+                    "currency": summary_currency,
+                    "vm_only_cost": vm_cost,
+                    "direct_attached_resource_cost": round(attached_cost_total, 2) if priced_resource_count else None,
+                    "direct_total_cost": direct_total_cost,
+                    "priced_resource_count": priced_resource_count,
+                    "unpriced_resource_count": unpriced_resource_count,
+                    "shared_candidate_count": int(shared_group_summary["count"]),
+                    "shared_candidate_amount": round(float(shared_group_summary["amount"] or 0.0), 2),
+                    "cost_status": cost_status,
+                }
+            )
+            report(
+                f"Built export rows for {item.get('name') or self._resource_display_name(item.get('id'))}",
+                advance=1,
+            )
+
+        detail_rows.sort(
+            key=lambda item: (
+                str(item.get("vm_name") or "").lower(),
+                -int(item.pop("_priority", 0)),
+                str(item.get("associated_resource_name") or "").lower(),
+            )
+        )
+        summary_rows.sort(
+            key=lambda item: (
+                -(float(item.get("direct_total_cost") or 0.0) if item.get("direct_total_cost") is not None else -1.0),
+                str(item.get("vm_name") or "").lower(),
+            )
+        )
+        report("VM cost export data is ready", advance=1)
+
+        return {
+            "summary_rows": summary_rows,
+            "detail_rows": detail_rows,
+            "shared_rows": shared_rows,
+            "vm_count": len(selected_vms),
+            "lookback_days": lookback_days,
+            "currency": currency,
+            "scope": scope,
+            "filters": normalized_filters,
+        }
+
     def get_virtual_machine_detail(self, resource_id: str) -> dict[str, Any] | None:
         normalized_vm_id = self._normalize_resource_id(resource_id)
         if not normalized_vm_id:
             return None
 
         resources = self._snapshot("resources") or []
-        resource_by_id: dict[str, dict[str, Any]] = {}
-        children_by_parent: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        managed_by_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        attached_vm_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
-
-        for item in resources:
-            normalized_id = self._normalize_resource_id(item.get("id"))
-            if not normalized_id:
-                continue
-            resource_by_id[normalized_id] = item
-
-            parent_id = self._normalize_resource_id(item.get("parent_resource_id"))
-            if parent_id:
-                children_by_parent[parent_id].append(item)
-
-            managed_by = self._normalize_resource_id(item.get("managed_by"))
-            if managed_by:
-                managed_by_index[managed_by].append(item)
-
-            attached_vm_id = self._normalize_resource_id(item.get("attached_vm_id"))
-            if attached_vm_id:
-                attached_vm_index[attached_vm_id].append(item)
+        resource_by_id, children_by_parent, managed_by_index, attached_vm_index = self._build_resource_graph_indexes(resources)
 
         vm_item = resource_by_id.get(normalized_vm_id)
         if not vm_item or not self._is_virtual_machine(vm_item):
             return None
 
-        relationship_priority = {
-            "Virtual machine": 100,
-            "OS disk": 90,
-            "Data disk": 85,
-            "Network interface": 80,
-            "Public IP": 70,
-            "Child resource": 60,
-            "Managed by VM": 50,
-            "Attached VM resource": 40,
-            "Associated resource": 10,
-        }
-        associated_by_id: dict[str, tuple[str, int]] = {}
-
-        def mark_related(target_resource_id: Any, relationship: str) -> None:
-            normalized_target = self._normalize_resource_id(target_resource_id)
-            if not normalized_target:
-                return
-            priority = relationship_priority.get(relationship, 0)
-            current = associated_by_id.get(normalized_target)
-            if current and current[1] >= priority:
-                return
-            associated_by_id[normalized_target] = (relationship, priority)
-
-        mark_related(vm_item.get("id"), "Virtual machine")
-
-        network_interface_ids = list(vm_item.get("network_interface_ids") or [])
-        os_disk_id = vm_item.get("os_disk_id")
-        data_disk_ids = list(vm_item.get("data_disk_ids") or [])
-
-        for nic_id in network_interface_ids:
-            mark_related(nic_id, "Network interface")
-        if os_disk_id:
-            mark_related(os_disk_id, "OS disk")
-        for disk_id in data_disk_ids:
-            mark_related(disk_id, "Data disk")
-
-        for child in children_by_parent.get(normalized_vm_id, []):
-            mark_related(child.get("id"), "Child resource")
-        for item in managed_by_index.get(normalized_vm_id, []):
-            mark_related(item.get("id"), "Managed by VM")
-        for item in attached_vm_index.get(normalized_vm_id, []):
-            mark_related(item.get("id"), "Attached VM resource")
-
-        for nic_id in network_interface_ids:
-            nic = resource_by_id.get(self._normalize_resource_id(nic_id))
-            if not nic:
-                continue
-            for public_ip_id in nic.get("public_ip_ids") or []:
-                mark_related(public_ip_id, "Public IP")
-
-        associated_items = [
-            resource_by_id[normalized_id]
-            for normalized_id in associated_by_id
-            if normalized_id in resource_by_id
-        ]
+        associated_by_id = self._collect_vm_relationships(
+            vm_item,
+            resource_by_id,
+            children_by_parent,
+            managed_by_index,
+            attached_vm_index,
+        )
+        associated_items = self._build_vm_associated_resource_rows(associated_by_id, resource_by_id)
         targeted_cost_items = [
-            resource_by_id[normalized_id]
-            for normalized_id, (relationship, _) in associated_by_id.items()
-            if normalized_id in resource_by_id
-            and self._should_query_direct_resource_cost(relationship, resource_by_id[normalized_id])
+            resource_by_id[str(item.get("_normalized_id") or "")]
+            for item in associated_items
+            if item.get("_cost_candidate")
+            and str(item.get("_normalized_id") or "") in resource_by_id
         ]
 
         resource_cost_status = self._get_resource_cost_status()
@@ -1199,8 +1644,9 @@ class AzureCache:
         total_cost = 0.0
         vm_cost = 0.0
 
-        for normalized_id, (relationship, priority) in associated_by_id.items():
-            item = resource_by_id.get(normalized_id)
+        for item in associated_items:
+            normalized_id = str(item.get("_normalized_id") or "")
+            relationship = str(item.get("relationship") or "")
             cost_row = resource_cost_index.get(normalized_id)
             cost_value: float | None
             if resource_cost_status["available"]:
@@ -1217,25 +1663,10 @@ class AzureCache:
                 if relationship == "Virtual machine":
                     vm_cost = cost_value
 
-            associated_resources.append(
-                {
-                    "id": item.get("id") if item else f"/{normalized_id}",
-                    "name": (
-                        (item.get("name") if item else "")
-                        or self._resource_display_name(item.get("id") if item else normalized_id)
-                    ),
-                    "resource_type": item.get("resource_type") if item else "",
-                    "relationship": relationship,
-                    "subscription_id": item.get("subscription_id") if item else "",
-                    "subscription_name": item.get("subscription_name") if item else "",
-                    "resource_group": item.get("resource_group") if item else "",
-                    "location": item.get("location") if item else "",
-                    "state": item.get("state") if item else "",
-                    "cost": cost_value,
-                    "currency": str((cost_row or {}).get("currency") or "USD"),
-                    "_priority": priority,
-                }
-            )
+            associated_resource = dict(item)
+            associated_resource["cost"] = cost_value
+            associated_resource["currency"] = str((cost_row or {}).get("currency") or "USD")
+            associated_resources.append(associated_resource)
 
         associated_resources.sort(
             key=lambda item: (
@@ -1244,6 +1675,9 @@ class AzureCache:
                 str(item.get("name") or "").lower(),
             )
         )
+        for item in associated_resources:
+            item.pop("_normalized_id", None)
+            item.pop("_cost_candidate", None)
 
         vm_row = dict(vm_item)
         vm_row["size"] = self._vm_size(vm_item)
