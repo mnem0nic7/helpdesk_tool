@@ -210,6 +210,8 @@ class TicketUpdateRequest(BaseModel):
     reporter_account_id: Optional[str] = None
     reporter_display_name: Optional[str] = None
     request_type_id: Optional[str] = None
+    components: Optional[list[str]] = None
+    work_category: Optional[str] = None
 
 
 class TicketTransitionRequest(BaseModel):

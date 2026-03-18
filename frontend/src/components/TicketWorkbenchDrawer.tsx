@@ -71,6 +71,29 @@ function sortCommentsByCreated(comments: TicketComment[]): TicketComment[] {
   });
 }
 
+function getTransitionLabel(transition: Transition): string {
+  return (transition.to_status || transition.name || "").trim();
+}
+
+function normalizeStatusLabel(label: string): string {
+  return label.trim().toLowerCase();
+}
+
+function parseComponentInput(value: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value.split(",")) {
+    const trimmed = item.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result;
+}
+
 export default function TicketWorkbenchDrawer({
   ticketKey,
   initialTicket,
@@ -88,6 +111,8 @@ export default function TicketWorkbenchDrawer({
   const [selectedReporterAccountId, setSelectedReporterAccountId] = useState("");
   const [selectedRequestTypeId, setSelectedRequestTypeId] = useState("");
   const [selectedTransitionId, setSelectedTransitionId] = useState("");
+  const [applicationInput, setApplicationInput] = useState("");
+  const [workCategoryInput, setWorkCategoryInput] = useState("");
   const [comment, setComment] = useState("");
   const [commentAudience, setCommentAudience] = useState<"internal" | "customer">("internal");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -140,6 +165,13 @@ export default function TicketWorkbenchDrawer({
     enabled: !!ticketKey,
   });
 
+  const { data: filterOptions } = useQuery({
+    queryKey: ["filter-options"],
+    queryFn: () => api.getFilterOptions(),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!ticketKey,
+  });
+
   useEffect(() => {
     if (!detail) return;
     setSummary(detail.ticket.summary);
@@ -151,6 +183,8 @@ export default function TicketWorkbenchDrawer({
     setComment("");
     setCommentAudience("internal");
     setSelectedTransitionId("");
+    setApplicationInput(detail.ticket.components.join(", "));
+    setWorkCategoryInput(detail.work_category ?? "");
     setIsHistoryOpen(false);
   }, [detail]);
 
@@ -294,6 +328,16 @@ export default function TicketWorkbenchDrawer({
       if (selectedRequestTypeId && selectedRequestTypeId !== currentRequestTypeId) {
         payload.request_type_id = selectedRequestTypeId;
       }
+      const nextComponents = parseComponentInput(applicationInput);
+      const currentComponents = (detail.ticket.components ?? []).map((component) => component.trim()).filter(Boolean);
+      if (JSON.stringify(nextComponents) !== JSON.stringify(currentComponents)) {
+        payload.components = nextComponents;
+      }
+      const trimmedWorkCategory = workCategoryInput.trim();
+      const currentWorkCategory = (detail.work_category ?? "").trim();
+      if (trimmedWorkCategory !== currentWorkCategory) {
+        payload.work_category = trimmedWorkCategory;
+      }
       if (Object.keys(payload).length === 0) {
         throw new Error("No changes to save");
       }
@@ -379,6 +423,20 @@ export default function TicketWorkbenchDrawer({
   const sortedPriorities = [...priorities].sort((a: PriorityOption, b: PriorityOption) =>
     a.name.localeCompare(b.name)
   );
+  const componentOptions = filterOptions?.components ?? [];
+  const workCategoryOptions = filterOptions?.work_categories ?? [];
+  const currentStatusLabel = (ticket?.status ?? "").trim();
+  const currentStatusKey = normalizeStatusLabel(currentStatusLabel);
+  const seenTransitionLabels = new Set<string>();
+  const displayTransitions = transitions.filter((transition) => {
+    const label = getTransitionLabel(transition);
+    const normalizedLabel = normalizeStatusLabel(label);
+    if (!normalizedLabel || normalizedLabel === currentStatusKey || seenTransitionLabels.has(normalizedLabel)) {
+      return false;
+    }
+    seenTransitionLabels.add(normalizedLabel);
+    return true;
+  });
   const actionContextItems = detail
     ? [
         { label: "Type", value: detail.ticket.issue_type || "—" },
@@ -386,7 +444,7 @@ export default function TicketWorkbenchDrawer({
         { label: "Created", value: formatDateTime(detail.ticket.created) },
         { label: "Updated", value: formatDateTime(detail.ticket.updated) },
         { label: "Resolved", value: formatDateTime(detail.ticket.resolved) },
-        { label: "Work Category", value: detail.work_category || "—" },
+        { label: "Operational Categorization", value: detail.work_category || "—" },
       ]
     : [];
   const historyItems = detail ? sortCommentsByCreated(detail.comments) : [];
@@ -640,6 +698,43 @@ export default function TicketWorkbenchDrawer({
                     </select>
                   </label>
 
+                  <label className="block xl:col-span-2">
+                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Application</span>
+                    <input
+                      list="ticket-application-options"
+                      value={applicationInput}
+                      onChange={(e) => setApplicationInput(e.target.value)}
+                      placeholder="Portal, Outlook, VPN"
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                    <datalist id="ticket-application-options">
+                      {componentOptions.map((component) => (
+                        <option key={component} value={component} />
+                      ))}
+                    </datalist>
+                    <div className="mt-1 text-xs text-slate-500">
+                      Maps to Jira components. Use commas if a ticket needs more than one application.
+                    </div>
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                      Operational Categorization
+                    </span>
+                    <input
+                      list="ticket-work-category-options"
+                      value={workCategoryInput}
+                      onChange={(e) => setWorkCategoryInput(e.target.value)}
+                      placeholder="Identity"
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                    <datalist id="ticket-work-category-options">
+                      {workCategoryOptions.map((category) => (
+                        <option key={category} value={category} />
+                      ))}
+                    </datalist>
+                  </label>
+
                   <div className="md:col-span-2 xl:col-span-2 flex flex-wrap items-end gap-3">
                     <label className="min-w-[260px] flex-1">
                       <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Status</span>
@@ -649,9 +744,9 @@ export default function TicketWorkbenchDrawer({
                         className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                       >
                         <option value="">{detail.ticket.status || "Select status"}</option>
-                        {transitions.map((transition: Transition) => (
+                        {displayTransitions.map((transition: Transition) => (
                           <option key={transition.id} value={transition.id}>
-                            {transition.to_status || transition.name}
+                            {getTransitionLabel(transition)}
                           </option>
                         ))}
                       </select>
@@ -845,7 +940,9 @@ export default function TicketWorkbenchDrawer({
                         </div>
                       </div>
                       <div>
-                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Components</div>
+                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                          Application
+                        </div>
                         <div className="mt-2 flex flex-wrap gap-2">
                           {detail.ticket.components.length === 0 && <span className="text-slate-400">None</span>}
                           {detail.ticket.components.map((component) => (

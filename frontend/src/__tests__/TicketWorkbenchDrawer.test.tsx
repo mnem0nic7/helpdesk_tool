@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { render } from "../test-utils.tsx";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     getTicket: vi.fn(),
+    getFilterOptions: vi.fn(),
     getAssignees: vi.fn(),
     searchUsers: vi.fn(),
     getPriorities: vi.fn(),
@@ -106,6 +107,14 @@ describe("TicketWorkbenchDrawer", () => {
       value: 1400,
     });
     mockApi.getTicket.mockResolvedValue(ticketDetail);
+    mockApi.getFilterOptions.mockResolvedValue({
+      statuses: [],
+      priorities: [],
+      issue_types: [],
+      labels: [],
+      components: ["Portal", "VPN"],
+      work_categories: ["Support", "Identity"],
+    });
     mockApi.getAssignees.mockResolvedValue([]);
     mockApi.searchUsers.mockResolvedValue([]);
     mockApi.getPriorities.mockResolvedValue([{ id: "1", name: "High" }]);
@@ -251,6 +260,42 @@ describe("TicketWorkbenchDrawer", () => {
     });
   });
 
+  it("lets the user update application and operational categorization before saving", async () => {
+    mockApi.updateTicket.mockResolvedValue({
+      ...ticketDetail,
+      ticket: {
+        ...ticketRow,
+        components: ["Portal", "VPN"],
+      },
+      work_category: "Identity",
+    });
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Ticket Actions");
+
+    fireEvent.change(screen.getByPlaceholderText("Portal, Outlook, VPN"), {
+      target: { value: "Portal, VPN" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Identity"), {
+      target: { value: "Identity" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Ticket Details" }));
+
+    await waitFor(() => {
+      expect(mockApi.updateTicket).toHaveBeenCalledWith("OIT-1", {
+        components: ["Portal", "VPN"],
+        work_category: "Identity",
+      });
+    });
+  });
+
   it("updates the reporter from the OCC creator line with one click", async () => {
     mockApi.syncTicketReporter.mockResolvedValue({
       updated: true,
@@ -282,5 +327,45 @@ describe("TicketWorkbenchDrawer", () => {
     });
 
     expect(await screen.findByText("Reporter updated to Raza Abidi.")).toBeInTheDocument();
+  });
+
+  it("hides duplicate status labels in the drawer transition list", async () => {
+    mockApi.getTicket.mockResolvedValue({
+      ...ticketDetail,
+      ticket: {
+        ...ticketRow,
+        status: "Acknowledged",
+      },
+    });
+    mockApi.getTransitions.mockResolvedValue([
+      { id: "11", name: "Keep Acknowledged", to_status: "Acknowledged" },
+      { id: "21", name: "Start Work", to_status: "In Progress" },
+      { id: "22", name: "Begin Investigation", to_status: "In Progress" },
+      { id: "31", name: "Wait on Customer", to_status: "Waiting for customer" },
+    ]);
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={{ ...ticketRow, status: "Acknowledged" }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Ticket Actions");
+
+    const statusLabel = screen.getByText("Status").closest("label");
+    expect(statusLabel).not.toBeNull();
+
+    const statusSelect = within(statusLabel as HTMLLabelElement).getByRole("combobox");
+    const optionLabels = within(statusSelect)
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+
+    expect(optionLabels).toEqual([
+      "Acknowledged",
+      "In Progress",
+      "Waiting for customer",
+    ]);
   });
 });

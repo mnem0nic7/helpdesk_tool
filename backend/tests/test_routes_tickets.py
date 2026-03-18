@@ -169,12 +169,36 @@ class TestTicketsEndpoint:
                     lambda: [
                         _issue(labels=["vip", "network"]),
                         _issue(key="OIT-2", labels=["security"]),
+                        {
+                            "key": "OIT-3",
+                            "fields": {
+                                "summary": "Portal outage",
+                                "status": {"name": "Open"},
+                                "priority": {"name": "High"},
+                                "issuetype": {"name": "[System] Service request"},
+                                "labels": [],
+                                "components": [{"name": "Portal"}],
+                                "customfield_11239": "Identity",
+                            },
+                        },
                     ]
                 ),
                 "get_filtered_issues": staticmethod(
                     lambda: [
                         _issue(labels=["vip", "network"]),
                         _issue(key="OIT-2", labels=["security"]),
+                        {
+                            "key": "OIT-3",
+                            "fields": {
+                                "summary": "Portal outage",
+                                "status": {"name": "Open"},
+                                "priority": {"name": "High"},
+                                "issuetype": {"name": "[System] Service request"},
+                                "labels": [],
+                                "components": [{"name": "Portal"}],
+                                "customfield_11239": "Identity",
+                            },
+                        },
                     ]
                 ),
             },
@@ -189,6 +213,8 @@ class TestTicketsEndpoint:
         resp = test_client.get("/api/filter-options")
         assert resp.status_code == 200
         assert resp.json()["labels"] == ["network", "security", "vip"]
+        assert resp.json()["components"] == ["Portal"]
+        assert resp.json()["work_categories"] == ["Identity"]
 
     def test_oasisdev_host_lists_only_oasisdev_tickets(self, test_client):
         resp = test_client.get("/api/tickets", headers={"host": "oasisdev.movedocs.com"})
@@ -469,6 +495,8 @@ class TestTicketDetailAndActions:
         issue["fields"]["reporter"] = {"displayName": "Raza Abidi", "accountId": "acct-raza"}
         issue["fields"]["description"] = _adf("Updated description")
         issue["fields"]["customfield_11102"]["requestType"]["name"] = "Access"
+        issue["fields"]["components"] = [{"name": "Portal"}, {"name": "VPN"}]
+        issue["fields"]["customfield_11239"] = "Operations"
 
         calls: list[tuple[Any, ...]] = []
         monkeypatch.setattr(routes_tickets._client, "update_summary", lambda key, value: calls.append(("summary", key, value)))
@@ -477,6 +505,8 @@ class TestTicketDetailAndActions:
         monkeypatch.setattr(routes_tickets._client, "assign_issue", lambda key, value: calls.append(("assignee", key, value)))
         monkeypatch.setattr(routes_tickets._client, "update_reporter", lambda key, value: calls.append(("reporter", key, value)))
         monkeypatch.setattr(routes_tickets._client, "set_request_type", lambda key, value: calls.append(("request_type", key, value)))
+        monkeypatch.setattr(routes_tickets._client, "update_components", lambda key, value: calls.append(("components", key, value)))
+        monkeypatch.setattr(routes_tickets._client, "update_work_category", lambda key, value: calls.append(("work_category", key, value)))
         monkeypatch.setattr(
             routes_tickets._client,
             "get_users_assignable",
@@ -500,6 +530,8 @@ class TestTicketDetailAndActions:
                 "reporter_account_id": "acct-raza",
                 "reporter_display_name": "Raza Abidi",
                 "request_type_id": "122",
+                "components": ["Portal", "VPN"],
+                "work_category": "Operations",
             },
         )
 
@@ -511,6 +543,8 @@ class TestTicketDetailAndActions:
             ("assignee", "OIT-123", "acc-bob"),
             ("reporter", "OIT-123", "acct-raza"),
             ("request_type", "OIT-123", "122"),
+            ("components", "OIT-123", ["Portal", "VPN"]),
+            ("work_category", "OIT-123", "Operations"),
         ]
         assert ("OIT-123", "summary", "Updated summary") in [c.args for c in mock_cache.update_cached_field.call_args_list]
         assert ("OIT-123", "description", "Updated description") in [c.args for c in mock_cache.update_cached_field.call_args_list]
@@ -528,6 +562,8 @@ class TestTicketDetailAndActions:
         assert ("OIT-123", "request_type", "Access") in [c.args for c in mock_cache.update_cached_field.call_args_list]
         mock_cache.upsert_issue.assert_called_once_with(issue)
         assert resp.json()["ticket"]["summary"] == "Updated summary"
+        assert resp.json()["ticket"]["components"] == ["Portal", "VPN"]
+        assert resp.json()["work_category"] == "Operations"
         assert resp.json()["description"] == "Updated description"
 
     def test_transition_ticket_updates_status(self, test_client, mock_cache, monkeypatch):
