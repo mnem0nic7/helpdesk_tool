@@ -513,7 +513,7 @@ def _build_oasisdev_workload_workbook(report: dict[str, Any]) -> Workbook:
         "Resolved",
         "Request Type",
         "Application",
-        "Operational Categorization",
+        "Category",
     ]
     _write_header_row(since_ws, detail_start, detail_headers)
     for row_idx, row in enumerate(since_last_report["tickets"], detail_start + 1):

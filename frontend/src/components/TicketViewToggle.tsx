@@ -6,7 +6,7 @@ interface TicketViewToggleProps {
 }
 
 const baseClass =
-  "inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium transition-colors";
+  "inline-flex min-w-[5.5rem] items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition-colors";
 
 export default function TicketViewToggle({ value, onChange }: TicketViewToggleProps) {
   return (

@@ -962,7 +962,7 @@ export default function ReportsPage() {
                             "Resolved",
                             "Request Type",
                             "Application",
-                            "Operational Categorization",
+                            "Category",
                           ].map((header) => (
                             <th
                               key={header}

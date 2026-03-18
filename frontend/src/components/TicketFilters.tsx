@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type { Assignee } from "../lib/api.ts";
@@ -86,40 +86,47 @@ export default function TicketFilters({
     setSearchInput(value);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      onFilterChange({ ...filters, search: value });
+      startTransition(() => {
+        onFilterChange({ ...filters, search: value });
+      });
     }, 300);
   }
 
   function handleChange(field: keyof TicketFilterValues, value: string | boolean) {
-    onFilterChange({ ...filters, [field]: value });
+    startTransition(() => {
+      onFilterChange({ ...filters, [field]: value });
+    });
   }
 
   function handleClear() {
     setSearchInput("");
-    onFilterChange({ ...emptyFilters });
+    startTransition(() => {
+      onFilterChange({ ...emptyFilters });
+    });
   }
 
   const hasActiveFilters = (Object.keys(emptyFilters) as (keyof TicketFilterValues)[])
     .some((key) => filters[key] !== emptyFilters[key]);
 
   return (
-    <div className="flex flex-wrap items-center gap-3">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
       {/* Search */}
       <input
         type="text"
         placeholder="Search tickets..."
         value={searchInput}
         onChange={(e) => handleSearchChange(e.target.value)}
-        className="h-9 w-56 rounded-md border border-gray-300 bg-white px-3 text-sm
+        className="h-9 w-full rounded-md border border-gray-300 bg-white px-3 text-sm
                    text-gray-700 placeholder-gray-400 shadow-sm
-                   focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                   focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500
+                   sm:col-span-2 xl:col-span-2"
       />
 
       {/* Status dropdown */}
       <select
         value={filters.status}
         onChange={(e) => handleChange("status", e.target.value)}
-        className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm
+        className="h-9 w-full rounded-md border border-gray-300 bg-white px-3 text-sm
                    text-gray-700 shadow-sm
                    focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
       >
@@ -135,7 +142,7 @@ export default function TicketFilters({
       <select
         value={filters.priority}
         onChange={(e) => handleChange("priority", e.target.value)}
-        className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm
+        className="h-9 w-full rounded-md border border-gray-300 bg-white px-3 text-sm
                    text-gray-700 shadow-sm
                    focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
       >
@@ -151,7 +158,7 @@ export default function TicketFilters({
       <select
         value={filters.issue_type}
         onChange={(e) => handleChange("issue_type", e.target.value)}
-        className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm
+        className="h-9 w-full rounded-md border border-gray-300 bg-white px-3 text-sm
                    text-gray-700 shadow-sm
                    focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
       >
@@ -167,7 +174,7 @@ export default function TicketFilters({
       <select
         value={filters.label}
         onChange={(e) => handleChange("label", e.target.value)}
-        className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm
+        className="h-9 w-full rounded-md border border-gray-300 bg-white px-3 text-sm
                    text-gray-700 shadow-sm
                    focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
       >
@@ -183,7 +190,7 @@ export default function TicketFilters({
       <select
         value={filters.assignee}
         onChange={(e) => handleChange("assignee", e.target.value)}
-        className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm
+        className="h-9 w-full rounded-md border border-gray-300 bg-white px-3 text-sm
                    text-gray-700 shadow-sm
                    focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
       >
@@ -200,7 +207,7 @@ export default function TicketFilters({
         type="button"
         onClick={() => handleChange("open_only", !filters.open_only)}
         className={[
-          "h-9 rounded-md border px-3 text-sm font-medium shadow-sm transition-colors",
+          "h-9 w-full rounded-md border px-3 text-sm font-medium shadow-sm transition-colors",
           filters.open_only
             ? "border-blue-600 bg-blue-600 text-white"
             : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50",
@@ -214,7 +221,7 @@ export default function TicketFilters({
         type="button"
         onClick={() => handleChange("stale_only", !filters.stale_only)}
         className={[
-          "h-9 rounded-md border px-3 text-sm font-medium shadow-sm transition-colors",
+          "h-9 w-full rounded-md border px-3 text-sm font-medium shadow-sm transition-colors",
           filters.stale_only
             ? "border-amber-600 bg-amber-600 text-white"
             : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50",
@@ -230,7 +237,7 @@ export default function TicketFilters({
         onChange={(e) => handleChange("created_after", e.target.value)}
         title="Created after"
         placeholder="From date"
-        className="h-9 rounded-md border border-gray-300 bg-white px-2 text-sm
+        className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-sm
                    text-gray-700 shadow-sm
                    focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
       />
@@ -242,23 +249,26 @@ export default function TicketFilters({
         onChange={(e) => handleChange("created_before", e.target.value)}
         title="Created before"
         placeholder="To date"
-        className="h-9 rounded-md border border-gray-300 bg-white px-2 text-sm
+        className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-sm
                    text-gray-700 shadow-sm
                    focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
       />
 
       {/* Clear Filters */}
-      {hasActiveFilters && (
-        <button
-          type="button"
-          onClick={handleClear}
-          className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm
-                     font-medium text-red-600 shadow-sm transition-colors
-                     hover:bg-red-50"
-        >
-          Clear Filters
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={handleClear}
+        disabled={!hasActiveFilters}
+        aria-hidden={!hasActiveFilters}
+        className={[
+          "h-9 w-full rounded-md border border-gray-300 bg-white px-3 text-sm font-medium shadow-sm transition-colors",
+          hasActiveFilters
+            ? "text-red-600 hover:bg-red-50"
+            : "invisible pointer-events-none text-red-600",
+        ].join(" ")}
+      >
+        Clear Filters
+      </button>
     </div>
   );
 }

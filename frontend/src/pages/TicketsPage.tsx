@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { startTransition, useState, useCallback, useEffect, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api.ts";
@@ -56,8 +56,10 @@ export default function TicketsPage() {
   }, [filterParamsKey]);
 
   const handleFilterChange = useCallback((next: TicketFilterValues) => {
-    setFilters(next);
-    setPage(1);
+    startTransition(() => {
+      setFilters(next);
+      setPage(1);
+    });
   }, []);
 
   const openLocalTicket = useCallback(
@@ -95,7 +97,9 @@ export default function TicketsPage() {
       } else {
         next.delete("view");
       }
-      setSearchParams(next, { replace: true });
+      startTransition(() => {
+        setSearchParams(next, { replace: true });
+      });
     },
     [searchParams, setSearchParams],
   );
@@ -160,38 +164,47 @@ export default function TicketsPage() {
   }, [refreshVisibleMutation, tickets]);
 
   const isRefreshingVisible = refreshVisibleMutation.isPending;
+  const headerCountContent = isLoading ? (
+    <span className="inline-flex items-center gap-2 text-slate-400">
+      <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-slate-200" />
+      Loading ticket count...
+    </span>
+  ) : hasFilters && totalCount !== undefined ? (
+    <span>
+      <span className="font-semibold text-slate-800">{matchedCount.toLocaleString()}</span>
+      {" "}matched of {totalCount.toLocaleString()} tickets
+    </span>
+  ) : (
+    <span>
+      <span className="font-semibold text-slate-800">{matchedCount.toLocaleString()}</span>
+      {" "}tickets
+    </span>
+  );
+  const feedbackMessage = isError
+    ? `Failed to load tickets: ${error instanceof Error ? error.message : "Unknown error"}`
+    : refreshVisibleMutation.isError
+      ? `Failed to refresh displayed tickets: ${refreshVisibleMutation.error instanceof Error ? refreshVisibleMutation.error.message : "Unknown error"}`
+      : "";
 
   return (
     <div className="space-y-4">
       {/* Page header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Tickets</h1>
           <p className="mt-1 text-sm text-gray-500">
             Browse and search {branding.appName} tickets. Showing open tickets by default.
           </p>
         </div>
-        <div className="flex items-center gap-4">
-          {!isLoading && (
-            <div className="text-sm text-slate-500">
-              {hasFilters && totalCount !== undefined ? (
-                <span>
-                  <span className="font-semibold text-slate-800">{matchedCount.toLocaleString()}</span>
-                  {" "}matched of {totalCount.toLocaleString()} tickets
-                </span>
-              ) : (
-                <span>
-                  <span className="font-semibold text-slate-800">{matchedCount.toLocaleString()}</span>
-                  {" "}tickets
-                </span>
-              )}
-            </div>
-          )}
+        <div className="flex flex-wrap items-center justify-end gap-2 xl:max-w-[52rem]">
+          <div className="flex min-h-9 min-w-[15rem] items-center justify-end text-right text-sm text-slate-500">
+            {headerCountContent}
+          </div>
           <button
             type="button"
             onClick={handleRefreshVisible}
             disabled={isRefreshingVisible || isLoading || tickets.length === 0}
-            className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex min-w-[10.75rem] items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
             title="Re-fetch the tickets currently shown on this page from Jira"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className={`${isRefreshingVisible ? "animate-spin" : ""} h-4 w-4`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -202,7 +215,7 @@ export default function TicketsPage() {
           <TicketViewToggle value={view} onChange={handleViewChange} />
           <a
             href={api.exportAll()}
-            className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+            className="inline-flex min-w-[8.5rem] items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -213,39 +226,40 @@ export default function TicketsPage() {
       </div>
 
       {/* Filters */}
-      <TicketFilters filters={filters} onFilterChange={handleFilterChange} />
+      <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+        <TicketFilters filters={filters} onFilterChange={handleFilterChange} />
+      </div>
 
-      {/* Error state */}
-      {isError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Failed to load tickets: {error instanceof Error ? error.message : "Unknown error"}
-        </div>
-      )}
-
-      {refreshVisibleMutation.isError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Failed to refresh displayed tickets: {refreshVisibleMutation.error instanceof Error ? refreshVisibleMutation.error.message : "Unknown error"}
-        </div>
-      )}
+      <div className="min-h-[3.25rem]">
+        {feedbackMessage && (
+          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {feedbackMessage}
+          </div>
+        )}
+      </div>
 
       {/* Ticket list */}
-      {view === "kanban" ? (
-        <TicketKanbanBoard
-          data={tickets}
-          loading={isLoading}
-          onRowOpen={openLocalTicket}
-          ticketHrefBuilder={buildTicketHref}
-        />
-      ) : (
-        <TicketTable
-          data={tickets}
-          loading={isLoading}
-          onRowOpen={openLocalTicket}
-          ticketHrefBuilder={buildTicketHref}
-        />
-      )}
+      <div className="min-h-[24rem]">
+        {view === "kanban" ? (
+          <TicketKanbanBoard
+            data={tickets}
+            loading={isLoading}
+            onRowOpen={openLocalTicket}
+            ticketHrefBuilder={buildTicketHref}
+          />
+        ) : (
+          <TicketTable
+            data={tickets}
+            loading={isLoading}
+            onRowOpen={openLocalTicket}
+            ticketHrefBuilder={buildTicketHref}
+          />
+        )}
+      </div>
 
-      <Pagination page={page} hasMore={hasMore} onPageChange={setPage} />
+      <div className="min-h-10">
+        <Pagination page={page} hasMore={hasMore} onPageChange={setPage} />
+      </div>
 
       <TicketWorkbenchDrawer
         ticketKey={ticketKey}
