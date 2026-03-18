@@ -95,14 +95,23 @@ describe("AzureVMsPage", () => {
     });
   });
 
-  it("lets the VM detail drawer expand and restore", async () => {
+  it("lets the VM detail drawer resize, expand, and restore", async () => {
     render(<AzureVMsPage />);
 
     await screen.findByText("vm-1");
     fireEvent.click(screen.getByText("vm-1"));
 
     const drawer = await screen.findByTestId("azure-vm-detail-drawer");
+    const resizer = await screen.findByTestId("azure-vm-detail-resizer");
     expect(drawer).toHaveStyle({ width: "960px" });
+
+    fireEvent.pointerDown(resizer, { clientX: 440 });
+    fireEvent.mouseMove(window, { clientX: 280 });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      expect(drawer).toHaveStyle({ width: "1120px" });
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Expand" }));
 

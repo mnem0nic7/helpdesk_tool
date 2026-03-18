@@ -180,6 +180,18 @@ class AzureClient:
         return parsed
 
     @staticmethod
+    def _cost_amount(item: dict[str, Any]) -> float:
+        for key in ("totalCost", "PreTaxCost", "Cost", "cost"):
+            raw_value = item.get(key)
+            if raw_value in (None, ""):
+                continue
+            try:
+                return float(raw_value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    @staticmethod
     def _strip_resource_id(value: str) -> str:
         return value.strip().strip("/")
 
@@ -547,6 +559,7 @@ Resources
         self,
         scope_path: str,
         *,
+        cost_type: str = "ActualCost",
         grouping_dimension: str | None = None,
         granularity: str = "Daily",
         lookback_days: int | None = None,
@@ -584,7 +597,7 @@ Resources
             scope=_ARM_SCOPE,
             params={"api-version": "2025-03-01"},
             json_body={
-                "type": "ActualCost",
+                "type": cost_type,
                 "timeframe": "Custom",
                 "timePeriod": {
                     "from": start,
@@ -616,7 +629,7 @@ Resources
                     date_value = (
                         f"{date_value[0:4]}-{date_value[4:6]}-{date_value[6:8]}"
                     )
-                totals[date_value] = totals.get(date_value, 0.0) + float(item.get("totalCost") or 0.0)
+                totals[date_value] = totals.get(date_value, 0.0) + self._cost_amount(item)
         return [
             {"date": date_key, "cost": round(cost, 2), "currency": "USD"}
             for date_key, cost in sorted(totals.items())
@@ -628,12 +641,18 @@ Resources
         grouping_dimension: str,
         *,
         limit: int | None = 20,
+        cost_type: str = "ActualCost",
     ) -> list[dict[str, Any]]:
         totals: dict[str, float] = {}
         for scope_path in self._cost_scope_paths(subscriptions):
-            for item in self._cost_query(scope_path, grouping_dimension=grouping_dimension, granularity="None"):
+            for item in self._cost_query(
+                scope_path,
+                cost_type=cost_type,
+                grouping_dimension=grouping_dimension,
+                granularity="None",
+            ):
                 label = str(item.get(grouping_dimension) or "Unspecified").strip() or "Unspecified"
-                totals[label] = totals.get(label, 0.0) + float(item.get("totalCost") or 0.0)
+                totals[label] = totals.get(label, 0.0) + self._cost_amount(item)
         grand_total = sum(totals.values()) or 0.0
         rows = [
             {
@@ -655,6 +674,7 @@ Resources
         *,
         lookback_days: int | None = None,
         chunk_size: int = 20,
+        cost_type: str = "AmortizedCost",
     ) -> list[dict[str, Any]]:
         normalized_ids: list[str] = []
         seen: set[str] = set()
@@ -672,6 +692,7 @@ Resources
             return []
 
         totals: dict[str, float] = {}
+        currencies: dict[str, str] = {}
         scope_path = f"/subscriptions/{subscription_id}"
         for index in range(0, len(normalized_ids), max(1, chunk_size)):
             chunk = normalized_ids[index : index + max(1, chunk_size)]
@@ -679,6 +700,7 @@ Resources
                 try:
                     rows = self._cost_query(
                         scope_path,
+                        cost_type=cost_type,
                         grouping_dimension="ResourceId",
                         granularity="None",
                         lookback_days=lookback_days,
@@ -687,7 +709,8 @@ Resources
                     )
                     for item in rows:
                         label = str(item.get("ResourceId") or "Unspecified").strip() or "Unspecified"
-                        totals[label] = totals.get(label, 0.0) + float(item.get("totalCost") or 0.0)
+                        totals[label] = totals.get(label, 0.0) + self._cost_amount(item)
+                        currencies[label] = str(item.get("Currency") or currencies.get(label) or "USD")
                     break
                 except AzureApiError as exc:
                     if exc.status_code == 429 and attempt < 2:
@@ -706,7 +729,7 @@ Resources
             {
                 "label": label,
                 "amount": round(amount, 2),
-                "currency": "USD",
+                "currency": currencies.get(label, "USD"),
                 "share": round((amount / grand_total) if grand_total else 0.0, 4),
             }
             for label, amount in sorted(totals.items(), key=lambda item: item[1], reverse=True)

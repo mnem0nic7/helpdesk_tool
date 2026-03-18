@@ -443,15 +443,16 @@ class AzureCache:
             by_subscription = self._client.get_cost_breakdown(subscriptions, "SubscriptionName")
             by_resource_group = self._client.get_cost_breakdown(subscriptions, "ResourceGroupName")
             by_resource_id: list[dict[str, Any]] = []
-            by_resource_id_status = {"available": False, "error": None}
+            by_resource_id_status = {"available": False, "error": None, "cost_basis": "amortized"}
             for attempt in range(3):
                 try:
                     by_resource_id = self._client.get_cost_breakdown(
                         subscriptions,
                         "ResourceId",
                         limit=None,
+                        cost_type="AmortizedCost",
                     )
-                    by_resource_id_status = {"available": True, "error": None}
+                    by_resource_id_status = {"available": True, "error": None, "cost_basis": "amortized"}
                     break
                 except AzureApiError as exc:
                     message = str(exc)
@@ -468,7 +469,7 @@ class AzureCache:
                         "Azure cost by resource id is unavailable for this principal; continuing cost refresh without it: %s",
                         exc,
                     )
-                    by_resource_id_status = {"available": False, "error": message}
+                    by_resource_id_status = {"available": False, "error": message, "cost_basis": "amortized"}
                     break
             advisor = self._client.list_advisor_recommendations(subscriptions)
             summary = {
@@ -768,8 +769,9 @@ class AzureCache:
             return {
                 "available": bool(status.get("available")),
                 "error": status.get("error"),
+                "cost_basis": str(status.get("cost_basis") or "").strip().lower() or None,
             }
-        return {"available": False, "error": None}
+        return {"available": False, "error": None, "cost_basis": None}
 
     def _resource_cost_index(self) -> dict[str, dict[str, Any]]:
         rows = self._snapshot("cost_by_resource_id") or []
@@ -804,14 +806,27 @@ class AzureCache:
                 "Azure targeted resource cost query is unavailable for VM detail: %s",
                 exc,
             )
-            return {}, {"available": False, "error": str(exc)}
+            return {}, {"available": False, "error": str(exc), "cost_basis": "amortized"}
 
         index: dict[str, dict[str, Any]] = {}
         for item in rows:
             key = self._normalize_resource_id(item.get("label"))
             if key:
                 index[key] = item
-        return index, {"available": True, "error": None}
+        return index, {"available": True, "error": None, "cost_basis": "amortized"}
+
+    @staticmethod
+    def _should_query_direct_resource_cost(relationship: str, item: dict[str, Any]) -> bool:
+        resource_type = str(item.get("resource_type") or "").strip().lower()
+        if relationship == "Child resource":
+            return False
+        if resource_type in {
+            "microsoft.network/networkinterfaces",
+        }:
+            return False
+        if resource_type.endswith("/extensions"):
+            return False
+        return True
 
     def _get_reservation_status(self) -> dict[str, Any]:
         status = self._snapshot("reservation_status")
@@ -1164,11 +1179,20 @@ class AzureCache:
             for normalized_id in associated_by_id
             if normalized_id in resource_by_id
         ]
+        targeted_cost_items = [
+            resource_by_id[normalized_id]
+            for normalized_id, (relationship, _) in associated_by_id.items()
+            if normalized_id in resource_by_id
+            and self._should_query_direct_resource_cost(relationship, resource_by_id[normalized_id])
+        ]
 
         resource_cost_status = self._get_resource_cost_status()
-        resource_cost_index = self._resource_cost_index() if resource_cost_status["available"] else {}
-        if not resource_cost_status["available"] and associated_items:
-            resource_cost_index, resource_cost_status = self._targeted_resource_cost_index(associated_items)
+        can_use_cached_resource_costs = bool(
+            resource_cost_status["available"] and resource_cost_status.get("cost_basis") == "amortized"
+        )
+        resource_cost_index = self._resource_cost_index() if can_use_cached_resource_costs else {}
+        if not can_use_cached_resource_costs and targeted_cost_items:
+            resource_cost_index, resource_cost_status = self._targeted_resource_cost_index(targeted_cost_items)
 
         associated_resources: list[dict[str, Any]] = []
         known_cost_count = 0
