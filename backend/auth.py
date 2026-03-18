@@ -107,6 +107,17 @@ def require_admin(request: Request) -> dict[str, Any]:
     return session
 
 
+def require_authenticated_user(request: Request) -> dict[str, Any]:
+    """FastAPI dependency: require a valid session and return it."""
+    from fastapi import HTTPException as _HTTPException
+
+    sid = request.cookies.get("session_id", "")
+    session = get_session(sid) if sid else None
+    if not session:
+        raise _HTTPException(status_code=401, detail="Not authenticated")
+    return session
+
+
 def session_to_public_user(session: dict[str, Any]) -> dict[str, Any]:
     """Return the frontend-safe user payload for the current session."""
     return {

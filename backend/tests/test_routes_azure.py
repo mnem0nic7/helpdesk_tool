@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 from unittest.mock import MagicMock
 
 from models import AIModel, AzureCitation, AzureCostChatResponse
@@ -256,6 +258,120 @@ def test_azure_vm_detail_returns_cached_vm_drilldown(test_client, monkeypatch):
     assert body["vm"]["name"] == "vm-1"
     assert body["cost"]["total_cost"] == 82.5
     assert body["associated_resources"][0]["relationship"] == "Virtual machine"
+
+
+def test_create_azure_vm_cost_export_job(test_client, monkeypatch):
+    import routes_azure
+
+    mock_jobs = MagicMock()
+    mock_jobs.create_job.return_value = {
+        "job_id": "job-123",
+        "status": "queued",
+        "recipient_email": "test@example.com",
+        "scope": "filtered",
+        "lookback_days": 30,
+        "filters": {"search": "wvd", "subscription_id": "sub-1", "location": "", "state": "Running", "size": ""},
+        "requested_at": "2026-03-18T00:00:00+00:00",
+        "started_at": None,
+        "completed_at": None,
+        "progress_current": 0,
+        "progress_total": 0,
+        "progress_message": "Queued",
+        "file_name": None,
+        "file_ready": False,
+        "error": None,
+    }
+    monkeypatch.setattr(routes_azure, "azure_vm_export_jobs", mock_jobs)
+
+    resp = test_client.post(
+        "/api/azure/vms/cost-export-jobs",
+        headers={"host": "azure.movedocs.com"},
+        json={
+            "scope": "filtered",
+            "lookback_days": 30,
+            "filters": {
+                "search": "wvd",
+                "subscription_id": "sub-1",
+                "state": "Running",
+            },
+        },
+    )
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["job_id"] == "job-123"
+    assert body["scope"] == "filtered"
+    assert body["recipient_email"] == "test@example.com"
+
+
+def test_get_azure_vm_cost_export_job_status(test_client, monkeypatch):
+    import routes_azure
+
+    mock_jobs = MagicMock()
+    mock_jobs.get_job.return_value = {
+        "job_id": "job-123",
+        "status": "running",
+        "recipient_email": "test@example.com",
+        "scope": "all",
+        "lookback_days": 90,
+        "filters": {},
+        "requested_at": "2026-03-18T00:00:00+00:00",
+        "started_at": "2026-03-18T00:01:00+00:00",
+        "completed_at": None,
+        "progress_current": 3,
+        "progress_total": 8,
+        "progress_message": "Querying live direct Azure cost data",
+        "file_name": None,
+        "file_ready": False,
+        "error": None,
+    }
+    mock_jobs.job_belongs_to.return_value = True
+    monkeypatch.setattr(routes_azure, "azure_vm_export_jobs", mock_jobs)
+
+    resp = test_client.get("/api/azure/vms/cost-export-jobs/job-123", headers={"host": "azure.movedocs.com"})
+
+    assert resp.status_code == 200
+    assert resp.json()["progress_message"] == "Querying live direct Azure cost data"
+
+
+def test_download_azure_vm_cost_export_job(test_client, monkeypatch):
+    import routes_azure
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    try:
+        tmp.write(b"excel")
+        tmp.close()
+
+        mock_jobs = MagicMock()
+        mock_jobs.get_job.return_value = {
+            "job_id": "job-123",
+            "status": "completed",
+            "recipient_email": "test@example.com",
+            "scope": "all",
+            "lookback_days": 30,
+            "filters": {},
+            "requested_at": "2026-03-18T00:00:00+00:00",
+            "started_at": "2026-03-18T00:01:00+00:00",
+            "completed_at": "2026-03-18T00:03:00+00:00",
+            "progress_current": 10,
+            "progress_total": 10,
+            "progress_message": "Export ready",
+            "file_name": "azure_vm_costs.xlsx",
+            "file_ready": True,
+            "file_path": tmp.name,
+            "error": None,
+        }
+        mock_jobs.job_belongs_to.return_value = True
+        monkeypatch.setattr(routes_azure, "azure_vm_export_jobs", mock_jobs)
+
+        resp = test_client.get("/api/azure/vms/cost-export-jobs/job-123/download", headers={"host": "azure.movedocs.com"})
+
+        assert resp.status_code == 200
+        assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in resp.headers["content-type"]
+        assert "attachment; filename=" in resp.headers["content-disposition"]
+    finally:
+        if os.path.exists(tmp.name):
+            os.unlink(tmp.name)
 
 
 def test_azure_vm_coverage_csv_export(test_client, monkeypatch):

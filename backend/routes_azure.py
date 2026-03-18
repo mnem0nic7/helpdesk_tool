@@ -20,9 +20,15 @@ from ai_client import (
     get_available_copilot_models,
     get_default_copilot_model_id,
 )
-from auth import require_admin
+from auth import is_admin_user, require_admin, require_authenticated_user
 from azure_cache import azure_cache
-from models import AzureCostChatRequest, AzureVirtualMachineDetailResponse
+from azure_vm_export_jobs import azure_vm_export_jobs
+from models import (
+    AzureCostChatRequest,
+    AzureVirtualMachineCostExportJobCreateRequest,
+    AzureVirtualMachineCostExportJobResponse,
+    AzureVirtualMachineDetailResponse,
+)
 from site_context import get_current_site_scope
 
 router = APIRouter(prefix="/api/azure")
@@ -110,6 +116,24 @@ def _build_vm_coverage_file_response(path: str, filename: str, media_type: str) 
         media_type=media_type,
         background=BackgroundTask(_delete_file, path),
     )
+
+
+def _get_export_job_or_404(job_id: str) -> dict[str, Any]:
+    job = azure_vm_export_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Azure VM cost export job was not found")
+    return job
+
+
+def _ensure_export_job_access(job_id: str, session: dict[str, Any]) -> dict[str, Any]:
+    job = _get_export_job_or_404(job_id)
+    if not azure_vm_export_jobs.job_belongs_to(
+        job_id,
+        str(session.get("email") or ""),
+        is_admin=is_admin_user(str(session.get("email") or "")),
+    ):
+        raise HTTPException(status_code=403, detail="You do not have access to this Azure VM export job")
+    return job
 
 
 @router.get("/status")
@@ -231,6 +255,56 @@ async def get_virtual_machine_detail(resource_id: str = Query(default="")) -> Az
     if not detail:
         raise HTTPException(status_code=404, detail="Virtual machine was not found in the Azure cache")
     return AzureVirtualMachineDetailResponse.model_validate(detail)
+
+
+@router.post("/vms/cost-export-jobs", status_code=202)
+async def create_virtual_machine_cost_export_job(
+    body: AzureVirtualMachineCostExportJobCreateRequest,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> AzureVirtualMachineCostExportJobResponse:
+    _ensure_azure_site()
+    try:
+        job = azure_vm_export_jobs.create_job(
+            recipient_email=str(session.get("email") or ""),
+            requester_name=str(session.get("name") or ""),
+            scope=body.scope,
+            lookback_days=int(body.lookback_days),
+            filters=body.filters.model_dump(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AzureVirtualMachineCostExportJobResponse.model_validate(job)
+
+
+@router.get("/vms/cost-export-jobs/{job_id}")
+async def get_virtual_machine_cost_export_job(
+    job_id: str,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> AzureVirtualMachineCostExportJobResponse:
+    _ensure_azure_site()
+    job = _ensure_export_job_access(job_id, session)
+    return AzureVirtualMachineCostExportJobResponse.model_validate(job)
+
+
+@router.get("/vms/cost-export-jobs/{job_id}/download")
+async def download_virtual_machine_cost_export_job(
+    job_id: str,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> FileResponse:
+    _ensure_azure_site()
+    job = _ensure_export_job_access(job_id, session)
+    if str(job.get("status") or "") != "completed":
+        raise HTTPException(status_code=409, detail="Azure VM export is not ready yet")
+
+    file_path = str(job.get("file_path") or "")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=410, detail="Azure VM export file is no longer available")
+
+    return FileResponse(
+        file_path,
+        filename=str(job.get("file_name") or os.path.basename(file_path)),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @router.get("/vms/coverage/export.csv")

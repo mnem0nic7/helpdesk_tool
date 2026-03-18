@@ -32,6 +32,7 @@ from routes_kb import router as kb_router
 from routes_azure import router as azure_router
 from issue_cache import cache
 from azure_cache import azure_cache
+from azure_vm_export_jobs import azure_vm_export_jobs
 from knowledge_base import kb_store
 from site_context import (
     get_current_site_scope,
@@ -47,7 +48,9 @@ async def lifespan(app: FastAPI):
     kb_store.ensure_seed_articles()
     await cache.start_background_refresh()
     await azure_cache.start_background_refresh()
+    await azure_vm_export_jobs.start_worker()
     yield
+    await azure_vm_export_jobs.stop_worker()
     await azure_cache.stop_background_refresh()
     await cache.stop_background_refresh()
 

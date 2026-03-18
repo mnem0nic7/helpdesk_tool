@@ -518,6 +518,45 @@ class AzureVirtualMachineDetailResponse(BaseModel):
     cost: AzureVirtualMachineCostDetails
 
 
+class AzureVirtualMachineExportFilters(BaseModel):
+    """Saved VM filter set for export jobs."""
+
+    search: str = ""
+    subscription_id: str = ""
+    resource_group: str = ""
+    location: str = ""
+    state: str = ""
+    size: str = ""
+
+
+class AzureVirtualMachineCostExportJobCreateRequest(BaseModel):
+    """Request body for starting a background VM cost export."""
+
+    scope: Literal["all", "filtered"] = "all"
+    lookback_days: Literal[7, 30, 90] = 30
+    filters: AzureVirtualMachineExportFilters = Field(default_factory=AzureVirtualMachineExportFilters)
+
+
+class AzureVirtualMachineCostExportJobResponse(BaseModel):
+    """Status payload for one VM cost export background job."""
+
+    job_id: str
+    status: Literal["queued", "running", "completed", "failed"]
+    recipient_email: str
+    scope: Literal["all", "filtered"]
+    lookback_days: Literal[7, 30, 90]
+    filters: AzureVirtualMachineExportFilters = Field(default_factory=AzureVirtualMachineExportFilters)
+    requested_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    progress_current: int = 0
+    progress_total: int = 0
+    progress_message: str = ""
+    file_name: Optional[str] = None
+    file_ready: bool = False
+    error: Optional[str] = None
+
+
 class AzureDirectoryObject(BaseModel):
     """Normalized Entra directory object row."""
 

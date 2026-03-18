@@ -7,6 +7,10 @@ const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     getAzureVMs: vi.fn(),
     getAzureVMDetail: vi.fn(),
+    getMe: vi.fn(),
+    createAzureVMCostExportJob: vi.fn(),
+    getAzureVMCostExportJob: vi.fn(),
+    downloadAzureVMCostExportJob: vi.fn((jobId: string) => `/api/azure/vms/cost-export-jobs/${jobId}/download`),
     exportAzureVMCoverageExcel: vi.fn(() => "/api/azure/vms/coverage/export.xlsx"),
     exportAzureVMExcessExcel: vi.fn(() => "/api/azure/vms/excess/export.xlsx"),
   },
@@ -54,6 +58,11 @@ describe("AzureVMsPage", () => {
       writable: true,
       value: 1400,
     });
+    mockApi.getMe.mockResolvedValue({
+      email: "user@example.com",
+      name: "Example User",
+      is_admin: true,
+    });
 
     mockApi.getAzureVMs.mockResolvedValue({
       vms: [vmRow],
@@ -93,6 +102,40 @@ describe("AzureVMsPage", () => {
         priced_resource_count: 1,
       },
     });
+    mockApi.createAzureVMCostExportJob.mockResolvedValue({
+      job_id: "job-123",
+      status: "queued",
+      recipient_email: "user@example.com",
+      scope: "filtered",
+      lookback_days: 7,
+      filters: { search: "wvd", subscription_id: "sub-1", location: "", state: "Running", size: "" },
+      requested_at: "2026-03-18T00:00:00Z",
+      started_at: null,
+      completed_at: null,
+      progress_current: 0,
+      progress_total: 0,
+      progress_message: "Queued",
+      file_name: null,
+      file_ready: false,
+      error: null,
+    });
+    mockApi.getAzureVMCostExportJob.mockResolvedValue({
+      job_id: "job-123",
+      status: "completed",
+      recipient_email: "user@example.com",
+      scope: "filtered",
+      lookback_days: 7,
+      filters: { search: "wvd", subscription_id: "sub-1", location: "", state: "Running", size: "" },
+      requested_at: "2026-03-18T00:00:00Z",
+      started_at: "2026-03-18T00:01:00Z",
+      completed_at: "2026-03-18T00:02:00Z",
+      progress_current: 2,
+      progress_total: 2,
+      progress_message: "Export ready",
+      file_name: "azure_vm_costs.xlsx",
+      file_ready: true,
+      error: null,
+    });
   });
 
   it("lets the VM detail drawer resize, expand, and restore", async () => {
@@ -123,6 +166,37 @@ describe("AzureVMsPage", () => {
 
     await waitFor(() => {
       expect(drawer).toHaveStyle({ width: "960px" });
+    });
+  });
+
+  it("starts a filtered VM cost export job with the selected range", async () => {
+    render(<AzureVMsPage />);
+
+    await screen.findByText("vm-1");
+    fireEvent.change(screen.getByPlaceholderText("Search VM name, size, tag..."), {
+      target: { value: "wvd" },
+    });
+    await screen.findByText("vm-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Export VM Costs" }));
+    await screen.findByText(/Build a live Azure workbook/i);
+
+    fireEvent.click(screen.getAllByRole("radio")[1]);
+    fireEvent.click(screen.getByRole("button", { name: "Last 7 days" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start export" }));
+
+    await waitFor(() => {
+      expect(mockApi.createAzureVMCostExportJob).toHaveBeenCalledWith({
+        scope: "filtered",
+        lookback_days: 7,
+        filters: {
+          search: "wvd",
+          subscription_id: "",
+          location: "",
+          state: "",
+          size: "",
+        },
+      });
     });
   });
 });

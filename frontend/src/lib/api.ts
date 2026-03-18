@@ -728,6 +728,33 @@ export interface AzureVirtualMachineDetailResponse {
   cost: AzureVirtualMachineCostDetails;
 }
 
+export type AzureVirtualMachineCostExportScope = "all" | "filtered";
+export type AzureVirtualMachineCostExportLookbackDays = 7 | 30 | 90;
+
+export interface AzureVirtualMachineCostExportJobRequest {
+  scope: AzureVirtualMachineCostExportScope;
+  lookback_days: AzureVirtualMachineCostExportLookbackDays;
+  filters?: AzureVirtualMachineQueryParams;
+}
+
+export interface AzureVirtualMachineCostExportJobStatus {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  recipient_email: string;
+  scope: AzureVirtualMachineCostExportScope;
+  lookback_days: AzureVirtualMachineCostExportLookbackDays;
+  filters: AzureVirtualMachineQueryParams;
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  progress_current: number;
+  progress_total: number;
+  progress_message: string;
+  file_name: string | null;
+  file_ready: boolean;
+  error: string | null;
+}
+
 export interface AzureDirectoryObject {
   id: string;
   display_name: string;
@@ -1148,6 +1175,20 @@ export const api = {
 
   getAzureVMDetail(resource_id: string): Promise<AzureVirtualMachineDetailResponse> {
     return fetchJSON<AzureVirtualMachineDetailResponse>(`/api/azure/vms/detail${buildQuery({ resource_id })}`);
+  },
+
+  createAzureVMCostExportJob(
+    body: AzureVirtualMachineCostExportJobRequest,
+  ): Promise<AzureVirtualMachineCostExportJobStatus> {
+    return postJSON<AzureVirtualMachineCostExportJobStatus>("/api/azure/vms/cost-export-jobs", body);
+  },
+
+  getAzureVMCostExportJob(job_id: string): Promise<AzureVirtualMachineCostExportJobStatus> {
+    return fetchJSON<AzureVirtualMachineCostExportJobStatus>(`/api/azure/vms/cost-export-jobs/${encodeURIComponent(job_id)}`);
+  },
+
+  downloadAzureVMCostExportJob(job_id: string): string {
+    return `/api/azure/vms/cost-export-jobs/${encodeURIComponent(job_id)}/download`;
   },
 
   exportAzureVMCoverageCsv(): string {

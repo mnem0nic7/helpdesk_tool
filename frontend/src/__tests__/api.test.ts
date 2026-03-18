@@ -204,4 +204,64 @@ describe("azure api methods", () => {
     expect(url).toContain("/api/azure/vms/detail");
     expect(url).toContain("resource_id=%2Fsubscriptions%2Fsub-1%2FresourceGroups%2Frg-prod%2Fproviders%2FMicrosoft.Compute%2FvirtualMachines%2Fvm-1");
   });
+
+  it("starts an Azure VM cost export job", async () => {
+    mockFetch({
+      job_id: "job-123",
+      status: "queued",
+      recipient_email: "user@example.com",
+      scope: "filtered",
+      lookback_days: 30,
+      filters: { search: "wvd", subscription_id: "sub-1" },
+      requested_at: "2026-03-18T00:00:00Z",
+      started_at: null,
+      completed_at: null,
+      progress_current: 0,
+      progress_total: 0,
+      progress_message: "Queued",
+      file_name: null,
+      file_ready: false,
+      error: null,
+    });
+    await api.createAzureVMCostExportJob({
+      scope: "filtered",
+      lookback_days: 30,
+      filters: { search: "wvd", subscription_id: "sub-1" },
+    });
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/azure/vms/cost-export-jobs");
+    expect(call[1].method).toBe("POST");
+    expect(JSON.parse(call[1].body)).toEqual({
+      scope: "filtered",
+      lookback_days: 30,
+      filters: { search: "wvd", subscription_id: "sub-1" },
+    });
+  });
+
+  it("fetches Azure VM cost export job status", async () => {
+    mockFetch({
+      job_id: "job-123",
+      status: "running",
+      recipient_email: "user@example.com",
+      scope: "all",
+      lookback_days: 90,
+      filters: {},
+      requested_at: "2026-03-18T00:00:00Z",
+      started_at: "2026-03-18T00:01:00Z",
+      completed_at: null,
+      progress_current: 2,
+      progress_total: 5,
+      progress_message: "Querying Azure",
+      file_name: null,
+      file_ready: false,
+      error: null,
+    });
+    await api.getAzureVMCostExportJob("job-123");
+    const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(url).toBe("/api/azure/vms/cost-export-jobs/job-123");
+  });
+
+  it("returns the Azure VM cost export download URL", () => {
+    expect(api.downloadAzureVMCostExportJob("job-123")).toBe("/api/azure/vms/cost-export-jobs/job-123/download");
+  });
 });
