@@ -1843,16 +1843,173 @@ class AzureCache:
             },
         }
 
+    def _grounding_vm_power_state_summary(self) -> dict[str, Any]:
+        """Count VMs by normalized power state for copilot grounding."""
+        resources = self._snapshot("resources") or []
+        counts: dict[str, int] = {}
+        for item in resources:
+            if str(item.get("resource_type") or "").lower() != "microsoft.compute/virtualmachines":
+                continue
+            raw = str(item.get("state") or "Unknown")
+            # Normalize "PowerState/running" → "running"
+            state = raw.split("/", 1)[-1].lower() if "/" in raw else raw.lower()
+            counts[state] = counts.get(state, 0) + 1
+        total = sum(counts.values())
+        return {
+            "total": total,
+            "by_state": dict(sorted(counts.items(), key=lambda kv: -kv[1])),
+        }
+
+    def _grounding_cost_trend_summary(self) -> dict[str, Any]:
+        """Derive week-over-week trend signal from the 14-day cost trend."""
+        trend = self.get_cost_trend() or []
+        last_14 = trend[-14:]
+        last_7 = last_14[-7:]
+        prev_7 = last_14[:7]
+        last_7_cost = round(sum(float(d.get("cost") or 0) for d in last_7), 2)
+        prev_7_cost = round(sum(float(d.get("cost") or 0) for d in prev_7), 2)
+        wow_change_pct: float | None = (
+            round((last_7_cost - prev_7_cost) / prev_7_cost * 100, 1)
+            if prev_7_cost
+            else None
+        )
+        daily_avg_last_7: float | None = round(last_7_cost / len(last_7), 2) if last_7 else None
+        return {
+            "last_7_days_cost": last_7_cost,
+            "prev_7_days_cost": prev_7_cost,
+            "wow_change_pct": wow_change_pct,
+            "daily_avg_last_7": daily_avg_last_7,
+            "period_start": last_7[0]["date"] if last_7 else None,
+            "period_end": last_7[-1]["date"] if last_7 else None,
+        }
+
+    def _grounding_data_freshness(self) -> dict[str, str | None]:
+        """Return per-dataset last-refresh timestamps for the copilot to cite."""
+        s = self.status()
+        return {
+            d["key"]: d.get("last_refresh")
+            for d in s.get("datasets", [])
+            if d.get("key")
+        }
+
+    def _grounding_top_resources_by_cost(self) -> list[dict[str, Any]]:
+        """Return the top 10 most expensive individual resources if cost-by-resource is available."""
+        status = self._get_resource_cost_status()
+        if not status["available"]:
+            return []
+        rows = self._snapshot("cost_by_resource_id") or []
+        top = sorted(rows, key=lambda r: -(float(r.get("amount") or 0)), reverse=False)[:10]
+        # Enrich with resource metadata where available
+        resources = self._snapshot("resources") or []
+        meta_by_id = {
+            self._normalize_resource_id(item.get("id")): item
+            for item in resources
+            if item.get("id")
+        }
+        result = []
+        for row in top:
+            normalized = self._normalize_resource_id(row.get("label"))
+            meta = meta_by_id.get(normalized or "", {})
+            result.append({
+                "resource_id": row.get("label", ""),
+                "name": meta.get("name") or normalized or row.get("label", ""),
+                "resource_type": meta.get("resource_type", ""),
+                "resource_group": meta.get("resource_group", ""),
+                "subscription_name": meta.get("subscription_name", ""),
+                "cost": round(float(row.get("amount") or 0), 2),
+                "currency": row.get("currency", "USD"),
+            })
+        return result
+
+    def get_storage_summary(self) -> dict[str, Any]:
+        """Return storage inventory grouped by type with per-resource cost annotations."""
+        resources = self._snapshot("resources") or []
+        cost_status = self._get_resource_cost_status()
+        cost_index = self._resource_cost_index() if cost_status["available"] else {}
+
+        storage_accounts: list[dict[str, Any]] = []
+        managed_disks: list[dict[str, Any]] = []
+        snapshots: list[dict[str, Any]] = []
+
+        for item in resources:
+            rt = str(item.get("resource_type") or "").lower()
+            if rt == "microsoft.storage/storageaccounts":
+                storage_accounts.append(item)
+            elif rt == "microsoft.compute/disks":
+                managed_disks.append(item)
+            elif rt == "microsoft.compute/snapshots":
+                snapshots.append(item)
+
+        def annotate_cost(item: dict[str, Any]) -> dict[str, Any]:
+            norm_id = self._normalize_resource_id(item.get("id"))
+            row = cost_index.get(norm_id) or {}
+            result = dict(item)
+            result["cost"] = round(float(row["amount"]), 2) if row else None
+            result["currency"] = row.get("currency", "USD") if row else "USD"
+            return result
+
+        annotated_accounts = [annotate_cost(r) for r in storage_accounts]
+        annotated_disks = [annotate_cost(r) for r in managed_disks]
+        annotated_snapshots = [annotate_cost(r) for r in snapshots]
+
+        total_storage_cost: float | None = None
+        if cost_status["available"]:
+            total_storage_cost = round(
+                sum((r["cost"] or 0) for r in annotated_accounts + annotated_disks + annotated_snapshots if r.get("cost") is not None),
+                2,
+            )
+
+        unattached_disks = sum(1 for d in managed_disks if not str(d.get("managed_by") or "").strip())
+
+        disk_sku_counts: dict[str, int] = defaultdict(int)
+        for disk in managed_disks:
+            disk_sku_counts[str(disk.get("sku_name") or "Unknown")] += 1
+
+        kind_counts: dict[str, int] = defaultdict(int)
+        tier_counts: dict[str, int] = defaultdict(int)
+        for acct in storage_accounts:
+            kind_counts[str(acct.get("kind") or "Unknown")] += 1
+            tier_counts[str(acct.get("sku_name") or "Unknown")] += 1
+
+        by_service = self._snapshot("cost_by_service") or []
+        storage_services_cost = [
+            item for item in by_service
+            if any(kw in str(item.get("label") or "").lower() for kw in ["storage", "disk", "backup", "bandwidth"])
+        ]
+
+        return {
+            "storage_accounts": annotated_accounts,
+            "managed_disks": annotated_disks,
+            "snapshots": annotated_snapshots,
+            "summary": {
+                "total_storage_accounts": len(storage_accounts),
+                "total_managed_disks": len(managed_disks),
+                "total_snapshots": len(snapshots),
+                "unattached_disks": unattached_disks,
+                "total_storage_cost": total_storage_cost,
+            },
+            "disk_by_sku": dict(sorted(disk_sku_counts.items(), key=lambda kv: -kv[1])),
+            "accounts_by_kind": dict(sorted(kind_counts.items(), key=lambda kv: -kv[1])),
+            "accounts_by_tier": dict(sorted(tier_counts.items(), key=lambda kv: -kv[1])),
+            "storage_services_cost": storage_services_cost,
+            "cost_available": cost_status["available"],
+            "cost_basis": cost_status.get("cost_basis"),
+        }
+
     def get_grounding_context(self) -> dict[str, Any]:
         return {
             "overview": self.get_overview(),
             "cost_summary": self.get_cost_summary(),
             "cost_trend": (self.get_cost_trend() or [])[-14:],
+            "cost_trend_summary": self._grounding_cost_trend_summary(),
             "cost_by_service": (self.get_cost_breakdown("service") or [])[:8],
             "cost_by_subscription": (self.get_cost_breakdown("subscription") or [])[:8],
             "cost_by_resource_group": (self.get_cost_breakdown("resource_group") or [])[:8],
             "vm_inventory_summary": self.get_vm_inventory_summary(),
+            "vm_power_state_summary": self._grounding_vm_power_state_summary(),
             "advisor": (self.get_advisor() or [])[:10],
+            "top_resources_by_cost": self._grounding_top_resources_by_cost(),
+            "data_freshness": self._grounding_data_freshness(),
         }
 
 
