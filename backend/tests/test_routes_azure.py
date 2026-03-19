@@ -47,6 +47,62 @@ def test_azure_overview_is_not_available_on_helpdesk_host(test_client):
     assert resp.status_code == 404
 
 
+def test_directory_users_returns_cached_payload_on_azure_host(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.list_directory_objects.return_value = [
+        {
+            "id": "user-1",
+            "display_name": "Ada Lovelace",
+            "object_type": "user",
+            "principal_name": "ada@example.com",
+            "mail": "ada@example.com",
+            "app_id": "",
+            "enabled": True,
+            "extra": {"user_type": "Member"},
+        }
+    ]
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get("/api/azure/directory/users", headers={"host": "azure.movedocs.com"})
+
+    assert resp.status_code == 200
+    assert resp.json()[0]["display_name"] == "Ada Lovelace"
+    mock_cache.list_directory_objects.assert_called_once_with("users", search="")
+
+
+def test_directory_users_returns_cached_payload_on_primary_host(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.list_directory_objects.return_value = [
+        {
+            "id": "user-2",
+            "display_name": "Grace Hopper",
+            "object_type": "user",
+            "principal_name": "grace@example.com",
+            "mail": "grace@example.com",
+            "app_id": "",
+            "enabled": False,
+            "extra": {"user_type": "Guest"},
+        }
+    ]
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get("/api/azure/directory/users", headers={"host": "it-app.movedocs.com"})
+
+    assert resp.status_code == 200
+    assert resp.json()[0]["display_name"] == "Grace Hopper"
+    mock_cache.list_directory_objects.assert_called_once_with("users", search="")
+
+
+def test_directory_users_is_not_available_on_oasisdev_host(test_client):
+    resp = test_client.get("/api/azure/directory/users", headers={"host": "oasisdev.movedocs.com"})
+
+    assert resp.status_code == 404
+
+
 def test_azure_refresh_requires_admin(test_client, monkeypatch):
     import auth
 

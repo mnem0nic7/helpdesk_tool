@@ -43,6 +43,14 @@ def _ensure_azure_site() -> None:
         raise HTTPException(status_code=404, detail="Azure portal APIs are only available on azure.movedocs.com")
 
 
+def _ensure_azure_or_primary_site() -> None:
+    if get_current_site_scope() not in {"azure", "primary"}:
+        raise HTTPException(
+            status_code=404,
+            detail="Azure directory user APIs are only available on azure.movedocs.com and it-app.movedocs.com",
+        )
+
+
 def _safe_export_text(value: Any) -> str:
     text = str(value or "")
     if text and text[0] in ("=", "+", "-", "@"):
@@ -431,7 +439,7 @@ async def export_virtual_machine_excess_excel() -> FileResponse:
 
 @router.get("/directory/users")
 async def get_users(search: str = Query(default="")) -> list[dict[str, Any]]:
-    _ensure_azure_site()
+    _ensure_azure_or_primary_site()
     return azure_cache.list_directory_objects("users", search=search)
 
 
