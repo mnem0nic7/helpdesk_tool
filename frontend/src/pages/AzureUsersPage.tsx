@@ -298,7 +298,7 @@ export default function AzureUsersPage() {
       if (key === "department") return u.extra.department;
       if (key === "job_title") return u.extra.job_title;
       if (key === "created_datetime") return u.extra.created_datetime;
-      return (u as Record<string, unknown>)[key] as string;
+      return (u as unknown as Record<string, unknown>)[key] as string;
     },
   );
   const filterKey = [search, statusFilter, typeFilter, sortKey, sortDir].join("|");

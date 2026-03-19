@@ -132,7 +132,7 @@ function IdleVMsSection({ vms, costAvailable }: { vms: AzureVirtualMachineRow[];
   const sorted = sortRows(filtered, sortKey, sortDir, (v, key) => {
     if (key === "subscription") return v.subscription_name || v.subscription_id;
     if (key === "cost") return v.cost;
-    return (v as Record<string, unknown>)[key] as string;
+    return (v as unknown as Record<string, unknown>)[key] as string;
   });
   const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 100, `${search}|${sortKey}|${sortDir}`);
   const visible = sorted.slice(0, visibleCount);
@@ -204,7 +204,7 @@ function TopCostVMsSection({ vms }: { vms: AzureVirtualMachineRow[] }) {
   const sorted = sortRows(vms, sortKey, sortDir, (v, key) => {
     if (key === "subscription") return v.subscription_name || v.subscription_id;
     if (key === "cost") return v.cost;
-    return (v as Record<string, unknown>)[key] as string;
+    return (v as unknown as Record<string, unknown>)[key] as string;
   });
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

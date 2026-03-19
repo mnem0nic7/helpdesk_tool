@@ -54,7 +54,7 @@ function AccountsTable({ accounts, costAvailable }: { accounts: AzureStorageAcco
   const sorted = sortRows(filtered, sortKey, sortDir, (a, key) => {
     if (key === "subscription") return a.subscription_name || a.subscription_id;
     if (key === "cost") return a.cost;
-    return (a as Record<string, unknown>)[key] as string;
+    return (a as unknown as Record<string, unknown>)[key] as string;
   });
   const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 100, `${search}|${sortKey}|${sortDir}`);
   const visible = sorted.slice(0, visibleCount);
@@ -132,7 +132,7 @@ function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costA
   const sorted = sortRows(filtered, sortKey, sortDir, (d, key) => {
     if (key === "subscription") return d.subscription_name || d.subscription_id;
     if (key === "cost") return d.cost;
-    return (d as Record<string, unknown>)[key] as string | number;
+    return (d as unknown as Record<string, unknown>)[key] as string | number;
   });
   const filterKey = [search, String(showUnattached), sortKey, sortDir].join("|");
   const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 100, filterKey);
@@ -243,7 +243,7 @@ function SnapshotsTable({ snapshots, costAvailable }: { snapshots: AzureManagedD
   const sorted = sortRows(filtered, sortKey, sortDir, (s, key) => {
     if (key === "subscription") return s.subscription_name || s.subscription_id;
     if (key === "cost") return s.cost;
-    return (s as Record<string, unknown>)[key] as string | number;
+    return (s as unknown as Record<string, unknown>)[key] as string | number;
   });
   const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 100, `${search}|${sortKey}|${sortDir}`);
   const visible = sorted.slice(0, visibleCount);

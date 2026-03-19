@@ -521,7 +521,7 @@ export default function AzureVMsPage() {
   const sortedVMs = sortRows(vmRows, vmSortKey, vmSortDir, (item, key) => {
     if (key === "subscription") return item.subscription_name || item.subscription_id;
     if (key === "cost") return item.cost;
-    return (item as Record<string, unknown>)[key] as string;
+    return (item as unknown as Record<string, unknown>)[key] as string;
   });
   const filterKey = [search, subscriptionId, size, location, state, vmSortKey, vmSortDir].join("|");
   const coverageScroll = useInfiniteScrollCount(coverageRows.length, 20, filterKey);

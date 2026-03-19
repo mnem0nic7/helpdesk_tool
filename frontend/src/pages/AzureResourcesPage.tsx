@@ -49,7 +49,7 @@ export default function AzureResourcesPage() {
   const sorted = sortRows(filtered, sortKey, sortDir, (item, key) => {
     if (key === "subscription") return item.subscription_name || item.subscription_id;
     if (key === "sku") return item.vm_size || item.sku_name;
-    return (item as Record<string, unknown>)[key] as string;
+    return (item as unknown as Record<string, unknown>)[key] as string;
   });
   const filterKey = [search, subscriptionId, resourceType, location, state, sortKey, sortDir].join("|");
   const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 20, filterKey);
