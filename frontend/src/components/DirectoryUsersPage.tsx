@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type AzureDirectoryObject,
+  type UserDirectoryReportFilter,
   type UserAdminActionType,
   type UserAdminAuditEntry,
   type UserAdminCapabilities,
@@ -11,8 +12,12 @@ import {
   type UserAdminJobResult,
   type UserAdminJobStatus,
   type UserAdminLicense,
+  type UserAdminMailbox,
   type UserAdminRole,
   type UserAdminUserDetail,
+  type UserExitPreflight,
+  type UserExitWorkflow,
+  type UserExitWorkflowStep,
 } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
@@ -24,12 +29,14 @@ type UserColKey =
   | "department"
   | "job_title"
   | "created_datetime"
-  | "on_prem_domain";
+  | "on_prem_domain"
+  | "is_licensed"
+  | "last_successful_utc";
 
 type DirectoryUsersPageMode = "primary" | "azure";
 type StatusFilter = "all" | "enabled" | "disabled";
 type TypeFilter = "all" | "member" | "guest";
-type UserDrawerTab = "overview" | "access" | "groups" | "licenses" | "roles" | "mailbox" | "devices" | "activity";
+type UserDrawerTab = "overview" | "access" | "groups" | "licenses" | "roles" | "mailbox" | "devices" | "activity" | "exit";
 
 interface PendingAction {
   actionType: UserAdminActionType;
@@ -73,6 +80,10 @@ const ACTION_LABELS: Record<UserAdminActionType, string> = {
   device_wipe: "Wipe Device",
   device_remote_lock: "Remote Lock Device",
   device_reassign_primary_user: "Reassign Primary User",
+  exit_group_cleanup: "Remove Direct Cloud Group Memberships",
+  exit_on_prem_deprovision: "On-Prem AD Deprovision",
+  exit_remove_all_licenses: "Remove Direct M365 Licenses",
+  exit_manual_task_complete: "Exit Manual Task Complete",
 };
 
 const DANGEROUS_ACTIONS = new Set<UserAdminActionType>([
@@ -115,6 +126,7 @@ const DRAWER_TABS: Array<{ id: UserDrawerTab; label: string }> = [
   { id: "mailbox", label: "Mailbox" },
   { id: "devices", label: "Devices" },
   { id: "activity", label: "Activity" },
+  { id: "exit", label: "Exit" },
 ];
 
 function getDirectoryLabel(user: AzureDirectoryObject): string {
@@ -133,6 +145,32 @@ function clampDrawerWidth(width: number): number {
 function getExpandedDrawerWidth(): number {
   if (typeof window === "undefined") return DEFAULT_DRAWER_WIDTH;
   return clampDrawerWidth(window.innerWidth - DRAWER_VIEWPORT_MARGIN);
+}
+
+function isLicensedUser(user: AzureDirectoryObject): boolean {
+  return String(user.extra.is_licensed || "").toLowerCase() === "true";
+}
+
+function licenseCount(user: AzureDirectoryObject): number {
+  const raw = Number(user.extra.license_count || "0");
+  return Number.isFinite(raw) ? raw : 0;
+}
+
+function lastSuccessfulIso(user: AzureDirectoryObject): string {
+  return user.extra.last_successful_utc || "";
+}
+
+function hasNoSuccessfulSignIn30d(user: AzureDirectoryObject): boolean {
+  if (user.enabled !== true) return false;
+  const iso = lastSuccessfulIso(user);
+  if (!iso) return true;
+  const time = new Date(iso).getTime();
+  if (Number.isNaN(time)) return true;
+  return Date.now() - time >= 30 * 24 * 60 * 60 * 1000;
+}
+
+function lastSuccessfulText(user: AzureDirectoryObject): string {
+  return user.extra.last_successful_local || formatDateTime(user.extra.last_successful_utc);
 }
 
 function formatDate(iso: string): string {
@@ -185,11 +223,24 @@ function createLiveDetailFallback(user: AzureDirectoryObject): UserAdminUserDeta
     on_prem_sync: user.extra.on_prem_sync === "true",
     on_prem_domain: user.extra.on_prem_domain || "",
     on_prem_netbios: user.extra.on_prem_netbios || "",
+    on_prem_sam_account_name: user.extra.on_prem_sam_account_name || "",
+    on_prem_distinguished_name: user.extra.on_prem_distinguished_name || "",
     usage_location: "",
     employee_id: "",
     employee_type: "",
     preferred_language: "",
     proxy_addresses: user.extra.proxy_addresses ? user.extra.proxy_addresses.split(",").map((item) => item.trim()).filter(Boolean) : [],
+    is_licensed: isLicensedUser(user),
+    license_count: licenseCount(user),
+    sku_part_numbers: user.extra.sku_part_numbers
+      ? user.extra.sku_part_numbers.split(",").map((item) => item.trim()).filter(Boolean)
+      : [],
+    last_interactive_utc: user.extra.last_interactive_utc || "",
+    last_interactive_local: user.extra.last_interactive_local || "",
+    last_noninteractive_utc: user.extra.last_noninteractive_utc || "",
+    last_noninteractive_local: user.extra.last_noninteractive_local || "",
+    last_successful_utc: user.extra.last_successful_utc || "",
+    last_successful_local: user.extra.last_successful_local || "",
     manager: null,
     source_directory: getDirectoryLabel(user),
   };
@@ -532,6 +583,268 @@ function AzureUserDrawerContent({ user }: { user: AzureDirectoryObject }) {
   );
 }
 
+function ExitStepStatusChip({ status }: { status: UserExitWorkflowStep["status"] | UserExitWorkflow["status"] }) {
+  const tone =
+    status === "completed"
+      ? "bg-emerald-100 text-emerald-700"
+      : status === "failed"
+        ? "bg-red-100 text-red-700"
+        : status === "running"
+          ? "bg-sky-100 text-sky-700"
+          : status === "awaiting_manual"
+            ? "bg-amber-100 text-amber-700"
+            : status === "skipped"
+              ? "bg-slate-100 text-slate-600"
+              : "bg-slate-100 text-slate-600";
+  return <span className={`rounded-full px-2 py-0.5 text-xs font-semibold uppercase tracking-wide ${tone}`}>{status}</span>;
+}
+
+function ExitWorkflowPanel({
+  user,
+}: {
+  user: AzureDirectoryObject;
+}) {
+  const queryClient = useQueryClient();
+  const [typedUpn, setTypedUpn] = useState("");
+  const [onPremOverride, setOnPremOverride] = useState("");
+  const [workflowId, setWorkflowId] = useState<string | null>(null);
+  const [manualNotes, setManualNotes] = useState<Record<string, string>>({});
+
+  const preflightQuery = useQuery<UserExitPreflight>({
+    queryKey: ["user-exit", "preflight", user.id],
+    queryFn: () => api.getUserExitPreflight(user.id),
+  });
+
+  const workflowQuery = useQuery<UserExitWorkflow>({
+    queryKey: ["user-exit", "workflow", workflowId],
+    queryFn: () => api.getUserExitWorkflow(workflowId as string),
+    enabled: !!workflowId,
+    refetchInterval: (query) => {
+      const workflow = query.state.data as UserExitWorkflow | undefined;
+      return workflow && ["completed", "failed"].includes(workflow.status) ? false : 3000;
+    },
+  });
+
+  useEffect(() => {
+    setTypedUpn("");
+    setOnPremOverride("");
+    setWorkflowId(null);
+    setManualNotes({});
+  }, [user.id]);
+
+  useEffect(() => {
+    if (preflightQuery.data?.active_workflow?.workflow_id) {
+      setWorkflowId((current) => current || preflightQuery.data?.active_workflow?.workflow_id || null);
+    }
+  }, [preflightQuery.data]);
+
+  const createWorkflowMutation = useMutation({
+    mutationFn: () =>
+      api.createUserExitWorkflow({
+        user_id: user.id,
+        typed_upn_confirmation: typedUpn,
+        on_prem_sam_account_name_override: onPremOverride.trim(),
+      }),
+    onSuccess: async (workflow) => {
+      setWorkflowId(workflow.workflow_id);
+      await queryClient.invalidateQueries({ queryKey: ["user-admin", "activity", user.id] });
+      await queryClient.invalidateQueries({ queryKey: ["user-admin", "audit"] });
+    },
+  });
+
+  const retryStepMutation = useMutation({
+    mutationFn: (stepId: string) => api.retryUserExitWorkflowStep(workflowId as string, stepId),
+    onSuccess: async (workflow) => {
+      setWorkflowId(workflow.workflow_id);
+      await queryClient.invalidateQueries({ queryKey: ["user-admin", "activity", user.id] });
+      await queryClient.invalidateQueries({ queryKey: ["user-admin", "audit"] });
+    },
+  });
+
+  const completeTaskMutation = useMutation({
+    mutationFn: (taskId: string) => api.completeUserExitManualTask(workflowId as string, taskId, manualNotes[taskId] || ""),
+    onSuccess: async (workflow) => {
+      setWorkflowId(workflow.workflow_id);
+      await queryClient.invalidateQueries({ queryKey: ["user-admin", "activity", user.id] });
+      await queryClient.invalidateQueries({ queryKey: ["user-admin", "audit"] });
+    },
+  });
+
+  const preflight = preflightQuery.data;
+  const workflow = workflowQuery.data;
+  const canStartWorkflow =
+    !!preflight &&
+    typedUpn.trim().toLowerCase() === preflight.user_principal_name.trim().toLowerCase() &&
+    (!preflight.requires_on_prem_username_override || onPremOverride.trim().length > 0) &&
+    !preflight.active_workflow &&
+    !workflowId;
+
+  return (
+    <div className="space-y-6">
+      <QueryState isLoading={preflightQuery.isLoading} isError={preflightQuery.isError} error={preflightQuery.error} />
+
+      {preflight ? (
+        <>
+          <SectionCard title="Preflight">
+            <DetailRow label="Scope" value={preflight.scope_summary} />
+            <DetailRow label="Directory Profile" value={preflight.profile_label || "Cloud-only"} />
+            <DetailRow label="On-Prem Username" value={preflight.on_prem_sam_account_name || onPremOverride} />
+            <DetailRow label="Mailbox" value={preflight.mailbox_expected ? "Mailbox detected" : "No mailbox detected"} />
+            <DetailRow label="Direct Licenses" value={`${preflight.direct_license_count}`} />
+            <DetailRow label="Managed Devices" value={`${preflight.managed_devices.length}`} />
+            {preflight.warnings.length > 0 ? (
+              <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                {preflight.warnings.map((warning) => (
+                  <div key={warning}>{warning}</div>
+                ))}
+              </div>
+            ) : null}
+            <div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Manual Follow-Up</div>
+              <SummaryList items={preflight.manual_tasks.map((task) => task.label)} />
+            </div>
+            <div className="space-y-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Automated Steps</div>
+              {(preflight.steps || []).map((step) => (
+                <div key={step.step_key} className="rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-medium text-slate-900">{step.label}</div>
+                    <ExitStepStatusChip status={step.will_run ? "queued" : "skipped"} />
+                  </div>
+                  {step.reason ? <div className="mt-1 text-sm text-slate-500">{step.reason}</div> : null}
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+
+          {preflight.active_workflow ? (
+            <SectionCard title="Active Workflow">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm text-slate-700">
+                  A workflow is already active for this user. The live timeline is shown below.
+                </div>
+                <ExitStepStatusChip status={preflight.active_workflow.status} />
+              </div>
+            </SectionCard>
+          ) : null}
+
+          {!workflowId ? (
+            <SectionCard title="Start Exit Workflow">
+              <div className="text-sm text-slate-600">
+                Type the exact UPN below to confirm the exit workflow for this user.
+              </div>
+              <input
+                value={typedUpn}
+                onChange={(event) => setTypedUpn(event.target.value)}
+                className={inputClass()}
+                placeholder={preflight.user_principal_name}
+              />
+              {preflight.requires_on_prem_username_override ? (
+                <input
+                  value={onPremOverride}
+                  onChange={(event) => setOnPremOverride(event.target.value)}
+                  className={inputClass()}
+                  placeholder="On-prem SAM account name"
+                />
+              ) : null}
+              <button
+                type="button"
+                className={buttonClass("danger", !canStartWorkflow || createWorkflowMutation.isPending)}
+                disabled={!canStartWorkflow || createWorkflowMutation.isPending}
+                onClick={() => void createWorkflowMutation.mutateAsync()}
+              >
+                {createWorkflowMutation.isPending ? "Starting..." : "Start Exit Workflow"}
+              </button>
+            </SectionCard>
+          ) : null}
+        </>
+      ) : null}
+
+      {workflowQuery.isError ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          Failed to load exit workflow: {workflowQuery.error instanceof Error ? workflowQuery.error.message : "Unknown error"}
+        </div>
+      ) : null}
+
+      {workflow ? (
+        <>
+          <SectionCard title="Workflow Timeline">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-slate-700">
+                Requested by {workflow.requested_by_name || workflow.requested_by_email}
+              </div>
+              <ExitStepStatusChip status={workflow.status} />
+            </div>
+            {workflow.error ? <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{workflow.error}</div> : null}
+            {workflow.steps.map((step) => (
+              <div key={step.step_id} className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="font-medium text-slate-900">{step.label}</div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      {step.summary || step.error || "Waiting to run."}
+                    </div>
+                    {step.error ? <div className="mt-1 text-sm text-red-700">{step.error}</div> : null}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <ExitStepStatusChip status={step.status} />
+                    {step.status === "failed" ? (
+                      <button
+                        type="button"
+                        className={buttonClass("secondary", retryStepMutation.isPending)}
+                        disabled={retryStepMutation.isPending}
+                        onClick={() => void retryStepMutation.mutateAsync(step.step_id)}
+                      >
+                        Retry
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </SectionCard>
+
+          <SectionCard title="Manual Checklist">
+            {workflow.manual_tasks.map((task) => (
+              <div key={task.task_id} className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="font-medium text-slate-900">{task.label}</div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      {task.completed_at ? `Completed ${formatDateTime(task.completed_at)}` : "Pending"}
+                    </div>
+                  </div>
+                  <ExitStepStatusChip status={task.status === "completed" ? "completed" : "queued"} />
+                </div>
+                {task.status !== "completed" ? (
+                  <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
+                    <input
+                      value={manualNotes[task.task_id] || ""}
+                      onChange={(event) => setManualNotes((current) => ({ ...current, [task.task_id]: event.target.value }))}
+                      className={inputClass()}
+                      placeholder="Optional note"
+                    />
+                    <button
+                      type="button"
+                      className={buttonClass("primary", completeTaskMutation.isPending)}
+                      disabled={completeTaskMutation.isPending}
+                      onClick={() => void completeTaskMutation.mutateAsync(task.task_id)}
+                    >
+                      Mark Complete
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-sm text-slate-600">{task.notes || "Completed."}</div>
+                )}
+              </div>
+            ))}
+          </SectionCard>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function PrimaryUserDrawerContent({
   user,
   capabilities,
@@ -558,31 +871,31 @@ function PrimaryUserDrawerContent({
   const [selectedRoleId, setSelectedRoleId] = useState("");
   const [devicePrimaryUserId, setDevicePrimaryUserId] = useState("");
 
-  const detailQuery = useQuery({
+  const detailQuery = useQuery<UserAdminUserDetail>({
     queryKey: ["user-admin", "detail", user.id],
     queryFn: () => api.getUserAdminUserDetail(user.id),
   });
-  const groupsQuery = useQuery({
+  const groupsQuery = useQuery<UserAdminGroupMembership[]>({
     queryKey: ["user-admin", "groups", user.id],
     queryFn: () => api.getUserAdminUserGroups(user.id),
   });
-  const licensesQuery = useQuery({
+  const licensesQuery = useQuery<UserAdminLicense[]>({
     queryKey: ["user-admin", "licenses", user.id],
     queryFn: () => api.getUserAdminUserLicenses(user.id),
   });
-  const rolesQuery = useQuery({
+  const rolesQuery = useQuery<UserAdminRole[]>({
     queryKey: ["user-admin", "roles", user.id],
     queryFn: () => api.getUserAdminUserRoles(user.id),
   });
-  const mailboxQuery = useQuery({
+  const mailboxQuery = useQuery<UserAdminMailbox>({
     queryKey: ["user-admin", "mailbox", user.id],
     queryFn: () => api.getUserAdminUserMailbox(user.id),
   });
-  const devicesQuery = useQuery({
+  const devicesQuery = useQuery<UserAdminDevice[]>({
     queryKey: ["user-admin", "devices", user.id],
     queryFn: () => api.getUserAdminUserDevices(user.id),
   });
-  const activityQuery = useQuery({
+  const activityQuery = useQuery<UserAdminAuditEntry[]>({
     queryKey: ["user-admin", "activity", user.id],
     queryFn: () => api.getUserAdminUserActivity(user.id),
   });
@@ -669,6 +982,17 @@ function PrimaryUserDrawerContent({
             <DetailRow label="Company" value={detail.company_name} />
             <DetailRow label="Office Location" value={detail.office_location} />
             <DetailRow label="Manager" value={detail.manager?.display_name || ""} />
+          </SectionCard>
+
+          <SectionCard title="Audit Reporting">
+            <DetailRow label="Licensed" value={detail.is_licensed ? "Yes" : "No"} />
+            <DetailRow label="License Count" value={`${detail.license_count}`} />
+            <DetailRow label="SKU Part Numbers" value={detail.sku_part_numbers.join(", ")} />
+            <DetailRow label="Last Interactive" value={detail.last_interactive_local || formatDateTime(detail.last_interactive_utc)} />
+            <DetailRow label="Last Noninteractive" value={detail.last_noninteractive_local || formatDateTime(detail.last_noninteractive_utc)} />
+            <DetailRow label="Last Successful" value={detail.last_successful_local || formatDateTime(detail.last_successful_utc)} />
+            <DetailRow label="On-Prem SAM" value={detail.on_prem_sam_account_name} />
+            <DetailRow label="On-Prem DN" value={detail.on_prem_distinguished_name} />
           </SectionCard>
 
           <SectionCard title="Profile Update">
@@ -1138,6 +1462,8 @@ function PrimaryUserDrawerContent({
           </SectionCard>
         </div>
       ) : null}
+
+      {selectedTab === "exit" ? <ExitWorkflowPanel user={user} /> : null}
     </div>
   );
 }
@@ -1299,6 +1625,7 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [reportFilter, setReportFilter] = useState<UserDirectoryReportFilter>("");
   const [directoryFilter, setDirectoryFilter] = useState("");
   const [selectedUser, setSelectedUser] = useState<AzureDirectoryObject | null>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
@@ -1320,20 +1647,20 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: capabilities } = useQuery({
+  const { data: capabilities } = useQuery<UserAdminCapabilities>({
     queryKey: ["user-admin", "capabilities"],
     queryFn: () => api.getUserAdminCapabilities(),
     enabled: mode === "primary",
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: users = [], isLoading, isError, error } = useQuery({
+  const { data: users = [], isLoading, isError, error } = useQuery<AzureDirectoryObject[]>({
     queryKey: ["directory", "users", mode, { search }],
     queryFn: () => api.getAzureUsers(search),
     refetchInterval: 60_000,
   });
 
-  const { data: auditEntries = [] } = useQuery({
+  const { data: auditEntries = [] } = useQuery<UserAdminAuditEntry[]>({
     queryKey: ["user-admin", "audit"],
     queryFn: () => api.getUserAdminAudit(25),
     enabled: mode === "primary",
@@ -1351,7 +1678,7 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
     },
   });
 
-  const activeJobQuery = useQuery({
+  const activeJobQuery = useQuery<UserAdminJobStatus>({
     queryKey: ["user-admin", "job", activeJobId],
     queryFn: () => api.getUserAdminJob(activeJobId as string),
     enabled: !!activeJobId,
@@ -1387,18 +1714,23 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
   const totalCount = users.length;
   const enabledCount = users.filter((user) => user.enabled === true).length;
   const disabledCount = users.filter((user) => user.enabled === false).length;
+  const licensedCount = users.filter(isLicensedUser).length;
+  const disabledLicensedCount = users.filter((user) => user.enabled === false && isLicensedUser(user)).length;
+  const noSuccess30dCount = users.filter(hasNoSuccessfulSignIn30d).length;
   const memberCount = users.filter((user) => user.extra.user_type !== "Guest").length;
   const guestCount = users.filter((user) => user.extra.user_type === "Guest").length;
   const onPremCount = users.filter((user) => user.extra.on_prem_sync === "true").length;
   const directoryOptions = Array.from(new Set(users.map(getDirectoryLabel))).sort();
 
-  const filtered = sortRows(
+  const filtered = sortRows<AzureDirectoryObject>(
     users.filter((user) => {
       if (statusFilter === "enabled" && user.enabled !== true) return false;
       if (statusFilter === "disabled" && user.enabled !== false) return false;
       if (typeFilter === "member" && user.extra.user_type === "Guest") return false;
       if (typeFilter === "guest" && user.extra.user_type !== "Guest") return false;
       if (directoryFilter && getDirectoryLabel(user) !== directoryFilter) return false;
+      if (reportFilter === "disabled_licensed" && !(user.enabled === false && isLicensedUser(user))) return false;
+      if (reportFilter === "active_no_success_30d" && !hasNoSuccessfulSignIn30d(user)) return false;
       return true;
     }),
     sortKey,
@@ -1408,11 +1740,23 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
       if (key === "job_title") return user.extra.job_title;
       if (key === "created_datetime") return user.extra.created_datetime;
       if (key === "on_prem_domain") return getDirectoryLabel(user);
+      if (key === "is_licensed") return isLicensedUser(user) ? 1 : 0;
+      if (key === "last_successful_utc") return lastSuccessfulIso(user);
       return (user as unknown as Record<string, unknown>)[key] as string;
     },
   );
 
-  const filterKey = [mode, search, statusFilter, typeFilter, directoryFilter, sortKey, sortDir].join("|");
+  const filteredExportParams = {
+    search,
+    status: statusFilter,
+    type: typeFilter,
+    directory: directoryFilter,
+    report_filter: reportFilter,
+    scope: "filtered" as const,
+  };
+  const allExportParams = { scope: "all" as const };
+
+  const filterKey = [mode, search, statusFilter, typeFilter, reportFilter, directoryFilter, sortKey, sortDir].join("|");
   const scroll = useInfiniteScrollCount(filtered.length, 50, filterKey);
   const visibleUsers = filtered.slice(0, scroll.visibleCount);
   const allVisibleSelected = visibleUsers.length > 0 && visibleUsers.every((user) => selectedUserIds.includes(user.id));
@@ -1513,10 +1857,13 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
 
       {mode === "primary" && activeJobId && activeJobQuery.data ? <JobProgressCard job={activeJobQuery.data} results={activeJobResults} /> : null}
 
-      <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+      <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-9">
         <StatCard label="Total" value={totalCount.toLocaleString()} />
         <StatCard label="Enabled" value={enabledCount.toLocaleString()} tone="text-emerald-700" />
         <StatCard label="Disabled" value={disabledCount.toLocaleString()} tone="text-red-700" />
+        <StatCard label="Licensed" value={licensedCount.toLocaleString()} tone="text-sky-700" />
+        <StatCard label="Disabled + Licensed" value={disabledLicensedCount.toLocaleString()} tone="text-amber-700" />
+        <StatCard label="No Success 30d" value={noSuccess30dCount.toLocaleString()} tone="text-rose-700" />
         <StatCard label="Members" value={memberCount.toLocaleString()} tone="text-sky-700" />
         <StatCard label="Guests" value={guestCount.toLocaleString()} tone="text-amber-700" />
         <StatCard label="On-Prem Synced" value={onPremCount.toLocaleString()} tone="text-violet-700" />
@@ -1564,6 +1911,45 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
             </>
           ) : null}
         </div>
+        {mode === "primary" ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="self-center text-xs font-semibold uppercase tracking-wide text-slate-400">Saved Filters</span>
+            <button type="button" onClick={() => setReportFilter("")} className={pillClass(reportFilter === "")}>
+              All Users
+            </button>
+            <button
+              type="button"
+              onClick={() => setReportFilter("disabled_licensed")}
+              className={pillClass(reportFilter === "disabled_licensed")}
+            >
+              Disabled + Licensed
+            </button>
+            <button
+              type="button"
+              onClick={() => setReportFilter("active_no_success_30d")}
+              className={pillClass(reportFilter === "active_no_success_30d")}
+            >
+              Active + No Successful Sign-In (30d)
+            </button>
+          </div>
+        ) : null}
+        {mode === "primary" && me?.can_manage_users ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="self-center text-xs font-semibold uppercase tracking-wide text-slate-400">Exports</span>
+            <a href={api.exportUserAdminUsersCsv(filteredExportParams)} className={buttonClass("secondary")}>
+              Export Filtered CSV
+            </a>
+            <a href={api.exportUserAdminUsersExcel(filteredExportParams)} className={buttonClass("secondary")}>
+              Export Filtered XLSX
+            </a>
+            <a href={api.exportUserAdminUsersCsv(allExportParams)} className={buttonClass("secondary")}>
+              Export All CSV
+            </a>
+            <a href={api.exportUserAdminUsersExcel(allExportParams)} className={buttonClass("secondary")}>
+              Export All XLSX
+            </a>
+          </div>
+        ) : null}
       </div>
 
       {mode === "primary" && me?.can_manage_users ? (
@@ -1661,6 +2047,8 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
                 <SortHeader col="mail" label="Email" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortHeader col="department" label="Department" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortHeader col="job_title" label="Job Title" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="is_licensed" label="Licensed" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="last_successful_utc" label="Last Successful" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortHeader col="on_prem_domain" label="Directory" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Type</th>
@@ -1670,7 +2058,7 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={mode === "primary" && me?.can_manage_users ? 10 : 9} className="px-4 py-8 text-center text-sm text-slate-500">
+                  <td colSpan={mode === "primary" && me?.can_manage_users ? 12 : 11} className="px-4 py-8 text-center text-sm text-slate-500">
                     No users matched the current filters.
                   </td>
                 </tr>
@@ -1699,6 +2087,8 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
                   <td className="px-4 py-3 text-slate-700">{user.mail || "—"}</td>
                   <td className="px-4 py-3 text-slate-700">{user.extra.department || "—"}</td>
                   <td className="px-4 py-3 text-slate-700">{user.extra.job_title || "—"}</td>
+                  <td className="px-4 py-3 text-slate-700">{isLicensedUser(user) ? `Yes${licenseCount(user) > 0 ? ` (${licenseCount(user)})` : ""}` : "No"}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-slate-700">{lastSuccessfulText(user)}</td>
                   <td className="px-4 py-3 font-mono text-xs text-slate-600">{getDirectoryLabel(user)}</td>
                   <td className="px-4 py-3">
                     <StatusChip enabled={user.enabled ?? null} />

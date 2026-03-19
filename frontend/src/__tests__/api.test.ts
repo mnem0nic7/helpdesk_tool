@@ -127,6 +127,27 @@ describe("api.exportExcel", () => {
     expect(api.exportAzureVMCoverageCsv()).toBe("/api/azure/vms/coverage/export.csv");
     expect(api.exportAzureVMCoverageExcel()).toBe("/api/azure/vms/coverage/export.xlsx");
   });
+
+  it("returns primary user export URLs with filters", () => {
+    expect(
+      api.exportUserAdminUsersCsv({
+        search: "ada",
+        status: "disabled",
+        report_filter: "disabled_licensed",
+        scope: "filtered",
+      }),
+    ).toContain("/api/user-admin/users/export.csv");
+    expect(
+      api.exportUserAdminUsersCsv({
+        search: "ada",
+        status: "disabled",
+        report_filter: "disabled_licensed",
+        scope: "filtered",
+      }),
+    ).toContain("report_filter=disabled_licensed");
+    expect(api.exportUserAdminUsersExcel({ scope: "all" })).toContain("/api/user-admin/users/export.xlsx");
+    expect(api.exportUserAdminUsersExcel({ scope: "all" })).toContain("scope=all");
+  });
 });
 
 describe("azure api methods", () => {
@@ -210,6 +231,110 @@ describe("azure api methods", () => {
     expect(api.exportAzureSavingsCsv({ category: "network" })).toContain("category=network");
     expect(api.exportAzureSavingsExcel({ quantified_only: true })).toContain("/api/azure/savings/export.xlsx");
     expect(api.exportAzureSavingsExcel({ quantified_only: true })).toContain("quantified_only=true");
+  });
+
+  it("calls user exit workflow endpoints", async () => {
+    mockFetch({
+      user_id: "user-1",
+      user_display_name: "Ada Lovelace",
+      user_principal_name: "ada@example.com",
+      profile_key: "oasis",
+      profile_label: "Oasis",
+      scope_summary: "Hybrid exit workflow (Oasis)",
+      on_prem_required: true,
+      requires_on_prem_username_override: false,
+      on_prem_sam_account_name: "adal",
+      on_prem_distinguished_name: "",
+      mailbox_expected: true,
+      direct_license_count: 1,
+      direct_licenses: [],
+      managed_devices: [],
+      manual_tasks: [],
+      steps: [],
+      warnings: [],
+      active_workflow: null,
+    });
+    await api.getUserExitPreflight("user-1");
+    expect(globalThis.fetch).toHaveBeenCalledWith("/api/user-exit/users/user-1/preflight");
+
+    mockFetch({
+      workflow_id: "workflow-1",
+      user_id: "user-1",
+      user_display_name: "Ada Lovelace",
+      user_principal_name: "ada@example.com",
+      requested_by_email: "tech@example.com",
+      requested_by_name: "Tech User",
+      status: "running",
+      profile_key: "oasis",
+      on_prem_required: true,
+      requires_on_prem_username_override: false,
+      on_prem_sam_account_name: "adal",
+      on_prem_distinguished_name: "",
+      created_at: "2026-03-19T00:00:00Z",
+      started_at: null,
+      completed_at: null,
+      error: "",
+      steps: [],
+      manual_tasks: [],
+    });
+    await api.createUserExitWorkflow({
+      user_id: "user-1",
+      typed_upn_confirmation: "ada@example.com",
+      on_prem_sam_account_name_override: "",
+    });
+    let call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/user-exit/workflows");
+    expect(call[1].method).toBe("POST");
+
+    mockFetch({
+      workflow_id: "workflow-1",
+      user_id: "user-1",
+      user_display_name: "Ada Lovelace",
+      user_principal_name: "ada@example.com",
+      requested_by_email: "tech@example.com",
+      requested_by_name: "Tech User",
+      status: "running",
+      profile_key: "oasis",
+      on_prem_required: true,
+      requires_on_prem_username_override: false,
+      on_prem_sam_account_name: "adal",
+      on_prem_distinguished_name: "",
+      created_at: "2026-03-19T00:00:00Z",
+      started_at: null,
+      completed_at: null,
+      error: "",
+      steps: [],
+      manual_tasks: [],
+    });
+    await api.retryUserExitWorkflowStep("workflow-1", "step-1");
+    call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/user-exit/workflows/workflow-1/retry-step");
+    expect(JSON.parse(call[1].body)).toEqual({ step_id: "step-1" });
+
+    mockFetch({
+      workflow_id: "workflow-1",
+      user_id: "user-1",
+      user_display_name: "Ada Lovelace",
+      user_principal_name: "ada@example.com",
+      requested_by_email: "tech@example.com",
+      requested_by_name: "Tech User",
+      status: "completed",
+      profile_key: "oasis",
+      on_prem_required: true,
+      requires_on_prem_username_override: false,
+      on_prem_sam_account_name: "adal",
+      on_prem_distinguished_name: "",
+      created_at: "2026-03-19T00:00:00Z",
+      started_at: null,
+      completed_at: "2026-03-19T00:10:00Z",
+      error: "",
+      steps: [],
+      manual_tasks: [],
+    });
+    await api.completeUserExitManualTask("workflow-1", "task-1", "done");
+    call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/user-exit/workflows/workflow-1/manual-tasks/task-1/complete");
+    expect(JSON.parse(call[1].body)).toEqual({ notes: "done" });
   });
 
   it("calls the Azure VM detail endpoint with the resource id", async () => {

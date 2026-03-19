@@ -1,0 +1,24 @@
+{
+  "baseUrl": "https://it-app.movedocs.com",
+  "sharedSecret": "replace-me",
+  "agentId": "user-exit-agent-01",
+  "pollSeconds": 10,
+  "heartbeatSeconds": 20,
+  "profiles": {
+    "canyon": {
+      "disabledOu": "OU=Disabled Users,DC=canyon,DC=local",
+      "defaultDomainController": "dc01.canyon.local",
+      "exchangeConnectionUri": "http://exchange01.canyon.local/PowerShell/"
+    },
+    "khm": {
+      "disabledOu": "OU=Disabled Users,DC=khm,DC=local",
+      "defaultDomainController": "dc01.khm.local",
+      "exchangeConnectionUri": "http://exchange01.khm.local/PowerShell/"
+    },
+    "oasis": {
+      "disabledOu": "OU=Disabled Users,DC=oasis,DC=local",
+      "defaultDomainController": "dc01.oasis.local",
+      "exchangeConnectionUri": "http://exchange01.oasis.local/PowerShell/"
+    }
+  }
+}

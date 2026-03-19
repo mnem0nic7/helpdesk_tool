@@ -922,7 +922,11 @@ export type UserAdminActionType =
   | "device_retire"
   | "device_wipe"
   | "device_remote_lock"
-  | "device_reassign_primary_user";
+  | "device_reassign_primary_user"
+  | "exit_group_cleanup"
+  | "exit_on_prem_deprovision"
+  | "exit_remove_all_licenses"
+  | "exit_manual_task_complete";
 
 export interface UserAdminReference {
   id: string;
@@ -969,11 +973,22 @@ export interface UserAdminUserDetail {
   on_prem_sync: boolean;
   on_prem_domain: string;
   on_prem_netbios: string;
+  on_prem_sam_account_name: string;
+  on_prem_distinguished_name: string;
   usage_location: string;
   employee_id: string;
   employee_type: string;
   preferred_language: string;
   proxy_addresses: string[];
+  is_licensed: boolean;
+  license_count: number;
+  sku_part_numbers: string[];
+  last_interactive_utc: string;
+  last_interactive_local: string;
+  last_noninteractive_utc: string;
+  last_noninteractive_local: string;
+  last_successful_utc: string;
+  last_successful_local: string;
   manager: UserAdminReference | null;
   source_directory: string;
 }
@@ -1038,7 +1053,7 @@ export interface UserAdminAuditEntry {
   actor_name: string;
   target_user_id: string;
   target_display_name: string;
-  provider: "entra" | "mailbox" | "device_management";
+  provider: "entra" | "mailbox" | "device_management" | "windows_agent" | "workflow";
   action_type: UserAdminActionType;
   params_summary: Record<string, unknown>;
   before_summary: Record<string, unknown>;
@@ -1058,7 +1073,7 @@ export interface UserAdminJobStatus {
   job_id: string;
   status: "queued" | "running" | "completed" | "failed";
   action_type: UserAdminActionType;
-  provider: "entra" | "mailbox" | "device_management";
+  provider: "entra" | "mailbox" | "device_management" | "windows_agent" | "workflow";
   target_user_ids: string[];
   requested_by_email: string;
   requested_by_name: string;
@@ -1078,7 +1093,7 @@ export interface UserAdminJobStatus {
 export interface UserAdminJobResult {
   target_user_id: string;
   target_display_name: string;
-  provider: "entra" | "mailbox" | "device_management";
+  provider: "entra" | "mailbox" | "device_management" | "windows_agent" | "workflow";
   success: boolean;
   summary: string;
   error: string;
@@ -1091,6 +1106,114 @@ export interface AzureCostPoint {
   date: string;
   cost: number;
   currency: string;
+}
+
+export type UserDirectoryReportFilter = "" | "disabled_licensed" | "active_no_success_30d";
+
+export interface UserDirectoryExportParams {
+  search?: string;
+  status?: "all" | "enabled" | "disabled";
+  type?: "all" | "member" | "guest";
+  directory?: string;
+  report_filter?: UserDirectoryReportFilter;
+  scope?: "filtered" | "all";
+}
+
+export type UserExitWorkflowStatus = "queued" | "running" | "awaiting_manual" | "completed" | "failed";
+export type UserExitStepStatus = "queued" | "running" | "completed" | "failed" | "skipped";
+export type UserExitStepProvider = "entra" | "windows_agent" | "workflow";
+
+export interface UserExitWorkflowSummary {
+  workflow_id: string;
+  user_id: string;
+  user_display_name: string;
+  user_principal_name: string;
+  status: UserExitWorkflowStatus;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  profile_key: string;
+  on_prem_required: boolean;
+  requires_on_prem_username_override: boolean;
+  error: string;
+}
+
+export interface UserExitPreflightStep {
+  step_key: string;
+  label: string;
+  provider: UserExitStepProvider;
+  will_run: boolean;
+  reason: string;
+}
+
+export interface UserExitManualTask {
+  task_id: string;
+  label: string;
+  status: "pending" | "completed";
+  notes: string;
+  completed_at: string | null;
+  completed_by_email: string;
+  completed_by_name: string;
+}
+
+export interface UserExitPreflight {
+  user_id: string;
+  user_display_name: string;
+  user_principal_name: string;
+  profile_key: string;
+  profile_label: string;
+  scope_summary: string;
+  on_prem_required: boolean;
+  requires_on_prem_username_override: boolean;
+  on_prem_sam_account_name: string;
+  on_prem_distinguished_name: string;
+  mailbox_expected: boolean;
+  direct_license_count: number;
+  direct_licenses: UserAdminLicense[];
+  managed_devices: UserAdminDevice[];
+  manual_tasks: UserExitManualTask[];
+  steps: UserExitPreflightStep[];
+  warnings: string[];
+  active_workflow: UserExitWorkflowSummary | null;
+}
+
+export interface UserExitWorkflowStep {
+  step_id: string;
+  step_key: string;
+  label: string;
+  provider: UserExitStepProvider;
+  status: UserExitStepStatus;
+  order_index: number;
+  profile_key: string;
+  summary: string;
+  error: string;
+  before_summary: Record<string, unknown>;
+  after_summary: Record<string, unknown>;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  retry_count: number;
+}
+
+export interface UserExitWorkflow {
+  workflow_id: string;
+  user_id: string;
+  user_display_name: string;
+  user_principal_name: string;
+  requested_by_email: string;
+  requested_by_name: string;
+  status: UserExitWorkflowStatus;
+  profile_key: string;
+  on_prem_required: boolean;
+  requires_on_prem_username_override: boolean;
+  on_prem_sam_account_name: string;
+  on_prem_distinguished_name: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string;
+  steps: UserExitWorkflowStep[];
+  manual_tasks: UserExitManualTask[];
 }
 
 // ── Azure Alert types ─────────────────────────────────────────────────────────
@@ -1800,6 +1923,43 @@ export const api = {
 
   getUserAdminAudit(limit = 100): Promise<UserAdminAuditEntry[]> {
     return fetchJSON<UserAdminAuditEntry[]>(`/api/user-admin/audit${buildQuery({ limit })}`);
+  },
+
+  exportUserAdminUsersCsv(params: UserDirectoryExportParams = {}): string {
+    return `/api/user-admin/users/export.csv${buildQuery(params)}`;
+  },
+
+  exportUserAdminUsersExcel(params: UserDirectoryExportParams = {}): string {
+    return `/api/user-admin/users/export.xlsx${buildQuery(params)}`;
+  },
+
+  getUserExitPreflight(userId: string): Promise<UserExitPreflight> {
+    return fetchJSON<UserExitPreflight>(`/api/user-exit/users/${encodeURIComponent(userId)}/preflight`);
+  },
+
+  createUserExitWorkflow(body: {
+    user_id: string;
+    typed_upn_confirmation: string;
+    on_prem_sam_account_name_override?: string;
+  }): Promise<UserExitWorkflow> {
+    return postJSON<UserExitWorkflow>("/api/user-exit/workflows", body);
+  },
+
+  getUserExitWorkflow(workflowId: string): Promise<UserExitWorkflow> {
+    return fetchJSON<UserExitWorkflow>(`/api/user-exit/workflows/${encodeURIComponent(workflowId)}`);
+  },
+
+  retryUserExitWorkflowStep(workflowId: string, stepId: string): Promise<UserExitWorkflow> {
+    return postJSON<UserExitWorkflow>(`/api/user-exit/workflows/${encodeURIComponent(workflowId)}/retry-step`, {
+      step_id: stepId,
+    });
+  },
+
+  completeUserExitManualTask(workflowId: string, taskId: string, notes = ""): Promise<UserExitWorkflow> {
+    return postJSON<UserExitWorkflow>(
+      `/api/user-exit/workflows/${encodeURIComponent(workflowId)}/manual-tasks/${encodeURIComponent(taskId)}/complete`,
+      { notes },
+    );
   },
 
   getAzureCostSummary(): Promise<AzureCostSummary> {

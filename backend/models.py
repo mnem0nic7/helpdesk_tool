@@ -832,10 +832,14 @@ UserAdminActionType = Literal[
     "device_wipe",
     "device_remote_lock",
     "device_reassign_primary_user",
+    "exit_group_cleanup",
+    "exit_on_prem_deprovision",
+    "exit_remove_all_licenses",
+    "exit_manual_task_complete",
 ]
 
 UserAdminJobStatus = Literal["queued", "running", "completed", "failed"]
-UserAdminProviderKey = Literal["entra", "mailbox", "device_management"]
+UserAdminProviderKey = Literal["entra", "mailbox", "device_management", "windows_agent", "workflow"]
 
 
 class UserAdminReference(BaseModel):
@@ -875,11 +879,22 @@ class UserAdminUserDetailResponse(BaseModel):
     on_prem_sync: bool = False
     on_prem_domain: str = ""
     on_prem_netbios: str = ""
+    on_prem_sam_account_name: str = ""
+    on_prem_distinguished_name: str = ""
     usage_location: str = ""
     employee_id: str = ""
     employee_type: str = ""
     preferred_language: str = ""
     proxy_addresses: list[str] = Field(default_factory=list)
+    is_licensed: bool = False
+    license_count: int = 0
+    sku_part_numbers: list[str] = Field(default_factory=list)
+    last_interactive_utc: str = ""
+    last_interactive_local: str = ""
+    last_noninteractive_utc: str = ""
+    last_noninteractive_local: str = ""
+    last_successful_utc: str = ""
+    last_successful_local: str = ""
     manager: UserAdminReference | None = None
     source_directory: str = ""
 
@@ -991,3 +1006,149 @@ class UserAdminJobResponse(BaseModel):
     results_ready: bool = False
     error: str = ""
     one_time_results_available: bool = False
+
+
+UserExitWorkflowStatus = Literal["queued", "running", "awaiting_manual", "completed", "failed"]
+UserExitStepStatus = Literal["queued", "running", "completed", "failed", "skipped"]
+UserExitStepProvider = Literal["entra", "windows_agent", "workflow"]
+UserExitReportFilter = Literal["", "disabled_licensed", "active_no_success_30d"]
+
+
+class UserExitWorkflowSummary(BaseModel):
+    workflow_id: str
+    user_id: str
+    user_display_name: str = ""
+    user_principal_name: str = ""
+    status: UserExitWorkflowStatus
+    created_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    profile_key: str = ""
+    on_prem_required: bool = False
+    requires_on_prem_username_override: bool = False
+    error: str = ""
+
+
+class UserExitPreflightStepResponse(BaseModel):
+    step_key: str
+    label: str
+    provider: UserExitStepProvider
+    will_run: bool = True
+    reason: str = ""
+
+
+class UserExitManualTaskResponse(BaseModel):
+    task_id: str = ""
+    label: str
+    status: Literal["pending", "completed"] = "pending"
+    notes: str = ""
+    completed_at: str | None = None
+    completed_by_email: str = ""
+    completed_by_name: str = ""
+
+
+class UserExitPreflightResponse(BaseModel):
+    user_id: str
+    user_display_name: str = ""
+    user_principal_name: str = ""
+    profile_key: str = ""
+    profile_label: str = ""
+    scope_summary: str = ""
+    on_prem_required: bool = False
+    requires_on_prem_username_override: bool = False
+    on_prem_sam_account_name: str = ""
+    on_prem_distinguished_name: str = ""
+    mailbox_expected: bool = False
+    direct_license_count: int = 0
+    direct_licenses: list[UserAdminLicenseResponse] = Field(default_factory=list)
+    managed_devices: list[UserAdminDeviceResponse] = Field(default_factory=list)
+    manual_tasks: list[UserExitManualTaskResponse] = Field(default_factory=list)
+    steps: list[UserExitPreflightStepResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    active_workflow: UserExitWorkflowSummary | None = None
+
+
+class UserExitWorkflowCreateRequest(BaseModel):
+    user_id: str
+    typed_upn_confirmation: str
+    on_prem_sam_account_name_override: str = ""
+
+
+class UserExitRetryStepRequest(BaseModel):
+    step_id: str
+
+
+class UserExitWorkflowStepResponse(BaseModel):
+    step_id: str
+    step_key: str
+    label: str
+    provider: UserExitStepProvider
+    status: UserExitStepStatus
+    order_index: int
+    profile_key: str = ""
+    summary: str = ""
+    error: str = ""
+    before_summary: dict[str, Any] = Field(default_factory=dict)
+    after_summary: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    retry_count: int = 0
+
+
+class UserExitWorkflowResponse(BaseModel):
+    workflow_id: str
+    user_id: str
+    user_display_name: str = ""
+    user_principal_name: str = ""
+    requested_by_email: str
+    requested_by_name: str = ""
+    status: UserExitWorkflowStatus
+    profile_key: str = ""
+    on_prem_required: bool = False
+    requires_on_prem_username_override: bool = False
+    on_prem_sam_account_name: str = ""
+    on_prem_distinguished_name: str = ""
+    created_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    error: str = ""
+    steps: list[UserExitWorkflowStepResponse] = Field(default_factory=list)
+    manual_tasks: list[UserExitManualTaskResponse] = Field(default_factory=list)
+
+
+class UserExitManualTaskCompleteRequest(BaseModel):
+    notes: str = ""
+
+
+class UserExitAgentClaimRequest(BaseModel):
+    agent_id: str
+    profile_keys: list[str] = Field(default_factory=list)
+
+
+class UserExitAgentClaimResponse(BaseModel):
+    step_id: str
+    workflow_id: str
+    step_key: str
+    label: str
+    profile_key: str = ""
+    user_id: str
+    user_display_name: str = ""
+    user_principal_name: str = ""
+    on_prem_sam_account_name: str = ""
+    on_prem_distinguished_name: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+    lease_expires_at: str
+
+
+class UserExitAgentHeartbeatRequest(BaseModel):
+    agent_id: str
+
+
+class UserExitAgentCompleteRequest(BaseModel):
+    agent_id: str
+    status: Literal["completed", "failed", "skipped"]
+    summary: str = ""
+    error: str = ""
+    before_summary: dict[str, Any] = Field(default_factory=dict)
+    after_summary: dict[str, Any] = Field(default_factory=dict)

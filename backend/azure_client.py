@@ -30,6 +30,36 @@ _ARM_SCOPE = "https://management.azure.com/.default"
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 _TOKEN_SKEW_SECONDS = 60
 _GRAPH_ROOT = "https://graph.microsoft.com"
+_USER_BASE_SELECT = [
+    "id",
+    "displayName",
+    "userPrincipalName",
+    "mail",
+    "accountEnabled",
+    "jobTitle",
+    "department",
+    "officeLocation",
+    "companyName",
+    "city",
+    "country",
+    "mobilePhone",
+    "businessPhones",
+    "createdDateTime",
+    "userType",
+    "onPremisesSyncEnabled",
+    "onPremisesDomainName",
+    "onPremisesNetBiosName",
+    "onPremisesSamAccountName",
+    "onPremisesDistinguishedName",
+    "lastPasswordChangeDateTime",
+    "proxyAddresses",
+    "assignedLicenses",
+    "usageLocation",
+    "employeeId",
+    "employeeType",
+    "preferredLanguage",
+]
+_USER_OPTIONAL_SELECT = ["signInActivity"]
 
 
 class AzureApiError(RuntimeError):
@@ -656,16 +686,39 @@ Resources
         return self._paged_get(url, scope=_GRAPH_SCOPE, params=params)
 
     def list_users(self) -> list[dict[str, Any]]:
-        return self.list_graph_collection_custom(
-            "users",
-            select=[
-                "id", "displayName", "userPrincipalName", "mail", "accountEnabled",
-                "jobTitle", "department", "officeLocation", "companyName",
-                "city", "country", "mobilePhone", "businessPhones",
-                "createdDateTime", "userType", "onPremisesSyncEnabled",
-                "onPremisesDomainName", "onPremisesNetBiosName",
-                "lastPasswordChangeDateTime", "proxyAddresses",
-            ],
+        full_select = [* _USER_BASE_SELECT, *_USER_OPTIONAL_SELECT]
+        try:
+            return self.list_graph_collection_custom("users", select=full_select)
+        except AzureApiError as exc:
+            message = str(exc).lower()
+            if "signinactivity" not in message and "auditlog.read.all" not in message:
+                raise
+            logger.warning(
+                "Microsoft Graph signInActivity is unavailable for this principal; continuing directory refresh without it: %s",
+                exc,
+            )
+            return self.list_graph_collection_custom("users", select=_USER_BASE_SELECT)
+
+    def get_user(self, user_id: str) -> dict[str, Any]:
+        full_select = [*_USER_BASE_SELECT, *_USER_OPTIONAL_SELECT]
+        params = {"$select": ",".join(full_select)}
+        try:
+            return self.graph_request("GET", f"users/{user_id}", params=params)
+        except AzureApiError as exc:
+            message = str(exc).lower()
+            if "signinactivity" not in message and "auditlog.read.all" not in message:
+                raise
+            logger.warning(
+                "Microsoft Graph signInActivity is unavailable for targeted user refresh %s; continuing without it: %s",
+                user_id,
+                exc,
+            )
+            return self.graph_request("GET", f"users/{user_id}", params={"$select": ",".join(_USER_BASE_SELECT)})
+
+    def list_subscribed_skus(self) -> list[dict[str, Any]]:
+        return self.graph_paged_get(
+            "subscribedSkus",
+            params={"$select": "skuId,skuPartNumber"},
         )
 
     def list_groups(self) -> list[dict[str, Any]]:

@@ -214,9 +214,11 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     import routes_triage
     import routes_azure
     import routes_user_admin
+    import routes_user_exit
     import azure_cache as azure_cache_module
     import user_admin_jobs as user_admin_jobs_module
     import user_admin_providers as user_admin_providers_module
+    import user_exit_workflows as user_exit_workflows_module
 
     for mod in [issue_cache, routes_metrics, routes_tickets, routes_chart, routes_export, routes_cache, routes_triage]:
         monkeypatch.setattr(mod, "cache", mock_cache)
@@ -341,11 +343,22 @@ def test_client(mock_cache, freeze_time, monkeypatch):
         "on_prem_sync": False,
         "on_prem_domain": "",
         "on_prem_netbios": "",
+        "on_prem_sam_account_name": "",
+        "on_prem_distinguished_name": "",
         "usage_location": "",
         "employee_id": "",
         "employee_type": "",
         "preferred_language": "",
         "proxy_addresses": [],
+        "is_licensed": False,
+        "license_count": 0,
+        "sku_part_numbers": [],
+        "last_interactive_utc": "",
+        "last_interactive_local": "",
+        "last_noninteractive_utc": "",
+        "last_noninteractive_local": "",
+        "last_successful_utc": "",
+        "last_successful_local": "",
         "manager": None,
         "source_directory": "Cloud",
     }
@@ -368,6 +381,58 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     mock_user_admin_providers.list_devices.return_value = []
     monkeypatch.setattr(user_admin_providers_module, "user_admin_providers", mock_user_admin_providers)
     monkeypatch.setattr(routes_user_admin, "user_admin_providers", mock_user_admin_providers)
+
+    mock_user_exit_workflows = MagicMock()
+    mock_user_exit_workflows.start_worker = AsyncMock()
+    mock_user_exit_workflows.stop_worker = AsyncMock()
+    mock_user_exit_workflows.build_preflight.return_value = {
+        "user_id": "user-1",
+        "user_display_name": "Test User",
+        "user_principal_name": "test@example.com",
+        "profile_key": "",
+        "profile_label": "",
+        "scope_summary": "Cloud-only exit workflow",
+        "on_prem_required": False,
+        "requires_on_prem_username_override": False,
+        "on_prem_sam_account_name": "",
+        "on_prem_distinguished_name": "",
+        "mailbox_expected": True,
+        "direct_license_count": 0,
+        "direct_licenses": [],
+        "managed_devices": [],
+        "manual_tasks": [{"task_id": "", "label": "RingCentral", "status": "pending", "notes": "", "completed_at": None, "completed_by_email": "", "completed_by_name": ""}],
+        "steps": [{"step_key": "disable_sign_in", "label": "Disable Entra Sign-In", "provider": "entra", "will_run": True, "reason": ""}],
+        "warnings": [],
+        "active_workflow": None,
+    }
+    mock_user_exit_workflows.create_workflow.return_value = {
+        "workflow_id": "workflow-1",
+        "user_id": "user-1",
+        "user_display_name": "Test User",
+        "user_principal_name": "test@example.com",
+        "requested_by_email": "test@example.com",
+        "requested_by_name": "Test User",
+        "status": "running",
+        "profile_key": "",
+        "on_prem_required": False,
+        "requires_on_prem_username_override": False,
+        "on_prem_sam_account_name": "",
+        "on_prem_distinguished_name": "",
+        "created_at": "2026-03-19T00:00:00Z",
+        "started_at": None,
+        "completed_at": None,
+        "error": "",
+        "steps": [],
+        "manual_tasks": [],
+    }
+    mock_user_exit_workflows.get_workflow.return_value = mock_user_exit_workflows.create_workflow.return_value
+    mock_user_exit_workflows.retry_step.return_value = mock_user_exit_workflows.create_workflow.return_value
+    mock_user_exit_workflows.complete_manual_task.return_value = mock_user_exit_workflows.create_workflow.return_value
+    mock_user_exit_workflows.claim_agent_step.return_value = None
+    mock_user_exit_workflows.heartbeat_agent_step.return_value = None
+    mock_user_exit_workflows.complete_agent_step.return_value = mock_user_exit_workflows.create_workflow.return_value
+    monkeypatch.setattr(user_exit_workflows_module, "user_exit_workflows", mock_user_exit_workflows)
+    monkeypatch.setattr(routes_user_exit, "user_exit_workflows", mock_user_exit_workflows)
 
     # Import app *after* patching
     from main import app

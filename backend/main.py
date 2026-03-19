@@ -32,11 +32,13 @@ from routes_kb import router as kb_router
 from routes_azure import router as azure_router
 from routes_azure_alerts import router as azure_alerts_router
 from routes_user_admin import router as user_admin_router
+from routes_user_exit import router as user_exit_router
 from azure_alert_engine import start_azure_alert_loop, stop_azure_alert_loop
 from issue_cache import cache
 from azure_cache import azure_cache
 from azure_vm_export_jobs import azure_vm_export_jobs
 from user_admin_jobs import user_admin_jobs
+from user_exit_workflows import user_exit_workflows
 from knowledge_base import kb_store
 from site_context import (
     get_current_site_scope,
@@ -54,9 +56,11 @@ async def lifespan(app: FastAPI):
     await azure_cache.start_background_refresh()
     await azure_vm_export_jobs.start_worker()
     await user_admin_jobs.start_worker()
+    await user_exit_workflows.start_worker()
     await start_azure_alert_loop()
     yield
     await stop_azure_alert_loop()
+    await user_exit_workflows.stop_worker()
     await user_admin_jobs.stop_worker()
     await azure_vm_export_jobs.stop_worker()
     await azure_cache.stop_background_refresh()
@@ -81,7 +85,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path.rstrip("/")
         # Only protect /api/* paths (let frontend assets through)
-        if path.startswith("/api") and path not in _PUBLIC_PATHS:
+        if path.startswith("/api") and path not in _PUBLIC_PATHS and not path.startswith("/api/user-exit/agent/"):
             sid = request.cookies.get("session_id")
             if not sid or not get_session(sid):
                 return JSONResponse(
@@ -149,6 +153,7 @@ app.include_router(kb_router)
 app.include_router(azure_router)
 app.include_router(azure_alerts_router)
 app.include_router(user_admin_router)
+app.include_router(user_exit_router)
 
 # ---------------------------------------------------------------------------
 # Routes

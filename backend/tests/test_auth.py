@@ -317,3 +317,19 @@ class TestAuthMiddleware:
         assert resp.status_code == 200
         # Session should be deleted
         assert get_session(sid) is None
+
+    def test_user_exit_agent_endpoint_uses_shared_secret_without_session(self, auth_client, monkeypatch):
+        import routes_user_exit
+
+        mock_workflows = MagicMock()
+        mock_workflows.claim_agent_step.return_value = None
+        monkeypatch.setattr(routes_user_exit, "USER_EXIT_AGENT_SHARED_SECRET", "secret-123")
+        monkeypatch.setattr(routes_user_exit, "user_exit_workflows", mock_workflows)
+
+        resp = auth_client.post(
+            "/api/user-exit/agent/steps/claim",
+            headers={"host": "it-app.movedocs.com", "x-user-exit-agent-secret": "secret-123"},
+            json={"agent_id": "agent-1", "profile_keys": ["oasis"]},
+        )
+
+        assert resp.status_code == 200

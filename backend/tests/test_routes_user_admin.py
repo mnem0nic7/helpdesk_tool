@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from io import BytesIO
 from unittest.mock import MagicMock
+
+from openpyxl import load_workbook
 
 
 def test_user_admin_capabilities_return_primary_payload(test_client, monkeypatch):
@@ -253,3 +256,115 @@ def test_user_activity_and_audit_read_from_job_store(test_client, monkeypatch):
     assert audit_resp.status_code == 200
     assert activity_resp.json()[0]["target_user_id"] == "user-1"
     assert audit_resp.json()[0]["target_user_id"] == "user-2"
+
+
+def test_user_export_csv_applies_report_filter(test_client, monkeypatch):
+    import routes_user_admin
+
+    mock_cache = MagicMock()
+    mock_cache.list_directory_objects.return_value = [
+        {
+            "id": "user-1",
+            "display_name": "Disabled Licensed",
+            "object_type": "user",
+            "principal_name": "disabled@example.com",
+            "mail": "disabled@example.com",
+            "app_id": "",
+            "enabled": False,
+            "extra": {
+                "user_type": "Member",
+                "is_licensed": "true",
+                "license_count": "2",
+                "sku_part_numbers": "M365_BUSINESS_PREMIUM, EMS",
+                "last_successful_utc": "",
+                "last_successful_local": "",
+            },
+        },
+        {
+            "id": "user-2",
+            "display_name": "Enabled Licensed",
+            "object_type": "user",
+            "principal_name": "enabled@example.com",
+            "mail": "enabled@example.com",
+            "app_id": "",
+            "enabled": True,
+            "extra": {
+                "user_type": "Member",
+                "is_licensed": "true",
+                "license_count": "1",
+                "sku_part_numbers": "M365_BUSINESS_BASIC",
+                "last_successful_utc": "2026-03-18T00:00:00+00:00",
+                "last_successful_local": "2026-03-17 17:00 PT",
+            },
+        },
+    ]
+    monkeypatch.setattr(routes_user_admin, "azure_cache", mock_cache)
+
+    resp = test_client.get(
+        "/api/user-admin/users/export.csv",
+        headers={"host": "it-app.movedocs.com"},
+        params={"report_filter": "disabled_licensed", "scope": "filtered"},
+    )
+
+    assert resp.status_code == 200
+    assert "Disabled Licensed" in resp.text
+    assert "Enabled Licensed" not in resp.text
+    mock_cache.list_directory_objects.assert_called_once_with("users", search="")
+
+
+def test_user_export_xlsx_supports_scope_all(test_client, monkeypatch):
+    import routes_user_admin
+
+    mock_cache = MagicMock()
+    mock_cache.list_directory_objects.return_value = [
+        {
+            "id": "user-1",
+            "display_name": "Ada Lovelace",
+            "object_type": "user",
+            "principal_name": "ada@example.com",
+            "mail": "ada@example.com",
+            "app_id": "",
+            "enabled": False,
+            "extra": {
+                "user_type": "Member",
+                "is_licensed": "true",
+                "license_count": "1",
+                "sku_part_numbers": "M365_BUSINESS_PREMIUM",
+                "last_successful_utc": "",
+                "last_successful_local": "",
+            },
+        },
+        {
+            "id": "user-2",
+            "display_name": "Grace Hopper",
+            "object_type": "user",
+            "principal_name": "grace@example.com",
+            "mail": "grace@example.com",
+            "app_id": "",
+            "enabled": True,
+            "extra": {
+                "user_type": "Member",
+                "is_licensed": "",
+                "license_count": "0",
+                "sku_part_numbers": "",
+                "last_successful_utc": "2026-03-19T00:00:00+00:00",
+                "last_successful_local": "2026-03-18 17:00 PT",
+            },
+        },
+    ]
+    monkeypatch.setattr(routes_user_admin, "azure_cache", mock_cache)
+
+    resp = test_client.get(
+        "/api/user-admin/users/export.xlsx",
+        headers={"host": "it-app.movedocs.com"},
+        params={"search": "ada", "status": "disabled", "scope": "all"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    workbook = load_workbook(BytesIO(resp.content))
+    sheet = workbook.active
+    names = [sheet.cell(row=row, column=1).value for row in range(2, sheet.max_row + 1)]
+    assert "Ada Lovelace" in names
+    assert "Grace Hopper" in names
+    mock_cache.list_directory_objects.assert_called_once_with("users", search="")

@@ -132,41 +132,7 @@ class EntraAdminProvider:
         return list(_ENTRA_ACTIONS)
 
     def get_user_detail(self, user_id: str) -> dict[str, Any]:
-        user = _safe_graph_call(
-            self.client.graph_request,
-            "GET",
-            f"users/{user_id}",
-            params={
-                "$select": ",".join(
-                    [
-                        "id",
-                        "displayName",
-                        "userPrincipalName",
-                        "mail",
-                        "accountEnabled",
-                        "jobTitle",
-                        "department",
-                        "officeLocation",
-                        "companyName",
-                        "city",
-                        "country",
-                        "mobilePhone",
-                        "businessPhones",
-                        "createdDateTime",
-                        "userType",
-                        "onPremisesSyncEnabled",
-                        "onPremisesDomainName",
-                        "onPremisesNetBiosName",
-                        "lastPasswordChangeDateTime",
-                        "proxyAddresses",
-                        "usageLocation",
-                        "employeeId",
-                        "employeeType",
-                        "preferredLanguage",
-                    ]
-                )
-            },
-        )
+        user = _safe_graph_call(self.client.get_user, user_id)
         manager = None
         try:
             manager_payload = _safe_graph_call(
@@ -179,6 +145,25 @@ class EntraAdminProvider:
                 manager = _normalize_reference(manager_payload)
         except UserAdminProviderError:
             manager = None
+        sign_in = user.get("signInActivity") if isinstance(user.get("signInActivity"), dict) else {}
+        assigned_licenses = user.get("assignedLicenses") if isinstance(user.get("assignedLicenses"), list) else []
+        sku_map = {
+            str(item.get("sku_id") or item.get("skuId") or "").strip().lower(): str(
+                item.get("sku_part_number") or item.get("skuPartNumber") or ""
+            ).strip()
+            for item in self.list_license_catalog()
+            if item.get("sku_id") or item.get("skuId")
+        }
+        sku_part_numbers: list[str] = []
+        for item in assigned_licenses:
+            if not isinstance(item, dict):
+                continue
+            sku_id = str(item.get("skuId") or "").strip()
+            if not sku_id:
+                continue
+            label = sku_map.get(sku_id.lower()) or sku_id
+            if label and label not in sku_part_numbers:
+                sku_part_numbers.append(label)
 
         return {
             "id": str(user.get("id") or ""),
@@ -200,11 +185,22 @@ class EntraAdminProvider:
             "on_prem_sync": bool(user.get("onPremisesSyncEnabled")),
             "on_prem_domain": str(user.get("onPremisesDomainName") or ""),
             "on_prem_netbios": str(user.get("onPremisesNetBiosName") or ""),
+            "on_prem_sam_account_name": str(user.get("onPremisesSamAccountName") or ""),
+            "on_prem_distinguished_name": str(user.get("onPremisesDistinguishedName") or ""),
             "usage_location": str(user.get("usageLocation") or ""),
             "employee_id": str(user.get("employeeId") or ""),
             "employee_type": str(user.get("employeeType") or ""),
             "preferred_language": str(user.get("preferredLanguage") or ""),
             "proxy_addresses": _compact_list(user.get("proxyAddresses")),
+            "is_licensed": len(sku_part_numbers) > 0,
+            "license_count": len(sku_part_numbers),
+            "sku_part_numbers": sku_part_numbers,
+            "last_interactive_utc": str(sign_in.get("lastSignInDateTime") or ""),
+            "last_interactive_local": azure_cache._format_local_datetime_text(sign_in.get("lastSignInDateTime") or ""),
+            "last_noninteractive_utc": str(sign_in.get("lastNonInteractiveSignInDateTime") or ""),
+            "last_noninteractive_local": azure_cache._format_local_datetime_text(sign_in.get("lastNonInteractiveSignInDateTime") or ""),
+            "last_successful_utc": str(sign_in.get("lastSuccessfulSignInDateTime") or ""),
+            "last_successful_local": azure_cache._format_local_datetime_text(sign_in.get("lastSuccessfulSignInDateTime") or ""),
             "manager": manager,
             "source_directory": _directory_label(user),
         }
@@ -278,11 +274,7 @@ class EntraAdminProvider:
         return results
 
     def list_license_catalog(self) -> list[dict[str, str]]:
-        rows = _safe_graph_call(
-            self.client.graph_paged_get,
-            "subscribedSkus",
-            params={"$select": "skuId,skuPartNumber"},
-        )
+        rows = _safe_graph_call(self.client.list_subscribed_skus)
         return [
             {
                 "sku_id": str(item.get("skuId") or ""),
@@ -295,6 +287,107 @@ class EntraAdminProvider:
 
     def _update_user(self, user_id: str, body: dict[str, Any]) -> None:
         _safe_graph_call(self.client.graph_request, "PATCH", f"users/{user_id}", json_body=body)
+
+    def remove_direct_cloud_group_memberships(self, user_id: str) -> dict[str, Any]:
+        removed_groups: list[str] = []
+        skipped_dynamic: list[str] = []
+        skipped_on_prem: list[str] = []
+        skipped_unsupported: list[str] = []
+        failures: list[str] = []
+
+        for item in self._member_of(user_id):
+            if not str(item.get("@odata.type") or "").endswith("group"):
+                continue
+            group_id = str(item.get("id") or "").strip()
+            if not group_id:
+                continue
+            group_name = str(item.get("displayName") or group_id)
+            try:
+                detail = _safe_graph_call(
+                    self.client.graph_request,
+                    "GET",
+                    f"groups/{group_id}",
+                    params={
+                        "$select": ",".join(
+                            [
+                                "id",
+                                "displayName",
+                                "groupTypes",
+                                "mailEnabled",
+                                "securityEnabled",
+                                "membershipRule",
+                                "onPremisesSyncEnabled",
+                            ]
+                        )
+                    },
+                )
+            except UserAdminProviderError as exc:
+                failures.append(f"{group_name}: {exc}")
+                continue
+
+            group_types = _compact_list(detail.get("groupTypes"))
+            if detail.get("membershipRule") or "DynamicMembership" in group_types:
+                skipped_dynamic.append(group_name)
+                continue
+            if detail.get("onPremisesSyncEnabled"):
+                skipped_on_prem.append(group_name)
+                continue
+
+            is_unified = "Unified" in group_types
+            is_mail = bool(detail.get("mailEnabled"))
+            is_security = bool(detail.get("securityEnabled"))
+            if not (is_unified or is_mail or is_security):
+                skipped_unsupported.append(group_name)
+                continue
+
+            try:
+                _safe_graph_call(
+                    self.client.graph_request,
+                    "DELETE",
+                    f"groups/{group_id}/members/{user_id}/$ref",
+                )
+                removed_groups.append(group_name)
+            except UserAdminProviderError as exc:
+                failures.append(f"{group_name}: {exc}")
+
+        if failures:
+            raise UserAdminProviderError("; ".join(failures[:5]))
+
+        return {
+            "provider": "entra",
+            "summary": f"Removed {len(removed_groups)} direct cloud group membership(s)",
+            "before_summary": {"group_count": len(removed_groups) + len(skipped_dynamic) + len(skipped_on_prem)},
+            "after_summary": {
+                "removed_groups": removed_groups,
+                "removed_count": len(removed_groups),
+                "skipped_dynamic": skipped_dynamic,
+                "skipped_on_prem": skipped_on_prem,
+                "skipped_unsupported": skipped_unsupported,
+            },
+        }
+
+    def remove_all_direct_licenses(self, user_id: str) -> dict[str, Any]:
+        direct_licenses = [item for item in self.list_licenses(user_id) if not item.get("assigned_by_group")]
+        removed: list[str] = []
+        failures: list[str] = []
+        for license_item in direct_licenses:
+            sku_id = str(license_item.get("sku_id") or "").strip()
+            label = str(license_item.get("display_name") or license_item.get("sku_part_number") or sku_id)
+            if not sku_id:
+                continue
+            try:
+                self.execute("remove_license", user_id, {"sku_id": sku_id})
+                removed.append(label)
+            except UserAdminProviderError as exc:
+                failures.append(f"{label}: {exc}")
+        if failures:
+            raise UserAdminProviderError("; ".join(failures[:5]))
+        return {
+            "provider": "entra",
+            "summary": f"Removed {len(removed)} direct license(s)",
+            "before_summary": {"license_count": len(direct_licenses)},
+            "after_summary": {"removed_licenses": removed, "removed_count": len(removed)},
+        }
 
     def execute(self, action_type: UserAdminActionType, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
         if action_type == "disable_sign_in":

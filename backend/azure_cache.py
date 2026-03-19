@@ -13,6 +13,7 @@ from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from azure_client import AzureApiError, AzureClient
 from config import (
@@ -61,6 +62,7 @@ _DATASET_CONFIG: dict[str, dict[str, Any]] = {
 
 _SAVINGS_MONTHLY_PROXY_DAYS = 30
 _STALE_SNAPSHOT_DAYS = 60
+_USER_AUDIT_TIMEZONE = ZoneInfo("America/Los_Angeles")
 
 
 class AzureCache:
@@ -340,7 +342,59 @@ class AzureCache:
             self._set_dataset_status("inventory", updated_at=self._dataset_state["inventory"]["last_refresh"], error=str(exc))
 
     @staticmethod
+    def _format_local_datetime_text(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return ""
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        localized = parsed.astimezone(_USER_AUDIT_TIMEZONE)
+        return localized.strftime("%Y-%m-%d %I:%M %p %Z")
+
+    @staticmethod
+    def _license_sku_map(rows: list[dict[str, Any]]) -> dict[str, str]:
+        results: dict[str, str] = {}
+        for item in rows:
+            sku_id = str(item.get("skuId") or "").strip().lower()
+            sku_part_number = str(item.get("skuPartNumber") or "").strip()
+            if sku_id and sku_part_number:
+                results[sku_id] = sku_part_number
+        return results
+
+    @classmethod
+    def _normalize_assigned_license_names(
+        cls,
+        assigned_licenses: list[dict[str, Any]] | None,
+        sku_map: dict[str, str] | None,
+    ) -> list[str]:
+        names: list[str] = []
+        for item in assigned_licenses or []:
+            if not isinstance(item, dict):
+                continue
+            sku_id = str(item.get("skuId") or "").strip()
+            if not sku_id:
+                continue
+            display_name = (sku_map or {}).get(sku_id.lower()) or sku_id
+            if display_name not in names:
+                names.append(display_name)
+        return names
+
+    @classmethod
     def _normalize_user(item: dict[str, Any]) -> dict[str, Any]:
+        assigned_license_names = cls._normalize_assigned_license_names(
+            item.get("assignedLicenses") if isinstance(item.get("assignedLicenses"), list) else [],
+            item.get("_sku_map") if isinstance(item.get("_sku_map"), dict) else {},
+        )
+        sign_in = item.get("signInActivity") if isinstance(item.get("signInActivity"), dict) else {}
+        last_interactive = str(sign_in.get("lastSignInDateTime") or "")
+        last_noninteractive = str(sign_in.get("lastNonInteractiveSignInDateTime") or "")
+        last_successful = str(sign_in.get("lastSuccessfulSignInDateTime") or "")
         return {
             "id": item.get("id") or "",
             "display_name": item.get("displayName") or "",
@@ -363,8 +417,19 @@ class AzureCache:
                 "on_prem_sync": "true" if item.get("onPremisesSyncEnabled") else "",
                 "on_prem_domain": item.get("onPremisesDomainName") or "",
                 "on_prem_netbios": item.get("onPremisesNetBiosName") or "",
+                "on_prem_sam_account_name": item.get("onPremisesSamAccountName") or "",
+                "on_prem_distinguished_name": item.get("onPremisesDistinguishedName") or "",
                 "last_password_change": item.get("lastPasswordChangeDateTime") or "",
                 "proxy_addresses": ", ".join(item.get("proxyAddresses") or []),
+                "is_licensed": "true" if assigned_license_names else "",
+                "license_count": str(len(assigned_license_names)),
+                "sku_part_numbers": ", ".join(assigned_license_names),
+                "last_interactive_utc": last_interactive,
+                "last_interactive_local": cls._format_local_datetime_text(last_interactive),
+                "last_noninteractive_utc": last_noninteractive,
+                "last_noninteractive_local": cls._format_local_datetime_text(last_noninteractive),
+                "last_successful_utc": last_successful,
+                "last_successful_local": cls._format_local_datetime_text(last_successful),
             },
         }
 
@@ -430,7 +495,11 @@ class AzureCache:
 
     def _refresh_directory(self) -> None:
         try:
-            users = [self._normalize_user(item) for item in self._client.list_users()]
+            sku_map = self._license_sku_map(self._client.list_subscribed_skus())
+            users = [
+                self._normalize_user({**item, "_sku_map": sku_map})
+                for item in self._client.list_users()
+            ]
             groups = [self._normalize_group(item) for item in self._client.list_groups()]
             service_principals = [
                 self._normalize_service_principal(item)
@@ -474,42 +543,18 @@ class AzureCache:
         }
 
         fetched_count = 0
+        sku_map = {}
+        try:
+            sku_map = self._license_sku_map(self._client.list_subscribed_skus())
+        except AzureApiError as exc:
+            logger.warning("Azure subscribed SKU lookup failed during targeted user refresh: %s", exc)
         for user_id in normalized_user_ids:
             try:
-                payload = self._client.graph_request(
-                    "GET",
-                    f"users/{user_id}",
-                    params={
-                        "$select": ",".join(
-                            [
-                                "id",
-                                "displayName",
-                                "userPrincipalName",
-                                "mail",
-                                "accountEnabled",
-                                "jobTitle",
-                                "department",
-                                "officeLocation",
-                                "companyName",
-                                "city",
-                                "country",
-                                "mobilePhone",
-                                "businessPhones",
-                                "createdDateTime",
-                                "userType",
-                                "onPremisesSyncEnabled",
-                                "onPremisesDomainName",
-                                "onPremisesNetBiosName",
-                                "lastPasswordChangeDateTime",
-                                "proxyAddresses",
-                            ]
-                        )
-                    },
-                )
+                payload = self._client.get_user(user_id)
             except AzureApiError as exc:
                 logger.warning("Azure targeted user refresh failed for %s: %s", user_id, exc)
                 continue
-            user_by_id[user_id] = self._normalize_user(payload)
+            user_by_id[user_id] = self._normalize_user({**payload, "_sku_map": sku_map})
             fetched_count += 1
 
         if not fetched_count:

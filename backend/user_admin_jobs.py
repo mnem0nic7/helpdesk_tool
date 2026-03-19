@@ -346,6 +346,37 @@ class UserAdminJobManager:
             )
         return results
 
+    def record_audit_entry(
+        self,
+        *,
+        job_id: str = "",
+        actor_email: str,
+        actor_name: str,
+        target_user_id: str,
+        target_display_name: str,
+        provider: str,
+        action_type: UserAdminActionType,
+        params: dict[str, Any] | None = None,
+        before_summary: dict[str, Any] | None = None,
+        after_summary: dict[str, Any] | None = None,
+        status: str,
+        error: str = "",
+    ) -> None:
+        self._record_audit(
+            job_id=job_id,
+            actor_email=actor_email,
+            actor_name=actor_name,
+            target_user_id=target_user_id,
+            target_display_name=target_display_name,
+            provider=provider,
+            action_type=action_type,
+            params=params or {},
+            before_summary=before_summary or {},
+            after_summary=after_summary or {},
+            status=status,
+            error=error,
+        )
+
     async def start_worker(self) -> None:
         if self._bg_task and not self._bg_task.done():
             return

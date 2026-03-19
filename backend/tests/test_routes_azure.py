@@ -97,6 +97,44 @@ def test_directory_users_returns_cached_payload_on_primary_host(test_client, mon
     mock_cache.list_directory_objects.assert_called_once_with("users", search="")
 
 
+def test_directory_users_preserve_license_and_sign_in_reporting_fields(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.list_directory_objects.return_value = [
+        {
+            "id": "user-3",
+            "display_name": "Audit User",
+            "object_type": "user",
+            "principal_name": "audit@example.com",
+            "mail": "audit@example.com",
+            "app_id": "",
+            "enabled": True,
+            "extra": {
+                "user_type": "Member",
+                "is_licensed": "true",
+                "license_count": "2",
+                "sku_part_numbers": "M365_BUSINESS_PREMIUM, EMS",
+                "last_interactive_utc": "2026-03-10T14:00:00+00:00",
+                "last_interactive_local": "2026-03-10 07:00 PT",
+                "last_noninteractive_utc": "2026-03-11T14:00:00+00:00",
+                "last_noninteractive_local": "2026-03-11 07:00 PT",
+                "last_successful_utc": "2026-03-12T14:00:00+00:00",
+                "last_successful_local": "2026-03-12 07:00 PT",
+            },
+        }
+    ]
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get("/api/azure/directory/users", headers={"host": "it-app.movedocs.com"})
+
+    assert resp.status_code == 200
+    payload = resp.json()[0]
+    assert payload["extra"]["is_licensed"] == "true"
+    assert payload["extra"]["license_count"] == "2"
+    assert payload["extra"]["last_successful_local"] == "2026-03-12 07:00 PT"
+
+
 def test_directory_users_is_not_available_on_oasisdev_host(test_client):
     resp = test_client.get("/api/azure/directory/users", headers={"host": "oasisdev.movedocs.com"})
 

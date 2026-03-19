@@ -21,6 +21,13 @@ const { mockApi } = vi.hoisted(() => ({
     createUserAdminJob: vi.fn(),
     getUserAdminJob: vi.fn(),
     getUserAdminJobResults: vi.fn(),
+    exportUserAdminUsersCsv: vi.fn(),
+    exportUserAdminUsersExcel: vi.fn(),
+    getUserExitPreflight: vi.fn(),
+    createUserExitWorkflow: vi.fn(),
+    getUserExitWorkflow: vi.fn(),
+    retryUserExitWorkflowStep: vi.fn(),
+    completeUserExitManualTask: vi.fn(),
   },
 }));
 
@@ -54,6 +61,17 @@ const directoryUsers = [
       business_phones: "555-0110",
       city: "Los Angeles",
       country: "USA",
+      is_licensed: "true",
+      license_count: "2",
+      sku_part_numbers: "M365_BUSINESS_PREMIUM, EMS",
+      last_interactive_utc: "2026-03-15T16:00:00Z",
+      last_interactive_local: "Mar 15, 2026, 9:00 AM",
+      last_noninteractive_utc: "2026-03-16T16:00:00Z",
+      last_noninteractive_local: "Mar 16, 2026, 9:00 AM",
+      last_successful_utc: "2026-03-17T16:00:00Z",
+      last_successful_local: "Mar 17, 2026, 9:00 AM",
+      on_prem_sam_account_name: "ada.l",
+      on_prem_distinguished_name: "CN=Ada Lovelace,OU=Users,DC=movedocs,DC=local",
     },
   },
   {
@@ -80,6 +98,17 @@ const directoryUsers = [
       business_phones: "",
       city: "New York",
       country: "USA",
+      is_licensed: "true",
+      license_count: "1",
+      sku_part_numbers: "M365_BUSINESS_BASIC",
+      last_interactive_utc: "",
+      last_interactive_local: "",
+      last_noninteractive_utc: "",
+      last_noninteractive_local: "",
+      last_successful_utc: "",
+      last_successful_local: "",
+      on_prem_sam_account_name: "",
+      on_prem_distinguished_name: "",
     },
   },
 ];
@@ -180,11 +209,22 @@ describe("Users directory pages", () => {
       on_prem_sync: true,
       on_prem_domain: "MOVEDOCS",
       on_prem_netbios: "MOVEDOCS",
+      on_prem_sam_account_name: "ada.l",
+      on_prem_distinguished_name: "CN=Ada Lovelace,OU=Users,DC=movedocs,DC=local",
       usage_location: "US",
       employee_id: "",
       employee_type: "",
       preferred_language: "en-US",
       proxy_addresses: ["SMTP:ada@contoso.com"],
+      is_licensed: true,
+      license_count: 2,
+      sku_part_numbers: ["M365_BUSINESS_PREMIUM", "EMS"],
+      last_interactive_utc: "2026-03-15T16:00:00Z",
+      last_interactive_local: "Mar 15, 2026, 9:00 AM",
+      last_noninteractive_utc: "2026-03-16T16:00:00Z",
+      last_noninteractive_local: "Mar 16, 2026, 9:00 AM",
+      last_successful_utc: "2026-03-17T16:00:00Z",
+      last_successful_local: "Mar 17, 2026, 9:00 AM",
       manager: null,
       source_directory: "MOVEDOCS",
     });
@@ -333,6 +373,168 @@ describe("Users directory pages", () => {
         one_time_secret: null,
       },
     ]);
+    mockApi.exportUserAdminUsersCsv.mockImplementation((params?: { scope?: string }) =>
+      `/api/user-admin/users/export.csv?scope=${params?.scope || "filtered"}`,
+    );
+    mockApi.exportUserAdminUsersExcel.mockImplementation((params?: { scope?: string }) =>
+      `/api/user-admin/users/export.xlsx?scope=${params?.scope || "filtered"}`,
+    );
+    mockApi.getUserExitPreflight.mockResolvedValue({
+      user_id: "user-1",
+      user_display_name: "Ada Lovelace",
+      user_principal_name: "ada@contoso.com",
+      profile_key: "oasis",
+      profile_label: "Oasis",
+      scope_summary: "Hybrid exit workflow (Oasis)",
+      on_prem_required: true,
+      requires_on_prem_username_override: false,
+      on_prem_sam_account_name: "ada.l",
+      on_prem_distinguished_name: "CN=Ada Lovelace,OU=Users,DC=movedocs,DC=local",
+      mailbox_expected: true,
+      direct_license_count: 1,
+      direct_licenses: [
+        {
+          sku_id: "sku-1",
+          sku_part_number: "M365_BUSINESS_PREMIUM",
+          display_name: "M365 Business Premium",
+          state: "active",
+          disabled_plans: [],
+          assigned_by_group: false,
+        },
+      ],
+      managed_devices: [
+        {
+          id: "device-1",
+          device_name: "Ada-Laptop",
+          operating_system: "Windows",
+          operating_system_version: "11",
+          compliance_state: "compliant",
+          management_state: "managed",
+          owner_type: "company",
+          enrollment_type: "windowsAzureADJoin",
+          last_sync_date_time: "2026-03-19T00:00:00Z",
+          azure_ad_device_id: "aad-device-1",
+          primary_users: [],
+        },
+      ],
+      manual_tasks: [
+        {
+          task_id: "task-1",
+          label: "RingCentral",
+          status: "pending",
+          notes: "",
+          completed_at: null,
+          completed_by_email: "",
+          completed_by_name: "",
+        },
+      ],
+      steps: [
+        { step_key: "disable_sign_in", label: "Disable Entra Sign-In", provider: "entra", will_run: true, reason: "" },
+        { step_key: "exit_on_prem_deprovision", label: "Run On-Prem AD Deprovisioning", provider: "windows_agent", will_run: true, reason: "" },
+      ],
+      warnings: [],
+      active_workflow: null,
+    });
+    const pendingExitWorkflow = {
+      workflow_id: "workflow-1",
+      user_id: "user-1",
+      user_display_name: "Ada Lovelace",
+      user_principal_name: "ada@contoso.com",
+      requested_by_email: "tech@example.com",
+      requested_by_name: "Tech User",
+      status: "awaiting_manual",
+      profile_key: "oasis",
+      on_prem_required: true,
+      requires_on_prem_username_override: false,
+      on_prem_sam_account_name: "ada.l",
+      on_prem_distinguished_name: "CN=Ada Lovelace,OU=Users,DC=movedocs,DC=local",
+      created_at: "2026-03-19T00:00:00Z",
+      started_at: "2026-03-19T00:01:00Z",
+      completed_at: null,
+      error: "",
+      steps: [
+        {
+          step_id: "step-1",
+          step_key: "disable_sign_in",
+          label: "Disable Entra Sign-In",
+          provider: "entra",
+          status: "completed",
+          order_index: 1,
+          profile_key: "",
+          summary: "Disabled sign-in",
+          error: "",
+          before_summary: {},
+          after_summary: {},
+          created_at: "2026-03-19T00:00:00Z",
+          started_at: "2026-03-19T00:01:00Z",
+          completed_at: "2026-03-19T00:02:00Z",
+          retry_count: 0,
+        },
+      ],
+      manual_tasks: [
+        {
+          task_id: "task-1",
+          label: "RingCentral",
+          status: "pending",
+          notes: "",
+          completed_at: null,
+          completed_by_email: "",
+          completed_by_name: "",
+        },
+      ],
+    };
+    mockApi.createUserExitWorkflow.mockResolvedValue(pendingExitWorkflow);
+    mockApi.getUserExitWorkflow.mockResolvedValue(pendingExitWorkflow);
+    mockApi.retryUserExitWorkflowStep.mockResolvedValue({
+      workflow_id: "workflow-1",
+      user_id: "user-1",
+      user_display_name: "Ada Lovelace",
+      user_principal_name: "ada@contoso.com",
+      requested_by_email: "tech@example.com",
+      requested_by_name: "Tech User",
+      status: "running",
+      profile_key: "oasis",
+      on_prem_required: true,
+      requires_on_prem_username_override: false,
+      on_prem_sam_account_name: "ada.l",
+      on_prem_distinguished_name: "CN=Ada Lovelace,OU=Users,DC=movedocs,DC=local",
+      created_at: "2026-03-19T00:00:00Z",
+      started_at: "2026-03-19T00:01:00Z",
+      completed_at: null,
+      error: "",
+      steps: [],
+      manual_tasks: [],
+    });
+    mockApi.completeUserExitManualTask.mockResolvedValue({
+      workflow_id: "workflow-1",
+      user_id: "user-1",
+      user_display_name: "Ada Lovelace",
+      user_principal_name: "ada@contoso.com",
+      requested_by_email: "tech@example.com",
+      requested_by_name: "Tech User",
+      status: "completed",
+      profile_key: "oasis",
+      on_prem_required: true,
+      requires_on_prem_username_override: false,
+      on_prem_sam_account_name: "ada.l",
+      on_prem_distinguished_name: "CN=Ada Lovelace,OU=Users,DC=movedocs,DC=local",
+      created_at: "2026-03-19T00:00:00Z",
+      started_at: "2026-03-19T00:01:00Z",
+      completed_at: "2026-03-19T00:10:00Z",
+      error: "",
+      steps: [],
+      manual_tasks: [
+        {
+          task_id: "task-1",
+          label: "RingCentral",
+          status: "completed",
+          notes: "Handled",
+          completed_at: "2026-03-19T00:10:00Z",
+          completed_by_email: "tech@example.com",
+          completed_by_name: "Tech User",
+        },
+      ],
+    });
   });
 
   it("renders the primary users workspace with bulk actions, confirm flow, and job progress", async () => {
@@ -343,8 +545,12 @@ describe("Users directory pages", () => {
     expect(await screen.findByRole("heading", { name: "Users" })).toBeInTheDocument();
     expect(screen.getByText(/admin workspace/i)).toBeInTheDocument();
     expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getByText("Licensed")).toBeInTheDocument();
+    expect(screen.getByText("No Success 30d")).toBeInTheDocument();
     expect(screen.getByText("Recent Activity")).toBeInTheDocument();
     expect(screen.getByText("Bulk Actions")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Export Filtered CSV" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disabled + Licensed" })).toBeInTheDocument();
 
     await user.click(screen.getByLabelText("Select Ada Lovelace"));
     expect(screen.getByText("1 selected. Bulk actions are the fastest path for identity admin work on it-app.")).toBeInTheDocument();
@@ -386,6 +592,7 @@ describe("Users directory pages", () => {
     expect(screen.getByRole("button", { name: "Mailbox" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Devices" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Exit" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Access" }));
     expect(await screen.findByRole("button", { name: "Disable User" })).toBeInTheDocument();
@@ -397,6 +604,25 @@ describe("Users directory pages", () => {
 
     await user.click(screen.getByRole("button", { name: "Mailbox" }));
     expect(await screen.findByText(/Mailbox management will unlock/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Exit" }));
+    expect(await screen.findByText("Start Exit Workflow")).toBeInTheDocument();
+    expect(screen.getByText("Hybrid exit workflow (Oasis)")).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText("ada@contoso.com"), "ada@contoso.com");
+    await user.click(screen.getByRole("button", { name: "Start Exit Workflow" }));
+
+    await waitFor(() => {
+      expect(mockApi.createUserExitWorkflow).toHaveBeenCalledWith({
+        user_id: "user-1",
+        typed_upn_confirmation: "ada@contoso.com",
+        on_prem_sam_account_name_override: "",
+      });
+    });
+
+    expect(await screen.findByText("Workflow Timeline")).toBeInTheDocument();
+    expect(screen.getByText("Manual Checklist")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mark Complete" })).toBeInTheDocument();
   });
 
   it("renders the shared Azure directory view without the primary admin workspace", async () => {
@@ -407,6 +633,7 @@ describe("Users directory pages", () => {
     expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
     expect(screen.queryByText("Bulk Actions")).not.toBeInTheDocument();
     expect(screen.queryByText("Recent Activity")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Export Filtered CSV" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Guests" }));
 
@@ -420,5 +647,6 @@ describe("Users directory pages", () => {
     expect(await screen.findByRole("heading", { name: "Grace Hopper" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Disable User" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Exit" })).not.toBeInTheDocument();
   });
 });
