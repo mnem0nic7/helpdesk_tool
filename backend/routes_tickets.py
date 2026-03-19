@@ -491,6 +491,34 @@ async def get_assignees() -> list[dict[str, Any]]:
     return sorted(seen.values(), key=lambda x: x["display_name"])
 
 
+@router.get("/users")
+async def list_users() -> list[dict[str, Any]]:
+    """Return active Jira users assignable to the current project."""
+    try:
+        raw_users = _client.get_users_assignable(JIRA_PROJECT)
+    except Exception as exc:
+        logger.exception("Failed to load assignable Jira users")
+        raise HTTPException(
+            status_code=502,
+            detail="Could not load Jira users. Please try again in a moment.",
+        ) from exc
+
+    seen: dict[str, dict[str, Any]] = {}
+    for user in raw_users:
+        account_id = str(user.get("accountId", "")).strip()
+        display_name = str(user.get("displayName", "")).strip()
+        if not account_id or not display_name or account_id in seen:
+            continue
+        if user.get("active") is False:
+            continue
+        seen[account_id] = {
+            "account_id": account_id,
+            "display_name": display_name,
+            "email_address": str(user.get("emailAddress", "")).strip(),
+        }
+    return sorted(seen.values(), key=lambda x: x["display_name"])
+
+
 @router.get("/users/search")
 async def search_users(q: str = Query(default="", max_length=100)) -> list[dict[str, Any]]:
     """Search Jira users by name or email for manual ticket edits."""

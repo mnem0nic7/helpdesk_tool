@@ -13,6 +13,7 @@ const TriagePage = lazy(() => import("./pages/TriagePage"));
 const AILogPage = lazy(() => import("./pages/AILogPage"));
 const AlertsPage = lazy(() => import("./pages/AlertsPage"));
 const KnowledgeBasePage = lazy(() => import("./pages/KnowledgeBasePage"));
+const UsersPage = lazy(() => import("./pages/UsersPage"));
 const AzureOverviewPage = lazy(() => import("./pages/AzureOverviewPage"));
 const AzureVMsPage = lazy(() => import("./pages/AzureVMsPage"));
 const AzureResourcesPage = lazy(() => import("./pages/AzureResourcesPage"));
@@ -72,6 +73,7 @@ export default function App() {
                 <Route path="ai-log" element={<AILogPage />} />
                 <Route path="alerts" element={<AlertsPage />} />
                 <Route path="knowledge-base" element={<KnowledgeBasePage />} />
+                {branding.scope === "primary" ? <Route path="users" element={<UsersPage />} /> : null}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </>
             )}

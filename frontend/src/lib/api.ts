@@ -1298,6 +1298,11 @@ export const api = {
     return fetchJSON<Assignee[]>("/api/assignees");
   },
 
+  /** Fetch all active Jira users assignable to the project. */
+  getUsers(): Promise<Assignee[]> {
+    return fetchJSON<Assignee[]>("/api/users");
+  },
+
   /** Search Jira users by name or email for reporter changes. */
   searchUsers(query: string): Promise<Assignee[]> {
     return fetchJSON<Assignee[]>(`/api/users/search${buildQuery({ q: query })}`);

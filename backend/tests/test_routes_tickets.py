@@ -406,12 +406,15 @@ class TestTicketDetailAndActions:
             "get_priorities",
             lambda: [{"id": "1", "name": "Highest"}, {"id": "2", "name": "High"}],
         )
-        monkeypatch.setattr(routes_tickets._client, "get_service_desk_id_for_project", lambda project: "7")
-        monkeypatch.setattr(
-            routes_tickets._client,
-            "get_request_types",
-            lambda service_desk_id: [{"id": "122", "name": "Business Application Support", "description": "Apps"}],
-        )
+        issue = _detail_issue()
+        issue["fields"]["customfield_10010"] = {
+            "requestType": {
+                "id": "122",
+                "name": "Business Application Support",
+                "description": "Apps",
+            }
+        }
+        monkeypatch.setattr(routes_tickets, "get_scoped_issues", lambda: [issue])
 
         priorities = test_client.get("/api/priorities")
         request_types = test_client.get("/api/request-types")
@@ -438,6 +441,28 @@ class TestTicketDetailAndActions:
         )
 
         resp = test_client.get("/api/users/search?q=ra")
+
+        assert resp.status_code == 200
+        assert resp.json() == [
+            {"account_id": "acct-1", "display_name": "Alan Turing", "email_address": "alan@example.com"},
+            {"account_id": "acct-2", "display_name": "Raza Abidi", "email_address": "raza@example.com"},
+        ]
+
+    def test_list_users_returns_sorted_assignable_users(self, test_client, monkeypatch):
+        import routes_tickets
+
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_users_assignable",
+            lambda project: [
+                {"accountId": "acct-2", "displayName": "Raza Abidi", "emailAddress": "raza@example.com", "active": True},
+                {"accountId": "acct-1", "displayName": "Alan Turing", "emailAddress": "alan@example.com", "active": True},
+                {"accountId": "acct-3", "displayName": "Disabled User", "emailAddress": "disabled@example.com", "active": False},
+                {"accountId": "acct-1", "displayName": "Alan Turing", "emailAddress": "alan@example.com", "active": True},
+            ],
+        )
+
+        resp = test_client.get("/api/users")
 
         assert resp.status_code == 200
         assert resp.json() == [

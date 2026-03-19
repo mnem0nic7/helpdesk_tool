@@ -64,6 +64,14 @@ describe("api.getTickets", () => {
   });
 });
 
+describe("api.getUsers", () => {
+  it("calls /api/users", async () => {
+    mockFetch([]);
+    await api.getUsers();
+    expect(globalThis.fetch).toHaveBeenCalledWith("/api/users");
+  });
+});
+
 describe("api POST methods", () => {
   it("sends POST body for chart data", async () => {
     mockFetch({ data: [], group_by: "status", metric: "count" });

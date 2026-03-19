@@ -24,6 +24,7 @@ const helpdeskNavItems: NavItem[] = [
   { to: "/triage", label: "AI Triage", icon: "\u25C6" },
   { to: "/ai-log", label: "AI Log", icon: "\u25CB" },
   { to: "/alerts", label: "Alerts", icon: "\u25B3" },
+  { to: "/users", label: "Users", icon: "\u25C7", primaryOnly: true },
   { to: "/knowledge-base", label: "Knowledge Base", icon: "\u25A9", primaryOnly: true },
 ];
 
