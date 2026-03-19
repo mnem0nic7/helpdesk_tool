@@ -258,6 +258,23 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     mock_azure_cache.get_cost_trend.return_value = []
     mock_azure_cache.get_cost_breakdown.return_value = []
     mock_azure_cache.get_advisor.return_value = []
+    mock_azure_cache.get_savings_summary.return_value = {
+        "currency": "USD",
+        "total_opportunities": 0,
+        "quantified_opportunities": 0,
+        "quantified_monthly_savings": 0.0,
+        "quick_win_count": 0,
+        "quick_win_monthly_savings": 0.0,
+        "unquantified_opportunity_count": 0,
+        "by_category": [],
+        "by_opportunity_type": [],
+        "by_effort": [],
+        "by_risk": [],
+        "by_confidence": [],
+        "top_subscriptions": [],
+        "top_resource_groups": [],
+    }
+    mock_azure_cache.list_savings_opportunities.return_value = []
     mock_azure_cache.list_resources.return_value = {
         "resources": [],
         "matched_count": 0,

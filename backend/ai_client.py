@@ -384,6 +384,12 @@ Answer only from the provided cached Azure data.
 - For each recommendation cited, include: title, impact level, and monthly_savings amount.
 - Prioritize High-impact items even if a Medium-impact item has higher savings.
 
+## Savings Workspace Rules
+- Prefer `savings_summary.quantified_monthly_savings` over raw Advisor totals when the user asks where to save money now.
+- Use `savings_opportunities` as the ranked action list and mention effort, risk, confidence, and whether savings are quantified.
+- Separate quantified cleanup wins from unquantified reservation strategy items.
+- When the user asks for quick wins, prioritize low-effort, low-risk items first.
+
 ## General Rules
 - Be concrete and action-oriented — give specific resource names, dollar amounts, and subscription names from the data.
 - If the grounding data is empty or unavailable for a question, say so explicitly rather than speculating.
@@ -1219,6 +1225,11 @@ def answer_azure_cost_question(
             source_type="advisor",
             label="Advisor recommendations",
             detail=f"{len(context.get('advisor') or [])} recommendations",
+        ),
+        AzureCitation(
+            source_type="savings",
+            label="Savings opportunities",
+            detail=f"{len(context.get('savings_opportunities') or [])} ranked items",
         ),
     ]
     return AzureCostChatResponse(

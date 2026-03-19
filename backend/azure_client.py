@@ -533,6 +533,7 @@ Resources
     diskState        = tostring(properties.diskState),
     accessTier       = tostring(properties.accessTier),
     sourceResourceId = tostring(properties.creationData.sourceResourceId),
+    createdTime      = tostring(coalesce(properties.timeCreated, systemData.createdAt)),
     diskIOPS         = tolong(properties.diskIOPSReadWrite)
 """
         rows: list[dict[str, Any]] = []
@@ -583,6 +584,7 @@ Resources
                             or item.get("status")
                             or ""
                         ),
+                        "created_time": item.get("createdTime") or "",
                         "tags": item.get("tags") or {},
                         "disk_size_gb":       item.get("diskSizeGB"),
                         "disk_state":         item.get("diskState") or "",

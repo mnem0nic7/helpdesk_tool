@@ -37,6 +37,7 @@ const azureNavItems: NavItem[] = [
   { to: "/identity", label: "Identity", icon: "\u25A6" },
   { to: "/users", label: "Users", icon: "\u25C8" },
   { to: "/cost", label: "Cost", icon: "\u25A4" },
+  { to: "/savings", label: "Savings", icon: "\u25C7" },
   { to: "/copilot", label: "Copilot", icon: "\u25C6" },
   { to: "/alerts", label: "Alerts", icon: "\u25B2" },
   { to: "/account-health", label: "Acct Health", icon: "\u25CE" },

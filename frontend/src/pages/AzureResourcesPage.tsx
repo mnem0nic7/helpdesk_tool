@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
+import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
@@ -19,7 +20,15 @@ export default function AzureResourcesPage() {
     queryFn: () => api.getAzureResources(),
     refetchInterval: 30_000,
   });
+  const networkSavingsQuery = useQuery({
+    queryKey: ["azure", "savings", "resources-page"],
+    queryFn: () => api.getAzureSavingsOpportunities({ category: "network" }),
+    refetchInterval: 60_000,
+  });
   const resources = data?.resources ?? [];
+  const networkSavings = networkSavingsQuery.data ?? [];
+  const unattachedPublicIps = networkSavings.filter((item) => item.opportunity_type === "unattached_public_ip");
+  const networkReviewRows = networkSavings.filter((item) => item.opportunity_type !== "unattached_public_ip");
   const subscriptions = Array.from(new Set(resources.map((item) => item.subscription_name || item.subscription_id))).sort();
   const resourceTypes = Array.from(new Set(resources.map((item) => item.resource_type).filter(Boolean))).sort();
   const locations = Array.from(new Set(resources.map((item) => item.location).filter(Boolean))).sort();
@@ -99,6 +108,23 @@ export default function AzureResourcesPage() {
           <option value="">All states</option>
           {states.map((value) => <option key={value} value={value}>{value}</option>)}
         </select>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <AzureSavingsHighlightsSection
+          title="Network Cleanup"
+          description="Directly actionable network savings items from the synthesized Azure savings feed."
+          opportunities={unattachedPublicIps}
+          emptyMessage="No unattached public IP cleanup actions are currently flagged."
+          maxItems={6}
+        />
+        <AzureSavingsHighlightsSection
+          title="Top Cost Network Review"
+          description="Network-related savings items that still need human review before remediation."
+          opportunities={networkReviewRows}
+          emptyMessage="No additional network review items are currently flagged."
+          maxItems={6}
+        />
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">

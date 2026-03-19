@@ -7,6 +7,7 @@ import {
   type AzureVirtualMachineSizeCoverageRow,
   type AzureVirtualMachineRow,
 } from "../lib/api.ts";
+import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
@@ -367,6 +368,16 @@ export default function AzureComputeOptimizationPage() {
     queryKey: ["azure-compute-optimization"],
     queryFn: () => api.getAzureComputeOptimization(),
   });
+  const savingsQuery = useQuery({
+    queryKey: ["azure", "savings", "compute-page"],
+    queryFn: () => api.getAzureSavingsOpportunities({ category: "compute" }),
+    refetchInterval: 60_000,
+  });
+  const commitmentQuery = useQuery({
+    queryKey: ["azure", "savings", "compute-page", "commitment"],
+    queryFn: () => api.getAzureSavingsOpportunities({ category: "commitment" }),
+    refetchInterval: 60_000,
+  });
 
   if (isLoading) {
     return (
@@ -385,6 +396,8 @@ export default function AzureComputeOptimizationPage() {
   }
 
   const { summary, idle_vms, top_cost_vms, ri_coverage_gaps, advisor_recommendations, cost_available, reservation_data_available } = data;
+  const computeSavings = savingsQuery.data ?? [];
+  const commitmentSavings = commitmentQuery.data ?? [];
 
   return (
     <div className="space-y-6 p-6">
@@ -419,6 +432,22 @@ export default function AzureComputeOptimizationPage() {
           tone={summary.total_advisor_savings > 0 ? "text-emerald-600" : "text-slate-900"}
         />
       </div>
+
+      <AzureSavingsHighlightsSection
+        title="Compute Savings Actions"
+        description="Synthesized idle cleanup and Advisor-backed compute actions, ranked by savings and implementation friction."
+        opportunities={computeSavings}
+        emptyMessage="No compute-focused savings actions are currently flagged."
+        maxItems={6}
+      />
+
+      <AzureSavingsHighlightsSection
+        title="Reservation Strategy"
+        description="Reservation gaps and excesses are tracked here as planning items and are intentionally kept out of quantified totals."
+        opportunities={commitmentSavings}
+        emptyMessage="No reservation coverage gaps or excesses are currently flagged."
+        maxItems={6}
+      />
 
       {/* Idle VMs */}
       <IdleVMsSection vms={idle_vms} costAvailable={cost_available} />

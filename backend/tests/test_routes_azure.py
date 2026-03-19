@@ -103,6 +103,158 @@ def test_directory_users_is_not_available_on_oasisdev_host(test_client):
     assert resp.status_code == 404
 
 
+def test_azure_savings_summary_returns_cached_payload(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.get_savings_summary.return_value = {
+        "currency": "USD",
+        "total_opportunities": 4,
+        "quantified_opportunities": 2,
+        "quantified_monthly_savings": 125.0,
+        "quick_win_count": 3,
+        "quick_win_monthly_savings": 100.0,
+        "unquantified_opportunity_count": 2,
+        "by_category": [{"label": "compute", "count": 2, "estimated_monthly_savings": 75.0}],
+        "by_opportunity_type": [{"label": "idle_vm_attached_cost", "count": 1, "estimated_monthly_savings": 25.0}],
+        "by_effort": [{"label": "low", "count": 3}],
+        "by_risk": [{"label": "low", "count": 2}],
+        "by_confidence": [{"label": "high", "count": 2}],
+        "top_subscriptions": [{"label": "Prod", "count": 2, "estimated_monthly_savings": 75.0}],
+        "top_resource_groups": [{"label": "Prod / rg-prod", "count": 2, "estimated_monthly_savings": 75.0}],
+    }
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get("/api/azure/savings/summary", headers={"host": "azure.movedocs.com"})
+
+    assert resp.status_code == 200
+    assert resp.json()["quantified_monthly_savings"] == 125.0
+
+
+def test_azure_savings_opportunities_pass_filters_to_cache(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.list_savings_opportunities.return_value = [
+        {
+            "id": "opp-1",
+            "category": "storage",
+            "opportunity_type": "unattached_managed_disk",
+            "source": "heuristic",
+            "title": "Review unattached disk",
+            "summary": "Disk is still costing money.",
+            "subscription_id": "sub-1",
+            "subscription_name": "Prod",
+            "resource_group": "rg-prod",
+            "location": "eastus",
+            "resource_id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/disk-1",
+            "resource_name": "disk-1",
+            "resource_type": "Microsoft.Compute/disks",
+            "current_monthly_cost": 10.0,
+            "estimated_monthly_savings": 10.0,
+            "currency": "USD",
+            "quantified": True,
+            "estimate_basis": "proxy",
+            "effort": "low",
+            "risk": "low",
+            "confidence": "high",
+            "recommended_steps": ["Delete the disk if it is no longer needed."],
+            "evidence": [{"label": "Disk state", "value": "Unattached"}],
+            "portal_url": "https://portal.azure.com/#resource/disk-1",
+            "follow_up_route": "/storage",
+        }
+    ]
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get(
+        "/api/azure/savings/opportunities",
+        headers={"host": "azure.movedocs.com"},
+        params={
+            "category": "storage",
+            "subscription_id": "sub-1",
+            "quantified_only": "true",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()[0]["opportunity_type"] == "unattached_managed_disk"
+    mock_cache.list_savings_opportunities.assert_called_once_with(
+        search="",
+        category="storage",
+        opportunity_type="",
+        subscription_id="sub-1",
+        resource_group="",
+        effort="",
+        risk="",
+        confidence="",
+        quantified_only=True,
+    )
+
+
+def test_azure_savings_endpoints_are_not_available_on_primary_host(test_client):
+    resp = test_client.get("/api/azure/savings/summary")
+    assert resp.status_code == 404
+
+
+def test_azure_savings_csv_export_returns_filtered_rows(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.list_savings_opportunities.return_value = [
+        {
+            "id": "opp-1",
+            "category": "network",
+            "opportunity_type": "unattached_public_ip",
+            "source": "heuristic",
+            "title": "Release unattached public IP",
+            "summary": "Public IP is unused.",
+            "subscription_id": "sub-1",
+            "subscription_name": "Prod",
+            "resource_group": "rg-prod",
+            "location": "eastus",
+            "resource_id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/publicIPAddresses/pip-1",
+            "resource_name": "pip-1",
+            "resource_type": "Microsoft.Network/publicIPAddresses",
+            "current_monthly_cost": 4.0,
+            "estimated_monthly_savings": 4.0,
+            "currency": "USD",
+            "quantified": True,
+            "estimate_basis": "proxy",
+            "effort": "low",
+            "risk": "low",
+            "confidence": "high",
+            "recommended_steps": ["Release the IP if it is no longer needed."],
+            "evidence": [{"label": "Reference status", "value": "Unused"}],
+            "portal_url": "https://portal.azure.com/#resource/pip-1",
+            "follow_up_route": "/resources",
+        }
+    ]
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get(
+        "/api/azure/savings/export.csv",
+        headers={"host": "azure.movedocs.com"},
+        params={"category": "network"},
+    )
+
+    assert resp.status_code == 200
+    assert "Release unattached public IP" in resp.text
+    mock_cache.list_savings_opportunities.assert_called_once()
+
+
+def test_azure_savings_xlsx_export_returns_workbook(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.list_savings_opportunities.return_value = []
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get("/api/azure/savings/export.xlsx", headers={"host": "azure.movedocs.com"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
 def test_azure_refresh_requires_admin(test_client, monkeypatch):
     import auth
 

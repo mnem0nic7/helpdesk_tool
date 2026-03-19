@@ -25,6 +25,8 @@ from azure_cache import azure_cache
 from azure_vm_export_jobs import azure_vm_export_jobs
 from models import (
     AzureCostChatRequest,
+    AzureSavingsOpportunity,
+    AzureSavingsSummary,
     AzureVirtualMachineCostExportJobCreateRequest,
     AzureVirtualMachineCostExportJobResponse,
     AzureVirtualMachineDetailResponse,
@@ -123,6 +125,71 @@ def _build_vm_coverage_file_response(path: str, filename: str, media_type: str) 
         filename=filename,
         media_type=media_type,
         background=BackgroundTask(_delete_file, path),
+    )
+
+
+def _savings_export_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    export_rows: list[dict[str, Any]] = []
+    for item in rows:
+        evidence = "; ".join(
+            f"{row.get('label', '')}: {row.get('value', '')}"
+            for row in (item.get("evidence") or [])
+            if isinstance(row, dict)
+        )
+        export_rows.append(
+            {
+                "Title": _safe_export_text(item.get("title") or ""),
+                "Category": _safe_export_text(item.get("category") or ""),
+                "Opportunity Type": _safe_export_text(item.get("opportunity_type") or ""),
+                "Source": _safe_export_text(item.get("source") or ""),
+                "Subscription": _safe_export_text(item.get("subscription_name") or item.get("subscription_id") or ""),
+                "Resource Group": _safe_export_text(item.get("resource_group") or ""),
+                "Location": _safe_export_text(item.get("location") or ""),
+                "Resource Name": _safe_export_text(item.get("resource_name") or ""),
+                "Resource Type": _safe_export_text(item.get("resource_type") or ""),
+                "Current Monthly Cost": item.get("current_monthly_cost") if item.get("current_monthly_cost") is not None else "",
+                "Estimated Monthly Savings": (
+                    item.get("estimated_monthly_savings")
+                    if item.get("estimated_monthly_savings") is not None
+                    else ""
+                ),
+                "Quantified": "Yes" if item.get("quantified") else "No",
+                "Effort": _safe_export_text(item.get("effort") or ""),
+                "Risk": _safe_export_text(item.get("risk") or ""),
+                "Confidence": _safe_export_text(item.get("confidence") or ""),
+                "Estimate Basis": _safe_export_text(item.get("estimate_basis") or ""),
+                "Summary": _safe_export_text(item.get("summary") or ""),
+                "Recommended Steps": _safe_export_text("; ".join(item.get("recommended_steps") or [])),
+                "Evidence": _safe_export_text(evidence),
+                "Portal URL": _safe_export_text(item.get("portal_url") or ""),
+                "Follow Up Route": _safe_export_text(item.get("follow_up_route") or ""),
+            }
+        )
+    return export_rows
+
+
+def _list_filtered_savings_opportunities(
+    *,
+    search: str = "",
+    category: str = "",
+    opportunity_type: str = "",
+    subscription_id: str = "",
+    resource_group: str = "",
+    effort: str = "",
+    risk: str = "",
+    confidence: str = "",
+    quantified_only: bool = False,
+) -> list[dict[str, Any]]:
+    return azure_cache.list_savings_opportunities(
+        search=search,
+        category=category,
+        opportunity_type=opportunity_type,
+        subscription_id=subscription_id,
+        resource_group=resource_group,
+        effort=effort,
+        risk=risk,
+        confidence=confidence,
+        quantified_only=quantified_only,
     )
 
 
@@ -489,6 +556,203 @@ async def get_cost_breakdown(group_by: str = Query(default="service")) -> list[d
 async def get_advisor() -> list[dict[str, Any]]:
     _ensure_azure_site()
     return azure_cache.get_advisor()
+
+
+@router.get("/savings/summary")
+async def get_savings_summary() -> AzureSavingsSummary:
+    _ensure_azure_site()
+    return AzureSavingsSummary.model_validate(azure_cache.get_savings_summary())
+
+
+@router.get("/savings/opportunities")
+async def get_savings_opportunities(
+    search: str = Query(default=""),
+    category: str = Query(default=""),
+    opportunity_type: str = Query(default=""),
+    subscription_id: str = Query(default=""),
+    resource_group: str = Query(default=""),
+    effort: str = Query(default=""),
+    risk: str = Query(default=""),
+    confidence: str = Query(default=""),
+    quantified_only: bool = Query(default=False),
+) -> list[AzureSavingsOpportunity]:
+    _ensure_azure_site()
+    rows = _list_filtered_savings_opportunities(
+        search=search,
+        category=category,
+        opportunity_type=opportunity_type,
+        subscription_id=subscription_id,
+        resource_group=resource_group,
+        effort=effort,
+        risk=risk,
+        confidence=confidence,
+        quantified_only=quantified_only,
+    )
+    return [AzureSavingsOpportunity.model_validate(item) for item in rows]
+
+
+@router.get("/savings/export.csv")
+async def export_savings_csv(
+    search: str = Query(default=""),
+    category: str = Query(default=""),
+    opportunity_type: str = Query(default=""),
+    subscription_id: str = Query(default=""),
+    resource_group: str = Query(default=""),
+    effort: str = Query(default=""),
+    risk: str = Query(default=""),
+    confidence: str = Query(default=""),
+    quantified_only: bool = Query(default=False),
+) -> FileResponse:
+    _ensure_azure_site()
+    rows = _savings_export_rows(
+        _list_filtered_savings_opportunities(
+            search=search,
+            category=category,
+            opportunity_type=opportunity_type,
+            subscription_id=subscription_id,
+            resource_group=resource_group,
+            effort=effort,
+            risk=risk,
+            confidence=confidence,
+            quantified_only=quantified_only,
+        )
+    )
+    now = datetime.now(timezone.utc)
+    filename = f"azure_savings_{now.strftime('%Y%m%d_%H%M')}.csv"
+    headers = [
+        "Title",
+        "Category",
+        "Opportunity Type",
+        "Source",
+        "Subscription",
+        "Resource Group",
+        "Location",
+        "Resource Name",
+        "Resource Type",
+        "Current Monthly Cost",
+        "Estimated Monthly Savings",
+        "Quantified",
+        "Effort",
+        "Risk",
+        "Confidence",
+        "Estimate Basis",
+        "Summary",
+        "Recommended Steps",
+        "Evidence",
+        "Portal URL",
+        "Follow Up Route",
+    ]
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8")
+    try:
+        writer = csv.DictWriter(tmp, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(rows)
+        tmp.flush()
+    finally:
+        tmp.close()
+    return _build_vm_coverage_file_response(tmp.name, filename, "text/csv; charset=utf-8")
+
+
+@router.get("/savings/export.xlsx")
+async def export_savings_excel(
+    search: str = Query(default=""),
+    category: str = Query(default=""),
+    opportunity_type: str = Query(default=""),
+    subscription_id: str = Query(default=""),
+    resource_group: str = Query(default=""),
+    effort: str = Query(default=""),
+    risk: str = Query(default=""),
+    confidence: str = Query(default=""),
+    quantified_only: bool = Query(default=False),
+) -> FileResponse:
+    _ensure_azure_site()
+    rows = _savings_export_rows(
+        _list_filtered_savings_opportunities(
+            search=search,
+            category=category,
+            opportunity_type=opportunity_type,
+            subscription_id=subscription_id,
+            resource_group=resource_group,
+            effort=effort,
+            risk=risk,
+            confidence=confidence,
+            quantified_only=quantified_only,
+        )
+    )
+    now = datetime.now(timezone.utc)
+    filename = f"azure_savings_{now.strftime('%Y%m%d_%H%M')}.xlsx"
+    headers = [
+        "Title",
+        "Category",
+        "Opportunity Type",
+        "Source",
+        "Subscription",
+        "Resource Group",
+        "Location",
+        "Resource Name",
+        "Resource Type",
+        "Current Monthly Cost",
+        "Estimated Monthly Savings",
+        "Quantified",
+        "Effort",
+        "Risk",
+        "Confidence",
+        "Estimate Basis",
+        "Summary",
+        "Recommended Steps",
+        "Evidence",
+        "Portal URL",
+        "Follow Up Route",
+    ]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Savings"
+    for column_index, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=column_index, value=header)
+        cell.font = _HEADER_FONT
+        cell.fill = _HEADER_FILL
+        cell.alignment = _HEADER_ALIGNMENT
+
+    for row_index, row in enumerate(rows, 2):
+        for column_index, header in enumerate(headers, 1):
+            ws.cell(row=row_index, column=column_index, value=row.get(header, ""))
+
+    for column_name, width in {
+        "A": 36,
+        "B": 14,
+        "C": 26,
+        "D": 12,
+        "E": 24,
+        "F": 24,
+        "G": 14,
+        "H": 28,
+        "I": 34,
+        "J": 18,
+        "K": 22,
+        "L": 12,
+        "M": 10,
+        "N": 10,
+        "O": 12,
+        "P": 42,
+        "Q": 48,
+        "R": 56,
+        "S": 64,
+        "T": 48,
+        "U": 18,
+    }.items():
+        ws.column_dimensions[column_name].width = width
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    try:
+        wb.save(tmp.name)
+    finally:
+        tmp.close()
+    return _build_vm_coverage_file_response(
+        tmp.name,
+        filename,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @router.get("/storage")

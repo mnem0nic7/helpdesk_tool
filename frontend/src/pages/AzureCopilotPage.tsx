@@ -3,9 +3,9 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 
 const starterPrompts = [
-  "What are the biggest cost-saving opportunities right now?",
-  "Which subscriptions look most expensive over the current window?",
-  "What should we investigate first based on recent spend and Advisor data?",
+  "What are the highest-confidence savings opportunities right now?",
+  "Which quick wins should we tackle first to save money in Azure?",
+  "Where are we paying for idle or unattached resources right now?",
 ];
 
 export default function AzureCopilotPage() {
@@ -27,7 +27,7 @@ export default function AzureCopilotPage() {
       <div>
         <h1 className="text-3xl font-bold text-slate-900">Azure Copilot</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Ask grounded cost and governance questions against the cached Azure dataset.
+          Ask grounded cost and governance questions against the cached Azure dataset, including the new ranked savings workspace.
         </p>
       </div>
 

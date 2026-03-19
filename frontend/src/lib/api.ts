@@ -776,6 +776,7 @@ export interface AzureResourceRow {
   sku_name: string;
   vm_size: string;
   state: string;
+  created_time: string;
   tags: Record<string, string>;
 }
 
@@ -1177,6 +1178,62 @@ export interface AzureAdvisorRecommendation {
   currency: string;
 }
 
+export interface AzureSavingsEvidenceRow {
+  label: string;
+  value: string;
+}
+
+export interface AzureSavingsAggregateRow {
+  label: string;
+  count: number;
+  estimated_monthly_savings: number;
+}
+
+export interface AzureSavingsOpportunity {
+  id: string;
+  category: "compute" | "storage" | "network" | "commitment" | "other";
+  opportunity_type: string;
+  source: "heuristic" | "advisor";
+  title: string;
+  summary: string;
+  subscription_id: string;
+  subscription_name: string;
+  resource_group: string;
+  location: string;
+  resource_id: string;
+  resource_name: string;
+  resource_type: string;
+  current_monthly_cost: number | null;
+  estimated_monthly_savings: number | null;
+  currency: string;
+  quantified: boolean;
+  estimate_basis: string;
+  effort: "low" | "medium" | "high";
+  risk: "low" | "medium" | "high";
+  confidence: "low" | "medium" | "high";
+  recommended_steps: string[];
+  evidence: AzureSavingsEvidenceRow[];
+  portal_url: string;
+  follow_up_route: string;
+}
+
+export interface AzureSavingsSummary {
+  currency: string;
+  total_opportunities: number;
+  quantified_opportunities: number;
+  quantified_monthly_savings: number;
+  quick_win_count: number;
+  quick_win_monthly_savings: number;
+  unquantified_opportunity_count: number;
+  by_category: AzureSavingsAggregateRow[];
+  by_opportunity_type: AzureSavingsAggregateRow[];
+  by_effort: AzureCountByLabel[];
+  by_risk: AzureCountByLabel[];
+  by_confidence: AzureCountByLabel[];
+  top_subscriptions: AzureSavingsAggregateRow[];
+  top_resource_groups: AzureSavingsAggregateRow[];
+}
+
 export interface AzureComputeOptimizationSummary {
   total_vms: number;
   running_vms: number;
@@ -1347,6 +1404,18 @@ export interface AzureVirtualMachineQueryParams {
   location?: string;
   state?: string;
   size?: string;
+}
+
+export interface AzureSavingsQueryParams {
+  search?: string;
+  category?: string;
+  opportunity_type?: string;
+  subscription_id?: string;
+  resource_group?: string;
+  effort?: string;
+  risk?: string;
+  confidence?: string;
+  quantified_only?: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1747,6 +1816,22 @@ export const api = {
 
   getAzureAdvisor(): Promise<AzureAdvisorRecommendation[]> {
     return fetchJSON<AzureAdvisorRecommendation[]>("/api/azure/advisor");
+  },
+
+  getAzureSavingsSummary(): Promise<AzureSavingsSummary> {
+    return fetchJSON<AzureSavingsSummary>("/api/azure/savings/summary");
+  },
+
+  getAzureSavingsOpportunities(params: AzureSavingsQueryParams = {}): Promise<AzureSavingsOpportunity[]> {
+    return fetchJSON<AzureSavingsOpportunity[]>(`/api/azure/savings/opportunities${buildQuery(params)}`);
+  },
+
+  exportAzureSavingsCsv(params: AzureSavingsQueryParams = {}): string {
+    return `/api/azure/savings/export.csv${buildQuery(params)}`;
+  },
+
+  exportAzureSavingsExcel(params: AzureSavingsQueryParams = {}): string {
+    return `/api/azure/savings/export.xlsx${buildQuery(params)}`;
   },
 
   getAzureStorage(): Promise<AzureStorageSummary> {

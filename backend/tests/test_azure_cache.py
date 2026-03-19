@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from azure_cache import AzureCache
 from azure_client import AzureApiError
 
@@ -1483,3 +1485,495 @@ def test_inventory_refresh_continues_when_reservations_are_unauthorized(tmp_path
         "available": False,
         "error": "GET https://management.azure.com/providers/Microsoft.Capacity/reservations failed (403)",
     }
+
+
+def test_savings_opportunities_include_idle_vm_attached_cost(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    vm_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1"
+    nic_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/networkInterfaces/nic-1"
+    disk_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/disk-1"
+    pip_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/publicIPAddresses/pip-1"
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": vm_id,
+                    "name": "vm-1",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/deallocated",
+                    "created_time": "",
+                    "network_interface_ids": [nic_id],
+                    "os_disk_id": disk_id,
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "tags": {},
+                },
+                {
+                    "id": nic_id,
+                    "name": "nic-1",
+                    "resource_type": "Microsoft.Network/networkInterfaces",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "created_time": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [pip_id],
+                    "managed_by": "",
+                    "attached_vm_id": vm_id,
+                    "tags": {},
+                },
+                {
+                    "id": disk_id,
+                    "name": "disk-1",
+                    "resource_type": "Microsoft.Compute/disks",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "Premium_LRS",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "created_time": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "managed_by": vm_id,
+                    "attached_vm_id": "",
+                    "disk_state": "Attached",
+                    "tags": {},
+                },
+                {
+                    "id": pip_id,
+                    "name": "pip-1",
+                    "resource_type": "Microsoft.Network/publicIPAddresses",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "Standard",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "created_time": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "tags": {},
+                },
+            ],
+            "cost_summary": {
+                "lookback_days": 30,
+                "total_cost": 0.0,
+                "currency": "USD",
+                "top_service": "",
+                "top_subscription": "",
+                "top_resource_group": "",
+                "recommendation_count": 0,
+                "potential_monthly_savings": 0.0,
+            },
+            "cost_by_resource_id_status": {"available": True, "error": None, "cost_basis": "amortized"},
+            "cost_by_resource_id": [
+                {"label": disk_id, "amount": 14.0, "currency": "USD"},
+                {"label": pip_id, "amount": 6.0, "currency": "USD"},
+            ],
+            "advisor": [],
+            "reservations": [],
+            "reservation_status": {"available": False, "error": None},
+        }
+    )
+
+    cache._rebuild_savings_snapshots()
+
+    rows = cache.list_savings_opportunities(opportunity_type="idle_vm_attached_cost")
+
+    assert len(rows) == 1
+    assert rows[0]["resource_name"] == "vm-1"
+    assert rows[0]["estimated_monthly_savings"] == 20.0
+    assert rows[0]["quantified"] is True
+
+
+def test_savings_opportunities_include_unattached_disks_stale_snapshots_and_public_ips(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    stale_created = (datetime.now(timezone.utc) - timedelta(days=75)).isoformat()
+    disk_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/disk-2"
+    snapshot_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/snapshots/snap-1"
+    pip_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/publicIPAddresses/pip-2"
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": disk_id,
+                    "name": "disk-2",
+                    "resource_type": "Microsoft.Compute/disks",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "Premium_LRS",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "created_time": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "disk_state": "Unattached",
+                    "disk_size_gb": 128,
+                    "tags": {},
+                },
+                {
+                    "id": snapshot_id,
+                    "name": "snap-1",
+                    "resource_type": "Microsoft.Compute/snapshots",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "Standard_LRS",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "created_time": stale_created,
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "source_resource_id": disk_id,
+                    "tags": {},
+                },
+                {
+                    "id": pip_id,
+                    "name": "pip-2",
+                    "resource_type": "Microsoft.Network/publicIPAddresses",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "Standard",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "created_time": "",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "tags": {},
+                },
+            ],
+            "cost_summary": {
+                "lookback_days": 30,
+                "total_cost": 0.0,
+                "currency": "USD",
+                "top_service": "",
+                "top_subscription": "",
+                "top_resource_group": "",
+                "recommendation_count": 0,
+                "potential_monthly_savings": 0.0,
+            },
+            "cost_by_resource_id_status": {"available": True, "error": None, "cost_basis": "amortized"},
+            "cost_by_resource_id": [
+                {"label": disk_id, "amount": 12.0, "currency": "USD"},
+                {"label": snapshot_id, "amount": 3.5, "currency": "USD"},
+                {"label": pip_id, "amount": 4.0, "currency": "USD"},
+            ],
+            "advisor": [],
+            "reservations": [],
+            "reservation_status": {"available": False, "error": None},
+        }
+    )
+
+    cache._rebuild_savings_snapshots()
+
+    types = [row["opportunity_type"] for row in cache.list_savings_opportunities()]
+
+    assert "unattached_managed_disk" in types
+    assert "stale_snapshot" in types
+    assert "unattached_public_ip" in types
+
+
+def test_savings_opportunities_include_reservation_gap_and_excess(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "vm-gap-1",
+                    "name": "vm-gap-1",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "created_time": "",
+                    "tags": {},
+                }
+            ],
+            "reservations": [
+                {
+                    "sku": "Standard_D4s_v5",
+                    "location": "eastus",
+                    "quantity": 0,
+                    "display_name": "Prod gap",
+                },
+                {
+                    "sku": "Standard_E4as_v4",
+                    "location": "westus",
+                    "quantity": 2,
+                    "display_name": "West excess",
+                },
+            ],
+            "reservation_status": {"available": True, "error": None},
+            "cost_summary": {
+                "lookback_days": 30,
+                "total_cost": 0.0,
+                "currency": "USD",
+                "top_service": "",
+                "top_subscription": "",
+                "top_resource_group": "",
+                "recommendation_count": 0,
+                "potential_monthly_savings": 0.0,
+            },
+            "cost_by_resource_id_status": {"available": False, "error": None, "cost_basis": "amortized"},
+            "cost_by_resource_id": [],
+            "advisor": [],
+        }
+    )
+
+    cache._rebuild_savings_snapshots()
+
+    types = [row["opportunity_type"] for row in cache.list_savings_opportunities(category="commitment")]
+
+    assert "reservation_coverage_gap" in types
+    assert "reservation_excess" in types
+
+
+def test_savings_opportunities_dedupe_duplicate_advisor_rows(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    vm_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-2"
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": vm_id,
+                    "name": "vm-2",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "created_time": "",
+                    "tags": {},
+                }
+            ],
+            "cost_summary": {
+                "lookback_days": 30,
+                "total_cost": 0.0,
+                "currency": "USD",
+                "top_service": "",
+                "top_subscription": "",
+                "top_resource_group": "",
+                "recommendation_count": 2,
+                "potential_monthly_savings": 0.0,
+            },
+            "cost_by_resource_id_status": {"available": False, "error": None, "cost_basis": "amortized"},
+            "cost_by_resource_id": [],
+            "advisor": [
+                {
+                    "id": "advisor-1",
+                    "category": "Cost",
+                    "impact": "Medium",
+                    "recommendation_type": "RightSizeVirtualMachine",
+                    "title": "Right-size this VM",
+                    "description": "VM appears overprovisioned.",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_id": vm_id,
+                    "annual_savings": 120.0,
+                    "monthly_savings": 10.0,
+                    "currency": "USD",
+                },
+                {
+                    "id": "advisor-2",
+                    "category": "Cost",
+                    "impact": "High",
+                    "recommendation_type": "RightSizeVirtualMachine",
+                    "title": "Right-size this VM",
+                    "description": "Duplicate recommendation with higher savings.",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_id": vm_id,
+                    "annual_savings": 180.0,
+                    "monthly_savings": 15.0,
+                    "currency": "USD",
+                },
+            ],
+            "reservations": [],
+            "reservation_status": {"available": False, "error": None},
+        }
+    )
+
+    cache._rebuild_savings_snapshots()
+
+    rows = cache.list_savings_opportunities(opportunity_type="advisor_compute_rightsize")
+
+    assert len(rows) == 1
+    assert rows[0]["estimated_monthly_savings"] == 15.0
+
+
+def test_savings_summary_excludes_unquantified_commitment_items_from_totals(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    disk_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/disk-3"
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": disk_id,
+                    "name": "disk-3",
+                    "resource_type": "Microsoft.Compute/disks",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "StandardSSD_LRS",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "created_time": "",
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "disk_state": "Unattached",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "tags": {},
+                }
+            ],
+            "reservations": [
+                {
+                    "sku": "Standard_D4s_v5",
+                    "location": "eastus",
+                    "quantity": 2,
+                    "display_name": "Prod excess",
+                }
+            ],
+            "reservation_status": {"available": True, "error": None},
+            "cost_summary": {
+                "lookback_days": 30,
+                "total_cost": 0.0,
+                "currency": "USD",
+                "top_service": "",
+                "top_subscription": "",
+                "top_resource_group": "",
+                "recommendation_count": 0,
+                "potential_monthly_savings": 0.0,
+            },
+            "cost_by_resource_id_status": {"available": True, "error": None, "cost_basis": "amortized"},
+            "cost_by_resource_id": [{"label": disk_id, "amount": 11.5, "currency": "USD"}],
+            "advisor": [],
+        }
+    )
+
+    cache._rebuild_savings_snapshots()
+
+    summary = cache.get_savings_summary()
+
+    assert summary["quantified_monthly_savings"] == 11.5
+    assert summary["unquantified_opportunity_count"] == 1
+
+
+def test_savings_monthly_proxy_normalizes_non_30_day_lookback(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    disk_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/disk-4"
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": disk_id,
+                    "name": "disk-4",
+                    "resource_type": "Microsoft.Compute/disks",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "StandardSSD_LRS",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "created_time": "",
+                    "managed_by": "",
+                    "attached_vm_id": "",
+                    "disk_state": "Unattached",
+                    "network_interface_ids": [],
+                    "os_disk_id": "",
+                    "data_disk_ids": [],
+                    "public_ip_ids": [],
+                    "tags": {},
+                }
+            ],
+            "cost_summary": {
+                "lookback_days": 7,
+                "total_cost": 0.0,
+                "currency": "USD",
+                "top_service": "",
+                "top_subscription": "",
+                "top_resource_group": "",
+                "recommendation_count": 0,
+                "potential_monthly_savings": 0.0,
+            },
+            "cost_by_resource_id_status": {"available": True, "error": None, "cost_basis": "amortized"},
+            "cost_by_resource_id": [{"label": disk_id, "amount": 7.0, "currency": "USD"}],
+            "advisor": [],
+            "reservations": [],
+            "reservation_status": {"available": False, "error": None},
+        }
+    )
+
+    cache._rebuild_savings_snapshots()
+
+    rows = cache.list_savings_opportunities(opportunity_type="unattached_managed_disk")
+
+    assert len(rows) == 1
+    assert rows[0]["estimated_monthly_savings"] == 30.0

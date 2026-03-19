@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "../lib/api.ts";
+import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
@@ -46,7 +47,13 @@ export default function AzureCostPage() {
     queryFn: () => api.getAzureAdvisor(),
     refetchInterval: 60_000,
   });
+  const savings = useQuery({
+    queryKey: ["azure", "savings", "cost-page"],
+    queryFn: () => api.getAzureSavingsOpportunities({ quantified_only: true }),
+    refetchInterval: 60_000,
+  });
   const advisorRows = advisor.data ?? [];
+  const topSavingsRows = (savings.data ?? []).slice(0, 6);
   const { sortKey: advSortKey, sortDir: advSortDir, toggleSort: toggleAdvSort } = useTableSort<AdvisorSortKey>("monthly_savings", "desc");
   const sortedAdvisor = sortRows(advisorRows, advSortKey, advSortDir, (item, key) => {
     if (key === "subscription_name") return item.subscription_name || item.subscription_id;
@@ -155,6 +162,14 @@ export default function AzureCostPage() {
           </div>
         </section>
       </div>
+
+      <AzureSavingsHighlightsSection
+        title="Top Savings Opportunities"
+        description="The highest-value quantified actions across cleanup, rightsizing, and other synthesized Azure savings signals."
+        opportunities={topSavingsRows}
+        emptyMessage="No quantified Azure savings opportunities are available yet."
+        maxItems={6}
+      />
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between">

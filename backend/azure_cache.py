@@ -53,9 +53,14 @@ _DATASET_CONFIG: dict[str, dict[str, Any]] = {
             "cost_by_resource_id",
             "cost_by_resource_id_status",
             "advisor",
+            "savings_summary",
+            "savings_opportunities",
         ],
     },
 }
+
+_SAVINGS_MONTHLY_PROXY_DAYS = 30
+_STALE_SNAPSHOT_DAYS = 60
 
 
 class AzureCache:
@@ -577,11 +582,846 @@ class AzureCache:
                     "advisor": advisor,
                 }
             )
+            self._rebuild_savings_snapshots()
             updated_at = datetime.now(timezone.utc).isoformat()
             self._set_dataset_status("cost", updated_at=updated_at, error=None)
         except AzureApiError as exc:
             logger.warning("Azure cost refresh failed: %s", exc)
             self._set_dataset_status("cost", updated_at=self._dataset_state["cost"]["last_refresh"], error=str(exc))
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    @staticmethod
+    def _format_currency_text(value: Any, currency: str = "USD") -> str:
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            return "—"
+        if currency.upper() == "USD":
+            return f"${amount:,.2f}"
+        return f"{currency.upper()} {amount:,.2f}"
+
+    def _monthly_cost_proxy(self, amount: Any, *, lookback_days: int | None = None) -> float | None:
+        try:
+            numeric_amount = float(amount)
+        except (TypeError, ValueError):
+            return None
+        effective_lookback = int(lookback_days or self.get_cost_summary().get("lookback_days") or AZURE_COST_LOOKBACK_DAYS or 0)
+        if effective_lookback <= 0:
+            return round(numeric_amount, 2)
+        return round(numeric_amount * _SAVINGS_MONTHLY_PROXY_DAYS / effective_lookback, 2)
+
+    @staticmethod
+    def _portal_url_for_resource(resource_id: Any) -> str:
+        text = str(resource_id or "").strip()
+        if not text:
+            return "https://portal.azure.com/"
+        return f"https://portal.azure.com/#resource{text}"
+
+    @staticmethod
+    def _category_for_savings_opportunity(opportunity_type: str, resource_type: str) -> str:
+        if opportunity_type in {"idle_vm_attached_cost", "advisor_compute_rightsize", "advisor_compute_shutdown"}:
+            return "compute"
+        if opportunity_type in {"unattached_managed_disk", "stale_snapshot"}:
+            return "storage"
+        if opportunity_type == "unattached_public_ip":
+            return "network"
+        if opportunity_type in {"reservation_coverage_gap", "reservation_excess"}:
+            return "commitment"
+
+        normalized_type = str(resource_type or "").strip().lower()
+        if normalized_type in {"microsoft.compute/disks", "microsoft.compute/snapshots"}:
+            return "storage"
+        if normalized_type.startswith("microsoft.storage/"):
+            return "storage"
+        if normalized_type.startswith("microsoft.network/"):
+            return "network"
+        if normalized_type.startswith("microsoft.compute/"):
+            return "compute"
+        return "other"
+
+    @staticmethod
+    def _follow_up_route_for_savings_opportunity(opportunity_type: str, category: str) -> str:
+        if opportunity_type in {
+            "idle_vm_attached_cost",
+            "advisor_compute_rightsize",
+            "advisor_compute_shutdown",
+            "reservation_coverage_gap",
+            "reservation_excess",
+        }:
+            return "/compute"
+        if opportunity_type in {"unattached_managed_disk", "stale_snapshot"}:
+            return "/storage"
+        if opportunity_type == "unattached_public_ip":
+            return "/resources"
+        if category == "network":
+            return "/resources"
+        if category == "storage":
+            return "/storage"
+        if category == "compute":
+            return "/compute"
+        return "/cost"
+
+    @staticmethod
+    def _advisor_opportunity_type(item: dict[str, Any], resource_type: str) -> str:
+        haystack = " ".join(
+            [
+                str(item.get("recommendation_type") or ""),
+                str(item.get("title") or ""),
+                str(item.get("description") or ""),
+                str(resource_type or ""),
+            ]
+        ).lower()
+        if "virtualmachineshutdown" in haystack or "shutdown" in haystack or "shut down" in haystack:
+            return "advisor_compute_shutdown"
+        if "rightsize" in haystack or "right-size" in haystack or "resize" in haystack:
+            return "advisor_compute_rightsize"
+        return "advisor_other_cost"
+
+    @staticmethod
+    def _resource_group_label(item: dict[str, Any]) -> str:
+        group = str(item.get("resource_group") or "").strip()
+        if not group:
+            return ""
+        subscription = str(item.get("subscription_name") or item.get("subscription_id") or "").strip()
+        if subscription:
+            return f"{subscription} / {group}"
+        return group
+
+    @staticmethod
+    def _savings_sort_key(item: dict[str, Any]) -> tuple[float, int, int, int, str]:
+        savings_value = item.get("estimated_monthly_savings")
+        savings_sort = -(float(savings_value) if savings_value is not None else -1.0)
+        effort_rank = {"low": 0, "medium": 1, "high": 2}.get(str(item.get("effort") or "").lower(), 99)
+        risk_rank = {"low": 0, "medium": 1, "high": 2}.get(str(item.get("risk") or "").lower(), 99)
+        confidence_rank = {"high": 0, "medium": 1, "low": 2}.get(str(item.get("confidence") or "").lower(), 99)
+        return (
+            savings_sort,
+            effort_rank,
+            risk_rank,
+            confidence_rank,
+            str(item.get("title") or "").lower(),
+        )
+
+    @staticmethod
+    def _aggregate_savings_rows(
+        items: list[dict[str, Any]],
+        label_getter: Callable[[dict[str, Any]], str],
+        *,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        buckets: dict[str, dict[str, Any]] = {}
+        for item in items:
+            label = str(label_getter(item) or "").strip()
+            if not label:
+                continue
+            row = buckets.setdefault(
+                label,
+                {"label": label, "count": 0, "estimated_monthly_savings": 0.0},
+            )
+            row["count"] += 1
+            row["estimated_monthly_savings"] += float(item.get("estimated_monthly_savings") or 0.0)
+
+        rows = list(buckets.values())
+        rows.sort(
+            key=lambda row: (
+                -float(row.get("estimated_monthly_savings") or 0.0),
+                -int(row.get("count") or 0),
+                str(row.get("label") or "").lower(),
+            )
+        )
+        if limit is not None:
+            rows = rows[:limit]
+        for row in rows:
+            row["estimated_monthly_savings"] = round(float(row.get("estimated_monthly_savings") or 0.0), 2)
+        return rows
+
+    @staticmethod
+    def _aggregate_count_rows(
+        items: list[dict[str, Any]],
+        field_name: str,
+        *,
+        order: list[str],
+    ) -> list[dict[str, Any]]:
+        counts: dict[str, int] = defaultdict(int)
+        for item in items:
+            label = str(item.get(field_name) or "").strip().lower()
+            if not label:
+                continue
+            counts[label] += 1
+        return [
+            {"label": label, "count": counts[label]}
+            for label in order
+            if counts.get(label)
+        ]
+
+    def _build_savings_opportunity(
+        self,
+        *,
+        opportunity_id: str,
+        opportunity_type: str,
+        source: str,
+        title: str,
+        summary: str,
+        resource: dict[str, Any] | None = None,
+        category: str = "",
+        subscription_id: str = "",
+        subscription_name: str = "",
+        resource_group: str = "",
+        location: str = "",
+        resource_id: str = "",
+        resource_name: str = "",
+        resource_type: str = "",
+        current_monthly_cost: float | None = None,
+        estimated_monthly_savings: float | None = None,
+        currency: str = "USD",
+        quantified: bool | None = None,
+        estimate_basis: str = "",
+        effort: str = "medium",
+        risk: str = "medium",
+        confidence: str = "medium",
+        recommended_steps: list[str] | None = None,
+        evidence: list[dict[str, str]] | None = None,
+        portal_url: str = "",
+        follow_up_route: str = "",
+    ) -> dict[str, Any]:
+        resource = resource or {}
+        resolved_resource_id = str(resource_id or resource.get("id") or "").strip()
+        resolved_resource_name = str(
+            resource_name or resource.get("name") or self._resource_display_name(resolved_resource_id)
+        ).strip()
+        resolved_resource_type = str(resource_type or resource.get("resource_type") or "").strip()
+        resolved_category = category or self._category_for_savings_opportunity(opportunity_type, resolved_resource_type)
+        resolved_subscription_id = str(subscription_id or resource.get("subscription_id") or "").strip()
+        resolved_subscription_name = str(subscription_name or resource.get("subscription_name") or "").strip()
+        resolved_resource_group = str(resource_group or resource.get("resource_group") or "").strip()
+        resolved_location = str(location or resource.get("location") or "").strip()
+        resolved_quantified = bool(estimated_monthly_savings is not None) if quantified is None else bool(quantified)
+        return {
+            "id": opportunity_id,
+            "category": resolved_category,
+            "opportunity_type": opportunity_type,
+            "source": source,
+            "title": title,
+            "summary": summary,
+            "subscription_id": resolved_subscription_id,
+            "subscription_name": resolved_subscription_name,
+            "resource_group": resolved_resource_group,
+            "location": resolved_location,
+            "resource_id": resolved_resource_id,
+            "resource_name": resolved_resource_name,
+            "resource_type": resolved_resource_type,
+            "current_monthly_cost": round(float(current_monthly_cost), 2) if current_monthly_cost is not None else None,
+            "estimated_monthly_savings": (
+                round(float(estimated_monthly_savings), 2)
+                if estimated_monthly_savings is not None
+                else None
+            ),
+            "currency": str(currency or "USD"),
+            "quantified": resolved_quantified,
+            "estimate_basis": estimate_basis,
+            "effort": effort,
+            "risk": risk,
+            "confidence": confidence,
+            "recommended_steps": list(recommended_steps or []),
+            "evidence": list(evidence or []),
+            "portal_url": portal_url or self._portal_url_for_resource(resolved_resource_id),
+            "follow_up_route": follow_up_route or self._follow_up_route_for_savings_opportunity(opportunity_type, resolved_category),
+        }
+
+    def _build_savings_opportunities(self) -> list[dict[str, Any]]:
+        resources = self._snapshot("resources") or []
+        if not isinstance(resources, list):
+            return []
+
+        cost_summary = self.get_cost_summary()
+        currency = str(cost_summary.get("currency") or "USD")
+        lookback_days = int(cost_summary.get("lookback_days") or AZURE_COST_LOOKBACK_DAYS or _SAVINGS_MONTHLY_PROXY_DAYS)
+        cost_status = self._get_resource_cost_status()
+        cost_index = self._resource_cost_index() if cost_status["available"] else {}
+        reservation_status = self._get_reservation_status()
+        resource_by_id, children_by_parent, managed_by_index, attached_vm_index = self._build_resource_graph_indexes(resources)
+
+        opportunities: list[dict[str, Any]] = []
+        now = datetime.now(timezone.utc)
+
+        idle_states = {"deallocated", "stopped"}
+        for item in resources:
+            if not self._is_virtual_machine(item):
+                continue
+            power_state = self._vm_power_state(item).lower()
+            if power_state not in idle_states:
+                continue
+
+            related = self._collect_vm_relationships(
+                item,
+                resource_by_id,
+                children_by_parent,
+                managed_by_index,
+                attached_vm_index,
+            )
+            associated_rows = self._build_vm_associated_resource_rows(related, resource_by_id)
+
+            candidate_rows: list[dict[str, Any]] = []
+            candidate_costs: list[float] = []
+            for associated in associated_rows:
+                if str(associated.get("relationship") or "") == "Virtual machine":
+                    continue
+                if not bool(associated.get("_cost_candidate")):
+                    continue
+                candidate_rows.append(associated)
+                normalized_id = str(associated.get("_normalized_id") or "")
+                cost_row = cost_index.get(normalized_id)
+                monthly_cost = self._monthly_cost_proxy(cost_row.get("amount"), lookback_days=lookback_days) if cost_row else None
+                if monthly_cost is not None and monthly_cost > 0:
+                    candidate_costs.append(monthly_cost)
+
+            if not candidate_rows:
+                continue
+
+            attached_resource_names = ", ".join(
+                sorted({str(row.get("name") or "") for row in candidate_rows if row.get("name")}, key=str.lower)[:4]
+            )
+            estimated_monthly_savings = round(sum(candidate_costs), 2) if candidate_costs else None
+            summary = (
+                f"{self._vm_power_state(item)} VM with {len(candidate_rows)} likely billable attached resource(s)"
+                + (
+                    f" worth about {self._format_currency_text(estimated_monthly_savings, currency)} per month."
+                    if estimated_monthly_savings is not None
+                    else "; direct per-resource cost data is unavailable, so savings are unquantified."
+                )
+            )
+            evidence = [
+                {"label": "Power state", "value": self._vm_power_state(item)},
+                {"label": "Attached cost candidates", "value": str(len(candidate_rows))},
+            ]
+            if attached_resource_names:
+                evidence.append({"label": "Resources", "value": attached_resource_names})
+            if estimated_monthly_savings is not None:
+                evidence.append(
+                    {
+                        "label": "Estimated monthly savings",
+                        "value": self._format_currency_text(estimated_monthly_savings, currency),
+                    }
+                )
+
+            opportunities.append(
+                self._build_savings_opportunity(
+                    opportunity_id=f"idle-vm-attached-cost:{self._normalize_resource_id(item.get('id'))}",
+                    opportunity_type="idle_vm_attached_cost",
+                    source="heuristic",
+                    title=f"Clean up attached costs for idle VM {item.get('name') or self._resource_display_name(item.get('id'))}",
+                    summary=summary,
+                    resource=item,
+                    current_monthly_cost=estimated_monthly_savings,
+                    estimated_monthly_savings=estimated_monthly_savings,
+                    currency=currency,
+                    quantified=estimated_monthly_savings is not None,
+                    estimate_basis=(
+                        "Amortized attached-resource cost normalized to a 30-day monthly proxy from cached Azure cost data."
+                        if estimated_monthly_savings is not None
+                        else "Attached-resource cleanup signal from the Azure inventory graph; per-resource cost rows are unavailable."
+                    ),
+                    effort="low",
+                    risk="medium",
+                    confidence="high" if estimated_monthly_savings is not None else "medium",
+                    recommended_steps=[
+                        "Confirm the VM is intentionally idle and no longer needed.",
+                        "Review attached disks and public IPs before deletion.",
+                        "Delete or detach unneeded attached resources to stop ongoing charges.",
+                    ],
+                    evidence=evidence,
+                )
+            )
+
+        referenced_public_ip_ids = {
+            self._normalize_resource_id(public_ip_id)
+            for item in resources
+            for public_ip_id in (item.get("public_ip_ids") or [])
+            if self._normalize_resource_id(public_ip_id)
+        }
+
+        for item in resources:
+            resource_type = str(item.get("resource_type") or "").strip().lower()
+            normalized_id = self._normalize_resource_id(item.get("id"))
+            cost_row = cost_index.get(normalized_id)
+            monthly_cost = self._monthly_cost_proxy(cost_row.get("amount"), lookback_days=lookback_days) if cost_row else None
+
+            if resource_type == "microsoft.compute/disks":
+                if str(item.get("managed_by") or "").strip():
+                    continue
+                if monthly_cost is not None and monthly_cost <= 0:
+                    continue
+                disk_state = str(item.get("disk_state") or "").strip() or "Unattached"
+                opportunities.append(
+                    self._build_savings_opportunity(
+                        opportunity_id=f"unattached-managed-disk:{normalized_id}",
+                        opportunity_type="unattached_managed_disk",
+                        source="heuristic",
+                        title=f"Review unattached managed disk {item.get('name') or self._resource_display_name(item.get('id'))}",
+                        summary=(
+                            f"{disk_state} managed disk"
+                            + (
+                                f" is costing about {self._format_currency_text(monthly_cost, currency)} per month."
+                                if monthly_cost is not None
+                                else "; per-resource cost data is unavailable, so savings are unquantified."
+                            )
+                        ),
+                        resource=item,
+                        current_monthly_cost=monthly_cost,
+                        estimated_monthly_savings=monthly_cost,
+                        currency=currency,
+                        quantified=monthly_cost is not None,
+                        estimate_basis=(
+                            "Amortized disk cost normalized to a 30-day monthly proxy from cached Azure cost data."
+                            if monthly_cost is not None
+                            else "Disk attachment state from cached Azure inventory; per-resource cost rows are unavailable."
+                        ),
+                        effort="low",
+                        risk="low",
+                        confidence="high" if monthly_cost is not None else "medium",
+                        recommended_steps=[
+                            "Confirm the disk is not being retained for recovery or migration.",
+                            "Reattach the disk if it is still needed.",
+                            "Delete the disk if it is no longer required.",
+                        ],
+                        evidence=[
+                            {"label": "Disk state", "value": disk_state},
+                            {"label": "Size", "value": f"{int(item.get('disk_size_gb') or 0)} GB" if item.get("disk_size_gb") is not None else "—"},
+                            {"label": "SKU", "value": str(item.get("sku_name") or "—")},
+                        ] + (
+                            [{"label": "Estimated monthly savings", "value": self._format_currency_text(monthly_cost, currency)}]
+                            if monthly_cost is not None
+                            else []
+                        ),
+                    )
+                )
+                continue
+
+            if resource_type == "microsoft.compute/snapshots":
+                created_time = self._parse_datetime(item.get("created_time"))
+                if not created_time:
+                    continue
+                age_days = max(0, int((now - created_time).total_seconds() // 86400))
+                if age_days < _STALE_SNAPSHOT_DAYS:
+                    continue
+                if monthly_cost is not None and monthly_cost <= 0:
+                    continue
+                opportunities.append(
+                    self._build_savings_opportunity(
+                        opportunity_id=f"stale-snapshot:{normalized_id}",
+                        opportunity_type="stale_snapshot",
+                        source="heuristic",
+                        title=f"Review stale snapshot {item.get('name') or self._resource_display_name(item.get('id'))}",
+                        summary=(
+                            f"Snapshot is {age_days} days old"
+                            + (
+                                f" and costs about {self._format_currency_text(monthly_cost, currency)} per month."
+                                if monthly_cost is not None
+                                else "; per-resource cost data is unavailable, so savings are unquantified."
+                            )
+                        ),
+                        resource=item,
+                        current_monthly_cost=monthly_cost,
+                        estimated_monthly_savings=monthly_cost,
+                        currency=currency,
+                        quantified=monthly_cost is not None,
+                        estimate_basis=(
+                            "Amortized snapshot cost normalized to a 30-day monthly proxy from cached Azure cost data."
+                            if monthly_cost is not None
+                            else "Snapshot age from cached Azure inventory; per-resource cost rows are unavailable."
+                        ),
+                        effort="low",
+                        risk="medium",
+                        confidence="high" if monthly_cost is not None else "medium",
+                        recommended_steps=[
+                            "Validate retention and recovery requirements before deletion.",
+                            "Keep only the snapshots required for the retention window.",
+                            "Delete stale snapshots that no longer serve a backup or rollback purpose.",
+                        ],
+                        evidence=[
+                            {"label": "Age", "value": f"{age_days} days"},
+                            {"label": "Created", "value": created_time.isoformat()},
+                            {"label": "Source resource", "value": str(item.get("source_resource_id") or "—")},
+                        ] + (
+                            [{"label": "Estimated monthly savings", "value": self._format_currency_text(monthly_cost, currency)}]
+                            if monthly_cost is not None
+                            else []
+                        ),
+                    )
+                )
+                continue
+
+            if resource_type == "microsoft.network/publicipaddresses":
+                if normalized_id in referenced_public_ip_ids:
+                    continue
+                if monthly_cost is not None and monthly_cost <= 0:
+                    continue
+                opportunities.append(
+                    self._build_savings_opportunity(
+                        opportunity_id=f"unattached-public-ip:{normalized_id}",
+                        opportunity_type="unattached_public_ip",
+                        source="heuristic",
+                        title=f"Release unattached public IP {item.get('name') or self._resource_display_name(item.get('id'))}",
+                        summary=(
+                            "Public IP is not referenced by any cached VM or NIC"
+                            + (
+                                f" and costs about {self._format_currency_text(monthly_cost, currency)} per month."
+                                if monthly_cost is not None
+                                else "; per-resource cost data is unavailable, so savings are unquantified."
+                            )
+                        ),
+                        resource=item,
+                        current_monthly_cost=monthly_cost,
+                        estimated_monthly_savings=monthly_cost,
+                        currency=currency,
+                        quantified=monthly_cost is not None,
+                        estimate_basis=(
+                            "Amortized public IP cost normalized to a 30-day monthly proxy from cached Azure cost data."
+                            if monthly_cost is not None
+                            else "Public IP attachment state from cached Azure inventory; per-resource cost rows are unavailable."
+                        ),
+                        effort="low",
+                        risk="low",
+                        confidence="high" if monthly_cost is not None else "medium",
+                        recommended_steps=[
+                            "Confirm the address is no longer reserved for a production dependency.",
+                            "Release the public IP if no workload still requires it.",
+                            "Document any DNS or firewall cleanup that should happen alongside release.",
+                        ],
+                        evidence=(
+                            [
+                                {"label": "Reference status", "value": "Not referenced by cached VM/NIC relationships"},
+                                {"label": "Location", "value": str(item.get("location") or "—")},
+                            ]
+                            + (
+                                [{"label": "Estimated monthly savings", "value": self._format_currency_text(monthly_cost, currency)}]
+                                if monthly_cost is not None
+                                else []
+                            )
+                        ),
+                    )
+                )
+
+        if reservation_status["available"]:
+            for item in self.get_vm_coverage_by_sku():
+                delta = item.get("delta")
+                if delta is None:
+                    continue
+                try:
+                    delta_value = int(delta)
+                except (TypeError, ValueError):
+                    continue
+                if delta_value == 0:
+                    continue
+                sku = str(item.get("label") or "Unknown").strip() or "Unknown"
+                region = str(item.get("region") or "unknown").strip() or "unknown"
+                is_gap = delta_value > 0
+                opportunity_type = "reservation_coverage_gap" if is_gap else "reservation_excess"
+                title = (
+                    f"Increase reservation coverage for {sku} in {region}"
+                    if is_gap
+                    else f"Review excess reservations for {sku} in {region}"
+                )
+                summary = (
+                    f"Running VM demand exceeds reservations by {delta_value}."
+                    if is_gap
+                    else f"Reservation count exceeds running VM demand by {abs(delta_value)}."
+                )
+                opportunities.append(
+                    self._build_savings_opportunity(
+                        opportunity_id=f"{opportunity_type}:{sku.lower()}:{region.lower()}",
+                        opportunity_type=opportunity_type,
+                        source="heuristic",
+                        title=title,
+                        summary=summary,
+                        category="commitment",
+                        resource_name=f"{sku} ({region})",
+                        resource_type="Microsoft.Capacity/reservations",
+                        location=region,
+                        current_monthly_cost=None,
+                        estimated_monthly_savings=None,
+                        currency=currency,
+                        quantified=False,
+                        estimate_basis="Reservation coverage mismatch from cached VM inventory and reservation counts; pricing is not quantified in the current cache.",
+                        effort="medium",
+                        risk="low",
+                        confidence="medium",
+                        recommended_steps=[
+                            "Validate whether current workload demand is stable enough to justify a reservation change.",
+                            "Review reservation scope and instance flexibility settings.",
+                            "Use Azure pricing tools before purchasing, exchanging, or reducing reservations.",
+                        ],
+                        evidence=[
+                            {"label": "SKU", "value": sku},
+                            {"label": "Region", "value": region},
+                            {"label": "Running VMs", "value": str(int(item.get("vm_count") or 0))},
+                            {
+                                "label": "Reserved instances",
+                                "value": str(int(item.get("reserved_instance_count") or 0)),
+                            },
+                            {"label": "Coverage delta", "value": str(delta_value)},
+                        ],
+                        portal_url="https://portal.azure.com/",
+                    )
+                )
+
+        advisor_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in self.get_advisor():
+            resource_id = str(item.get("resource_id") or "").strip()
+            resource = resource_by_id.get(self._normalize_resource_id(resource_id)) if resource_id else None
+            resource_type = str(resource.get("resource_type") if resource else "").strip()
+            opportunity_type = self._advisor_opportunity_type(item, resource_type)
+            category = self._category_for_savings_opportunity(opportunity_type, resource_type)
+            monthly_savings = float(item.get("monthly_savings") or 0.0)
+            quantified = monthly_savings > 0
+            estimated_monthly_savings = round(monthly_savings, 2) if quantified else None
+            current_monthly_cost = None
+            if resource_id:
+                cost_row = cost_index.get(self._normalize_resource_id(resource_id))
+                current_monthly_cost = self._monthly_cost_proxy(cost_row.get("amount"), lookback_days=lookback_days) if cost_row else None
+
+            advisor_title = str(item.get("title") or "").strip() or "Advisor cost recommendation"
+            if opportunity_type == "advisor_compute_rightsize":
+                recommended_steps = [
+                    "Review the current VM size, performance needs, and maintenance window.",
+                    "Validate the Advisor resize recommendation against workload requirements.",
+                    "Resize the VM to the recommended SKU if the lower size is acceptable.",
+                ]
+                effort = "medium"
+                risk = "medium"
+                confidence = "medium"
+            elif opportunity_type == "advisor_compute_shutdown":
+                recommended_steps = [
+                    "Confirm the VM can be shut down or scheduled off-hours without business impact.",
+                    "Validate startup dependencies before changing runtime schedules.",
+                    "Apply an auto-shutdown schedule or decommission the VM if it is no longer needed.",
+                ]
+                effort = "low"
+                risk = "medium"
+                confidence = "high"
+            else:
+                recommended_steps = [
+                    "Open the Azure recommendation details and confirm the scope of change.",
+                    "Validate operational impact before remediation.",
+                    "Apply the recommendation through Azure once the owner approves it.",
+                ]
+                effort = "medium"
+                risk = "medium"
+                confidence = "medium"
+
+            evidence = [
+                {"label": "Advisor impact", "value": str(item.get("impact") or "—")},
+                {"label": "Recommendation type", "value": str(item.get("recommendation_type") or "—")},
+            ]
+            if estimated_monthly_savings is not None:
+                evidence.append(
+                    {
+                        "label": "Estimated monthly savings",
+                        "value": self._format_currency_text(estimated_monthly_savings, str(item.get("currency") or currency)),
+                    }
+                )
+            if current_monthly_cost is not None:
+                evidence.append(
+                    {
+                        "label": "Current monthly cost",
+                        "value": self._format_currency_text(current_monthly_cost, currency),
+                    }
+                )
+
+            opportunity = self._build_savings_opportunity(
+                opportunity_id=str(item.get("id") or f"advisor:{self._normalize_resource_id(resource_id)}:{opportunity_type}"),
+                opportunity_type=opportunity_type,
+                source="advisor",
+                title=advisor_title,
+                summary=str(item.get("description") or advisor_title),
+                resource=resource,
+                category=category,
+                subscription_id=str(item.get("subscription_id") or ""),
+                subscription_name=str(item.get("subscription_name") or ""),
+                resource_id=resource_id,
+                resource_name=str(resource.get("name") if resource else self._resource_display_name(resource_id)),
+                resource_type=resource_type,
+                current_monthly_cost=current_monthly_cost,
+                estimated_monthly_savings=estimated_monthly_savings,
+                currency=str(item.get("currency") or currency),
+                quantified=quantified,
+                estimate_basis=(
+                    "Azure Advisor monthly savings estimate from the cached cost recommendation feed."
+                    if quantified
+                    else "Azure Advisor cost recommendation without a quantified monthly savings estimate."
+                ),
+                effort=effort,
+                risk=risk,
+                confidence=confidence,
+                recommended_steps=recommended_steps,
+                evidence=evidence,
+            )
+
+            dedupe_key = (
+                self._normalize_resource_id(resource_id) or str(item.get("subscription_id") or "").strip().lower() or advisor_title.lower(),
+                opportunity_type,
+            )
+            existing = advisor_by_key.get(dedupe_key)
+            if existing is None or float(existing.get("estimated_monthly_savings") or 0.0) < float(estimated_monthly_savings or 0.0):
+                advisor_by_key[dedupe_key] = opportunity
+
+        opportunities.extend(advisor_by_key.values())
+        opportunities.sort(key=self._savings_sort_key)
+        return opportunities
+
+    def _build_savings_summary(self, opportunities: list[dict[str, Any]]) -> dict[str, Any]:
+        currency = str(self.get_cost_summary().get("currency") or "USD")
+        quantified = [item for item in opportunities if item.get("quantified") and item.get("estimated_monthly_savings") is not None]
+        quick_wins = [
+            item
+            for item in opportunities
+            if str(item.get("effort") or "").lower() == "low"
+            and str(item.get("risk") or "").lower() == "low"
+        ]
+        summary = {
+            "currency": currency,
+            "total_opportunities": len(opportunities),
+            "quantified_opportunities": len(quantified),
+            "quantified_monthly_savings": round(
+                sum(float(item.get("estimated_monthly_savings") or 0.0) for item in quantified),
+                2,
+            ),
+            "quick_win_count": len(quick_wins),
+            "quick_win_monthly_savings": round(
+                sum(float(item.get("estimated_monthly_savings") or 0.0) for item in quick_wins if item.get("quantified")),
+                2,
+            ),
+            "unquantified_opportunity_count": len([item for item in opportunities if not item.get("quantified")]),
+            "by_category": self._aggregate_savings_rows(opportunities, lambda item: str(item.get("category") or "")),
+            "by_opportunity_type": self._aggregate_savings_rows(opportunities, lambda item: str(item.get("opportunity_type") or "")),
+            "by_effort": self._aggregate_count_rows(opportunities, "effort", order=["low", "medium", "high"]),
+            "by_risk": self._aggregate_count_rows(opportunities, "risk", order=["low", "medium", "high"]),
+            "by_confidence": self._aggregate_count_rows(opportunities, "confidence", order=["high", "medium", "low"]),
+            "top_subscriptions": self._aggregate_savings_rows(
+                quantified,
+                lambda item: str(item.get("subscription_name") or item.get("subscription_id") or ""),
+                limit=5,
+            ),
+            "top_resource_groups": self._aggregate_savings_rows(
+                quantified,
+                self._resource_group_label,
+                limit=5,
+            ),
+        }
+        return summary
+
+    def _rebuild_savings_snapshots(self) -> None:
+        opportunities = self._build_savings_opportunities()
+        summary = self._build_savings_summary(opportunities)
+        self._update_snapshots(
+            {
+                "savings_summary": summary,
+                "savings_opportunities": opportunities,
+            }
+        )
+
+    def get_savings_summary(self) -> dict[str, Any]:
+        return self._snapshot("savings_summary") or {
+            "currency": str(self.get_cost_summary().get("currency") or "USD"),
+            "total_opportunities": 0,
+            "quantified_opportunities": 0,
+            "quantified_monthly_savings": 0.0,
+            "quick_win_count": 0,
+            "quick_win_monthly_savings": 0.0,
+            "unquantified_opportunity_count": 0,
+            "by_category": [],
+            "by_opportunity_type": [],
+            "by_effort": [],
+            "by_risk": [],
+            "by_confidence": [],
+            "top_subscriptions": [],
+            "top_resource_groups": [],
+        }
+
+    def list_savings_opportunities(
+        self,
+        *,
+        search: str = "",
+        category: str = "",
+        opportunity_type: str = "",
+        subscription_id: str = "",
+        resource_group: str = "",
+        effort: str = "",
+        risk: str = "",
+        confidence: str = "",
+        quantified_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        rows = self._snapshot("savings_opportunities") or []
+        if not isinstance(rows, list):
+            return []
+
+        search_lower = search.strip().lower()
+        category_filter = category.strip().lower()
+        type_filter = opportunity_type.strip().lower()
+        subscription_filter = subscription_id.strip().lower()
+        resource_group_filter = resource_group.strip().lower()
+        effort_filter = effort.strip().lower()
+        risk_filter = risk.strip().lower()
+        confidence_filter = confidence.strip().lower()
+
+        filtered: list[dict[str, Any]] = []
+        for item in rows:
+            if category_filter and str(item.get("category") or "").lower() != category_filter:
+                continue
+            if type_filter and str(item.get("opportunity_type") or "").lower() != type_filter:
+                continue
+            if subscription_filter and str(item.get("subscription_id") or "").lower() != subscription_filter:
+                continue
+            if resource_group_filter and str(item.get("resource_group") or "").lower() != resource_group_filter:
+                continue
+            if effort_filter and str(item.get("effort") or "").lower() != effort_filter:
+                continue
+            if risk_filter and str(item.get("risk") or "").lower() != risk_filter:
+                continue
+            if confidence_filter and str(item.get("confidence") or "").lower() != confidence_filter:
+                continue
+            if quantified_only and not bool(item.get("quantified")):
+                continue
+            if search_lower:
+                haystack = " ".join(
+                    [
+                        str(item.get("title") or ""),
+                        str(item.get("summary") or ""),
+                        str(item.get("resource_name") or ""),
+                        str(item.get("resource_type") or ""),
+                        str(item.get("subscription_name") or item.get("subscription_id") or ""),
+                        str(item.get("resource_group") or ""),
+                        str(item.get("location") or ""),
+                        str(item.get("category") or ""),
+                        str(item.get("opportunity_type") or ""),
+                        " ".join(str(step) for step in (item.get("recommended_steps") or [])),
+                        " ".join(
+                            f"{row.get('label', '')} {row.get('value', '')}"
+                            for row in (item.get("evidence") or [])
+                            if isinstance(row, dict)
+                        ),
+                    ]
+                ).lower()
+                if search_lower not in haystack:
+                    continue
+            filtered.append(item)
+
+        filtered.sort(key=self._savings_sort_key)
+        return filtered
 
     def get_overview(self) -> dict[str, Any]:
         subscriptions = self._snapshot("subscriptions") or []
@@ -2164,6 +3004,8 @@ class AzureCache:
             "vm_inventory_summary": self.get_vm_inventory_summary(),
             "vm_power_state_summary": self._grounding_vm_power_state_summary(),
             "advisor": (self.get_advisor() or [])[:10],
+            "savings_summary": self.get_savings_summary(),
+            "savings_opportunities": self.list_savings_opportunities()[:10],
             "top_resources_by_cost": self._grounding_top_resources_by_cost(),
             "data_freshness": self._grounding_data_freshness(),
         }

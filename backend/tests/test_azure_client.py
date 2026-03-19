@@ -72,6 +72,7 @@ def test_query_resources_captures_vm_size_and_sku(monkeypatch):
             "sku_name": "Standard_D4s_v5",
             "vm_size": "Standard_D4s_v5",
             "state": "PowerState/running",
+            "created_time": "",
             "tags": {"env": "prod"},
             "disk_size_gb": None,
             "disk_state": "",

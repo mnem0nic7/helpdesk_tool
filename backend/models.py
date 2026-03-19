@@ -435,6 +435,7 @@ class AzureResourceRow(BaseModel):
     sku_name: str = ""
     vm_size: str = ""
     state: str = ""
+    created_time: str = ""
     tags: dict[str, str] = Field(default_factory=dict)
 
 
@@ -633,6 +634,70 @@ class AzureCostSummary(BaseModel):
     top_resource_group: str = ""
     recommendation_count: int = 0
     potential_monthly_savings: float = 0.0
+
+
+class AzureSavingsEvidenceRow(BaseModel):
+    """One evidence row explaining why an Azure savings opportunity was flagged."""
+
+    label: str
+    value: str
+
+
+class AzureSavingsAggregateRow(BaseModel):
+    """Count and value rollup for a savings dimension."""
+
+    label: str
+    count: int = 0
+    estimated_monthly_savings: float = 0.0
+
+
+class AzureSavingsOpportunity(BaseModel):
+    """Normalized Azure savings opportunity from heuristics or Advisor."""
+
+    id: str
+    category: Literal["compute", "storage", "network", "commitment", "other"]
+    opportunity_type: str
+    source: Literal["heuristic", "advisor"]
+    title: str
+    summary: str
+    subscription_id: str = ""
+    subscription_name: str = ""
+    resource_group: str = ""
+    location: str = ""
+    resource_id: str = ""
+    resource_name: str = ""
+    resource_type: str = ""
+    current_monthly_cost: Optional[float] = None
+    estimated_monthly_savings: Optional[float] = None
+    currency: str = "USD"
+    quantified: bool = False
+    estimate_basis: str = ""
+    effort: Literal["low", "medium", "high"] = "medium"
+    risk: Literal["low", "medium", "high"] = "medium"
+    confidence: Literal["low", "medium", "high"] = "medium"
+    recommended_steps: list[str] = Field(default_factory=list)
+    evidence: list[AzureSavingsEvidenceRow] = Field(default_factory=list)
+    portal_url: str = ""
+    follow_up_route: str = ""
+
+
+class AzureSavingsSummary(BaseModel):
+    """Headline rollup for the Azure savings workspace."""
+
+    currency: str = "USD"
+    total_opportunities: int = 0
+    quantified_opportunities: int = 0
+    quantified_monthly_savings: float = 0.0
+    quick_win_count: int = 0
+    quick_win_monthly_savings: float = 0.0
+    unquantified_opportunity_count: int = 0
+    by_category: list[AzureSavingsAggregateRow] = Field(default_factory=list)
+    by_opportunity_type: list[AzureSavingsAggregateRow] = Field(default_factory=list)
+    by_effort: list[AzureCountByLabel] = Field(default_factory=list)
+    by_risk: list[AzureCountByLabel] = Field(default_factory=list)
+    by_confidence: list[AzureCountByLabel] = Field(default_factory=list)
+    top_subscriptions: list[AzureSavingsAggregateRow] = Field(default_factory=list)
+    top_resource_groups: list[AzureSavingsAggregateRow] = Field(default_factory=list)
 
 
 class AzureOverviewResponse(BaseModel):

@@ -177,6 +177,41 @@ describe("azure api methods", () => {
     expect(api.exportAzureVMExcessExcel()).toBe("/api/azure/vms/excess/export.xlsx");
   });
 
+  it("calls the Azure savings endpoints with query params", async () => {
+    mockFetch({
+      currency: "USD",
+      total_opportunities: 1,
+      quantified_opportunities: 1,
+      quantified_monthly_savings: 12,
+      quick_win_count: 1,
+      quick_win_monthly_savings: 12,
+      unquantified_opportunity_count: 0,
+      by_category: [],
+      by_opportunity_type: [],
+      by_effort: [],
+      by_risk: [],
+      by_confidence: [],
+      top_subscriptions: [],
+      top_resource_groups: [],
+    });
+    await api.getAzureSavingsSummary();
+    expect(globalThis.fetch).toHaveBeenCalledWith("/api/azure/savings/summary");
+
+    mockFetch([]);
+    await api.getAzureSavingsOpportunities({ category: "storage", quantified_only: true });
+    const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(url).toContain("/api/azure/savings/opportunities");
+    expect(url).toContain("category=storage");
+    expect(url).toContain("quantified_only=true");
+  });
+
+  it("returns Azure savings export URLs", () => {
+    expect(api.exportAzureSavingsCsv({ category: "network" })).toContain("/api/azure/savings/export.csv");
+    expect(api.exportAzureSavingsCsv({ category: "network" })).toContain("category=network");
+    expect(api.exportAzureSavingsExcel({ quantified_only: true })).toContain("/api/azure/savings/export.xlsx");
+    expect(api.exportAzureSavingsExcel({ quantified_only: true })).toContain("quantified_only=true");
+  });
+
   it("calls the Azure VM detail endpoint with the resource id", async () => {
     mockFetch({
       vm: {

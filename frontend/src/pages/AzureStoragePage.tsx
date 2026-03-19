@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type AzureManagedDisk, type AzureStorageAccount } from "../lib/api.ts";
+import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
@@ -317,6 +318,11 @@ export default function AzureStoragePage() {
     queryFn: () => api.getAzureStorage(),
     refetchInterval: 60_000,
   });
+  const storageSavingsQuery = useQuery({
+    queryKey: ["azure", "savings", "storage-page"],
+    queryFn: () => api.getAzureSavingsOpportunities({ category: "storage" }),
+    refetchInterval: 60_000,
+  });
 
   if (isLoading) return <div className="text-sm text-slate-500">Loading Azure storage data…</div>;
 
@@ -329,6 +335,9 @@ export default function AzureStoragePage() {
   }
 
   const { summary, storage_services_cost, disk_by_sku, accounts_by_kind, cost_available } = data;
+  const storageSavings = storageSavingsQuery.data ?? [];
+  const unattachedDiskSavings = storageSavings.filter((item) => item.opportunity_type === "unattached_managed_disk");
+  const staleSnapshotSavings = storageSavings.filter((item) => item.opportunity_type === "stale_snapshot");
 
   const diskSkuChartData = Object.entries(disk_by_sku).map(([label, count]) => ({ label, count }));
   const kindChartData = Object.entries(accounts_by_kind).map(([label, count]) => ({ label, count }));
@@ -379,6 +388,23 @@ export default function AzureStoragePage() {
           value={cost_available ? formatCurrency(summary.total_storage_cost) : "Unavailable"}
           sub={cost_available ? "Storage accounts + disks + snapshots" : undefined}
           tone="text-slate-900"
+        />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <AzureSavingsHighlightsSection
+          title="Unattached Disk Savings"
+          description="Disks with no current attachment, prioritized by monthly cost where direct cost rows are available."
+          opportunities={unattachedDiskSavings}
+          emptyMessage="No unattached managed disk savings opportunities are currently flagged."
+          maxItems={6}
+        />
+        <AzureSavingsHighlightsSection
+          title="Stale Snapshot Savings"
+          description="Snapshots older than the current 60-day stale threshold, ready for retention review."
+          opportunities={staleSnapshotSavings}
+          emptyMessage="No stale snapshot savings opportunities are currently flagged."
+          maxItems={6}
         />
       </div>
 
