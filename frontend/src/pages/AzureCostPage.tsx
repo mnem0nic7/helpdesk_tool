@@ -50,7 +50,7 @@ export default function AzureCostPage() {
   const { sortKey: advSortKey, sortDir: advSortDir, toggleSort: toggleAdvSort } = useTableSort<AdvisorSortKey>("monthly_savings", "desc");
   const sortedAdvisor = sortRows(advisorRows, advSortKey, advSortDir, (item, key) => {
     if (key === "subscription_name") return item.subscription_name || item.subscription_id;
-    return (item as Record<string, unknown>)[key] as string | number;
+    return (item as unknown as Record<string, unknown>)[key] as string | number;
   });
   const advisorScroll = useInfiniteScrollCount(sortedAdvisor.length, 20, `advisor|${advSortKey}|${advSortDir}`);
   const visibleAdvisorRows = sortedAdvisor.slice(0, advisorScroll.visibleCount);
