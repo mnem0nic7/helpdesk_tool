@@ -37,6 +37,7 @@ const azureNavItems: NavItem[] = [
   { to: "/users", label: "Users", icon: "\u25C8" },
   { to: "/cost", label: "Cost", icon: "\u25A4" },
   { to: "/copilot", label: "Copilot", icon: "\u25C6" },
+  { to: "/alerts", label: "Alerts", icon: "\u25B2" },
 ];
 
 export default function Layout() {

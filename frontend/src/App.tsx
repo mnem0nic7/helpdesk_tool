@@ -22,6 +22,7 @@ const AzureCopilotPage = lazy(() => import("./pages/AzureCopilotPage"));
 const AzureStoragePage = lazy(() => import("./pages/AzureStoragePage"));
 const AzureComputeOptimizationPage = lazy(() => import("./pages/AzureComputeOptimizationPage.tsx"));
 const AzureUsersPage = lazy(() => import("./pages/AzureUsersPage"));
+const AzureAlertsPage = lazy(() => import("./pages/AzureAlertsPage"));
 
 function PageFallback() {
   return (
@@ -54,6 +55,7 @@ export default function App() {
                 <Route path="storage" element={<AzureStoragePage />} />
                 <Route path="compute" element={<AzureComputeOptimizationPage />} />
                 <Route path="copilot" element={<AzureCopilotPage />} />
+                <Route path="alerts" element={<AzureAlertsPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </>
             ) : (

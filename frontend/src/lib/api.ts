@@ -886,6 +886,69 @@ export interface AzureCostPoint {
   currency: string;
 }
 
+// ── Azure Alert types ─────────────────────────────────────────────────────────
+
+export interface AzureAlertRule {
+  id: string;
+  name: string;
+  domain: "cost" | "vms" | "identity" | "resources";
+  trigger_type: string;
+  trigger_config: Record<string, unknown>;
+  frequency: "immediate" | "hourly" | "daily" | "weekly";
+  schedule_time: string;
+  schedule_days: string;
+  recipients: string;
+  teams_webhook_url: string;
+  custom_subject: string;
+  custom_message: string;
+  enabled: boolean;
+  last_run: string | null;
+  last_sent: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AzureAlertRuleCreate {
+  name: string;
+  domain: AzureAlertRule["domain"];
+  trigger_type: string;
+  trigger_config: Record<string, unknown>;
+  frequency: AzureAlertRule["frequency"];
+  schedule_time: string;
+  schedule_days: string;
+  recipients: string;
+  teams_webhook_url: string;
+  custom_subject: string;
+  custom_message: string;
+}
+
+export interface AzureAlertTestResponse {
+  match_count: number;
+  sample_items: Record<string, unknown>[];
+}
+
+export interface AzureAlertHistoryItem {
+  id: string;
+  rule_id: string;
+  rule_name: string;
+  trigger_type: string;
+  sent_at: string;
+  recipients: string;
+  match_count: number;
+  match_summary: Record<string, unknown>;
+  status: "sent" | "partial" | "failed" | "dry_run";
+  error: string | null;
+}
+
+export interface AzureChatParseResponse {
+  parsed: boolean;
+  rule: AzureAlertRuleCreate | null;
+  summary: string;
+  error: string;
+}
+
+export type AzureAlertTriggerSchema = Record<string, Record<string, Record<string, unknown>>>;
+
 export interface AzureCostBreakdownItem {
   label: string;
   amount: number;
@@ -1439,6 +1502,46 @@ export const api = {
 
   askAzureCostCopilot(question: string, model?: string): Promise<AzureCostChatResponse> {
     return postJSON<AzureCostChatResponse>("/api/azure/ai/cost-chat", { question, model });
+  },
+
+  // -------------------------------------------------------------------------
+  // Azure Alerts
+  // -------------------------------------------------------------------------
+
+  getAzureAlertRules(): Promise<AzureAlertRule[]> {
+    return fetchJSON<AzureAlertRule[]>("/api/azure/alerts/rules");
+  },
+
+  createAzureAlertRule(body: AzureAlertRuleCreate): Promise<AzureAlertRule> {
+    return postJSON<AzureAlertRule>("/api/azure/alerts/rules", body);
+  },
+
+  updateAzureAlertRule(id: string, body: AzureAlertRuleCreate): Promise<AzureAlertRule> {
+    return putJSON<AzureAlertRule>(`/api/azure/alerts/rules/${encodeURIComponent(id)}`, body);
+  },
+
+  deleteAzureAlertRule(id: string): Promise<void> {
+    return fetchJSON<void>(`/api/azure/alerts/rules/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
+
+  toggleAzureAlertRule(id: string): Promise<AzureAlertRule> {
+    return postJSON<AzureAlertRule>(`/api/azure/alerts/rules/${encodeURIComponent(id)}/toggle`, {});
+  },
+
+  testAzureAlertRule(id: string): Promise<AzureAlertTestResponse> {
+    return postJSON<AzureAlertTestResponse>(`/api/azure/alerts/rules/${encodeURIComponent(id)}/test`, {});
+  },
+
+  getAzureAlertHistory(params?: { limit?: number; rule_id?: string }): Promise<AzureAlertHistoryItem[]> {
+    return fetchJSON<AzureAlertHistoryItem[]>(`/api/azure/alerts/history${buildQuery(params ?? {})}`);
+  },
+
+  getAzureAlertTriggerTypes(): Promise<AzureAlertTriggerSchema> {
+    return fetchJSON<AzureAlertTriggerSchema>("/api/azure/alerts/trigger-types");
+  },
+
+  chatParseAzureAlert(message: string): Promise<AzureChatParseResponse> {
+    return postJSON<AzureChatParseResponse>("/api/azure/alerts/chat-parse", { message });
   },
 
   // -------------------------------------------------------------------------

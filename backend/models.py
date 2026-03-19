@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -674,3 +674,62 @@ class AzureCostChatResponse(BaseModel):
     model_used: str
     generated_at: str
     citations: list[AzureCitation] = Field(default_factory=list)
+
+
+# ── Azure Alerts ──────────────────────────────────────────────────────────────
+
+
+class AzureAlertRuleCreate(BaseModel):
+    name: str
+    domain: Literal["cost", "vms", "identity", "resources"]
+    trigger_type: str
+    trigger_config: dict[str, Any] = {}
+    frequency: Literal["immediate", "hourly", "daily", "weekly"]
+    schedule_time: str = "09:00"        # HH:MM, always UTC
+    schedule_days: str = "0,1,2,3,4"   # comma-separated 0=Mon..6=Sun
+    recipients: str = ""                # comma-separated emails
+    teams_webhook_url: str = ""
+    custom_subject: str = ""
+    custom_message: str = ""
+
+
+class AzureAlertRuleUpdate(AzureAlertRuleCreate):
+    pass
+
+
+class AzureAlertRuleResponse(AzureAlertRuleCreate):
+    id: str
+    enabled: bool
+    last_run: str | None = None
+    last_sent: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class AzureAlertTestResponse(BaseModel):
+    match_count: int
+    sample_items: list[dict[str, Any]]
+
+
+class AzureAlertHistoryItem(BaseModel):
+    id: str
+    rule_id: str
+    rule_name: str
+    trigger_type: str
+    sent_at: str
+    recipients: str
+    match_count: int
+    match_summary: dict[str, Any]
+    status: str
+    error: str | None = None
+
+
+class AzureChatParseRequest(BaseModel):
+    message: str
+
+
+class AzureChatParseResponse(BaseModel):
+    parsed: bool
+    rule: AzureAlertRuleCreate | None = None
+    summary: str = ""
+    error: str = ""
