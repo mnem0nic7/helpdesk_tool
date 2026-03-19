@@ -2,6 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
+
+type AdvisorSortKey = "title" | "subscription_name" | "impact" | "monthly_savings";
 
 function formatCurrency(value: number): string {
   return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
@@ -44,8 +47,13 @@ export default function AzureCostPage() {
     refetchInterval: 60_000,
   });
   const advisorRows = advisor.data ?? [];
-  const advisorScroll = useInfiniteScrollCount(advisorRows.length, 20, "advisor");
-  const visibleAdvisorRows = advisorRows.slice(0, advisorScroll.visibleCount);
+  const { sortKey: advSortKey, sortDir: advSortDir, toggleSort: toggleAdvSort } = useTableSort<AdvisorSortKey>("monthly_savings", "desc");
+  const sortedAdvisor = sortRows(advisorRows, advSortKey, advSortDir, (item, key) => {
+    if (key === "subscription_name") return item.subscription_name || item.subscription_id;
+    return (item as Record<string, unknown>)[key] as string | number;
+  });
+  const advisorScroll = useInfiniteScrollCount(sortedAdvisor.length, 20, `advisor|${advSortKey}|${advSortDir}`);
+  const visibleAdvisorRows = sortedAdvisor.slice(0, advisorScroll.visibleCount);
 
   const loading = [summary, trend, byService, bySubscription, byResourceGroup, advisor].some((query) => query.isLoading);
   const failure = [summary, trend, byService, bySubscription, byResourceGroup, advisor].find((query) => query.isError);
@@ -159,10 +167,10 @@ export default function AzureCostPage() {
           <table className="min-w-full text-left text-sm">
             <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-4 py-3">Recommendation</th>
-                <th className="px-4 py-3">Subscription</th>
-                <th className="px-4 py-3">Impact</th>
-                <th className="px-4 py-3 text-right">Monthly Savings</th>
+                <SortHeader col="title" label="Recommendation" sortKey={advSortKey} sortDir={advSortDir} onSort={toggleAdvSort} />
+                <SortHeader col="subscription_name" label="Subscription" sortKey={advSortKey} sortDir={advSortDir} onSort={toggleAdvSort} />
+                <SortHeader col="impact" label="Impact" sortKey={advSortKey} sortDir={advSortDir} onSort={toggleAdvSort} />
+                <SortHeader col="monthly_savings" label="Monthly Savings" right sortKey={advSortKey} sortDir={advSortDir} onSort={toggleAdvSort} />
               </tr>
             </thead>
             <tbody>

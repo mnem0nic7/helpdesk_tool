@@ -1,5 +1,8 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
+
+type VMSortKey = "name" | "size" | "power_state" | "subscription" | "resource_group" | "location" | "cost";
 import {
   api,
   type AzureVirtualMachineCostExportJobStatus,
@@ -514,11 +517,17 @@ export default function AzureVMsPage() {
   });
   const vmRows = data?.vms ?? [];
   const coverageRows = data?.by_size ?? [];
-  const filterKey = [search, subscriptionId, size, location, state].join("|");
+  const { sortKey: vmSortKey, sortDir: vmSortDir, toggleSort: toggleVMSort } = useTableSort<VMSortKey>("name");
+  const sortedVMs = sortRows(vmRows, vmSortKey, vmSortDir, (item, key) => {
+    if (key === "subscription") return item.subscription_name || item.subscription_id;
+    if (key === "cost") return item.cost;
+    return (item as Record<string, unknown>)[key] as string;
+  });
+  const filterKey = [search, subscriptionId, size, location, state, vmSortKey, vmSortDir].join("|");
   const coverageScroll = useInfiniteScrollCount(coverageRows.length, 20, filterKey);
   const visibleCoverage = coverageRows.slice(0, coverageScroll.visibleCount);
-  const vmScroll = useInfiniteScrollCount(vmRows.length, 20, filterKey);
-  const visibleVMs = vmRows.slice(0, vmScroll.visibleCount);
+  const vmScroll = useInfiniteScrollCount(sortedVMs.length, 20, filterKey);
+  const visibleVMs = sortedVMs.slice(0, vmScroll.visibleCount);
   const exportJob = activeExportJobId
     ? exportJobQuery.data ?? createExportJobMutation.data ?? null
     : null;
@@ -782,17 +791,14 @@ export default function AzureVMsPage() {
           <table className="min-w-full text-left text-sm">
             <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-4 py-3">VM</th>
-                <th className="px-4 py-3">Size</th>
-                <th className="px-4 py-3">State</th>
-                <th className="px-4 py-3">Subscription</th>
-                <th className="px-4 py-3">Resource Group</th>
-                <th className="px-4 py-3">Location</th>
+                <SortHeader col="name" label="VM" sortKey={vmSortKey} sortDir={vmSortDir} onSort={toggleVMSort} />
+                <SortHeader col="size" label="Size" sortKey={vmSortKey} sortDir={vmSortDir} onSort={toggleVMSort} />
+                <SortHeader col="power_state" label="State" sortKey={vmSortKey} sortDir={vmSortDir} onSort={toggleVMSort} />
+                <SortHeader col="subscription" label="Subscription" sortKey={vmSortKey} sortDir={vmSortDir} onSort={toggleVMSort} />
+                <SortHeader col="resource_group" label="Resource Group" sortKey={vmSortKey} sortDir={vmSortDir} onSort={toggleVMSort} />
+                <SortHeader col="location" label="Location" sortKey={vmSortKey} sortDir={vmSortDir} onSort={toggleVMSort} />
                 {data.cost_available ? (
-                  <th className="px-4 py-3 text-right">
-                    Cost
-                    <span className="ml-1 font-normal text-slate-400">(VM only)</span>
-                  </th>
+                  <SortHeader col="cost" label="Cost (VM only)" right sortKey={vmSortKey} sortDir={vmSortDir} onSort={toggleVMSort} />
                 ) : null}
                 <th className="px-4 py-3">Manage</th>
               </tr>

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { sortRows, useTableSort } from "../lib/tableSort.tsx";
 
 function DirectorySection({
   search,
@@ -12,16 +13,28 @@ function DirectorySection({
   title: string;
   rows: Awaited<ReturnType<typeof api.getAzureUsers>>;
 }) {
-  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(rows.length, 20, `${title}|${search}`);
-  const visibleRows = rows.slice(0, visibleCount);
+  const { sortKey, sortDir, toggleSort } = useTableSort<"display_name">("display_name");
+  const sorted = sortRows(rows, sortKey, sortDir);
+  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 20, `${title}|${search}|${sortDir}`);
+  const visibleRows = sorted.slice(0, visibleCount);
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-          {rows.length.toLocaleString()}
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => toggleSort("display_name")}
+            className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition"
+            title="Sort A–Z / Z–A"
+          >
+            Name {sortDir === "asc" ? "↑" : "↓"}
+          </button>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+            {rows.length.toLocaleString()}
+          </span>
+        </div>
       </div>
       <div className="mt-4 max-h-[38rem] space-y-3 overflow-y-auto">
         {visibleRows.map((item) => (

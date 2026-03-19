@@ -8,6 +8,10 @@ import {
   type AzureVirtualMachineRow,
 } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
+
+type IdleVMSortKey = "name" | "size" | "power_state" | "location" | "subscription" | "resource_group" | "cost";
+type TopCostSortKey = "name" | "size" | "location" | "subscription" | "cost";
 
 function formatCurrency(value: number | null, currency = "USD"): string {
   if (value === null) return "—";
@@ -117,6 +121,7 @@ function coverageStatusBadge(status: AzureVirtualMachineSizeCoverageRow["coverag
 
 function IdleVMsSection({ vms, costAvailable }: { vms: AzureVirtualMachineRow[]; costAvailable: boolean }) {
   const [search, setSearch] = useState("");
+  const { sortKey, sortDir, toggleSort } = useTableSort<IdleVMSortKey>("name");
   const filtered = vms.filter((v) => {
     if (!search.trim()) return true;
     const h = [v.name, v.subscription_name, v.subscription_id, v.resource_group, v.location]
@@ -124,8 +129,13 @@ function IdleVMsSection({ vms, costAvailable }: { vms: AzureVirtualMachineRow[];
       .toLowerCase();
     return h.includes(search.trim().toLowerCase());
   });
-  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(filtered.length, 100, search);
-  const visible = filtered.slice(0, visibleCount);
+  const sorted = sortRows(filtered, sortKey, sortDir, (v, key) => {
+    if (key === "subscription") return v.subscription_name || v.subscription_id;
+    if (key === "cost") return v.cost;
+    return (v as Record<string, unknown>)[key] as string;
+  });
+  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 100, `${search}|${sortKey}|${sortDir}`);
+  const visible = sorted.slice(0, visibleCount);
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -155,13 +165,13 @@ function IdleVMsSection({ vms, costAvailable }: { vms: AzureVirtualMachineRow[];
           <table className="min-w-full text-left text-sm">
             <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-4 py-3">VM Name</th>
-                <th className="px-4 py-3">Size</th>
+                <SortHeader col="name" label="VM Name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="size" label="Size" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <th className="px-4 py-3">State</th>
-                <th className="px-4 py-3">Location</th>
-                <th className="px-4 py-3">Subscription</th>
-                <th className="px-4 py-3">Resource Group</th>
-                {costAvailable && <th className="px-4 py-3 text-right">Cost</th>}
+                <SortHeader col="location" label="Location" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="subscription" label="Subscription" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="resource_group" label="Resource Group" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                {costAvailable && <SortHeader col="cost" label="Cost" right sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />}
               </tr>
             </thead>
             <tbody>
@@ -190,6 +200,12 @@ function IdleVMsSection({ vms, costAvailable }: { vms: AzureVirtualMachineRow[];
 // ─── Top Cost VMs Section ─────────────────────────────────────────────────────
 
 function TopCostVMsSection({ vms }: { vms: AzureVirtualMachineRow[] }) {
+  const { sortKey, sortDir, toggleSort } = useTableSort<TopCostSortKey>("cost", "desc");
+  const sorted = sortRows(vms, sortKey, sortDir, (v, key) => {
+    if (key === "subscription") return v.subscription_name || v.subscription_id;
+    if (key === "cost") return v.cost;
+    return (v as Record<string, unknown>)[key] as string;
+  });
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div>
@@ -200,18 +216,16 @@ function TopCostVMsSection({ vms }: { vms: AzureVirtualMachineRow[] }) {
         <table className="min-w-full text-left text-sm">
           <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
             <tr>
-              <th className="px-4 py-3">#</th>
-              <th className="px-4 py-3">VM Name</th>
-              <th className="px-4 py-3">Size</th>
-              <th className="px-4 py-3">Location</th>
-              <th className="px-4 py-3">Subscription</th>
-              <th className="px-4 py-3 text-right">Monthly Cost</th>
+              <SortHeader col="name" label="VM Name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="size" label="Size" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="location" label="Location" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="subscription" label="Subscription" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="cost" label="Monthly Cost" right sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
             </tr>
           </thead>
           <tbody>
-            {vms.map((vm, idx) => (
+            {sorted.map((vm) => (
               <tr key={vm.id} className="border-t border-slate-100 hover:bg-slate-50">
-                <td className="px-4 py-2 text-slate-400">{idx + 1}</td>
                 <td className="px-4 py-2 font-medium text-slate-900">{vm.name || vm.id}</td>
                 <td className="px-4 py-2 text-slate-600">{vm.size || "—"}</td>
                 <td className="px-4 py-2 text-slate-600">{vm.location || "—"}</td>

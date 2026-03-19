@@ -2,6 +2,9 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
+
+type ResourceSortKey = "name" | "resource_type" | "subscription" | "resource_group" | "location" | "sku" | "state";
 
 export default function AzureResourcesPage() {
   const [search, setSearch] = useState("");
@@ -9,6 +12,7 @@ export default function AzureResourcesPage() {
   const [resourceType, setResourceType] = useState("");
   const [location, setLocation] = useState("");
   const [state, setState] = useState("");
+  const { sortKey, sortDir, toggleSort } = useTableSort<ResourceSortKey>("name");
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["azure", "resources"],
@@ -42,9 +46,14 @@ export default function AzureResourcesPage() {
     if (state && item.state !== state) return false;
     return true;
   });
-  const filterKey = [search, subscriptionId, resourceType, location, state].join("|");
-  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(filtered.length, 20, filterKey);
-  const visibleResources = filtered.slice(0, visibleCount);
+  const sorted = sortRows(filtered, sortKey, sortDir, (item, key) => {
+    if (key === "subscription") return item.subscription_name || item.subscription_id;
+    if (key === "sku") return item.vm_size || item.sku_name;
+    return (item as Record<string, unknown>)[key] as string;
+  });
+  const filterKey = [search, subscriptionId, resourceType, location, state, sortKey, sortDir].join("|");
+  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 20, filterKey);
+  const visibleResources = sorted.slice(0, visibleCount);
 
   if (isLoading) {
     return <div className="text-sm text-slate-500">Loading Azure resources...</div>;
@@ -102,13 +111,13 @@ export default function AzureResourcesPage() {
           <table className="min-w-full text-left text-sm">
             <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Subscription</th>
-                <th className="px-4 py-3">Resource Group</th>
-                <th className="px-4 py-3">Location</th>
-                <th className="px-4 py-3">SKU / Size</th>
-                <th className="px-4 py-3">State</th>
+                <SortHeader col="name" label="Name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="resource_type" label="Type" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="subscription" label="Subscription" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="resource_group" label="Resource Group" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="location" label="Location" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="sku" label="SKU / Size" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="state" label="State" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               </tr>
             </thead>
             <tbody>

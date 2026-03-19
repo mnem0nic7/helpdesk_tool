@@ -3,6 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type AzureManagedDisk, type AzureStorageAccount } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
+
+type AccountSortKey = "name" | "kind" | "sku_name" | "access_tier" | "location" | "subscription" | "resource_group" | "cost";
+type DiskSortKey = "name" | "sku_name" | "disk_size_gb" | "location" | "subscription" | "resource_group" | "cost";
+type SnapshotSortKey = "name" | "sku_name" | "disk_size_gb" | "location" | "subscription" | "resource_group" | "cost";
 
 type StorageTab = "accounts" | "disks" | "snapshots";
 
@@ -38,6 +43,7 @@ function StatCard({
 
 function AccountsTable({ accounts, costAvailable }: { accounts: AzureStorageAccount[]; costAvailable: boolean }) {
   const [search, setSearch] = useState("");
+  const { sortKey, sortDir, toggleSort } = useTableSort<AccountSortKey>("name");
   const filtered = accounts.filter((a) => {
     if (!search.trim()) return true;
     const h = [a.name, a.kind, a.sku_name, a.location, a.subscription_name || a.subscription_id, a.resource_group]
@@ -45,8 +51,13 @@ function AccountsTable({ accounts, costAvailable }: { accounts: AzureStorageAcco
       .toLowerCase();
     return h.includes(search.trim().toLowerCase());
   });
-  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(filtered.length, 100, search);
-  const visible = filtered.slice(0, visibleCount);
+  const sorted = sortRows(filtered, sortKey, sortDir, (a, key) => {
+    if (key === "subscription") return a.subscription_name || a.subscription_id;
+    if (key === "cost") return a.cost;
+    return (a as Record<string, unknown>)[key] as string;
+  });
+  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 100, `${search}|${sortKey}|${sortDir}`);
+  const visible = sorted.slice(0, visibleCount);
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -66,14 +77,14 @@ function AccountsTable({ accounts, costAvailable }: { accounts: AzureStorageAcco
         <table className="min-w-full text-left text-sm">
           <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
             <tr>
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">Kind</th>
-              <th className="px-4 py-3">Tier / SKU</th>
-              <th className="px-4 py-3">Access Tier</th>
-              <th className="px-4 py-3">Location</th>
-              <th className="px-4 py-3">Subscription</th>
-              <th className="px-4 py-3">Resource Group</th>
-              {costAvailable ? <th className="px-4 py-3 text-right">Cost</th> : null}
+              <SortHeader col="name" label="Name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="kind" label="Kind" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="sku_name" label="Tier / SKU" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="access_tier" label="Access Tier" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="location" label="Location" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="subscription" label="Subscription" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="resource_group" label="Resource Group" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              {costAvailable ? <SortHeader col="cost" label="Cost" right sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} /> : null}
             </tr>
           </thead>
           <tbody>
@@ -108,6 +119,7 @@ function AccountsTable({ accounts, costAvailable }: { accounts: AzureStorageAcco
 function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costAvailable: boolean }) {
   const [search, setSearch] = useState("");
   const [showUnattached, setShowUnattached] = useState(false);
+  const { sortKey, sortDir, toggleSort } = useTableSort<DiskSortKey>("name");
 
   const filtered = disks.filter((d) => {
     if (showUnattached && d.managed_by) return false;
@@ -117,9 +129,14 @@ function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costA
       .toLowerCase();
     return h.includes(search.trim().toLowerCase());
   });
-  const filterKey = [search, String(showUnattached)].join("|");
-  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(filtered.length, 100, filterKey);
-  const visible = filtered.slice(0, visibleCount);
+  const sorted = sortRows(filtered, sortKey, sortDir, (d, key) => {
+    if (key === "subscription") return d.subscription_name || d.subscription_id;
+    if (key === "cost") return d.cost;
+    return (d as Record<string, unknown>)[key] as string | number;
+  });
+  const filterKey = [search, String(showUnattached), sortKey, sortDir].join("|");
+  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 100, filterKey);
+  const visible = sorted.slice(0, visibleCount);
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -151,14 +168,14 @@ function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costA
         <table className="min-w-full text-left text-sm">
           <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
             <tr>
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">SKU</th>
-              <th className="px-4 py-3 text-right">Size</th>
-              <th className="px-4 py-3">Location</th>
-              <th className="px-4 py-3">Subscription</th>
-              <th className="px-4 py-3">Resource Group</th>
+              <SortHeader col="name" label="Name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="sku_name" label="SKU" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="disk_size_gb" label="Size" right sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="location" label="Location" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="subscription" label="Subscription" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="resource_group" label="Resource Group" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <th className="px-4 py-3">State</th>
-              {costAvailable ? <th className="px-4 py-3 text-right">Cost</th> : null}
+              {costAvailable ? <SortHeader col="cost" label="Cost" right sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} /> : null}
               {costAvailable ? <th className="px-4 py-3 text-right">Cost/GB</th> : null}
             </tr>
           </thead>
@@ -215,6 +232,7 @@ function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costA
 
 function SnapshotsTable({ snapshots, costAvailable }: { snapshots: AzureManagedDisk[]; costAvailable: boolean }) {
   const [search, setSearch] = useState("");
+  const { sortKey, sortDir, toggleSort } = useTableSort<SnapshotSortKey>("name");
   const filtered = snapshots.filter((s) => {
     if (!search.trim()) return true;
     const h = [s.name, s.sku_name, s.location, s.subscription_name || s.subscription_id, s.resource_group]
@@ -222,8 +240,13 @@ function SnapshotsTable({ snapshots, costAvailable }: { snapshots: AzureManagedD
       .toLowerCase();
     return h.includes(search.trim().toLowerCase());
   });
-  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(filtered.length, 100, search);
-  const visible = filtered.slice(0, visibleCount);
+  const sorted = sortRows(filtered, sortKey, sortDir, (s, key) => {
+    if (key === "subscription") return s.subscription_name || s.subscription_id;
+    if (key === "cost") return s.cost;
+    return (s as Record<string, unknown>)[key] as string | number;
+  });
+  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 100, `${search}|${sortKey}|${sortDir}`);
+  const visible = sorted.slice(0, visibleCount);
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -243,14 +266,14 @@ function SnapshotsTable({ snapshots, costAvailable }: { snapshots: AzureManagedD
         <table className="min-w-full text-left text-sm">
           <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
             <tr>
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">SKU</th>
-              <th className="px-4 py-3 text-right">Size</th>
+              <SortHeader col="name" label="Name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="sku_name" label="SKU" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="disk_size_gb" label="Size" right sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <th className="px-4 py-3">Source Disk</th>
-              <th className="px-4 py-3">Location</th>
-              <th className="px-4 py-3">Subscription</th>
-              <th className="px-4 py-3">Resource Group</th>
-              {costAvailable ? <th className="px-4 py-3 text-right">Cost</th> : null}
+              <SortHeader col="location" label="Location" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="subscription" label="Subscription" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortHeader col="resource_group" label="Resource Group" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              {costAvailable ? <SortHeader col="cost" label="Cost" right sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} /> : null}
             </tr>
           </thead>
           <tbody>

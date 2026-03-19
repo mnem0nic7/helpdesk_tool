@@ -1,5 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
+
+type RuleSortKey = "name" | "domain" | "trigger_type" | "frequency" | "last_sent";
+type HistorySortKey = "rule_name" | "trigger_type" | "sent_at" | "match_count" | "status";
 import {
   api,
   type AzureAlertRule,
@@ -528,10 +532,14 @@ export default function AzureAlertsPage() {
 
   const rules = rulesQuery.data ?? [];
   const history = historyQuery.data ?? [];
-  const rulesScroll = useInfiniteScrollCount(rules.length, 50, "rules");
-  const historyScroll = useInfiniteScrollCount(history.length, 50, "history");
-  const visibleRules = rules.slice(0, rulesScroll.visibleCount);
-  const visibleHistory = history.slice(0, historyScroll.visibleCount);
+  const { sortKey: ruleSortKey, sortDir: ruleSortDir, toggleSort: toggleRuleSort } = useTableSort<RuleSortKey>("name");
+  const { sortKey: histSortKey, sortDir: histSortDir, toggleSort: toggleHistSort } = useTableSort<HistorySortKey>("sent_at", "desc");
+  const sortedRules = sortRows(rules, ruleSortKey, ruleSortDir);
+  const sortedHistory = sortRows(history, histSortKey, histSortDir);
+  const rulesScroll = useInfiniteScrollCount(sortedRules.length, 50, `rules|${ruleSortKey}|${ruleSortDir}`);
+  const historyScroll = useInfiniteScrollCount(sortedHistory.length, 50, `history|${histSortKey}|${histSortDir}`);
+  const visibleRules = sortedRules.slice(0, rulesScroll.visibleCount);
+  const visibleHistory = sortedHistory.slice(0, historyScroll.visibleCount);
 
   function openBuilder(initial: AzureAlertRuleCreate = EMPTY_RULE, id: string | null = null) {
     setBuilderInitial(initial);
@@ -613,11 +621,11 @@ export default function AzureAlertsPage() {
               <table className="min-w-full text-left text-sm">
                 <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="px-4 py-3">Name</th>
-                    <th className="px-4 py-3">Domain</th>
-                    <th className="px-4 py-3">Trigger</th>
-                    <th className="px-4 py-3">Schedule</th>
-                    <th className="px-4 py-3">Last Sent</th>
+                    <SortHeader col="name" label="Name" sortKey={ruleSortKey} sortDir={ruleSortDir} onSort={toggleRuleSort} />
+                    <SortHeader col="domain" label="Domain" sortKey={ruleSortKey} sortDir={ruleSortDir} onSort={toggleRuleSort} />
+                    <SortHeader col="trigger_type" label="Trigger" sortKey={ruleSortKey} sortDir={ruleSortDir} onSort={toggleRuleSort} />
+                    <SortHeader col="frequency" label="Schedule" sortKey={ruleSortKey} sortDir={ruleSortDir} onSort={toggleRuleSort} />
+                    <SortHeader col="last_sent" label="Last Sent" sortKey={ruleSortKey} sortDir={ruleSortDir} onSort={toggleRuleSort} />
                     <th className="px-4 py-3">Status</th>
                     <th className="px-4 py-3">Actions</th>
                   </tr>
@@ -699,12 +707,12 @@ export default function AzureAlertsPage() {
               <table className="min-w-full text-left text-sm">
                 <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="px-4 py-3">Rule</th>
-                    <th className="px-4 py-3">Trigger</th>
-                    <th className="px-4 py-3">Sent At</th>
+                    <SortHeader col="rule_name" label="Rule" sortKey={histSortKey} sortDir={histSortDir} onSort={toggleHistSort} />
+                    <SortHeader col="trigger_type" label="Trigger" sortKey={histSortKey} sortDir={histSortDir} onSort={toggleHistSort} />
+                    <SortHeader col="sent_at" label="Sent At" sortKey={histSortKey} sortDir={histSortDir} onSort={toggleHistSort} />
                     <th className="px-4 py-3">Recipients</th>
-                    <th className="px-4 py-3">Matches</th>
-                    <th className="px-4 py-3">Status</th>
+                    <SortHeader col="match_count" label="Matches" sortKey={histSortKey} sortDir={histSortDir} onSort={toggleHistSort} />
+                    <SortHeader col="status" label="Status" sortKey={histSortKey} sortDir={histSortDir} onSort={toggleHistSort} />
                   </tr>
                 </thead>
                 <tbody>

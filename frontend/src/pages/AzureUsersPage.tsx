@@ -2,6 +2,9 @@ import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "rea
 import { useQuery } from "@tanstack/react-query";
 import { api, type AzureDirectoryObject } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
+
+type UserColKey = "display_name" | "principal_name" | "mail" | "department" | "job_title" | "created_datetime";
 
 const DEFAULT_DRAWER_WIDTH = 720;
 const DRAWER_MIN_WIDTH = 520;
@@ -260,53 +263,12 @@ function UserDetailDrawer({
 
 type StatusFilter = "all" | "enabled" | "disabled";
 type TypeFilter = "all" | "member" | "guest";
-type SortKey = "name_asc" | "name_desc" | "department" | "job_title" | "newest" | "oldest";
-
-function applyFilters(
-  users: AzureDirectoryObject[],
-  statusFilter: StatusFilter,
-  typeFilter: TypeFilter,
-  sortKey: SortKey,
-): AzureDirectoryObject[] {
-  let result = users;
-
-  if (statusFilter === "enabled") {
-    result = result.filter((u) => u.enabled === true);
-  } else if (statusFilter === "disabled") {
-    result = result.filter((u) => u.enabled === false);
-  }
-
-  if (typeFilter === "member") {
-    result = result.filter((u) => u.extra.user_type !== "Guest");
-  } else if (typeFilter === "guest") {
-    result = result.filter((u) => u.extra.user_type === "Guest");
-  }
-
-  result = [...result].sort((a, b) => {
-    switch (sortKey) {
-      case "name_desc":
-        return b.display_name.localeCompare(a.display_name);
-      case "department":
-        return (a.extra.department || "").localeCompare(b.extra.department || "");
-      case "job_title":
-        return (a.extra.job_title || "").localeCompare(b.extra.job_title || "");
-      case "newest":
-        return (b.extra.created_datetime || "").localeCompare(a.extra.created_datetime || "");
-      case "oldest":
-        return (a.extra.created_datetime || "").localeCompare(b.extra.created_datetime || "");
-      default:
-        return a.display_name.localeCompare(b.display_name);
-    }
-  });
-
-  return result;
-}
 
 export default function AzureUsersPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("name_asc");
+  const { sortKey, sortDir, toggleSort } = useTableSort<UserColKey>("display_name");
   const [selectedUser, setSelectedUser] = useState<AzureDirectoryObject | null>(null);
 
   const { data: users = [], isLoading, isError, error } = useQuery({
@@ -322,8 +284,24 @@ export default function AzureUsersPage() {
   const guestCount = users.filter((u) => u.extra.user_type === "Guest").length;
   const onPremCount = users.filter((u) => u.extra.on_prem_sync === "true").length;
 
-  const filtered = applyFilters(users, statusFilter, typeFilter, sortKey);
-  const filterKey = [search, statusFilter, typeFilter, sortKey].join("|");
+  const filtered = sortRows(
+    users.filter((u) => {
+      if (statusFilter === "enabled" && u.enabled !== true) return false;
+      if (statusFilter === "disabled" && u.enabled !== false) return false;
+      if (typeFilter === "member" && u.extra.user_type === "Guest") return false;
+      if (typeFilter === "guest" && u.extra.user_type !== "Guest") return false;
+      return true;
+    }),
+    sortKey,
+    sortDir,
+    (u, key) => {
+      if (key === "department") return u.extra.department;
+      if (key === "job_title") return u.extra.job_title;
+      if (key === "created_datetime") return u.extra.created_datetime;
+      return (u as Record<string, unknown>)[key] as string;
+    },
+  );
+  const filterKey = [search, statusFilter, typeFilter, sortKey, sortDir].join("|");
   const scroll = useInfiniteScrollCount(filtered.length, 50, filterKey);
   const visibleUsers = filtered.slice(0, scroll.visibleCount);
 
@@ -376,18 +354,6 @@ export default function AzureUsersPage() {
             placeholder="Search name, email, department..."
             className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500"
           />
-          <select
-            value={sortKey}
-            onChange={(event) => setSortKey(event.target.value as SortKey)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          >
-            <option value="name_asc">Name A–Z</option>
-            <option value="name_desc">Name Z–A</option>
-            <option value="department">Department</option>
-            <option value="job_title">Job Title</option>
-            <option value="newest">Newest</option>
-            <option value="oldest">Oldest</option>
-          </select>
         </div>
         <div className="flex flex-wrap gap-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-slate-400 self-center">Status</span>
@@ -418,14 +384,14 @@ export default function AzureUsersPage() {
           <table className="min-w-full text-left text-sm">
             <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">UPN</th>
-                <th className="px-4 py-3">Email</th>
-                <th className="px-4 py-3">Department</th>
-                <th className="px-4 py-3">Job Title</th>
+                <SortHeader col="display_name" label="Name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="principal_name" label="UPN" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="mail" label="Email" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="department" label="Department" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="job_title" label="Job Title" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Created</th>
+                <SortHeader col="created_datetime" label="Created" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               </tr>
             </thead>
             <tbody>
