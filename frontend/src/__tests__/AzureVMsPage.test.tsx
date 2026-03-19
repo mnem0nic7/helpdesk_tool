@@ -62,6 +62,7 @@ describe("AzureVMsPage", () => {
       email: "user@example.com",
       name: "Example User",
       is_admin: true,
+      can_manage_users: true,
     });
 
     mockApi.getAzureVMs.mockResolvedValue({

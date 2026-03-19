@@ -31,10 +31,12 @@ from routes_alerts import router as alerts_router
 from routes_kb import router as kb_router
 from routes_azure import router as azure_router
 from routes_azure_alerts import router as azure_alerts_router
+from routes_user_admin import router as user_admin_router
 from azure_alert_engine import start_azure_alert_loop, stop_azure_alert_loop
 from issue_cache import cache
 from azure_cache import azure_cache
 from azure_vm_export_jobs import azure_vm_export_jobs
+from user_admin_jobs import user_admin_jobs
 from knowledge_base import kb_store
 from site_context import (
     get_current_site_scope,
@@ -51,9 +53,11 @@ async def lifespan(app: FastAPI):
     await cache.start_background_refresh()
     await azure_cache.start_background_refresh()
     await azure_vm_export_jobs.start_worker()
+    await user_admin_jobs.start_worker()
     await start_azure_alert_loop()
     yield
     await stop_azure_alert_loop()
+    await user_admin_jobs.stop_worker()
     await azure_vm_export_jobs.stop_worker()
     await azure_cache.stop_background_refresh()
     await cache.stop_background_refresh()
@@ -144,6 +148,7 @@ app.include_router(alerts_router)
 app.include_router(kb_router)
 app.include_router(azure_router)
 app.include_router(azure_alerts_router)
+app.include_router(user_admin_router)
 
 # ---------------------------------------------------------------------------
 # Routes

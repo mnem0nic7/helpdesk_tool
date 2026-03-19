@@ -29,6 +29,7 @@ _GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 _ARM_SCOPE = "https://management.azure.com/.default"
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 _TOKEN_SKEW_SECONDS = 60
+_GRAPH_ROOT = "https://graph.microsoft.com"
 
 
 class AzureApiError(RuntimeError):
@@ -599,6 +600,45 @@ Resources
         url = f"{_GRAPH_BASE}/{path}"
         params = {"$select": ",".join(select), "$top": "999"}
         return self._paged_get(url, scope=_GRAPH_SCOPE, params=params)
+
+    @staticmethod
+    def _graph_url(path: str, *, api_version: str = "v1.0") -> str:
+        normalized = path.lstrip("/")
+        return f"{_GRAPH_ROOT}/{api_version}/{normalized}"
+
+    def graph_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        api_version: str = "v1.0",
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            method,
+            self._graph_url(path, api_version=api_version),
+            scope=_GRAPH_SCOPE,
+            params=params,
+            json_body=json_body,
+            headers=headers,
+        )
+
+    def graph_paged_get(
+        self,
+        path: str,
+        *,
+        api_version: str = "v1.0",
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._paged_get(
+            self._graph_url(path, api_version=api_version),
+            scope=_GRAPH_SCOPE,
+            params=params,
+            headers=headers,
+        )
 
     def list_graph_collection_custom(
         self,

@@ -733,3 +733,196 @@ class AzureChatParseResponse(BaseModel):
     rule: AzureAlertRuleCreate | None = None
     summary: str = ""
     error: str = ""
+
+
+# ---------------------------------------------------------------------------
+# User administration models
+# ---------------------------------------------------------------------------
+
+
+UserAdminActionType = Literal[
+    "disable_sign_in",
+    "enable_sign_in",
+    "reset_password",
+    "revoke_sessions",
+    "reset_mfa",
+    "unblock_sign_in",
+    "update_usage_location",
+    "update_profile",
+    "set_manager",
+    "add_group_membership",
+    "remove_group_membership",
+    "assign_license",
+    "remove_license",
+    "add_directory_role",
+    "remove_directory_role",
+    "mailbox_add_alias",
+    "mailbox_remove_alias",
+    "mailbox_set_forwarding",
+    "mailbox_clear_forwarding",
+    "mailbox_convert_type",
+    "mailbox_set_delegates",
+    "device_sync",
+    "device_retire",
+    "device_wipe",
+    "device_remote_lock",
+    "device_reassign_primary_user",
+]
+
+UserAdminJobStatus = Literal["queued", "running", "completed", "failed"]
+UserAdminProviderKey = Literal["entra", "mailbox", "device_management"]
+
+
+class UserAdminReference(BaseModel):
+    id: str
+    display_name: str
+    principal_name: str = ""
+    mail: str = ""
+
+
+class UserAdminCapabilitiesResponse(BaseModel):
+    can_manage_users: bool = True
+    enabled_providers: dict[UserAdminProviderKey, bool] = Field(default_factory=dict)
+    supported_actions: list[UserAdminActionType] = Field(default_factory=list)
+    license_catalog: list[dict[str, str]] = Field(default_factory=list)
+    group_catalog: list[UserAdminReference] = Field(default_factory=list)
+    role_catalog: list[UserAdminReference] = Field(default_factory=list)
+    conditional_access_exception_groups: list[UserAdminReference] = Field(default_factory=list)
+
+
+class UserAdminUserDetailResponse(BaseModel):
+    id: str
+    display_name: str
+    principal_name: str = ""
+    mail: str = ""
+    enabled: Optional[bool] = None
+    user_type: str = "Member"
+    department: str = ""
+    job_title: str = ""
+    office_location: str = ""
+    company_name: str = ""
+    city: str = ""
+    country: str = ""
+    mobile_phone: str = ""
+    business_phones: list[str] = Field(default_factory=list)
+    created_datetime: str = ""
+    last_password_change: str = ""
+    on_prem_sync: bool = False
+    on_prem_domain: str = ""
+    on_prem_netbios: str = ""
+    usage_location: str = ""
+    employee_id: str = ""
+    employee_type: str = ""
+    preferred_language: str = ""
+    proxy_addresses: list[str] = Field(default_factory=list)
+    manager: UserAdminReference | None = None
+    source_directory: str = ""
+
+
+class UserAdminGroupMembershipResponse(BaseModel):
+    id: str
+    display_name: str
+    mail: str = ""
+    security_enabled: bool = False
+    group_types: list[str] = Field(default_factory=list)
+    object_type: str = "group"
+
+
+class UserAdminLicenseResponse(BaseModel):
+    sku_id: str
+    sku_part_number: str = ""
+    display_name: str = ""
+    state: str = ""
+    disabled_plans: list[str] = Field(default_factory=list)
+    assigned_by_group: bool = False
+
+
+class UserAdminRoleResponse(BaseModel):
+    id: str
+    display_name: str
+    description: str = ""
+    assignment_type: str = "direct"
+
+
+class UserAdminMailboxResponse(BaseModel):
+    primary_address: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    forwarding_enabled: bool = False
+    forwarding_address: str = ""
+    mailbox_type: str = ""
+    delegate_delivery_mode: str = ""
+    delegates: list[UserAdminReference] = Field(default_factory=list)
+    automatic_replies_status: str = ""
+    provider_enabled: bool = False
+    management_supported: bool = False
+    note: str = ""
+
+
+class UserAdminDeviceResponse(BaseModel):
+    id: str
+    device_name: str
+    operating_system: str = ""
+    operating_system_version: str = ""
+    compliance_state: str = ""
+    management_state: str = ""
+    owner_type: str = ""
+    enrollment_type: str = ""
+    last_sync_date_time: str = ""
+    azure_ad_device_id: str = ""
+    primary_users: list[UserAdminReference] = Field(default_factory=list)
+
+
+class UserAdminAuditEntryResponse(BaseModel):
+    audit_id: str
+    job_id: str = ""
+    actor_email: str
+    actor_name: str = ""
+    target_user_id: str
+    target_display_name: str = ""
+    provider: UserAdminProviderKey
+    action_type: UserAdminActionType
+    params_summary: dict[str, Any] = Field(default_factory=dict)
+    before_summary: dict[str, Any] = Field(default_factory=dict)
+    after_summary: dict[str, Any] = Field(default_factory=dict)
+    status: str
+    error: str = ""
+    created_at: str
+
+
+class UserAdminJobCreateRequest(BaseModel):
+    action_type: UserAdminActionType
+    target_user_ids: list[str] = Field(default_factory=list, min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class UserAdminJobResultResponse(BaseModel):
+    target_user_id: str
+    target_display_name: str = ""
+    provider: UserAdminProviderKey
+    success: bool
+    summary: str = ""
+    error: str = ""
+    before_summary: dict[str, Any] = Field(default_factory=dict)
+    after_summary: dict[str, Any] = Field(default_factory=dict)
+    one_time_secret: str | None = None
+
+
+class UserAdminJobResponse(BaseModel):
+    job_id: str
+    status: UserAdminJobStatus
+    action_type: UserAdminActionType
+    provider: UserAdminProviderKey
+    target_user_ids: list[str] = Field(default_factory=list)
+    requested_by_email: str
+    requested_by_name: str = ""
+    requested_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    progress_current: int = 0
+    progress_total: int = 0
+    progress_message: str = ""
+    success_count: int = 0
+    failure_count: int = 0
+    results_ready: bool = False
+    error: str = ""
+    one_time_results_available: bool = False

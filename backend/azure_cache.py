@@ -454,6 +454,68 @@ class AzureCache:
             logger.warning("Azure directory refresh failed: %s", exc)
             self._set_dataset_status("directory", updated_at=self._dataset_state["directory"]["last_refresh"], error=str(exc))
 
+    def refresh_directory_users(self, user_ids: list[str]) -> None:
+        normalized_user_ids = [str(item).strip() for item in user_ids if str(item).strip()]
+        if not normalized_user_ids or not self._client.configured:
+            return
+
+        current_users = self._snapshot("users") or []
+        if not isinstance(current_users, list):
+            current_users = []
+        user_by_id = {
+            str(item.get("id") or ""): item
+            for item in current_users
+            if isinstance(item, dict) and item.get("id")
+        }
+
+        fetched_count = 0
+        for user_id in normalized_user_ids:
+            try:
+                payload = self._client.graph_request(
+                    "GET",
+                    f"users/{user_id}",
+                    params={
+                        "$select": ",".join(
+                            [
+                                "id",
+                                "displayName",
+                                "userPrincipalName",
+                                "mail",
+                                "accountEnabled",
+                                "jobTitle",
+                                "department",
+                                "officeLocation",
+                                "companyName",
+                                "city",
+                                "country",
+                                "mobilePhone",
+                                "businessPhones",
+                                "createdDateTime",
+                                "userType",
+                                "onPremisesSyncEnabled",
+                                "onPremisesDomainName",
+                                "onPremisesNetBiosName",
+                                "lastPasswordChangeDateTime",
+                                "proxyAddresses",
+                            ]
+                        )
+                    },
+                )
+            except AzureApiError as exc:
+                logger.warning("Azure targeted user refresh failed for %s: %s", user_id, exc)
+                continue
+            user_by_id[user_id] = self._normalize_user(payload)
+            fetched_count += 1
+
+        if not fetched_count:
+            return
+
+        refreshed_users = list(user_by_id.values())
+        refreshed_users.sort(key=lambda item: str(item.get("display_name") or "").lower())
+        self._update_snapshots({"users": refreshed_users})
+        updated_at = datetime.now(timezone.utc).isoformat()
+        self._set_dataset_status("directory", updated_at=updated_at, error=None)
+
     def _refresh_cost(self) -> None:
         try:
             subscriptions = self._snapshot("subscriptions") or self._client.list_subscriptions()

@@ -153,6 +153,7 @@ def session_to_public_user(session: dict[str, Any]) -> dict[str, Any]:
         "email": session["email"],
         "name": session["name"],
         "is_admin": is_admin_user(session["email"]),
+        "can_manage_users": True,
     }
 
 

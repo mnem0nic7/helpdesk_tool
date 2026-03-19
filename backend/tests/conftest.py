@@ -213,7 +213,10 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     import routes_cache
     import routes_triage
     import routes_azure
+    import routes_user_admin
     import azure_cache as azure_cache_module
+    import user_admin_jobs as user_admin_jobs_module
+    import user_admin_providers as user_admin_providers_module
 
     for mod in [issue_cache, routes_metrics, routes_tickets, routes_chart, routes_export, routes_cache, routes_triage]:
         monkeypatch.setattr(mod, "cache", mock_cache)
@@ -280,6 +283,74 @@ def test_client(mock_cache, freeze_time, monkeypatch):
 
     monkeypatch.setattr(azure_cache_module, "azure_cache", mock_azure_cache)
     monkeypatch.setattr(routes_azure, "azure_cache", mock_azure_cache)
+
+    mock_user_admin_jobs = MagicMock()
+    mock_user_admin_jobs.start_worker = AsyncMock()
+    mock_user_admin_jobs.stop_worker = AsyncMock()
+    mock_user_admin_jobs.list_audit.return_value = []
+    mock_user_admin_jobs.get_job.return_value = None
+    mock_user_admin_jobs.get_job_results.return_value = []
+    mock_user_admin_jobs.job_belongs_to.return_value = True
+    monkeypatch.setattr(user_admin_jobs_module, "user_admin_jobs", mock_user_admin_jobs)
+    monkeypatch.setattr(routes_user_admin, "user_admin_jobs", mock_user_admin_jobs)
+
+    mock_user_admin_providers = MagicMock()
+    mock_user_admin_providers.get_capabilities.return_value = {
+        "can_manage_users": True,
+        "enabled_providers": {"entra": True, "mailbox": False, "device_management": True},
+        "supported_actions": [],
+        "license_catalog": [],
+        "group_catalog": [],
+        "role_catalog": [],
+        "conditional_access_exception_groups": [],
+    }
+    mock_user_admin_providers.get_user_detail.return_value = {
+        "id": "user-1",
+        "display_name": "Test User",
+        "principal_name": "test@example.com",
+        "mail": "test@example.com",
+        "enabled": True,
+        "user_type": "Member",
+        "department": "",
+        "job_title": "",
+        "office_location": "",
+        "company_name": "",
+        "city": "",
+        "country": "",
+        "mobile_phone": "",
+        "business_phones": [],
+        "created_datetime": "",
+        "last_password_change": "",
+        "on_prem_sync": False,
+        "on_prem_domain": "",
+        "on_prem_netbios": "",
+        "usage_location": "",
+        "employee_id": "",
+        "employee_type": "",
+        "preferred_language": "",
+        "proxy_addresses": [],
+        "manager": None,
+        "source_directory": "Cloud",
+    }
+    mock_user_admin_providers.list_groups.return_value = []
+    mock_user_admin_providers.list_licenses.return_value = []
+    mock_user_admin_providers.list_roles.return_value = []
+    mock_user_admin_providers.get_mailbox.return_value = {
+        "primary_address": "test@example.com",
+        "aliases": [],
+        "forwarding_enabled": False,
+        "forwarding_address": "",
+        "mailbox_type": "",
+        "delegate_delivery_mode": "",
+        "delegates": [],
+        "automatic_replies_status": "",
+        "provider_enabled": True,
+        "management_supported": False,
+        "note": "",
+    }
+    mock_user_admin_providers.list_devices.return_value = []
+    monkeypatch.setattr(user_admin_providers_module, "user_admin_providers", mock_user_admin_providers)
+    monkeypatch.setattr(routes_user_admin, "user_admin_providers", mock_user_admin_providers)
 
     # Import app *after* patching
     from main import app

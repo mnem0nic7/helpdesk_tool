@@ -689,6 +689,7 @@ export interface UserInfo {
   email: string;
   name: string;
   is_admin: boolean;
+  can_manage_users: boolean;
 }
 
 export interface AzureDatasetStatus {
@@ -892,6 +893,197 @@ export interface AzureDirectoryObject {
   app_id: string;
   enabled: boolean | null;
   extra: Record<string, string>;
+}
+
+export type UserAdminActionType =
+  | "disable_sign_in"
+  | "enable_sign_in"
+  | "reset_password"
+  | "revoke_sessions"
+  | "reset_mfa"
+  | "unblock_sign_in"
+  | "update_usage_location"
+  | "update_profile"
+  | "set_manager"
+  | "add_group_membership"
+  | "remove_group_membership"
+  | "assign_license"
+  | "remove_license"
+  | "add_directory_role"
+  | "remove_directory_role"
+  | "mailbox_add_alias"
+  | "mailbox_remove_alias"
+  | "mailbox_set_forwarding"
+  | "mailbox_clear_forwarding"
+  | "mailbox_convert_type"
+  | "mailbox_set_delegates"
+  | "device_sync"
+  | "device_retire"
+  | "device_wipe"
+  | "device_remote_lock"
+  | "device_reassign_primary_user";
+
+export interface UserAdminReference {
+  id: string;
+  display_name: string;
+  principal_name: string;
+  mail: string;
+}
+
+export interface UserAdminCapabilities {
+  can_manage_users: boolean;
+  enabled_providers: {
+    entra: boolean;
+    mailbox: boolean;
+    device_management: boolean;
+  };
+  supported_actions: UserAdminActionType[];
+  license_catalog: Array<{
+    sku_id: string;
+    sku_part_number: string;
+    display_name: string;
+  }>;
+  group_catalog: UserAdminReference[];
+  role_catalog: UserAdminReference[];
+  conditional_access_exception_groups: UserAdminReference[];
+}
+
+export interface UserAdminUserDetail {
+  id: string;
+  display_name: string;
+  principal_name: string;
+  mail: string;
+  enabled: boolean | null;
+  user_type: string;
+  department: string;
+  job_title: string;
+  office_location: string;
+  company_name: string;
+  city: string;
+  country: string;
+  mobile_phone: string;
+  business_phones: string[];
+  created_datetime: string;
+  last_password_change: string;
+  on_prem_sync: boolean;
+  on_prem_domain: string;
+  on_prem_netbios: string;
+  usage_location: string;
+  employee_id: string;
+  employee_type: string;
+  preferred_language: string;
+  proxy_addresses: string[];
+  manager: UserAdminReference | null;
+  source_directory: string;
+}
+
+export interface UserAdminGroupMembership {
+  id: string;
+  display_name: string;
+  mail: string;
+  security_enabled: boolean;
+  group_types: string[];
+  object_type: string;
+}
+
+export interface UserAdminLicense {
+  sku_id: string;
+  sku_part_number: string;
+  display_name: string;
+  state: string;
+  disabled_plans: string[];
+  assigned_by_group: boolean;
+}
+
+export interface UserAdminRole {
+  id: string;
+  display_name: string;
+  description: string;
+  assignment_type: string;
+}
+
+export interface UserAdminMailbox {
+  primary_address: string;
+  aliases: string[];
+  forwarding_enabled: boolean;
+  forwarding_address: string;
+  mailbox_type: string;
+  delegate_delivery_mode: string;
+  delegates: UserAdminReference[];
+  automatic_replies_status: string;
+  provider_enabled: boolean;
+  management_supported: boolean;
+  note: string;
+}
+
+export interface UserAdminDevice {
+  id: string;
+  device_name: string;
+  operating_system: string;
+  operating_system_version: string;
+  compliance_state: string;
+  management_state: string;
+  owner_type: string;
+  enrollment_type: string;
+  last_sync_date_time: string;
+  azure_ad_device_id: string;
+  primary_users: UserAdminReference[];
+}
+
+export interface UserAdminAuditEntry {
+  audit_id: string;
+  job_id: string;
+  actor_email: string;
+  actor_name: string;
+  target_user_id: string;
+  target_display_name: string;
+  provider: "entra" | "mailbox" | "device_management";
+  action_type: UserAdminActionType;
+  params_summary: Record<string, unknown>;
+  before_summary: Record<string, unknown>;
+  after_summary: Record<string, unknown>;
+  status: string;
+  error: string;
+  created_at: string;
+}
+
+export interface UserAdminJobRequest {
+  action_type: UserAdminActionType;
+  target_user_ids: string[];
+  params: Record<string, unknown>;
+}
+
+export interface UserAdminJobStatus {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  action_type: UserAdminActionType;
+  provider: "entra" | "mailbox" | "device_management";
+  target_user_ids: string[];
+  requested_by_email: string;
+  requested_by_name: string;
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  progress_current: number;
+  progress_total: number;
+  progress_message: string;
+  success_count: number;
+  failure_count: number;
+  results_ready: boolean;
+  error: string;
+  one_time_results_available: boolean;
+}
+
+export interface UserAdminJobResult {
+  target_user_id: string;
+  target_display_name: string;
+  provider: "entra" | "mailbox" | "device_management";
+  success: boolean;
+  summary: string;
+  error: string;
+  before_summary: Record<string, unknown>;
+  after_summary: Record<string, unknown>;
+  one_time_secret: string | null;
 }
 
 export interface AzureCostPoint {
@@ -1489,6 +1681,56 @@ export const api = {
 
   getAzureDirectoryRoles(search = ""): Promise<AzureDirectoryObject[]> {
     return fetchJSON<AzureDirectoryObject[]>(`/api/azure/directory/roles${buildQuery({ search })}`);
+  },
+
+  getUserAdminCapabilities(): Promise<UserAdminCapabilities> {
+    return fetchJSON<UserAdminCapabilities>("/api/user-admin/capabilities");
+  },
+
+  getUserAdminUserDetail(userId: string): Promise<UserAdminUserDetail> {
+    return fetchJSON<UserAdminUserDetail>(`/api/user-admin/users/${encodeURIComponent(userId)}/detail`);
+  },
+
+  getUserAdminUserGroups(userId: string): Promise<UserAdminGroupMembership[]> {
+    return fetchJSON<UserAdminGroupMembership[]>(`/api/user-admin/users/${encodeURIComponent(userId)}/groups`);
+  },
+
+  getUserAdminUserLicenses(userId: string): Promise<UserAdminLicense[]> {
+    return fetchJSON<UserAdminLicense[]>(`/api/user-admin/users/${encodeURIComponent(userId)}/licenses`);
+  },
+
+  getUserAdminUserRoles(userId: string): Promise<UserAdminRole[]> {
+    return fetchJSON<UserAdminRole[]>(`/api/user-admin/users/${encodeURIComponent(userId)}/roles`);
+  },
+
+  getUserAdminUserMailbox(userId: string): Promise<UserAdminMailbox> {
+    return fetchJSON<UserAdminMailbox>(`/api/user-admin/users/${encodeURIComponent(userId)}/mailbox`);
+  },
+
+  getUserAdminUserDevices(userId: string): Promise<UserAdminDevice[]> {
+    return fetchJSON<UserAdminDevice[]>(`/api/user-admin/users/${encodeURIComponent(userId)}/devices`);
+  },
+
+  getUserAdminUserActivity(userId: string, limit = 50): Promise<UserAdminAuditEntry[]> {
+    return fetchJSON<UserAdminAuditEntry[]>(
+      `/api/user-admin/users/${encodeURIComponent(userId)}/activity${buildQuery({ limit })}`,
+    );
+  },
+
+  createUserAdminJob(body: UserAdminJobRequest): Promise<UserAdminJobStatus> {
+    return postJSON<UserAdminJobStatus>("/api/user-admin/jobs", body);
+  },
+
+  getUserAdminJob(jobId: string): Promise<UserAdminJobStatus> {
+    return fetchJSON<UserAdminJobStatus>(`/api/user-admin/jobs/${encodeURIComponent(jobId)}`);
+  },
+
+  getUserAdminJobResults(jobId: string): Promise<UserAdminJobResult[]> {
+    return fetchJSON<UserAdminJobResult[]>(`/api/user-admin/jobs/${encodeURIComponent(jobId)}/results`);
+  },
+
+  getUserAdminAudit(limit = 100): Promise<UserAdminAuditEntry[]> {
+    return fetchJSON<UserAdminAuditEntry[]>(`/api/user-admin/audit${buildQuery({ limit })}`);
   },
 
   getAzureCostSummary(): Promise<AzureCostSummary> {

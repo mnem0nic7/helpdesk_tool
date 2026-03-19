@@ -273,3 +273,96 @@ describe("azure api methods", () => {
     expect(api.downloadAzureVMCostExportJob("job-123")).toBe("/api/azure/vms/cost-export-jobs/job-123/download");
   });
 });
+
+describe("user admin api methods", () => {
+  it("fetches user-admin capabilities", async () => {
+    mockFetch({
+      can_manage_users: true,
+      enabled_providers: { entra: true, mailbox: false, device_management: true },
+      supported_actions: ["disable_sign_in"],
+      license_catalog: [],
+      group_catalog: [],
+      role_catalog: [],
+      conditional_access_exception_groups: [],
+    });
+    await api.getUserAdminCapabilities();
+    expect(globalThis.fetch).toHaveBeenCalledWith("/api/user-admin/capabilities");
+  });
+
+  it("starts a user-admin job", async () => {
+    mockFetch({
+      job_id: "job-123",
+      status: "queued",
+      action_type: "disable_sign_in",
+      provider: "entra",
+      target_user_ids: ["user-1"],
+      requested_by_email: "tech@example.com",
+      requested_by_name: "Tech User",
+      requested_at: "2026-03-19T00:00:00Z",
+      started_at: null,
+      completed_at: null,
+      progress_current: 0,
+      progress_total: 1,
+      progress_message: "Queued",
+      success_count: 0,
+      failure_count: 0,
+      results_ready: false,
+      error: "",
+      one_time_results_available: false,
+    });
+    await api.createUserAdminJob({
+      action_type: "disable_sign_in",
+      target_user_ids: ["user-1"],
+      params: {},
+    });
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/user-admin/jobs");
+    expect(call[1].method).toBe("POST");
+    expect(JSON.parse(call[1].body)).toEqual({
+      action_type: "disable_sign_in",
+      target_user_ids: ["user-1"],
+      params: {},
+    });
+  });
+
+  it("fetches user-admin job status and results", async () => {
+    mockFetch({
+      job_id: "job-123",
+      status: "completed",
+      action_type: "disable_sign_in",
+      provider: "entra",
+      target_user_ids: ["user-1"],
+      requested_by_email: "tech@example.com",
+      requested_by_name: "Tech User",
+      requested_at: "2026-03-19T00:00:00Z",
+      started_at: "2026-03-19T00:01:00Z",
+      completed_at: "2026-03-19T00:02:00Z",
+      progress_current: 1,
+      progress_total: 1,
+      progress_message: "Completed",
+      success_count: 1,
+      failure_count: 0,
+      results_ready: true,
+      error: "",
+      one_time_results_available: false,
+    });
+    await api.getUserAdminJob("job-123");
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("/api/user-admin/jobs/job-123");
+
+    mockFetch([
+      {
+        target_user_id: "user-1",
+        target_display_name: "Ada Lovelace",
+        provider: "entra",
+        success: true,
+        summary: "Disabled sign-in",
+        error: "",
+        before_summary: { enabled: true },
+        after_summary: { enabled: false },
+        one_time_secret: null,
+      },
+    ]);
+    await api.getUserAdminJobResults("job-123");
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("/api/user-admin/jobs/job-123/results");
+  });
+});
