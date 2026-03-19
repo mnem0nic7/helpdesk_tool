@@ -4,7 +4,13 @@ import { api, type AzureDirectoryObject } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
-type UserColKey = "display_name" | "principal_name" | "mail" | "department" | "job_title" | "created_datetime";
+type UserColKey = "display_name" | "principal_name" | "mail" | "department" | "job_title" | "created_datetime" | "on_prem_domain";
+
+function getDirectoryLabel(user: AzureDirectoryObject): string {
+  if (user.extra.on_prem_domain) return user.extra.on_prem_domain;
+  if (user.extra.user_type === "Guest") return "External";
+  return "Cloud";
+}
 
 const DEFAULT_DRAWER_WIDTH = 720;
 const DRAWER_MIN_WIDTH = 520;
@@ -249,9 +255,11 @@ function UserDetailDrawer({
             <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Account</h3>
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
               <DetailRow label="User Type" value={extra.user_type} />
+              <DetailRow label="Source Directory" value={getDirectoryLabel(user)} />
+              {extra.on_prem_domain ? <DetailRow label="On-Prem Domain" value={extra.on_prem_domain} /> : null}
+              {extra.on_prem_netbios ? <DetailRow label="NetBIOS Name" value={extra.on_prem_netbios} /> : null}
               <DetailRow label="Created" value={formatDate(extra.created_datetime)} />
               <DetailRow label="Last Password Change" value={formatDate(extra.last_password_change)} />
-              <DetailRow label="On-Prem Sync" value={extra.on_prem_sync === "true" ? "Synced from on-premises" : "Cloud only"} />
               <DetailRow label="Proxy Addresses" value={extra.proxy_addresses} />
             </div>
           </section>
@@ -268,6 +276,7 @@ export default function AzureUsersPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [directoryFilter, setDirectoryFilter] = useState("");
   const { sortKey, sortDir, toggleSort } = useTableSort<UserColKey>("display_name");
   const [selectedUser, setSelectedUser] = useState<AzureDirectoryObject | null>(null);
 
@@ -284,12 +293,15 @@ export default function AzureUsersPage() {
   const guestCount = users.filter((u) => u.extra.user_type === "Guest").length;
   const onPremCount = users.filter((u) => u.extra.on_prem_sync === "true").length;
 
+  const directoryOptions = Array.from(new Set(users.map(getDirectoryLabel))).sort();
+
   const filtered = sortRows(
     users.filter((u) => {
       if (statusFilter === "enabled" && u.enabled !== true) return false;
       if (statusFilter === "disabled" && u.enabled !== false) return false;
       if (typeFilter === "member" && u.extra.user_type === "Guest") return false;
       if (typeFilter === "guest" && u.extra.user_type !== "Guest") return false;
+      if (directoryFilter && getDirectoryLabel(u) !== directoryFilter) return false;
       return true;
     }),
     sortKey,
@@ -298,10 +310,11 @@ export default function AzureUsersPage() {
       if (key === "department") return u.extra.department;
       if (key === "job_title") return u.extra.job_title;
       if (key === "created_datetime") return u.extra.created_datetime;
+      if (key === "on_prem_domain") return getDirectoryLabel(u);
       return (u as unknown as Record<string, unknown>)[key] as string;
     },
   );
-  const filterKey = [search, statusFilter, typeFilter, sortKey, sortDir].join("|");
+  const filterKey = [search, statusFilter, typeFilter, directoryFilter, sortKey, sortDir].join("|");
   const scroll = useInfiniteScrollCount(filtered.length, 50, filterKey);
   const visibleUsers = filtered.slice(0, scroll.visibleCount);
 
@@ -369,6 +382,22 @@ export default function AzureUsersPage() {
               {value === "all" ? "All" : value === "member" ? "Members" : "Guests"}
             </button>
           ))}
+          {directoryOptions.length > 1 ? (
+            <>
+              <span className="mx-2 self-center text-slate-300">|</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400 self-center">Directory</span>
+              <select
+                value={directoryFilter}
+                onChange={(e) => setDirectoryFilter(e.target.value)}
+                className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:border-slate-400"
+              >
+                <option value="">All</option>
+                {directoryOptions.map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -389,6 +418,7 @@ export default function AzureUsersPage() {
                 <SortHeader col="mail" label="Email" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortHeader col="department" label="Department" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortHeader col="job_title" label="Job Title" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="on_prem_domain" label="Directory" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Type</th>
                 <SortHeader col="created_datetime" label="Created" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -397,7 +427,7 @@ export default function AzureUsersPage() {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-sm text-slate-500">
+                  <td colSpan={9} className="px-4 py-8 text-center text-sm text-slate-500">
                     No users matched the current filters.
                   </td>
                 </tr>
@@ -416,6 +446,7 @@ export default function AzureUsersPage() {
                   <td className="px-4 py-3 text-slate-700">{user.mail || "—"}</td>
                   <td className="px-4 py-3 text-slate-700">{user.extra.department || "—"}</td>
                   <td className="px-4 py-3 text-slate-700">{user.extra.job_title || "—"}</td>
+                  <td className="px-4 py-3 text-xs text-slate-600 font-mono">{getDirectoryLabel(user)}</td>
                   <td className="px-4 py-3"><StatusChip enabled={user.enabled} /></td>
                   <td className="px-4 py-3"><TypeChip userType={user.extra.user_type || "Member"} /></td>
                   <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{formatDate(user.extra.created_datetime)}</td>

@@ -621,6 +621,7 @@ Resources
                 "jobTitle", "department", "officeLocation", "companyName",
                 "city", "country", "mobilePhone", "businessPhones",
                 "createdDateTime", "userType", "onPremisesSyncEnabled",
+                "onPremisesDomainName", "onPremisesNetBiosName",
                 "lastPasswordChangeDateTime", "proxyAddresses",
             ],
         )

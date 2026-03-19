@@ -356,6 +356,8 @@ class AzureCache:
                 "created_datetime": item.get("createdDateTime") or "",
                 "user_type": item.get("userType") or "Member",
                 "on_prem_sync": "true" if item.get("onPremisesSyncEnabled") else "",
+                "on_prem_domain": item.get("onPremisesDomainName") or "",
+                "on_prem_netbios": item.get("onPremisesNetBiosName") or "",
                 "last_password_change": item.get("lastPasswordChangeDateTime") or "",
                 "proxy_addresses": ", ".join(item.get("proxyAddresses") or []),
             },
