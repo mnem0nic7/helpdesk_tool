@@ -56,6 +56,20 @@ async function putJSON<T>(url: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function deleteJSON(url: string): Promise<void> {
+  const res = await fetch(url, {
+    method: "DELETE",
+  });
+  if (res.status === 401) {
+    window.location.href = "/api/auth/login";
+    throw new Error("Not authenticated");
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`DELETE ${url} failed (${res.status}): ${text}`);
+  }
+}
+
 async function downloadPost(url: string, body: unknown, fallbackFilename: string): Promise<void> {
   const res = await fetch(url, {
     method: "POST",
@@ -1521,7 +1535,7 @@ export const api = {
   },
 
   deleteAzureAlertRule(id: string): Promise<void> {
-    return fetchJSON<void>(`/api/azure/alerts/rules/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return deleteJSON(`/api/azure/alerts/rules/${encodeURIComponent(id)}`);
   },
 
   toggleAzureAlertRule(id: string): Promise<AzureAlertRule> {
