@@ -11,8 +11,25 @@ function getCostExportTone(status: AzureCostExportStatus | null | undefined): st
   if (!status) return "bg-slate-50 text-slate-700";
   if (!status.enabled) return "bg-slate-50 text-slate-700";
   if (status.refreshing || status.running) return "bg-amber-50 text-amber-700";
-  if (status.last_error) return "bg-red-50 text-red-700";
+  const exportState = status.health?.state?.toLowerCase();
+  if (exportState === "error" || status.last_error) return "bg-red-50 text-red-700";
+  if (exportState === "stale") return "bg-amber-50 text-amber-700";
+  if (exportState === "waiting") return "bg-slate-50 text-slate-700";
   return "bg-emerald-50 text-emerald-700";
+}
+
+function getCostExportLabel(status: AzureCostExportStatus | null | undefined): string {
+  if (!status) return "";
+  if (!status.enabled) return "Disabled";
+  if (status.refreshing || status.running) return "Syncing";
+
+  const exportState = status.health?.state?.toLowerCase();
+  if (exportState === "stale") return "Stale";
+  if (exportState === "waiting") return "Waiting";
+  if (exportState === "error") return "Error";
+  if (exportState === "healthy") return "Healthy";
+  if (status.last_error) return "Needs attention";
+  return "Healthy";
 }
 
 export default function AzureStatusBar({ isAdmin }: { isAdmin: boolean }) {
@@ -46,15 +63,8 @@ export default function AzureStatusBar({ isAdmin }: { isAdmin: boolean }) {
   if (!status) return null;
 
   const costExports = status.cost_exports;
-  const costExportState = !costExports
-    ? ""
-    : !costExports.enabled
-      ? "Disabled"
-      : costExports.refreshing || costExports.running
-        ? "Syncing"
-        : costExports.last_error
-          ? "Needs attention"
-          : "Healthy";
+  const costExportState = getCostExportLabel(costExports);
+  const costExportReason = costExports?.health?.reason || costExports?.last_error || "";
 
   return (
     <div className="mb-4 rounded-md border border-sky-200 bg-white shadow-sm">
@@ -96,7 +106,7 @@ export default function AzureStatusBar({ isAdmin }: { isAdmin: boolean }) {
               <span
                 className={`rounded-full px-3 py-1 text-xs font-medium ${getCostExportTone(costExports)}`}
                 title={
-                  costExports.last_error ||
+                  costExportReason ||
                   (costExports.last_success_at
                     ? `Last successful export sync at ${formatLastRefresh(costExports.last_success_at)}`
                     : "No successful export sync yet")

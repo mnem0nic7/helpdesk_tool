@@ -220,6 +220,47 @@ def test_status_marks_dataset_stale_when_latest_delivery_misses_expected_cadence
     assert status["health"]["dataset_health"][0]["stale"] is True
 
 
+def test_status_marks_dataset_error_when_newest_delivery_is_quarantined():
+    now = datetime.now(timezone.utc)
+    parsed_time = (now - timedelta(hours=2)).isoformat()
+    quarantined_time = (now - timedelta(hours=1)).isoformat()
+    pipeline = _FakePipeline(
+        deliveries=[
+            {
+                "dataset": "focus",
+                "parse_status": "parsed",
+                "discovered_at": parsed_time,
+                "parsed_at": parsed_time,
+                "landing_path": "/tmp/focus/raw/parsed",
+            },
+            {
+                "dataset": "focus",
+                "parse_status": "quarantined",
+                "discovered_at": quarantined_time,
+                "parsed_at": quarantined_time,
+                "landing_path": "/tmp/focus/raw/quarantined",
+            },
+        ]
+    )
+    service = AzureCostExportService(
+        pipeline=pipeline,
+        enabled=True,
+        poll_interval_seconds=60,
+        configured_datasets=["FOCUS"],
+        expected_cadence_hours=24,
+    )
+
+    status = service.status()
+    dataset_health = status["health"]["dataset_health"][0]
+
+    assert status["health"]["state"] == "error"
+    assert status["health"]["reason"] == "One or more datasets are quarantined without a parsed recovery"
+    assert dataset_health["dataset"] == "focus"
+    assert dataset_health["state"] == "error"
+    assert dataset_health["reason"] == "Latest delivery is quarantined"
+    assert dataset_health["latest_status"] == "quarantined"
+
+
 def test_status_reports_waiting_for_first_delivery_for_configured_dataset():
     pipeline = _FakePipeline(deliveries=[])
     service = AzureCostExportService(

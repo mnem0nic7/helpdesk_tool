@@ -719,6 +719,8 @@ export interface AzureCostExportHealth {
   quarantine_artifact_count: number;
   status_counts: Record<string, number>;
   latest_delivery: AzureCostExportLatestDelivery | null;
+  state: string;
+  reason: string;
 }
 
 export interface AzureCostExportStatus {

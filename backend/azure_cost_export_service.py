@@ -156,6 +156,7 @@ class AzureCostExportService:
             stale = False
             state = "waiting"
             reason = "No deliveries recorded yet"
+            latest_delivery_status = str(latest_delivery.get("parse_status") or "unknown") if latest_delivery else "unknown"
             reference_time = latest_parsed_time or latest_delivery_time
             if dataset_rows:
                 if expected_cadence > 0 and reference_time is not None:
@@ -167,12 +168,15 @@ class AzureCostExportService:
                         if latest_parsed_time is not None
                         else f"No recent delivery within {expected_cadence}h cadence"
                     )
+                elif latest_delivery_status == "parsed":
+                    state = "healthy"
+                    reason = "Recent parsed delivery available"
+                elif latest_delivery_status == "quarantined":
+                    state = "error"
+                    reason = "Latest delivery is quarantined"
                 elif parsed_count > 0:
                     state = "healthy"
                     reason = "Recent parsed delivery available"
-                elif quarantined_count > 0:
-                    state = "error"
-                    reason = "Latest deliveries are quarantined"
                 else:
                     state = "waiting"
                     reason = "Deliveries discovered but none parsed yet"

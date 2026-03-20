@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { api } from "../lib/api.ts";
+import { api, type AzureCostExportStatus } from "../lib/api.ts";
 
 function MetricCard({ label, value, accent = "text-sky-700" }: { label: string; value: string; accent?: string }) {
   return (
@@ -8,6 +8,45 @@ function MetricCard({ label, value, accent = "text-sky-700" }: { label: string; 
       <div className={`mt-2 text-3xl font-semibold ${accent}`}>{value}</div>
     </div>
   );
+}
+
+function getExportHealthView(costExports: AzureCostExportStatus | undefined) {
+  if (!costExports) {
+    return {
+      label: "",
+      accent: "text-slate-700",
+      reason: "",
+    };
+  }
+  if (!costExports.enabled) {
+    return { label: "Disabled", accent: "text-slate-700", reason: "Export ingestion is disabled." };
+  }
+  if (costExports.refreshing || costExports.running) {
+    return {
+      label: "Syncing",
+      accent: "text-amber-700",
+      reason: costExports.health.reason || "Export ingestion is currently syncing.",
+    };
+  }
+
+  const state = costExports.health.state?.toLowerCase();
+  const reason = costExports.health.reason || costExports.last_error || "";
+  if (state === "stale") {
+    return { label: "Stale", accent: "text-amber-700", reason };
+  }
+  if (state === "waiting") {
+    return { label: "Waiting", accent: "text-slate-700", reason };
+  }
+  if (state === "error") {
+    return { label: "Error", accent: "text-red-700", reason };
+  }
+  if (state === "healthy") {
+    return { label: "Healthy", accent: "text-emerald-700", reason };
+  }
+  if (costExports.last_error) {
+    return { label: "Needs attention", accent: "text-red-700", reason };
+  }
+  return { label: "Healthy", accent: "text-emerald-700", reason };
 }
 
 export default function AzureOverviewPage() {
@@ -28,6 +67,8 @@ export default function AzureOverviewPage() {
       </div>
     );
   }
+
+  const exportHealth = getExportHealthView(data.cost_exports);
 
   return (
     <div className="space-y-6">
@@ -126,24 +167,8 @@ export default function AzureOverviewPage() {
           <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <MetricCard
               label="Export Service"
-              value={
-                !data.cost_exports.enabled
-                  ? "Disabled"
-                  : data.cost_exports.refreshing || data.cost_exports.running
-                    ? "Syncing"
-                    : data.cost_exports.last_error
-                      ? "Needs attention"
-                      : "Healthy"
-              }
-              accent={
-                !data.cost_exports.enabled
-                  ? "text-slate-700"
-                  : data.cost_exports.refreshing || data.cost_exports.running
-                    ? "text-amber-700"
-                    : data.cost_exports.last_error
-                      ? "text-red-700"
-                      : "text-emerald-700"
-              }
+              value={exportHealth.label}
+              accent={exportHealth.accent}
             />
             <MetricCard
               label="Deliveries"
@@ -169,6 +194,11 @@ export default function AzureOverviewPage() {
               value={data.cost_exports.health.quarantine_artifact_count.toLocaleString()}
             />
           </div>
+          {exportHealth.reason && exportHealth.label && exportHealth.label !== "Healthy" && (
+            <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              {exportHealth.reason}
+            </div>
+          )}
           {data.cost_exports.last_error && (
             <div className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
               Last export sync error: {data.cost_exports.last_error}
