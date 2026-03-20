@@ -22,6 +22,7 @@ from ai_client import (
 )
 from auth import is_admin_user, require_admin, require_authenticated_user
 from azure_cache import azure_cache
+from azure_cost_exports import azure_cost_export_service
 from azure_vm_export_jobs import azure_vm_export_jobs
 from models import (
     AzureCostChatRequest,
@@ -211,10 +212,16 @@ def _ensure_export_job_access(job_id: str, session: dict[str, Any]) -> dict[str,
     return job
 
 
+def _azure_status_with_exports(payload: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(payload)
+    enriched["cost_exports"] = azure_cost_export_service.status()
+    return enriched
+
+
 @router.get("/status")
 async def get_status() -> dict[str, Any]:
     _ensure_azure_site()
-    return azure_cache.status()
+    return _azure_status_with_exports(azure_cache.status())
 
 
 @router.post("/refresh")
@@ -224,19 +231,19 @@ async def refresh_azure(
 ) -> dict[str, Any]:
     _ensure_azure_site()
     if azure_cache.status().get("refreshing"):
-        return {**azure_cache.status(), "message": "Refresh already in progress"}
+        return {**_azure_status_with_exports(azure_cache.status()), "message": "Refresh already in progress"}
 
     async def _run() -> None:
         await asyncio.get_running_loop().run_in_executor(None, azure_cache.trigger_refresh)
 
     background_tasks.add_task(_run)
-    return {**azure_cache.status(), "started": True}
+    return {**_azure_status_with_exports(azure_cache.status()), "started": True}
 
 
 @router.get("/overview")
 async def get_overview() -> dict[str, Any]:
     _ensure_azure_site()
-    return azure_cache.get_overview()
+    return _azure_status_with_exports(azure_cache.get_overview())
 
 
 @router.get("/subscriptions")

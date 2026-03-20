@@ -1,0 +1,2 @@
+UsageDate,ServiceName,SubscriptionName,ResourceGroupName,ResourceId,BillingCurrencyCode,ChargeType
+2026-03-18,Compute,Prod Subscription,rg-app,/subscriptions/sub-prod/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-01,USD,Usage

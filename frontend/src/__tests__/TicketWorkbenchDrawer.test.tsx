@@ -297,6 +297,38 @@ describe("TicketWorkbenchDrawer", () => {
     });
   });
 
+  it("uses a wrapping summary editor and normalizes pasted line breaks before saving", async () => {
+    mockApi.updateTicket.mockResolvedValue({
+      ...ticketDetail,
+      ticket: {
+        ...ticketRow,
+        summary: "Printer is offline please investigate asap",
+      },
+    });
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const summaryField = await screen.findByLabelText("Summary");
+    expect(summaryField.tagName).toBe("TEXTAREA");
+
+    fireEvent.change(summaryField, {
+      target: { value: "Printer is offline\nplease investigate asap" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Ticket Details" }));
+
+    await waitFor(() => {
+      expect(mockApi.updateTicket).toHaveBeenCalledWith("OIT-1", {
+        summary: "Printer is offline please investigate asap",
+      });
+    });
+  });
+
   it("shows the current request type in the drawer when live detail loses it", async () => {
     mockApi.getTicket.mockResolvedValue({
       ...ticketDetail,

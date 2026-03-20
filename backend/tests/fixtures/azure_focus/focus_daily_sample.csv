@@ -1,0 +1,5 @@
+UsageDate,ServiceName,SubscriptionName,ResourceGroupName,ResourceId,BillingCurrencyCode,CostInBillingCurrency,AmortizedCostInBillingCurrency,ChargeType,MeterCategory,ConsumedService
+2026-03-18,Compute,Prod Subscription,rg-app,/subscriptions/sub-prod/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-01,USD,10.00,8.00,Usage,Compute,Microsoft.Compute
+2026-03-18,Storage,Prod Subscription,rg-app,/subscriptions/sub-prod/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/st01,USD,5.00,5.00,Usage,Storage,Microsoft.Storage
+2026-03-19,Compute,Dev Subscription,rg-dev,/subscriptions/sub-dev/resourceGroups/rg-dev/providers/Microsoft.Compute/virtualMachines/vm-02,USD,7.50,6.50,Usage,Compute,Microsoft.Compute
+2026-03-19,Network,Dev Subscription,rg-net,/subscriptions/sub-dev/resourceGroups/rg-net/providers/Microsoft.Network/publicIPAddresses/pip-01,USD,3.00,3.00,Usage,Network,Microsoft.Network

@@ -34,6 +34,7 @@ from routes_azure_alerts import router as azure_alerts_router
 from routes_user_admin import router as user_admin_router
 from routes_user_exit import router as user_exit_router
 from azure_alert_engine import start_azure_alert_loop, stop_azure_alert_loop
+from azure_cost_exports import azure_cost_export_service
 from issue_cache import cache
 from azure_cache import azure_cache
 from azure_vm_export_jobs import azure_vm_export_jobs
@@ -54,6 +55,7 @@ async def lifespan(app: FastAPI):
     kb_store.ensure_seed_articles()
     await cache.start_background_refresh()
     await azure_cache.start_background_refresh()
+    await azure_cost_export_service.start()
     await azure_vm_export_jobs.start_worker()
     await user_admin_jobs.start_worker()
     await user_exit_workflows.start_worker()
@@ -63,6 +65,7 @@ async def lifespan(app: FastAPI):
     await user_exit_workflows.stop_worker()
     await user_admin_jobs.stop_worker()
     await azure_vm_export_jobs.stop_worker()
+    await azure_cost_export_service.stop()
     await azure_cache.stop_background_refresh()
     await cache.stop_background_refresh()
 

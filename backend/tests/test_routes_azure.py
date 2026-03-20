@@ -11,6 +11,7 @@ def test_azure_overview_returns_cached_payload(test_client, monkeypatch):
     import routes_azure
 
     mock_cache = MagicMock()
+    mock_cost_exports = MagicMock()
     mock_cache.get_overview.return_value = {
         "subscriptions": 4,
         "management_groups": 2,
@@ -34,17 +35,58 @@ def test_azure_overview_returns_cached_payload(test_client, monkeypatch):
         "datasets": [],
         "last_refresh": "2026-03-17T18:00:00+00:00",
     }
+    mock_cost_exports.status.return_value = {
+        "enabled": True,
+        "configured": True,
+        "running": False,
+        "refreshing": False,
+        "health": {"delivery_count": 2, "parsed_count": 2, "quarantined_count": 0},
+    }
     monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+    monkeypatch.setattr(routes_azure, "azure_cost_export_service", mock_cost_exports)
 
     resp = test_client.get("/api/azure/overview", headers={"host": "azure.movedocs.com"})
     assert resp.status_code == 200
     assert resp.json()["subscriptions"] == 4
     assert resp.json()["cost"]["total_cost"] == 1234.56
+    assert resp.json()["cost_exports"]["health"]["delivery_count"] == 2
 
 
 def test_azure_overview_is_not_available_on_helpdesk_host(test_client):
     resp = test_client.get("/api/azure/overview")
     assert resp.status_code == 404
+
+
+def test_azure_status_includes_cost_export_status(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cost_exports = MagicMock()
+    mock_cache.status.return_value = {
+        "configured": True,
+        "initialized": True,
+        "refreshing": False,
+        "last_refresh": "2026-03-20T08:00:00+00:00",
+        "datasets": [],
+    }
+    mock_cost_exports.status.return_value = {
+        "enabled": True,
+        "configured": True,
+        "running": True,
+        "refreshing": False,
+        "last_success_at": "2026-03-20T08:05:00+00:00",
+        "health": {"delivery_count": 3, "parsed_count": 2, "quarantined_count": 1},
+    }
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+    monkeypatch.setattr(routes_azure, "azure_cost_export_service", mock_cost_exports)
+
+    resp = test_client.get("/api/azure/status", headers={"host": "azure.movedocs.com"})
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["configured"] is True
+    assert payload["cost_exports"]["running"] is True
+    assert payload["cost_exports"]["health"]["quarantined_count"] == 1
 
 
 def test_directory_users_returns_cached_payload_on_azure_host(test_client, monkeypatch):

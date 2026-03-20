@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
@@ -98,6 +98,10 @@ function normalizeRequestTypeName(name: string): string {
   return name.trim().toLowerCase();
 }
 
+function normalizeSummaryInput(value: string): string {
+  return value.replace(/\r?\n+/g, " ");
+}
+
 export default function TicketWorkbenchDrawer({
   ticketKey,
   initialTicket,
@@ -122,6 +126,7 @@ export default function TicketWorkbenchDrawer({
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const summaryInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ["ticket-detail", ticketKey],
@@ -178,7 +183,7 @@ export default function TicketWorkbenchDrawer({
 
   useEffect(() => {
     if (!detail) return;
-    setSummary(detail.ticket.summary);
+    setSummary(normalizeSummaryInput(detail.ticket.summary));
     setDescription(detail.description);
     setSelectedPriority(detail.ticket.priority);
     setSelectedAssignee(detail.ticket.assignee_account_id ?? "");
@@ -191,6 +196,13 @@ export default function TicketWorkbenchDrawer({
     setWorkCategoryInput(detail.work_category ?? "");
     setIsHistoryOpen(false);
   }, [detail]);
+
+  useEffect(() => {
+    const textarea = summaryInputRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [drawerWidth, summary]);
 
   const effectiveRequestTypeName =
     detail?.ticket.request_type?.trim() ||
@@ -338,7 +350,8 @@ export default function TicketWorkbenchDrawer({
         throw new Error("Ticket detail not loaded");
       }
       const payload: Record<string, unknown> = {};
-      if (summary.trim() !== detail.ticket.summary) payload.summary = summary.trim();
+      const normalizedSummary = normalizeSummaryInput(summary).trim();
+      if (normalizedSummary !== detail.ticket.summary) payload.summary = normalizedSummary;
       if (description !== detail.description) payload.description = description;
       if (selectedPriority !== detail.ticket.priority) payload.priority = selectedPriority;
       if ((selectedAssignee || "") !== (detail.ticket.assignee_account_id || "")) {
@@ -527,7 +540,7 @@ export default function TicketWorkbenchDrawer({
         </div>
 
         <div className="border-b border-slate-200 px-5 py-3">
-          <div className="flex items-start justify-between gap-4">
+          <div className="space-y-3">
             <div className="min-w-0">
               <div className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">
                 {ticket?.key ?? ticketKey}
@@ -535,16 +548,17 @@ export default function TicketWorkbenchDrawer({
               <label className="sr-only" htmlFor="ticket-summary-input">
                 Summary
               </label>
-              <input
+              <textarea
+                ref={summaryInputRef}
                 id="ticket-summary-input"
-                type="text"
+                rows={1}
                 value={summary}
-                onChange={(e) => setSummary(e.target.value)}
-                className="mt-1.5 w-full rounded-md border border-transparent bg-transparent px-0 py-1 text-xl font-semibold text-slate-900 shadow-none focus:border-blue-200 focus:bg-white focus:px-3 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                onChange={(e) => setSummary(normalizeSummaryInput(e.target.value))}
+                className="mt-1.5 block w-full resize-none overflow-hidden rounded-md border border-transparent bg-transparent px-0 py-1 text-xl font-semibold leading-tight text-slate-900 shadow-none focus:border-blue-200 focus:bg-white focus:px-3 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 placeholder={ticket?.summary || "Loading ticket..."}
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               {getSiteBranding().scope === "oasisdev" &&
                 detail?.ticket.labels.some((l) => l.toLowerCase().includes("oasisdev")) && (
                   <button

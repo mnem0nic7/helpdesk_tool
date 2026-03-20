@@ -703,12 +703,44 @@ export interface AzureDatasetStatus {
   error?: string | null;
 }
 
+export interface AzureCostExportLatestDelivery {
+  delivery_id: string | null;
+  landing_path: string | null;
+  parse_status: string | null;
+  row_count: number | null;
+  manifest_path: string | null;
+}
+
+export interface AzureCostExportHealth {
+  delivery_count: number;
+  parsed_count: number;
+  quarantined_count: number;
+  staged_snapshot_count: number;
+  quarantine_artifact_count: number;
+  status_counts: Record<string, number>;
+  latest_delivery: AzureCostExportLatestDelivery | null;
+}
+
+export interface AzureCostExportStatus {
+  enabled: boolean;
+  configured: boolean;
+  running: boolean;
+  refreshing: boolean;
+  poll_interval_seconds: number;
+  last_sync_started_at: string | null;
+  last_sync_finished_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  health: AzureCostExportHealth;
+}
+
 export interface AzureStatus {
   configured: boolean;
   initialized: boolean;
   refreshing: boolean;
   last_refresh: string | null;
   datasets: AzureDatasetStatus[];
+  cost_exports?: AzureCostExportStatus;
 }
 
 export interface AzureCostSummary {
@@ -735,6 +767,7 @@ export interface AzureOverviewResponse {
   cost: AzureCostSummary;
   datasets: AzureDatasetStatus[];
   last_refresh: string | null;
+  cost_exports?: AzureCostExportStatus;
 }
 
 export interface AzureSubscription {

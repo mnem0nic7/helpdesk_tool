@@ -37,6 +37,10 @@ def _is_test_runtime() -> bool:
     return bool(os.getenv("PYTEST_CURRENT_TEST")) or env in {"test", "testing"}
 
 
+def _env_bool(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _load_app_secret_key() -> str:
     configured = os.getenv("APP_SECRET_KEY", "").strip()
     if not configured:
@@ -70,5 +74,22 @@ AZURE_VM_EXPORT_SHARED_MAX_RUNTIME_SECONDS: int = int(
 )
 AZURE_COST_INTER_QUERY_DELAY_SECONDS: float = float(os.getenv("AZURE_COST_INTER_QUERY_DELAY_SECONDS", "2"))
 AZURE_COST_MAX_RETRIES: int = int(os.getenv("AZURE_COST_MAX_RETRIES", "5"))
+AZURE_COST_EXPORTS_ENABLED: bool = _env_bool("AZURE_COST_EXPORTS_ENABLED", "0")
+AZURE_COST_EXPORT_ROOT: str = os.getenv("AZURE_COST_EXPORT_ROOT", os.path.join(DATA_DIR, "azure_cost_exports"))
+AZURE_COST_EXPORT_DATASETS: str = os.getenv("AZURE_COST_EXPORT_DATASETS", "FOCUS")
+AZURE_COST_EXPORT_MANIFEST_DB_PATH: str = os.getenv(
+    "AZURE_COST_EXPORT_MANIFEST_DB_PATH",
+    os.path.join(DATA_DIR, "azure_export_deliveries.db"),
+)
+AZURE_COST_EXPORT_STAGING_DIR: str = os.getenv(
+    "AZURE_COST_EXPORT_STAGING_DIR",
+    os.path.join(DATA_DIR, "azure_cost_exports", "_staged"),
+)
+AZURE_COST_EXPORT_QUARANTINE_DIR: str = os.getenv(
+    "AZURE_COST_EXPORT_QUARANTINE_DIR",
+    os.path.join(DATA_DIR, "azure_cost_exports", "_quarantine"),
+)
+AZURE_COST_EXPORT_EXPECTED_CADENCE_HOURS: int = int(os.getenv("AZURE_COST_EXPORT_EXPECTED_CADENCE_HOURS", "24"))
+AZURE_COST_EXPORT_POLL_INTERVAL_MINUTES: int = int(os.getenv("AZURE_COST_EXPORT_POLL_INTERVAL_MINUTES", "15"))
 USER_EXIT_AGENT_SHARED_SECRET: str = os.getenv("USER_EXIT_AGENT_SHARED_SECRET", "")
 USER_EXIT_AGENT_STEP_LEASE_SECONDS: int = int(os.getenv("USER_EXIT_AGENT_STEP_LEASE_SECONDS", "120"))

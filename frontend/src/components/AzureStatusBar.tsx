@@ -1,10 +1,18 @@
 import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../lib/api.ts";
+import { api, type AzureCostExportStatus } from "../lib/api.ts";
 
 function formatLastRefresh(value: string | null): string {
   if (!value) return "—";
   return new Date(value).toLocaleTimeString();
+}
+
+function getCostExportTone(status: AzureCostExportStatus | null | undefined): string {
+  if (!status) return "bg-slate-50 text-slate-700";
+  if (!status.enabled) return "bg-slate-50 text-slate-700";
+  if (status.refreshing || status.running) return "bg-amber-50 text-amber-700";
+  if (status.last_error) return "bg-red-50 text-red-700";
+  return "bg-emerald-50 text-emerald-700";
 }
 
 export default function AzureStatusBar({ isAdmin }: { isAdmin: boolean }) {
@@ -36,6 +44,17 @@ export default function AzureStatusBar({ isAdmin }: { isAdmin: boolean }) {
   });
 
   if (!status) return null;
+
+  const costExports = status.cost_exports;
+  const costExportState = !costExports
+    ? ""
+    : !costExports.enabled
+      ? "Disabled"
+      : costExports.refreshing || costExports.running
+        ? "Syncing"
+        : costExports.last_error
+          ? "Needs attention"
+          : "Healthy";
 
   return (
     <div className="mb-4 rounded-md border border-sky-200 bg-white shadow-sm">
@@ -71,6 +90,31 @@ export default function AzureStatusBar({ isAdmin }: { isAdmin: boolean }) {
               {dataset.label}: {dataset.item_count.toLocaleString()}
             </span>
           ))}
+          {costExports && (
+            <>
+              <span className="text-slate-300">|</span>
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-medium ${getCostExportTone(costExports)}`}
+                title={
+                  costExports.last_error ||
+                  (costExports.last_success_at
+                    ? `Last successful export sync at ${formatLastRefresh(costExports.last_success_at)}`
+                    : "No successful export sync yet")
+                }
+              >
+                Cost exports: {costExportState}
+              </span>
+              <span className="rounded-full bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700">
+                Deliveries: {costExports.health.delivery_count.toLocaleString()}
+              </span>
+              <span className="rounded-full bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700">
+                Parsed: {costExports.health.parsed_count.toLocaleString()}
+              </span>
+              <span className="rounded-full bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700">
+                Quarantined: {costExports.health.quarantined_count.toLocaleString()}
+              </span>
+            </>
+          )}
           {isAdmin && (
             <button
               type="button"

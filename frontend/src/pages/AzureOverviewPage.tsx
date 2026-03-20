@@ -119,6 +119,67 @@ export default function AzureOverviewPage() {
           </div>
         </section>
       </div>
+
+      {data.cost_exports && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Cost Export Health</h2>
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <MetricCard
+              label="Export Service"
+              value={
+                !data.cost_exports.enabled
+                  ? "Disabled"
+                  : data.cost_exports.refreshing || data.cost_exports.running
+                    ? "Syncing"
+                    : data.cost_exports.last_error
+                      ? "Needs attention"
+                      : "Healthy"
+              }
+              accent={
+                !data.cost_exports.enabled
+                  ? "text-slate-700"
+                  : data.cost_exports.refreshing || data.cost_exports.running
+                    ? "text-amber-700"
+                    : data.cost_exports.last_error
+                      ? "text-red-700"
+                      : "text-emerald-700"
+              }
+            />
+            <MetricCard
+              label="Deliveries"
+              value={data.cost_exports.health.delivery_count.toLocaleString()}
+              accent="text-sky-700"
+            />
+            <MetricCard
+              label="Parsed"
+              value={data.cost_exports.health.parsed_count.toLocaleString()}
+              accent="text-emerald-700"
+            />
+            <MetricCard
+              label="Quarantined"
+              value={data.cost_exports.health.quarantined_count.toLocaleString()}
+              accent="text-amber-700"
+            />
+            <MetricCard
+              label="Staged Snapshots"
+              value={data.cost_exports.health.staged_snapshot_count.toLocaleString()}
+            />
+            <MetricCard
+              label="Quarantine Artifacts"
+              value={data.cost_exports.health.quarantine_artifact_count.toLocaleString()}
+            />
+          </div>
+          {data.cost_exports.last_error && (
+            <div className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
+              Last export sync error: {data.cost_exports.last_error}
+            </div>
+          )}
+          <div className="mt-4 text-sm text-slate-500">
+            Last successful export sync:{" "}
+            {data.cost_exports.last_success_at ? new Date(data.cost_exports.last_success_at).toLocaleString() : "—"}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

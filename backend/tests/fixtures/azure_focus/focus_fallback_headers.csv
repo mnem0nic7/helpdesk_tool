@@ -1,0 +1,3 @@
+UsageDate,ConsumedService,SubscriptionId,ResourceGroupName,Currency,ActualCost,AmortizedCost,ChargeType,MeterCategory
+2026-03-18,Microsoft.Compute,sub-prod,rg-app,USD,10.00,8.00,Usage,Compute
+2026-03-19,Microsoft.Storage,sub-prod,rg-app,USD,5.00,5.00,Usage,Storage

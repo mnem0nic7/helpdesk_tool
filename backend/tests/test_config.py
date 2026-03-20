@@ -31,3 +31,22 @@ def test_config_allows_test_runtime_without_explicit_app_secret(monkeypatch):
     config = _reload_config()
 
     assert config._load_app_secret_key() == "test-secret-key"
+
+
+def test_cost_export_config_defaults_and_bool_parsing(monkeypatch):
+    monkeypatch.setenv("APP_SECRET_KEY", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("DATA_DIR", "/tmp/azure-data")
+    monkeypatch.setenv("AZURE_COST_EXPORTS_ENABLED", "true")
+    monkeypatch.delenv("AZURE_COST_EXPORT_ROOT", raising=False)
+    monkeypatch.delenv("AZURE_COST_EXPORT_MANIFEST_DB_PATH", raising=False)
+    monkeypatch.delenv("AZURE_COST_EXPORT_STAGING_DIR", raising=False)
+    monkeypatch.delenv("AZURE_COST_EXPORT_QUARANTINE_DIR", raising=False)
+
+    config = _reload_config()
+
+    assert config.AZURE_COST_EXPORTS_ENABLED is True
+    assert config.AZURE_COST_EXPORT_ROOT == "/tmp/azure-data/azure_cost_exports"
+    assert config.AZURE_COST_EXPORT_MANIFEST_DB_PATH == "/tmp/azure-data/azure_export_deliveries.db"
+    assert config.AZURE_COST_EXPORT_STAGING_DIR == "/tmp/azure-data/azure_cost_exports/_staged"
+    assert config.AZURE_COST_EXPORT_QUARANTINE_DIR == "/tmp/azure-data/azure_cost_exports/_quarantine"

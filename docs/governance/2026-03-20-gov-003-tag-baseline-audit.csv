@@ -1,0 +1,6 @@
+scope,resource_id,tag_key,tag_value,expected_value,compliance_status,owner,remediation_due,notes
+TBD,TBD,application_service,TBD,TBD,TBD,TBD,TBD,TBD
+TBD,TBD,environment,TBD,TBD,TBD,TBD,TBD,TBD
+TBD,TBD,owner,TBD,TBD,TBD,TBD,TBD,TBD
+TBD,TBD,cost_center,TBD,TBD,TBD,TBD,TBD,TBD
+TBD,TBD,business_unit,TBD,TBD,TBD,TBD,TBD,TBD
