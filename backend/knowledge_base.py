@@ -121,17 +121,10 @@ def _render_content(lines: list[str]) -> str:
 
 
 def _default_seed_archive_paths() -> list[Path]:
-    backend_dir = Path(__file__).resolve().parent
-    repo_root = backend_dir.parent
     env_path = os.getenv("KB_ARTICLE_ARCHIVE", "").strip()
-    candidates = []
     if env_path:
-        candidates.append(Path(env_path))
-    candidates.extend([
-        repo_root / "OIT_KB_Articles.zip",
-        Path("/app/OIT_KB_Articles.zip"),
-    ])
-    return candidates
+        return [Path(env_path)]
+    return []
 
 
 _SUPPORTED_SOP_EXTENSIONS = {".docx", ".txt", ".pdf"}

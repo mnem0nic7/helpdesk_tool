@@ -30,7 +30,27 @@ ENTRA_CLIENT_ID: str = os.getenv("ENTRA_CLIENT_ID", "")
 ENTRA_CLIENT_SECRET: str = os.getenv("ENTRA_CLIENT_SECRET", "")
 ALLOWED_USERS: str = os.getenv("ALLOWED_USERS", "")  # comma-separated emails, empty = all
 ADMIN_USERS: str = os.getenv("ADMIN_USERS", "")  # comma-separated emails for write operations, empty = all authenticated
-APP_SECRET_KEY: str = os.getenv("APP_SECRET_KEY", "change-me-in-production")
+
+
+def _is_test_runtime() -> bool:
+    env = os.getenv("APP_ENV", "").strip().lower()
+    return bool(os.getenv("PYTEST_CURRENT_TEST")) or env in {"test", "testing"}
+
+
+def _load_app_secret_key() -> str:
+    configured = os.getenv("APP_SECRET_KEY", "").strip()
+    if not configured:
+        if _is_test_runtime():
+            return "test-secret-key"
+        raise RuntimeError("APP_SECRET_KEY must be set to a strong random value before starting the app.")
+    if configured == "change-me-in-production" and not _is_test_runtime():
+        raise RuntimeError(
+            "APP_SECRET_KEY is using the insecure placeholder value. Set a strong random secret before starting the app."
+        )
+    return configured
+
+
+APP_SECRET_KEY: str = _load_app_secret_key()
 
 # Azure portal integration
 AZURE_ROOT_MANAGEMENT_GROUP_ID: str = os.getenv("AZURE_ROOT_MANAGEMENT_GROUP_ID", "")
@@ -52,9 +72,3 @@ AZURE_COST_INTER_QUERY_DELAY_SECONDS: float = float(os.getenv("AZURE_COST_INTER_
 AZURE_COST_MAX_RETRIES: int = int(os.getenv("AZURE_COST_MAX_RETRIES", "5"))
 USER_EXIT_AGENT_SHARED_SECRET: str = os.getenv("USER_EXIT_AGENT_SHARED_SECRET", "")
 USER_EXIT_AGENT_STEP_LEASE_SECONDS: int = int(os.getenv("USER_EXIT_AGENT_STEP_LEASE_SECONDS", "120"))
-if APP_SECRET_KEY == "change-me-in-production":
-    import warnings
-    warnings.warn(
-        "APP_SECRET_KEY is using the insecure default. Set it in .env for production.",
-        stacklevel=1,
-    )

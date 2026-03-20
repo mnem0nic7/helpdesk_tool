@@ -24,8 +24,10 @@ services:
       - backend/.env
     environment:
       - DATA_DIR=/app/data
+      - KB_ARTICLE_ARCHIVE=/app/private/OIT_KB_Articles.zip
     volumes:
       - cache_data:/app/data
+      - ./private:/app/private:ro
     restart: unless-stopped
 
 volumes:

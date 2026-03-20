@@ -1,0 +1,26 @@
+name: Repo Hygiene
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check blocked tracked artifacts
+        run: bash ./scripts/check_repo_hygiene.sh
+
+      - name: Scan working tree for secrets
+        run: bash ./scripts/run_secret_scan.sh --working-tree
+
+      - name: Scan full git history for secrets
+        run: bash ./scripts/run_secret_scan.sh --full-history

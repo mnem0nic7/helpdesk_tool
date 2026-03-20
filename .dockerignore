@@ -9,6 +9,23 @@ reports/
 docs/
 __pycache__/
 *.pyc
+private/
+*.xls
+*.xlsx
+*.xlsm
+*.doc
+*.docx
+*.ppt
+*.pptx
+*.zip
+*.7z
+*.msg
+*.pem
+*.pfx
+*.key
+*.db
+*.sqlite
+*.sqlite3
 
 # Large data files
 oit_all_issues.json
@@ -25,6 +42,7 @@ start.sh
 backend/.env
 backend/.env.*
 !backend/.env.example
+.env
 
 # IDE / editor
 .vscode/

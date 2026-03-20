@@ -1,6 +1,10 @@
 # Environment & secrets
 backend/.env
 .env
+private/
+*.pem
+*.pfx
+*.key
 
 # Python
 .venv/
@@ -18,8 +22,21 @@ data/
 backend/data/
 oit_all_issues.json
 oit_all_issues_full.json
+*.db
+*.sqlite
+*.sqlite3
+*.xls
 *.xlsx
+*.xlsm
+*.doc
+*.docx
+*.ppt
+*.pptx
+*.zip
+*.7z
+*.msg
 reports/
+FW_ Exit tasks with powershell.msg
 
 # Scratch / planning
 plan.md

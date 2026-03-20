@@ -60,3 +60,24 @@ def test_import_seed_archive_extracts_docx_articles(tmp_path):
     assert article.summary == "Covers Outlook, mail flow, and shared mailbox troubleshooting."
     assert "Resolution Steps:" in article.content
     assert article.imported_from_seed is True
+
+
+def test_ensure_seed_articles_uses_private_archive_env(monkeypatch, tmp_path):
+    archive_path = _seed_archive(tmp_path / "private-kb.zip")
+    monkeypatch.setenv("KB_ARTICLE_ARCHIVE", str(archive_path))
+    store = KnowledgeBaseStore(str(tmp_path / "kb.db"))
+
+    imported = store.ensure_seed_articles()
+
+    assert imported == 1
+    assert store.count_articles() == 1
+
+
+def test_ensure_seed_articles_skips_when_no_archive_configured(monkeypatch, tmp_path):
+    monkeypatch.delenv("KB_ARTICLE_ARCHIVE", raising=False)
+    store = KnowledgeBaseStore(str(tmp_path / "kb.db"))
+
+    imported = store.ensure_seed_articles()
+
+    assert imported == 0
+    assert store.count_articles() == 0

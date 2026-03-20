@@ -89,6 +89,12 @@ if git diff --cached --quiet; then
     fi
 fi
 
+echo ">>> Running repo hygiene checks..."
+bash ./scripts/check_repo_hygiene.sh
+
+echo ">>> Running working-tree secret scan..."
+bash ./scripts/run_secret_scan.sh --working-tree
+
 echo ">>> Creating commit on $current_branch..."
 if [[ "$allow_empty" -eq 1 ]]; then
     git commit --allow-empty -m "$commit_message"

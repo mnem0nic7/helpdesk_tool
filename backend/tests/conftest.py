@@ -21,6 +21,7 @@ os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="altlassian_test_"))
 os.environ.setdefault("JIRA_EMAIL", "test@example.com")
 os.environ.setdefault("JIRA_API_TOKEN", "test-token")
 os.environ.setdefault("JIRA_BASE_URL", "https://example.atlassian.net")
+os.environ.setdefault("APP_SECRET_KEY", "test-secret-key")
 
 # Frozen time constant (also used in test_metrics.py)
 FROZEN_NOW = datetime(2026, 3, 4, 12, 0, 0, tzinfo=timezone.utc)

@@ -24,9 +24,8 @@ WORKDIR /app
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend source and KB seed archive
+# Copy backend source
 COPY backend/ ./backend/
-COPY OIT_KB_Articles.zip ./OIT_KB_Articles.zip
 
 # Copy frontend build output to nginx html root
 COPY --from=frontend-build /build/dist/ /usr/share/nginx/html/
@@ -38,7 +37,7 @@ COPY nginx.conf /etc/nginx/conf.d/dashboard.conf
 # Copy supervisord config
 COPY supervisord.conf /etc/supervisor/conf.d/dashboard.conf
 
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /app/private
 
 EXPOSE 80
 
