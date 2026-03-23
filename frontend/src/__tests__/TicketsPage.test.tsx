@@ -196,7 +196,12 @@ describe("TicketsPage", () => {
   });
 
   it("stays stable when tickets resolve after an initial loading render", async () => {
-    let resolveTickets: ((value: { tickets: typeof ticketRow[]; matched_count: number; total_count: number }) => void) | null = null;
+    type TicketListResult = {
+      tickets: Array<typeof ticketRow>;
+      matched_count: number;
+      total_count: number;
+    };
+    let resolveTickets: ((value: TicketListResult) => void) | undefined;
     mockApi.getTickets.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -207,7 +212,11 @@ describe("TicketsPage", () => {
     render(<TicketsPage />);
     await screen.findByText("Loading ticket count...");
 
-    resolveTickets?.({
+    if (!resolveTickets) {
+      throw new Error("Ticket resolver was not captured");
+    }
+
+    resolveTickets({
       tickets: [ticketRow],
       matched_count: 1,
       total_count: 1,
