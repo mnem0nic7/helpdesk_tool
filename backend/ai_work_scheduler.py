@@ -102,6 +102,9 @@ class AIWorkScheduler:
                 outcome = "deferred"
 
             if outcome == "processed":
+                # Yield after each completed item so API requests are not starved
+                # when the scheduler is working through a long backlog.
+                await asyncio.sleep(0)
                 continue
             if outcome == "deferred":
                 await asyncio.sleep(self._defer_interval_seconds)
