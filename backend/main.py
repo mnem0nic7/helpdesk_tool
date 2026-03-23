@@ -22,7 +22,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from auth import get_session
-from config import APP_SECRET_KEY
+from config import APP_SECRET_KEY, TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES
 from routes_metrics import router as metrics_router
 from routes_tickets import router as tickets_router
 from routes_actions import router as actions_router
@@ -38,6 +38,7 @@ from routes_azure import router as azure_router
 from routes_azure_alerts import router as azure_alerts_router
 from routes_user_admin import router as user_admin_router
 from routes_user_exit import router as user_exit_router
+from ai_work_scheduler import AIWorkScheduler
 from azure_alert_engine import start_azure_alert_loop, stop_azure_alert_loop
 from azure_cost_exports import azure_cost_export_service
 from issue_cache import cache
@@ -54,6 +55,12 @@ from site_context import (
 )
 
 logger = logging.getLogger(__name__)
+
+ai_work_scheduler = AIWorkScheduler(
+    cache=cache,
+    technician_scoring_manager=technician_scoring_manager,
+    qa_poll_interval_seconds=TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES * 60,
+)
 
 
 def _default_kb_seed_status() -> dict[str, Any]:
@@ -110,16 +117,11 @@ async def _start_deferred_services(app: FastAPI) -> None:
             logger.exception("Failed to start %s", label)
 
     try:
-        while not cache.initialized:
-            ready = await cache.wait_until_initialized(timeout=5)
-            if ready:
-                break
-            logger.info("Waiting for issue cache warm-up before starting technician scoring worker")
-        await technician_scoring_manager.start_worker()
+        await ai_work_scheduler.start_worker()
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("Failed to start technician scoring worker")
+        logger.exception("Failed to start AI work scheduler")
 
 
 async def _seed_knowledge_base(app: FastAPI) -> None:
@@ -214,7 +216,7 @@ async def lifespan(app: FastAPI):
     await stop_azure_alert_loop()
     await user_exit_workflows.stop_worker()
     await user_admin_jobs.stop_worker()
-    await technician_scoring_manager.stop_worker()
+    await ai_work_scheduler.stop_worker()
     await azure_vm_export_jobs.stop_worker()
     await azure_cost_export_service.stop()
     await azure_cache.stop_background_refresh()

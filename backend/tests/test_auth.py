@@ -245,6 +245,10 @@ class TestAuthMiddleware:
         monkeypatch.setattr(routes_user_admin, "user_admin_providers", mock_user_admin_providers)
 
         import main
+        mock_ai_work_scheduler = MagicMock()
+        mock_ai_work_scheduler.start_worker = AsyncMock()
+        mock_ai_work_scheduler.stop_worker = AsyncMock()
+        monkeypatch.setattr(main, "ai_work_scheduler", mock_ai_work_scheduler)
         mock_technician_scoring_manager = MagicMock()
         mock_technician_scoring_manager.start_worker = AsyncMock()
         mock_technician_scoring_manager.stop_worker = AsyncMock()

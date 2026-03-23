@@ -996,11 +996,9 @@ class IssueCache:
             first = False
             try:
                 refresh_args: tuple[int, ...] = () if lookback is None else (lookback,)
-                new_keys = await asyncio.get_running_loop().run_in_executor(
+                await asyncio.get_running_loop().run_in_executor(
                     None, self._incremental_refresh, *refresh_args
                 )
-                if new_keys:
-                    await self._auto_triage_new_tickets(new_keys)
                 # Run alert checks after each refresh
                 await self._run_alert_checks()
             except Exception:
