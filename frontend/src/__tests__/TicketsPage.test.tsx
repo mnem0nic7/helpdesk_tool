@@ -194,4 +194,26 @@ describe("TicketsPage", () => {
     expect(screen.getByRole("link", { name: "OIT-75" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "OIT-90" })).not.toBeInTheDocument();
   });
+
+  it("stays stable when tickets resolve after an initial loading render", async () => {
+    let resolveTickets: ((value: { tickets: typeof ticketRow[]; matched_count: number; total_count: number }) => void) | null = null;
+    mockApi.getTickets.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveTickets = resolve;
+        }),
+    );
+
+    render(<TicketsPage />);
+    await screen.findByText("Loading ticket count...");
+
+    resolveTickets?.({
+      tickets: [ticketRow],
+      matched_count: 1,
+      total_count: 1,
+    });
+
+    await screen.findByRole("link", { name: "OIT-1" });
+    expect(screen.getByText("1 matched of 1 tickets")).toBeInTheDocument();
+  });
 });

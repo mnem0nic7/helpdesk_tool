@@ -5,6 +5,7 @@ frontend/dist/
 dist/
 .git/
 .gitignore
+.deploy-state/
 reports/
 docs/
 __pycache__/

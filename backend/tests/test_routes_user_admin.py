@@ -127,6 +127,9 @@ def test_user_admin_capabilities_require_auth(monkeypatch):
     mock_technician_scoring_manager.start_worker = AsyncMock()
     mock_technician_scoring_manager.stop_worker = AsyncMock()
     monkeypatch.setattr(main, "technician_scoring_manager", mock_technician_scoring_manager)
+    mock_kb_store = MagicMock()
+    mock_kb_store.ensure_seed_articles.return_value = 0
+    monkeypatch.setattr(main, "kb_store", mock_kb_store)
     from starlette.testclient import TestClient
 
     client = TestClient(main.app)

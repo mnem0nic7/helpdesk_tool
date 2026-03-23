@@ -21,6 +21,9 @@ def _build_client() -> TestClient:
     mock_technician_scoring_manager.start_worker = AsyncMock()
     mock_technician_scoring_manager.stop_worker = AsyncMock()
     main.technician_scoring_manager = mock_technician_scoring_manager
+    mock_kb_store = MagicMock()
+    mock_kb_store.ensure_seed_articles.return_value = 0
+    main.kb_store = mock_kb_store
 
     client = TestClient(main.app, raise_server_exceptions=False)
     sid = create_session("test@example.com", "Test User")

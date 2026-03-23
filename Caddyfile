@@ -8,7 +8,15 @@ it-app.movedocs.com, oasisdev.movedocs.com, azure.movedocs.com {
 		}
 		issuer internal
 	}
-	reverse_proxy 172.19.0.10:80 {
+
+	@api path /api/*
+	reverse_proxy @api 172.19.0.10:8000 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-Proto {http.request.scheme}
+	}
+
+	reverse_proxy 172.19.0.11:80 {
 		header_up Host {http.request.host}
 		header_up X-Forwarded-Host {http.request.host}
 		header_up X-Forwarded-Proto {http.request.scheme}

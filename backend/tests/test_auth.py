@@ -249,6 +249,9 @@ class TestAuthMiddleware:
         mock_technician_scoring_manager.start_worker = AsyncMock()
         mock_technician_scoring_manager.stop_worker = AsyncMock()
         monkeypatch.setattr(main, "technician_scoring_manager", mock_technician_scoring_manager)
+        mock_kb_store = MagicMock()
+        mock_kb_store.ensure_seed_articles.return_value = 0
+        monkeypatch.setattr(main, "kb_store", mock_kb_store)
         from starlette.testclient import TestClient
         return TestClient(main.app)
 
@@ -289,6 +292,76 @@ class TestAuthMiddleware:
     def test_auth_me_returns_401_without_session(self, auth_client):
         resp = auth_client.get("/api/auth/me")
         assert resp.status_code == 401
+
+    def test_readiness_is_public_and_reports_ready(self, auth_client):
+        import main
+
+        main.cache.status.return_value = {
+            "initialized": True,
+            "refreshing": False,
+            "issue_count": 0,
+            "filtered_count": 0,
+            "last_refresh": "2026-03-23T17:00:00+00:00",
+        }
+        main.azure_cache.status.return_value = {
+            "configured": False,
+            "initialized": False,
+            "refreshing": False,
+            "last_refresh": None,
+            "datasets": [],
+        }
+        main.app.state.kb_seed_status = {
+            "ready": True,
+            "message": "Knowledge base seed check complete",
+            "imported_count": 0,
+            "error": None,
+        }
+
+        resp = auth_client.get("/api/health/ready")
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["status"] == "ready"
+        assert payload["site_scope"] == "primary"
+        assert payload["components"]["issue_cache"]["ready"] is True
+        assert payload["components"]["issue_cache"]["last_refresh"] == "2026-03-23T17:00:00+00:00"
+        assert payload["components"]["azure_cache"]["ready"] is False
+        assert payload["components"]["knowledge_base"]["ready"] is True
+
+    def test_readiness_returns_503_while_issue_cache_warming(self, auth_client):
+        import main
+
+        main.cache.status.return_value = {
+            "initialized": False,
+            "refreshing": True,
+            "issue_count": 0,
+            "filtered_count": 0,
+            "last_refresh": None,
+        }
+        main.azure_cache.status.return_value = {
+            "configured": True,
+            "initialized": True,
+            "refreshing": False,
+            "last_refresh": "2026-03-23T16:00:00+00:00",
+            "datasets": [],
+        }
+        main.app.state.kb_seed_status = {
+            "ready": False,
+            "message": "Knowledge base seed import running in the background",
+            "imported_count": 0,
+            "error": None,
+        }
+
+        resp = auth_client.get("/api/health/ready", headers={"host": "azure.movedocs.com"})
+
+        assert resp.status_code == 503
+        payload = resp.json()
+        assert payload["status"] == "warming"
+        assert payload["site_scope"] == "azure"
+        assert payload["components"]["issue_cache"]["ready"] is False
+        assert payload["components"]["issue_cache"]["message"] == "Issue cache is warming"
+        assert payload["components"]["azure_cache"]["ready"] is True
+        assert payload["components"]["knowledge_base"]["ready"] is False
 
     def test_protected_route_returns_401_without_session(self, auth_client):
         resp = auth_client.get("/api/metrics")

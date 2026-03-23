@@ -295,6 +295,17 @@ export default function TicketTable({
     getSortedRowModel: getSortedRowModel(),
   });
 
+  const rows = table.getRowModel().rows;
+  const visibleRowsResetKey = `${data[0]?.key ?? ""}|${data[data.length - 1]?.key ?? ""}|${sorting
+    .map((entry) => `${entry.id}:${entry.desc ? "desc" : "asc"}`)
+    .join(",")}`;
+  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(
+    rows.length,
+    TICKET_TABLE_PAGE_SIZE,
+    visibleRowsResetKey,
+  );
+  const visibleRows = rows.slice(0, visibleCount);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -311,17 +322,6 @@ export default function TicketTable({
       </div>
     );
   }
-
-  const rows = table.getRowModel().rows;
-  const visibleRowsResetKey = `${data[0]?.key ?? ""}|${data[data.length - 1]?.key ?? ""}|${sorting
-    .map((entry) => `${entry.id}:${entry.desc ? "desc" : "asc"}`)
-    .join(",")}`;
-  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(
-    rows.length,
-    TICKET_TABLE_PAGE_SIZE,
-    visibleRowsResetKey,
-  );
-  const visibleRows = rows.slice(0, visibleCount);
 
   return (
     <div>

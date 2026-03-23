@@ -1,8 +1,10 @@
 """FastAPI backend for the OIT Helpdesk Dashboard."""
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Any
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,10 +56,124 @@ from site_context import (
 logger = logging.getLogger(__name__)
 
 
+def _default_kb_seed_status() -> dict[str, Any]:
+    return {
+        "ready": False,
+        "message": "Knowledge base seed import queued",
+        "imported_count": 0,
+        "error": None,
+    }
+
+
+def _get_kb_seed_status(app: FastAPI) -> dict[str, Any]:
+    status = getattr(app.state, "kb_seed_status", None)
+    if isinstance(status, dict):
+        return dict(status)
+    default = _default_kb_seed_status()
+    app.state.kb_seed_status = dict(default)
+    return default
+
+
+def _set_kb_seed_status(app: FastAPI, **updates: Any) -> None:
+    status = _get_kb_seed_status(app)
+    status.update(updates)
+    app.state.kb_seed_status = status
+
+
+def _register_app_task(app: FastAPI, task: asyncio.Task[Any]) -> None:
+    tasks = getattr(app.state, "background_tasks", None)
+    if tasks is None:
+        tasks = set()
+        app.state.background_tasks = tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
+async def _seed_knowledge_base(app: FastAPI) -> None:
+    _set_kb_seed_status(
+        app,
+        ready=False,
+        message="Knowledge base seed import running in the background",
+        imported_count=0,
+        error=None,
+    )
+    try:
+        imported = await asyncio.to_thread(kb_store.ensure_seed_articles)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("Knowledge base seed import failed")
+        _set_kb_seed_status(
+            app,
+            ready=False,
+            message="Knowledge base seed import failed",
+            imported_count=0,
+            error=str(exc),
+        )
+        return
+
+    message = "Knowledge base seed check complete"
+    if imported:
+        message = f"Imported {imported} knowledge base seed article(s)"
+    _set_kb_seed_status(
+        app,
+        ready=True,
+        message=message,
+        imported_count=imported,
+        error=None,
+    )
+
+
+def _build_readiness_payload(app: FastAPI) -> dict[str, Any]:
+    scope = get_current_site_scope()
+    issue_status = cache.status()
+    azure_status = azure_cache.status()
+    kb_status = _get_kb_seed_status(app)
+
+    issue_ready = bool(issue_status.get("initialized"))
+    issue_message = "Issue cache ready"
+    if not issue_ready:
+        issue_message = "Issue cache is warming"
+    elif issue_status.get("refreshing"):
+        issue_message = "Issue cache ready; background refresh in progress"
+
+    azure_ready = bool(azure_status.get("initialized"))
+    azure_message = "Azure cache ready"
+    if not azure_status.get("configured", True):
+        azure_message = "Azure cache credentials are not configured"
+    elif not azure_ready:
+        azure_message = "Azure cache is warming"
+    elif azure_status.get("refreshing"):
+        azure_message = "Azure cache ready; background refresh in progress"
+
+    return {
+        "status": "ready" if issue_ready else "warming",
+        "site_scope": scope,
+        "components": {
+            "issue_cache": {
+                "ready": issue_ready,
+                "last_refresh": issue_status.get("last_refresh"),
+                "message": issue_message,
+            },
+            "azure_cache": {
+                "ready": azure_ready,
+                "last_refresh": azure_status.get("last_refresh"),
+                "message": azure_message,
+            },
+            "knowledge_base": {
+                "ready": bool(kb_status.get("ready")),
+                "message": str(kb_status.get("message") or ""),
+            },
+        },
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start background cache refresh on startup, stop on shutdown."""
-    kb_store.ensure_seed_articles()
+    app.state.background_tasks = set()
+    app.state.kb_seed_status = _default_kb_seed_status()
+    _register_app_task(app, asyncio.create_task(_seed_knowledge_base(app)))
     await cache.start_background_refresh()
     await azure_cache.start_background_refresh()
     await azure_cost_export_service.start()
@@ -75,6 +191,12 @@ async def lifespan(app: FastAPI):
     await azure_cost_export_service.stop()
     await azure_cache.stop_background_refresh()
     await cache.stop_background_refresh()
+    background_tasks = list(getattr(app.state, "background_tasks", set()))
+    for task in background_tasks:
+        if not task.done():
+            task.cancel()
+    if background_tasks:
+        await asyncio.gather(*background_tasks, return_exceptions=True)
 
 
 app = FastAPI(title="OIT Helpdesk Dashboard API", version="0.1.0", lifespan=lifespan)
@@ -92,6 +214,7 @@ def _request_label(request: Request) -> str:
 # ---------------------------------------------------------------------------
 _PUBLIC_PATHS = {
     "/api/health",
+    "/api/health/ready",
     "/api/auth/login",
     "/api/auth/callback",
     "/api/auth/me",
@@ -210,6 +333,13 @@ app.include_router(user_exit_router)
 async def health() -> dict:
     scope = get_current_site_scope()
     return {"status": "ok", "site_scope": scope}
+
+
+@app.get("/api/health/ready")
+async def health_ready(request: Request) -> JSONResponse:
+    payload = _build_readiness_payload(request.app)
+    status_code = 200 if payload["status"] == "ready" else 503
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 # ---------------------------------------------------------------------------
