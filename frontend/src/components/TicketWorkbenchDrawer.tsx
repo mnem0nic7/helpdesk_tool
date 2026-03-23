@@ -6,7 +6,6 @@ import type {
   Assignee,
   PriorityOption,
   TicketComment,
-  TechnicianScoreEntry,
   RequestTypeOption,
   TicketDetail,
   TicketRow,
