@@ -730,7 +730,7 @@ class IssueCache:
         # Check model is available
         available_ids = {m.id for m in get_available_models()}
         if AUTO_TRIAGE_MODEL not in available_ids:
-            logger.warning("Auto-triage: model %s not available (missing API key?), skipping", AUTO_TRIAGE_MODEL)
+            logger.warning("Auto-triage: model %s not available from the active AI provider, skipping", AUTO_TRIAGE_MODEL)
             return
 
         seen = self._load_auto_triage_seen()

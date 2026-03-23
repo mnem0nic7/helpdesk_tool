@@ -253,7 +253,7 @@ async def run_closed_ticket_scoring(
     if not available:
         raise HTTPException(
             status_code=400,
-            detail="No AI model available. Configure an API key before scoring technician responses.",
+            detail="No AI model available. Ensure Ollama is running and the configured local model is pulled before scoring technician responses.",
         )
     available_ids = {model.id for model in available}
     model_id = AUTO_TRIAGE_MODEL if AUTO_TRIAGE_MODEL in available_ids else available[0].id

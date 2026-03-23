@@ -833,13 +833,19 @@ async def post_cost_chat(body: AzureCostChatRequest) -> dict[str, Any]:
     _ensure_azure_site()
     available = get_available_copilot_models()
     if not available:
-        raise HTTPException(status_code=400, detail="No AI model available for the Azure copilot")
+        raise HTTPException(
+            status_code=400,
+            detail="No AI model available for the Azure copilot. Ensure Ollama is running and the configured local model is pulled.",
+        )
     available_ids = {model.id for model in available}
     model_id = body.model or get_default_copilot_model_id(available)
     if not model_id:
-        raise HTTPException(status_code=400, detail="No AI model available for the Azure copilot")
+        raise HTTPException(
+            status_code=400,
+            detail="No AI model available for the Azure copilot. Ensure Ollama is running and the configured local model is pulled.",
+        )
     if model_id not in available_ids:
-        raise HTTPException(status_code=400, detail=f"Model '{model_id}' is not available")
+        raise HTTPException(status_code=400, detail=f"Model '{model_id}' is not available from the active Ollama provider")
     if not body.question.strip():
         raise HTTPException(status_code=400, detail="Question is required")
     result = answer_azure_cost_question(

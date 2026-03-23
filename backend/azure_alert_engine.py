@@ -720,7 +720,7 @@ Do not include any text outside the JSON object.
 
 def parse_azure_alert_rule(message: str) -> dict[str, Any]:
     """Call AI to parse a natural-language alert description. Returns raw dict."""
-    from ai_client import _call_openai, _call_anthropic, get_available_models  # noqa: PLC0415
+    from ai_client import _call_anthropic, _call_ollama, _call_openai, get_available_models  # noqa: PLC0415
 
     models = get_available_models()
     if not models:
@@ -730,6 +730,8 @@ def parse_azure_alert_rule(message: str) -> dict[str, Any]:
     try:
         if model.provider == "openai":
             raw = _call_openai(model.id, _CHAT_SYSTEM_PROMPT, message)
+        elif model.provider == "ollama":
+            raw = _call_ollama(model.id, _CHAT_SYSTEM_PROMPT, message)
         else:
             raw = _call_anthropic(model.id, _CHAT_SYSTEM_PROMPT, message)
         return json.loads(raw.strip())

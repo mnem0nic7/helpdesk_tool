@@ -1,9 +1,12 @@
 import ai_client
 from ai_client import (
+    analyze_ticket,
     _enforce_reporter_hint,
     _enforce_security_priority,
     _extract_reporter_hint_from_text,
     draft_kb_article,
+    draft_kb_from_sop,
+    get_available_models,
     get_available_copilot_models,
     get_default_copilot_model_id,
     score_closed_ticket,
@@ -125,6 +128,7 @@ def test_enforce_reporter_hint_adds_reporter_suggestion():
 def test_get_available_copilot_models_uses_live_openai_catalog(monkeypatch):
     monkeypatch.setattr(ai_client, "OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(ai_client, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", False)
     monkeypatch.setattr(ai_client, "_OPENAI_COPILOT_MODEL_CACHE", None)
     monkeypatch.setattr(
         ai_client,
@@ -143,6 +147,42 @@ def test_get_available_copilot_models_uses_live_openai_catalog(monkeypatch):
         "gpt-4o-mini",
         "gpt-5.4-mini-2026-03-17",
     ]
+
+
+def test_get_available_models_includes_ollama_when_enabled(monkeypatch):
+    monkeypatch.setattr(ai_client, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(ai_client, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen2.5:7b")
+    monkeypatch.setattr(ai_client, "_OLLAMA_MODEL_CACHE", None)
+    monkeypatch.setattr(
+        ai_client,
+        "_list_ollama_models_from_api",
+        lambda: [
+            AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
+            AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
+        ],
+    )
+
+    models = get_available_models()
+
+    assert [model.id for model in models] == ["qwen2.5:7b", "qwen2.5:3b"]
+
+
+def test_get_available_models_prefers_ollama_over_cloud_when_enabled(monkeypatch):
+    monkeypatch.setattr(ai_client, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_client, "ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
+    monkeypatch.setattr(ai_client, "_OLLAMA_MODEL_CACHE", None)
+    monkeypatch.setattr(
+        ai_client,
+        "_list_ollama_models_from_api",
+        lambda: [AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama")],
+    )
+
+    models = get_available_models()
+
+    assert [model.provider for model in models] == ["ollama"]
 
 
 def test_get_default_copilot_model_id_prefers_supported_default():
@@ -185,6 +225,49 @@ def test_score_closed_ticket_parses_scores(monkeypatch):
     assert score.communication_score == 4
     assert score.documentation_score == 3
     assert score.score_summary == "Good communication, average documentation."
+
+
+def test_analyze_ticket_uses_ollama_provider(monkeypatch):
+    issue = {
+        "key": "OIT-314",
+        "fields": {
+            "summary": "VPN not connecting",
+            "priority": {"name": "Medium"},
+            "status": {"name": "Open"},
+            "description": {
+                "type": "doc",
+                "content": [{"type": "text", "text": "User cannot connect to the VPN from home."}],
+            },
+            "comment": {"comments": []},
+        },
+    }
+
+    monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen2.5:7b")
+    monkeypatch.setattr(ai_client, "get_request_type_names", lambda: ["VPN", "Get IT help"])
+    monkeypatch.setattr(
+        ai_client,
+        "_call_ollama",
+        lambda model_id, system, user_msg: """{
+          "suggestions": [
+            {
+              "field": "request_type",
+              "suggested_value": "VPN",
+              "reasoning": "Ticket clearly describes a VPN connectivity issue.",
+              "confidence": 0.97
+            }
+          ]
+        }""",
+    )
+    import knowledge_base
+
+    monkeypatch.setattr(knowledge_base.kb_store, "find_relevant_articles", lambda **kwargs: [])
+
+    result = analyze_ticket(issue, "qwen2.5:7b")
+
+    assert result.model_used == "qwen2.5:7b"
+    assert result.suggestions[0].field == "request_type"
+    assert result.suggestions[0].suggested_value == "VPN"
 
 
 def test_score_closed_ticket_clamps_invalid_scores(monkeypatch):
@@ -323,3 +406,25 @@ def test_draft_kb_article_parses_model_response(monkeypatch):
     assert draft.recommended_action == "update_existing"
     assert draft.suggested_article_id == 5
     assert "Restart Outlook." in draft.content
+
+
+def test_draft_kb_from_sop_supports_ollama(monkeypatch):
+    monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen2.5:7b")
+    monkeypatch.setattr(
+        ai_client,
+        "_call_ollama",
+        lambda model_id, system, user_msg, **kwargs: """{
+          "title": "VPN Access",
+          "request_type": "VPN",
+          "summary": "Steps to restore VPN access.",
+          "content": "1. Verify FortiClient settings.",
+          "change_summary": "Converted from SOP"
+        }""",
+    )
+
+    draft = draft_kb_from_sop("VPN troubleshooting steps", "vpn_access.docx", "qwen2.5:7b")
+
+    assert draft.title == "VPN Access"
+    assert draft.model_used == "qwen2.5:7b"
+    assert draft.request_type == "VPN"

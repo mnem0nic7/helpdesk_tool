@@ -22,7 +22,7 @@ OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
 # Auto-triage model (runs automatically on new tickets during cache refresh)
-AUTO_TRIAGE_MODEL: str = os.getenv("AUTO_TRIAGE_MODEL", "gpt-4o-mini")
+AUTO_TRIAGE_MODEL: str = os.getenv("AUTO_TRIAGE_MODEL", os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
 
 # Microsoft Entra ID (Azure AD) authentication
 ENTRA_TENANT_ID: str = os.getenv("ENTRA_TENANT_ID", "")
@@ -39,6 +39,13 @@ def _is_test_runtime() -> bool:
 
 def _env_bool(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Local AI provider (Ollama)
+OLLAMA_ENABLED: bool = _env_bool("OLLAMA_ENABLED", "0")
+OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:7b").strip() or "qwen2.5:7b"
+OLLAMA_REQUEST_TIMEOUT_SECONDS: float = float(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "300"))
 
 
 def _load_app_secret_key() -> str:

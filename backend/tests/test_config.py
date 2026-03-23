@@ -66,3 +66,20 @@ def test_reporting_handoff_config_defaults_and_overrides(monkeypatch):
     assert config.AZURE_REPORTING_COST_ANALYSIS_URL.startswith("https://portal.azure.com/")
     assert config.AZURE_REPORTING_POWER_BI_LABEL == "FinOps Workspace"
     assert config.AZURE_REPORTING_COST_ANALYSIS_LABEL == "Azure Cost Analysis"
+
+
+def test_ollama_config_defaults_and_overrides(monkeypatch):
+    monkeypatch.setenv("APP_SECRET_KEY", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("OLLAMA_ENABLED", "true")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/")
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+    monkeypatch.delenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", raising=False)
+
+    config = _reload_config()
+
+    assert config.OLLAMA_ENABLED is True
+    assert config.OLLAMA_BASE_URL == "http://localhost:11434"
+    assert config.OLLAMA_MODEL == "qwen2.5:7b"
+    assert config.OLLAMA_REQUEST_TIMEOUT_SECONDS == 300
+    assert config.AUTO_TRIAGE_MODEL == "qwen2.5:7b"

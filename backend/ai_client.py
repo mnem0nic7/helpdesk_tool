@@ -9,7 +9,16 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from config import OPENAI_API_KEY, ANTHROPIC_API_KEY
+import requests
+
+from config import (
+    ANTHROPIC_API_KEY,
+    OLLAMA_BASE_URL,
+    OLLAMA_ENABLED,
+    OLLAMA_MODEL,
+    OLLAMA_REQUEST_TIMEOUT_SECONDS,
+    OPENAI_API_KEY,
+)
 from models import (
     AIModel,
     AzureCitation,
@@ -28,7 +37,7 @@ logger = logging.getLogger(__name__)
 # Model registry
 # ---------------------------------------------------------------------------
 
-MODELS: list[dict[str, str]] = [
+_CURATED_MODELS: list[dict[str, str]] = [
     {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai"},
     {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai"},
     {"id": "gpt-4.1", "name": "GPT-4.1", "provider": "openai"},
@@ -39,6 +48,8 @@ MODELS: list[dict[str, str]] = [
 
 _OPENAI_COPILOT_MODEL_CACHE_TTL_SECONDS = 300
 _OPENAI_COPILOT_MODEL_CACHE: tuple[float, list[AIModel]] | None = None
+_OLLAMA_MODEL_CACHE_TTL_SECONDS = 30
+_OLLAMA_MODEL_CACHE: tuple[float, list[AIModel]] | None = None
 _OPENAI_TEXT_MODEL_PREFIXES = ("gpt-", "o1", "o3", "o4")
 _OPENAI_EXCLUDED_MODEL_TOKENS = (
     "audio",
@@ -67,14 +78,64 @@ _DEFAULT_COPILOT_MODEL_ORDER = (
 _DEFAULT_COPILOT_MODEL_RANK = {model_id: index for index, model_id in enumerate(_DEFAULT_COPILOT_MODEL_ORDER)}
 
 
+def _get_curated_models(provider: str) -> list[AIModel]:
+    return [AIModel(**model) for model in _CURATED_MODELS if model["provider"] == provider]
+
+
+def _list_ollama_models_from_api() -> list[AIModel]:
+    response = requests.get(
+        f"{OLLAMA_BASE_URL}/api/tags",
+        timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    seen: dict[str, AIModel] = {}
+    for item in payload.get("models") or []:
+        model_id = str(item.get("model") or item.get("name") or "").strip()
+        if not model_id:
+            continue
+        display_name = str(item.get("name") or model_id).strip() or model_id
+        seen[model_id] = AIModel(id=model_id, name=display_name, provider="ollama")
+    return sorted(
+        seen.values(),
+        key=lambda model: (0 if model.id == OLLAMA_MODEL else 1, model.id.lower()),
+    )
+
+
+def _get_available_ollama_models() -> list[AIModel]:
+    global _OLLAMA_MODEL_CACHE
+
+    if not OLLAMA_ENABLED:
+        return []
+
+    now = time.time()
+    cached = _OLLAMA_MODEL_CACHE
+    if cached and now - cached[0] < _OLLAMA_MODEL_CACHE_TTL_SECONDS:
+        return list(cached[1])
+
+    try:
+        models = _list_ollama_models_from_api()
+    except Exception:
+        logger.warning("Failed to fetch Ollama models from %s", OLLAMA_BASE_URL, exc_info=True)
+        if cached:
+            return list(cached[1])
+        _OLLAMA_MODEL_CACHE = (now, [])
+        return []
+
+    _OLLAMA_MODEL_CACHE = (now, list(models))
+    return models
+
+
 def get_available_models() -> list[AIModel]:
-    """Return models filtered by which API keys are configured."""
+    """Return models filtered by which providers are configured and reachable."""
+    if OLLAMA_ENABLED:
+        return _get_available_ollama_models()
+
     available: list[AIModel] = []
-    for m in MODELS:
-        if m["provider"] == "openai" and OPENAI_API_KEY:
-            available.append(AIModel(**m))
-        elif m["provider"] == "anthropic" and ANTHROPIC_API_KEY:
-            available.append(AIModel(**m))
+    if OPENAI_API_KEY:
+        available.extend(_get_curated_models("openai"))
+    if ANTHROPIC_API_KEY:
+        available.extend(_get_curated_models("anthropic"))
     return available
 
 
@@ -90,7 +151,7 @@ def _is_model_snapshot(model_id: str) -> bool:
 
 
 def _copilot_model_sort_key(model: AIModel) -> tuple[int, int, int, str]:
-    provider_rank = 0 if model.provider == "openai" else 1
+    provider_rank = {"openai": 0, "anthropic": 1, "ollama": 2}.get(model.provider, 3)
     default_rank = _DEFAULT_COPILOT_MODEL_RANK.get(model.id, len(_DEFAULT_COPILOT_MODEL_RANK) + 1)
     snapshot_rank = 1 if _is_model_snapshot(model.id) else 0
     return (provider_rank, default_rank, snapshot_rank, model.id.lower())
@@ -113,6 +174,9 @@ def get_available_copilot_models() -> list[AIModel]:
     """Return Azure Copilot models, including the live OpenAI catalog when available."""
     global _OPENAI_COPILOT_MODEL_CACHE
 
+    if OLLAMA_ENABLED:
+        return _get_available_ollama_models()
+
     available: list[AIModel] = []
 
     if OPENAI_API_KEY:
@@ -126,19 +190,13 @@ def get_available_copilot_models() -> list[AIModel]:
                 _OPENAI_COPILOT_MODEL_CACHE = (now, list(openai_models))
             except Exception:
                 logger.exception("Failed to fetch live OpenAI models for Azure Copilot; falling back to curated defaults")
-                openai_models = [
-                    AIModel(**model)
-                    for model in MODELS
-                    if model["provider"] == "openai"
-                ]
+                openai_models = _get_curated_models("openai")
         available.extend(openai_models)
 
     if ANTHROPIC_API_KEY:
-        available.extend(
-            AIModel(**model)
-            for model in MODELS
-            if model["provider"] == "anthropic"
-        )
+        available.extend(_get_curated_models("anthropic"))
+
+    available.extend(_get_available_ollama_models())
 
     unique = {model.id: model for model in available}
     return sorted(unique.values(), key=_copilot_model_sort_key)
@@ -148,6 +206,8 @@ def get_default_copilot_model_id(available: list[AIModel]) -> str | None:
     if not available:
         return None
     available_ids = {model.id for model in available}
+    if OLLAMA_MODEL in available_ids:
+        return OLLAMA_MODEL
     for model_id in _DEFAULT_COPILOT_MODEL_ORDER:
         if model_id in available_ids:
             return model_id
@@ -155,9 +215,13 @@ def get_default_copilot_model_id(available: list[AIModel]) -> str | None:
 
 
 def _get_model_provider(model_id: str) -> str | None:
-    for m in MODELS:
+    for m in _CURATED_MODELS:
         if m["id"] == model_id:
             return m["provider"]
+    if OLLAMA_ENABLED and model_id == OLLAMA_MODEL:
+        return "ollama"
+    if OLLAMA_ENABLED and any(model.id == model_id for model in _get_available_ollama_models()):
+        return "ollama"
     if OPENAI_API_KEY and _is_openai_text_model(model_id):
         return "openai"
     return None
@@ -715,6 +779,45 @@ def _call_anthropic(model_id: str, system: str, user_msg: str) -> str:
     return resp.content[0].text
 
 
+def _call_ollama(
+    model_id: str,
+    system: str,
+    user_msg: str,
+    *,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
+) -> str:
+    """Call a local Ollama model and return the response text."""
+    payload: dict[str, Any] = {
+        "model": model_id,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_msg},
+        ],
+        "stream": False,
+    }
+    options: dict[str, Any] = {}
+    if temperature is not None:
+        options["temperature"] = temperature
+    if max_output_tokens is not None:
+        options["num_predict"] = max_output_tokens
+    if options:
+        payload["options"] = options
+
+    response = requests.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json=payload,
+        timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    data = response.json()
+    message = data.get("message") or {}
+    text = str(message.get("content") or "").strip()
+    if text:
+        return text
+    raise RuntimeError(f"Ollama model '{model_id}' returned no text output")
+
+
 def _parse_suggestions(raw: str, issue: dict[str, Any]) -> list[TriageSuggestion]:
     """Parse AI response JSON into TriageSuggestion list."""
     # Strip markdown fences if present
@@ -926,6 +1029,8 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
         raw = _call_openai(model_id, system, user_msg)
     elif provider == "anthropic":
         raw = _call_anthropic(model_id, system, user_msg)
+    elif provider == "ollama":
+        raw = _call_ollama(model_id, system, user_msg)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
@@ -1034,6 +1139,8 @@ def score_closed_ticket(
         raw = _call_openai(model_id, TECHNICIAN_SCORE_PROMPT, user_msg)
     elif provider == "anthropic":
         raw = _call_anthropic(model_id, TECHNICIAN_SCORE_PROMPT, user_msg)
+    elif provider == "ollama":
+        raw = _call_ollama(model_id, TECHNICIAN_SCORE_PROMPT, user_msg)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
@@ -1058,6 +1165,8 @@ def draft_kb_article(
         raw = _call_openai(model_id, KB_DRAFT_PROMPT, user_msg)
     elif provider == "anthropic":
         raw = _call_anthropic(model_id, KB_DRAFT_PROMPT, user_msg)
+    elif provider == "ollama":
+        raw = _call_ollama(model_id, KB_DRAFT_PROMPT, user_msg)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
@@ -1093,6 +1202,14 @@ def draft_kb_from_sop(text: str, filename: str, model_id: str) -> KnowledgeBaseD
             max_tokens=3000,
         )
         raw = resp.choices[0].message.content or "{}"
+    elif provider == "ollama":
+        raw = _call_ollama(
+            model_id,
+            KB_SOP_PROMPT,
+            user_msg,
+            temperature=0.2,
+            max_output_tokens=3000,
+        )
     else:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -1105,10 +1222,10 @@ def draft_kb_from_sop(text: str, filename: str, model_id: str) -> KnowledgeBaseD
         )
         raw = resp.content[0].text
 
-    return _parse_sop_draft(raw, filename)
+    return _parse_sop_draft(raw, filename, model_id)
 
 
-def _parse_sop_draft(raw: str, filename: str) -> KnowledgeBaseDraft:
+def _parse_sop_draft(raw: str, filename: str, model_id: str) -> KnowledgeBaseDraft:
     text = raw.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -1160,6 +1277,14 @@ def reformat_kb_article_content(article: KnowledgeBaseArticle, model_id: str) ->
             max_tokens=3000,
         )
         return (resp.choices[0].message.content or "").strip()
+    if provider == "ollama":
+        return _call_ollama(
+            model_id,
+            KB_REFORMAT_PROMPT,
+            user_msg,
+            temperature=0.2,
+            max_output_tokens=3000,
+        ).strip()
 
     import anthropic
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -1194,6 +1319,8 @@ def answer_azure_cost_question(
         raw = _call_openai(model_id, AZURE_COST_COPILOT_PROMPT, user_msg)
     elif provider == "anthropic":
         raw = _call_anthropic(model_id, AZURE_COST_COPILOT_PROMPT, user_msg)
+    elif provider == "ollama":
+        raw = _call_ollama(model_id, AZURE_COST_COPILOT_PROMPT, user_msg)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 

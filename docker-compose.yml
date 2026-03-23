@@ -25,9 +25,12 @@ services:
     environment:
       - DATA_DIR=/app/data
       - KB_ARTICLE_ARCHIVE=/app/private/OIT_KB_Articles.zip
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
     volumes:
       - cache_data:/app/data
       - ./private:/app/private:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
 volumes:

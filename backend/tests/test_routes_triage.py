@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from models import TechnicianScore, TriageResult, TriageSuggestion
+from models import AIModel, TechnicianScore, TriageResult, TriageSuggestion
 
 
 class TestTechnicianScoringRoutes:
@@ -30,6 +30,11 @@ class TestTechnicianScoringRoutes:
             running=False, processed=0, total=0, current_key=None, cancel=False
         )
 
+        monkeypatch.setattr(
+            routes_triage,
+            "get_available_models",
+            lambda: [AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama")],
+        )
         monkeypatch.setattr(routes_triage._client, "get_request_comments", lambda key: [])
         monkeypatch.setattr(
             routes_triage,

@@ -196,7 +196,7 @@ async def draft_article_from_ticket(
     if not available:
         raise HTTPException(
             status_code=400,
-            detail="No AI model available. Configure an API key before generating KB drafts.",
+            detail="No AI model available. Ensure Ollama is running and the configured local model is pulled before generating KB drafts.",
         )
 
     available_ids = {model.id for model in available}
