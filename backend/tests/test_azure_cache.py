@@ -1362,6 +1362,109 @@ def test_list_virtual_machines_matches_reservations_by_sku_and_region(tmp_path):
     ]
 
 
+def test_get_storage_summary_filters_tab_searches_server_side(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "sa-1",
+                    "name": "acct-prod",
+                    "resource_type": "Microsoft.Storage/storageAccounts",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "kind": "StorageV2",
+                    "sku_name": "Standard_LRS",
+                    "access_tier": "Hot",
+                    "state": "Succeeded",
+                    "tags": {},
+                },
+                {
+                    "id": "disk-1",
+                    "name": "disk-prod",
+                    "resource_type": "Microsoft.Compute/disks",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "sku_name": "Premium_LRS",
+                    "disk_state": "Unattached",
+                    "managed_by": "",
+                    "disk_size_gb": 128,
+                    "tags": {},
+                },
+                {
+                    "id": "snap-1",
+                    "name": "snapshot-keep",
+                    "resource_type": "Microsoft.Compute/snapshots",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "sku_name": "Standard_LRS",
+                    "source_resource_id": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/disks/disk-prod",
+                    "disk_size_gb": 64,
+                    "tags": {},
+                },
+            ]
+        }
+    )
+
+    payload = cache.get_storage_summary(
+        account_search="acct",
+        disk_search="disk-prod",
+        snapshot_search="snapshot",
+        disk_unattached_only=True,
+    )
+
+    assert [item["name"] for item in payload["storage_accounts"]] == ["acct-prod"]
+    assert [item["name"] for item in payload["managed_disks"]] == ["disk-prod"]
+    assert [item["name"] for item in payload["snapshots"]] == ["snapshot-keep"]
+
+
+def test_get_compute_optimization_filters_idle_vm_search_server_side(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "vm-1",
+                    "name": "vm-keep",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-prod",
+                    "location": "eastus",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/deallocated",
+                    "tags": {},
+                },
+                {
+                    "id": "vm-2",
+                    "name": "vm-skip",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-dev",
+                    "location": "westus",
+                    "vm_size": "Standard_D2s_v5",
+                    "state": "PowerState/stopped",
+                    "tags": {},
+                },
+            ],
+            "advisor": [],
+            "reservation_status": {"available": False, "error": None},
+        }
+    )
+
+    payload = cache.get_compute_optimization(idle_vm_search="rg-prod")
+
+    assert [item["name"] for item in payload["idle_vms"]] == ["vm-keep"]
+    assert payload["summary"]["idle_vms"] == 2
+
+
 def test_get_vm_excess_reservation_report_includes_all_active_reservation_names(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     cache._update_snapshots(

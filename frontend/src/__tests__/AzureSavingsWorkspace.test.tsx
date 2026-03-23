@@ -338,6 +338,7 @@ describe("Azure savings workspace", () => {
     render(<AzureSavingsPage />);
 
     await screen.findByText("Quantified Savings");
+    expect(screen.getByText("Heuristic operational guidance")).toBeInTheDocument();
     expect(screen.getByText("Actionable Savings Opportunities")).toBeInTheDocument();
     expect(screen.getByText("Clean up attached costs for idle VM vm-1")).toBeInTheDocument();
 
@@ -360,6 +361,7 @@ describe("Azure savings workspace", () => {
 
   it("renders the savings sections across the Azure pages", async () => {
     render(<AzureCostPage />);
+    expect(await screen.findByText("Cached app data")).toBeInTheDocument();
     expect(await screen.findByText("Top Savings Opportunities")).toBeInTheDocument();
     expect(screen.getByText("Clean up attached costs for idle VM vm-1")).toBeInTheDocument();
 
@@ -374,6 +376,56 @@ describe("Azure savings workspace", () => {
     render(<AzureResourcesPage />);
     expect(await screen.findByText("Network Cleanup")).toBeInTheDocument();
     expect(screen.getByText("Release unattached public IP pip-1")).toBeInTheDocument();
+  });
+
+  it("sends Azure resource search terms to the backend", async () => {
+    render(<AzureResourcesPage />);
+
+    await screen.findByText("Resources");
+    fireEvent.change(screen.getByPlaceholderText("Search name, group, tag..."), {
+      target: { value: "pip-1" },
+    });
+
+    await waitFor(() => {
+      expect(mockApi.getAzureResources).toHaveBeenLastCalledWith({
+        search: "pip-1",
+        subscription_id: "",
+        resource_type: "",
+        location: "",
+        state: "",
+      });
+    });
+  });
+
+  it("sends Azure storage and compute search terms to the backend", async () => {
+    render(<AzureStoragePage />);
+
+    await screen.findByText("Storage");
+    fireEvent.change(screen.getByPlaceholderText("Search by name, kind, SKU, location, subscription…"), {
+      target: { value: "disk-1" },
+    });
+
+    await waitFor(() => {
+      expect(mockApi.getAzureStorage).toHaveBeenLastCalledWith({
+        account_search: "disk-1",
+        disk_search: "",
+        snapshot_search: "",
+        disk_unattached_only: false,
+      });
+    });
+
+    render(<AzureComputeOptimizationPage />);
+
+    await screen.findByText("Compute Optimization");
+    fireEvent.change(screen.getByPlaceholderText("Search by name, subscription, resource group…"), {
+      target: { value: "vm-1" },
+    });
+
+    await waitFor(() => {
+      expect(mockApi.getAzureComputeOptimization).toHaveBeenLastCalledWith({
+        idle_vm_search: "vm-1",
+      });
+    });
   });
 
   it("renders the savings route and nav on the Azure host", async () => {

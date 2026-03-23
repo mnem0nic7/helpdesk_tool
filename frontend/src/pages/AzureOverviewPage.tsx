@@ -1,11 +1,36 @@
 import { useQuery } from "@tanstack/react-query";
-import { api, type AzureCostExportStatus } from "../lib/api.ts";
+import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
+import { api, type AzureCostExportStatus, type AzureReportingTarget } from "../lib/api.ts";
 
 function MetricCard({ label, value, accent = "text-sky-700" }: { label: string; value: string; accent?: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
       <div className={`mt-2 text-3xl font-semibold ${accent}`}>{value}</div>
+    </div>
+  );
+}
+
+function ReportingCard({ target }: { target: AzureReportingTarget }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Governed Reporting</div>
+      <h3 className="mt-2 text-lg font-semibold text-slate-900">{target.label}</h3>
+      <p className="mt-2 text-sm text-slate-600">{target.description}</p>
+      {target.configured && target.url ? (
+        <a
+          href={target.url}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-4 inline-flex rounded-xl bg-sky-700 px-4 py-2 text-sm font-medium text-white hover:bg-sky-800"
+        >
+          Open {target.label}
+        </a>
+      ) : (
+        <div className="mt-4 rounded-xl border border-dashed border-slate-300 px-4 py-3 text-sm text-slate-500">
+          Not configured yet
+        </div>
+      )}
     </div>
   );
 }
@@ -77,7 +102,46 @@ export default function AzureOverviewPage() {
         <p className="mt-1 text-sm text-slate-500">
           Tenant-wide inventory, identity, and cost posture from the Azure cache.
         </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <AzureSourceBadge
+            label={data.reporting?.sources.overview.label || "Cached app data"}
+            description={
+              data.reporting?.sources.overview.description ||
+              "Overview metrics come from cached Azure snapshots and operational cost queries."
+            }
+          />
+          <AzureSourceBadge
+            label={data.reporting?.sources.exports.label || "Export-backed governed reporting"}
+            description={
+              data.reporting?.sources.exports.description ||
+              "Shared reporting should come from Cost Management exports and governed BI assets."
+            }
+            tone="emerald"
+          />
+        </div>
       </div>
+
+      {data.reporting && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Reporting Handoff</h2>
+              <p className="mt-1 max-w-3xl text-sm text-slate-500">
+                Use this app for operational triage and governed reporting tools for shared finance, showback, and deep cost analysis.
+              </p>
+            </div>
+            <AzureSourceBadge
+              label={data.reporting.sources.exports.label}
+              description={data.reporting.sources.exports.description}
+              tone="emerald"
+            />
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <ReportingCard target={data.reporting.power_bi} />
+            <ReportingCard target={data.reporting.cost_analysis} />
+          </div>
+        </section>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <MetricCard label="Subscriptions" value={data.subscriptions.toLocaleString()} />
@@ -163,7 +227,22 @@ export default function AzureOverviewPage() {
 
       {data.cost_exports && (
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Cost Export Health</h2>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Cost Export Health</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Freshness for the export-backed governed reporting lane, separate from the app cache refresh.
+              </p>
+            </div>
+            <AzureSourceBadge
+              label={data.reporting?.sources.exports.label || "Export-backed governed reporting"}
+              description={
+                data.reporting?.sources.exports.description ||
+                "Shared reporting should come from Cost Management exports and governed BI assets."
+              }
+              tone="emerald"
+            />
+          </div>
           <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <MetricCard
               label="Export Service"

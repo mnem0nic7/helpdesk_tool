@@ -50,3 +50,19 @@ def test_cost_export_config_defaults_and_bool_parsing(monkeypatch):
     assert config.AZURE_COST_EXPORT_MANIFEST_DB_PATH == "/tmp/azure-data/azure_export_deliveries.db"
     assert config.AZURE_COST_EXPORT_STAGING_DIR == "/tmp/azure-data/azure_cost_exports/_staged"
     assert config.AZURE_COST_EXPORT_QUARANTINE_DIR == "/tmp/azure-data/azure_cost_exports/_quarantine"
+
+
+def test_reporting_handoff_config_defaults_and_overrides(monkeypatch):
+    monkeypatch.setenv("APP_SECRET_KEY", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("AZURE_REPORTING_POWER_BI_URL", "https://app.powerbi.com/groups/example")
+    monkeypatch.setenv("AZURE_REPORTING_COST_ANALYSIS_URL", "https://portal.azure.com/#blade/Microsoft_Azure_CostManagement/Menu/costanalysis")
+    monkeypatch.setenv("AZURE_REPORTING_POWER_BI_LABEL", "FinOps Workspace")
+    monkeypatch.delenv("AZURE_REPORTING_COST_ANALYSIS_LABEL", raising=False)
+
+    config = _reload_config()
+
+    assert config.AZURE_REPORTING_POWER_BI_URL == "https://app.powerbi.com/groups/example"
+    assert config.AZURE_REPORTING_COST_ANALYSIS_URL.startswith("https://portal.azure.com/")
+    assert config.AZURE_REPORTING_POWER_BI_LABEL == "FinOps Workspace"
+    assert config.AZURE_REPORTING_COST_ANALYSIS_LABEL == "Azure Cost Analysis"

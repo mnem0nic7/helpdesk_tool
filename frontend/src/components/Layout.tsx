@@ -5,6 +5,7 @@ import CacheStatusBar from "./CacheStatusBar.tsx";
 import AzureStatusBar from "./AzureStatusBar.tsx";
 import { api } from "../lib/api.ts";
 import { hasNewFrontendBuild } from "../lib/deployVersion.ts";
+import { logClientError } from "../lib/errorLogging.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
 
 interface NavItem {
@@ -74,8 +75,8 @@ export default function Layout() {
         if (await hasNewFrontendBuild(document, window)) {
           window.location.reload();
         }
-      } catch {
-        // Ignore version-check failures and keep the current app running.
+      } catch (err) {
+        logClientError("Frontend build version check failed", err);
       } finally {
         versionCheckInFlight.current = false;
       }

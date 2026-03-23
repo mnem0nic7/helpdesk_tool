@@ -224,4 +224,28 @@ describe("SLAPage", () => {
       expect(screen.queryByText("OIT-3")).not.toBeInTheDocument();
     });
   });
+
+  it("requests server-filtered tickets when the search box changes", async () => {
+    const user = userEvent.setup();
+
+    mockApi.getSLAMetrics.mockImplementation(async (params?: { search?: string }) => {
+      if (params?.search === "printer") {
+        return {
+          ...slaMetricsResponse,
+          tickets: slaMetricsResponse.tickets.filter((ticket) => ticket.summary.toLowerCase().includes("printer")),
+        };
+      }
+      return slaMetricsResponse;
+    });
+
+    render(<SLAPage />);
+
+    await screen.findByText("SLA Tracker");
+    await user.type(screen.getByPlaceholderText("Search key, summary, assignee..."), "printer");
+
+    await waitFor(() => {
+      expect(mockApi.getSLAMetrics).toHaveBeenLastCalledWith({ date_from: undefined, date_to: undefined, search: "printer" });
+      expect(screen.queryByText("OIT-2")).not.toBeInTheDocument();
+    });
+  });
 });

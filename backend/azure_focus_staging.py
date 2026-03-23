@@ -11,6 +11,7 @@ from csv import DictReader
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+import hashlib
 import io
 from typing import Any, Iterable, Mapping
 
@@ -26,6 +27,7 @@ _SEMANTIC_COLUMN_GROUPS: dict[str, tuple[str, ...]] = {
 _ACTUAL_COST_COLUMNS = ("CostInBillingCurrency", "ActualCost", "Cost")
 _AMORTIZED_COST_COLUMNS = ("AmortizedCostInBillingCurrency", "AmortizedCost")
 _DATE_COLUMNS = ("UsageDate", "Date")
+FOCUS_PARSER_VERSION = "focus-csv-v1"
 
 
 class FocusParseError(ValueError):
@@ -93,6 +95,28 @@ def _missing_semantic_columns(header: Iterable[str]) -> list[str]:
         if not any(candidate in header_set for candidate in candidates):
             missing.append(f"{semantic_name} ({' or '.join(candidates)})")
     return missing
+
+
+def _read_focus_header(content: str | bytes) -> list[str]:
+    text = content.decode("utf-8-sig") if isinstance(content, bytes) else str(content)
+    reader = DictReader(io.StringIO(text))
+    return [str(name).strip() for name in (reader.fieldnames or []) if str(name).strip()]
+
+
+def describe_focus_schema(content: str | bytes) -> dict[str, Any]:
+    header = _read_focus_header(content)
+    signature = ""
+    if header:
+        digest = hashlib.sha256("\n".join(header).encode("utf-8")).hexdigest()
+        signature = f"sha256:{digest}"
+    missing_columns = _missing_semantic_columns(header)
+    return {
+        "parser_version": FOCUS_PARSER_VERSION,
+        "schema_signature": signature,
+        "schema_compatible": not missing_columns,
+        "schema_columns": header,
+        "missing_columns": missing_columns,
+    }
 
 
 def _normalized_date(value: str, *, source_path: str, row_number: int) -> str:

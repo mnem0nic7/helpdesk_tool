@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useDeferredValue, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   api,
@@ -120,17 +120,19 @@ function coverageStatusBadge(status: AzureVirtualMachineSizeCoverageRow["coverag
 
 // ─── Idle VMs Section ────────────────────────────────────────────────────────
 
-function IdleVMsSection({ vms, costAvailable }: { vms: AzureVirtualMachineRow[]; costAvailable: boolean }) {
-  const [search, setSearch] = useState("");
+function IdleVMsSection({
+  vms,
+  costAvailable,
+  search,
+  onSearchChange,
+}: {
+  vms: AzureVirtualMachineRow[];
+  costAvailable: boolean;
+  search: string;
+  onSearchChange: (value: string) => void;
+}) {
   const { sortKey, sortDir, toggleSort } = useTableSort<IdleVMSortKey>("name");
-  const filtered = vms.filter((v) => {
-    if (!search.trim()) return true;
-    const h = [v.name, v.subscription_name, v.subscription_id, v.resource_group, v.location]
-      .join(" ")
-      .toLowerCase();
-    return h.includes(search.trim().toLowerCase());
-  });
-  const sorted = sortRows(filtered, sortKey, sortDir, (v, key) => {
+  const sorted = sortRows(vms, sortKey, sortDir, (v, key) => {
     if (key === "subscription") return v.subscription_name || v.subscription_id;
     if (key === "cost") return v.cost;
     return (v as unknown as Record<string, unknown>)[key] as string;
@@ -157,7 +159,7 @@ function IdleVMsSection({ vms, costAvailable }: { vms: AzureVirtualMachineRow[];
         className="mt-3 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm placeholder-slate-400 focus:border-blue-500 focus:outline-none"
         placeholder="Search by name, subscription, resource group…"
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => onSearchChange(e.target.value)}
       />
       {visible.length === 0 ? (
         <p className="mt-6 text-center text-sm text-slate-400">No idle VMs found — all VMs are running.</p>
@@ -364,9 +366,12 @@ function AdvisorSection({ recs }: { recs: AzureAdvisorRecommendation[] }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AzureComputeOptimizationPage() {
+  const [idleVmSearch, setIdleVmSearch] = useState("");
+  const deferredIdleVmSearch = useDeferredValue(idleVmSearch.trim());
   const { data, isLoading, isError } = useQuery<AzureComputeOptimizationResponse>({
-    queryKey: ["azure-compute-optimization"],
-    queryFn: () => api.getAzureComputeOptimization(),
+    queryKey: ["azure-compute-optimization", deferredIdleVmSearch],
+    queryFn: () => api.getAzureComputeOptimization({ idle_vm_search: deferredIdleVmSearch }),
+    placeholderData: (prev) => prev,
   });
   const savingsQuery = useQuery({
     queryKey: ["azure", "savings", "compute-page"],
@@ -450,7 +455,12 @@ export default function AzureComputeOptimizationPage() {
       />
 
       {/* Idle VMs */}
-      <IdleVMsSection vms={idle_vms} costAvailable={cost_available} />
+      <IdleVMsSection
+        vms={idle_vms}
+        costAvailable={cost_available}
+        search={idleVmSearch}
+        onSearchChange={setIdleVmSearch}
+      />
 
       {/* Top Cost VMs */}
       {cost_available && top_cost_vms.length > 0 && <TopCostVMsSection vms={top_cost_vms} />}

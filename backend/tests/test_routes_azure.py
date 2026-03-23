@@ -42,6 +42,13 @@ def test_azure_overview_returns_cached_payload(test_client, monkeypatch):
         "refreshing": False,
         "health": {"delivery_count": 2, "parsed_count": 2, "quarantined_count": 0},
     }
+    monkeypatch.setattr(routes_azure, "AZURE_REPORTING_POWER_BI_URL", "https://app.powerbi.com/groups/example")
+    monkeypatch.setattr(routes_azure, "AZURE_REPORTING_POWER_BI_LABEL", "FinOps Workspace")
+    monkeypatch.setattr(
+        routes_azure,
+        "AZURE_REPORTING_COST_ANALYSIS_URL",
+        "https://portal.azure.com/#blade/Microsoft_Azure_CostManagement/Menu/costanalysis",
+    )
     monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
     monkeypatch.setattr(routes_azure, "azure_cost_export_service", mock_cost_exports)
 
@@ -50,6 +57,10 @@ def test_azure_overview_returns_cached_payload(test_client, monkeypatch):
     assert resp.json()["subscriptions"] == 4
     assert resp.json()["cost"]["total_cost"] == 1234.56
     assert resp.json()["cost_exports"]["health"]["delivery_count"] == 2
+    assert resp.json()["reporting"]["power_bi"]["configured"] is True
+    assert resp.json()["reporting"]["power_bi"]["label"] == "FinOps Workspace"
+    assert resp.json()["reporting"]["sources"]["savings"]["label"] == "Heuristic operational guidance"
+    assert resp.json()["reporting"]["sources"]["exports"]["label"] == "Export-backed governed reporting"
 
 
 def test_azure_overview_is_not_available_on_helpdesk_host(test_client):
@@ -77,6 +88,8 @@ def test_azure_status_includes_cost_export_status(test_client, monkeypatch):
         "last_success_at": "2026-03-20T08:05:00+00:00",
         "health": {"delivery_count": 3, "parsed_count": 2, "quarantined_count": 1},
     }
+    monkeypatch.setattr(routes_azure, "AZURE_REPORTING_POWER_BI_URL", "")
+    monkeypatch.setattr(routes_azure, "AZURE_REPORTING_COST_ANALYSIS_URL", "")
     monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
     monkeypatch.setattr(routes_azure, "azure_cost_export_service", mock_cost_exports)
 
@@ -87,6 +100,8 @@ def test_azure_status_includes_cost_export_status(test_client, monkeypatch):
     assert payload["configured"] is True
     assert payload["cost_exports"]["running"] is True
     assert payload["cost_exports"]["health"]["quarantined_count"] == 1
+    assert payload["reporting"]["power_bi"]["configured"] is False
+    assert payload["reporting"]["cost_analysis"]["configured"] is False
 
 
 def test_directory_users_returns_cached_payload_on_azure_host(test_client, monkeypatch):
@@ -175,6 +190,80 @@ def test_directory_users_preserve_license_and_sign_in_reporting_fields(test_clie
     assert payload["extra"]["is_licensed"] == "true"
     assert payload["extra"]["license_count"] == "2"
     assert payload["extra"]["last_successful_local"] == "2026-03-12 07:00 PT"
+
+
+def test_azure_storage_passes_search_filters_to_cache(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.get_storage_summary.return_value = {
+        "storage_accounts": [],
+        "managed_disks": [],
+        "snapshots": [],
+        "summary": {
+            "total_storage_accounts": 0,
+            "total_managed_disks": 0,
+            "total_snapshots": 0,
+            "unattached_disks": 0,
+            "total_storage_cost": None,
+            "total_disk_gb": 0,
+            "total_snapshot_gb": 0,
+            "total_provisioned_gb": 0,
+            "avg_cost_per_gb": None,
+        },
+        "disk_by_sku": {},
+        "disk_by_state": {},
+        "accounts_by_kind": {},
+        "accounts_by_tier": {},
+        "storage_services_cost": [],
+        "cost_available": False,
+        "cost_basis": None,
+    }
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get(
+        "/api/azure/storage?account_search=acct&disk_search=disk&snapshot_search=snap&disk_unattached_only=true",
+        headers={"host": "azure.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    mock_cache.get_storage_summary.assert_called_once_with(
+        account_search="acct",
+        disk_search="disk",
+        snapshot_search="snap",
+        disk_unattached_only=True,
+    )
+
+
+def test_azure_compute_optimization_passes_idle_vm_search_to_cache(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.get_compute_optimization.return_value = {
+        "summary": {
+            "total_vms": 0,
+            "running_vms": 0,
+            "idle_vms": 0,
+            "total_running_cost": None,
+            "total_advisor_savings": 0,
+            "ri_gap_count": 0,
+        },
+        "idle_vms": [],
+        "top_cost_vms": [],
+        "ri_coverage_gaps": [],
+        "advisor_recommendations": [],
+        "cost_available": False,
+        "reservation_data_available": False,
+    }
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get(
+        "/api/azure/compute/optimization?idle_vm_search=vm-1",
+        headers={"host": "azure.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    mock_cache.get_compute_optimization.assert_called_once_with(idle_vm_search="vm-1")
 
 
 def test_directory_users_is_not_available_on_oasisdev_host(test_client):

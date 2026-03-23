@@ -11,8 +11,11 @@ logging.basicConfig(
 )
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -48,6 +51,8 @@ from site_context import (
     set_current_site_scope,
 )
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -71,6 +76,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="OIT Helpdesk Dashboard API", version="0.1.0", lifespan=lifespan)
+
+
+def _request_label(request: Request) -> str:
+    query = request.url.query
+    path = request.url.path
+    if query:
+        path = f"{path}?{query}"
+    return f"{request.method} {path}"
 
 # ---------------------------------------------------------------------------
 # Auth middleware — protects /api/* except public endpoints
@@ -109,12 +122,41 @@ class SiteContextMiddleware(BaseHTTPMiddleware):
             reset_current_site_scope(token)
 
 
+class ErrorLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await call_next(request)
+        except Exception:
+            logger.exception("Unhandled exception for %s", _request_label(request))
+            raise
+
+
 # ---------------------------------------------------------------------------
 # Middleware stack (applied in reverse order — CORS outermost)
 # ---------------------------------------------------------------------------
 app.add_middleware(AuthMiddleware)
 app.add_middleware(SiteContextMiddleware)
 app.add_middleware(SessionMiddleware, secret_key=APP_SECRET_KEY)
+app.add_middleware(ErrorLoggingMiddleware)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def log_http_exceptions(request: Request, exc: StarletteHTTPException):
+    log = logger.error if exc.status_code >= 500 else logger.warning
+    log("HTTP %s for %s: %s", exc.status_code, _request_label(request), exc.detail)
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def log_request_validation_errors(request: Request, exc: RequestValidationError):
+    logger.warning("Request validation failed for %s: %s", _request_label(request), exc.errors())
+    return await request_validation_exception_handler(request, exc)
+
+
+@app.exception_handler(Exception)
+async def log_unhandled_exceptions(request: Request, exc: Exception):
+    logger.exception("Unhandled exception for %s", _request_label(request))
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 # ---------------------------------------------------------------------------
 # CORS – allow the Vite dev-server, Docker/nginx, and production origin

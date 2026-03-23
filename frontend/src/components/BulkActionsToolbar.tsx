@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "../lib/api.ts";
+import { logClientError } from "../lib/errorLogging.ts";
 import type { Transition, Assignee, BulkResult } from "../lib/api.ts";
 import ConfirmModal from "./ConfirmModal.tsx";
 import type { BulkActionResult } from "./ConfirmModal.tsx";
@@ -65,7 +66,10 @@ export default function BulkActionsToolbar({
       // Fetch transitions for the first selected ticket
       const t = await api.getTransitions(selectedKeys[0]);
       setTransitions(t);
-    } catch {
+    } catch (err) {
+      logClientError("Failed to load bulk status transitions", err, {
+        selectedKeys,
+      });
       setTransitions([]);
     }
     setFetchingDropdown(false);
@@ -82,7 +86,10 @@ export default function BulkActionsToolbar({
     try {
       const a = await api.getAssignees();
       setAssignees(a);
-    } catch {
+    } catch (err) {
+      logClientError("Failed to load bulk assignees", err, {
+        selectedKeys,
+      });
       setAssignees([]);
     }
     setFetchingDropdown(false);
@@ -172,6 +179,10 @@ export default function BulkActionsToolbar({
       }
       setConfirmResult(parseResults(results));
     } catch (err) {
+      logClientError("Bulk action failed", err, {
+        action: activeAction,
+        selectedKeys,
+      });
       setConfirmResult({
         success: [],
         failed: selectedKeys.map((k) => ({

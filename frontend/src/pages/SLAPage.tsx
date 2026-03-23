@@ -1,7 +1,8 @@
-import { Suspense, lazy, useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { Suspense, lazy, useDeferredValue, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api.ts";
+import { logClientError } from "../lib/errorLogging.ts";
 import type {
   SLAMetricsResponse, SLATicketRow, SLATimerStats, SLATarget,
   SLASettings,
@@ -315,6 +316,7 @@ function SLASettingsModal({ settings, targets, onClose }: {
       await api.updateSLASettings(localSettings);
       queryClient.invalidateQueries({ queryKey: ["sla-metrics"] });
     } catch (err) {
+      logClientError("Failed to save SLA settings", err, { settings: localSettings });
       alert(`Error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSaving(false);
@@ -335,6 +337,10 @@ function SLASettingsModal({ settings, targets, onClose }: {
       setNewHours("");
       setNewDimVal("*");
     } catch (err) {
+      logClientError("Failed to create SLA target", err, {
+        sla_type: newType,
+        dimension: newDim,
+      });
       alert(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -344,6 +350,7 @@ function SLASettingsModal({ settings, targets, onClose }: {
       await api.deleteSLATarget(id);
       queryClient.invalidateQueries({ queryKey: ["sla-metrics"] });
     } catch (err) {
+      logClientError("Failed to delete SLA target", err, { targetId: id });
       alert(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -494,15 +501,20 @@ export default function SLAPage() {
   const [showSettings, setShowSettings] = useState(false);
   const { ticketKey, buildTicketHref, closeTicket } = useTicketDrawerNavigation();
   const [openTicket, setOpenTicket] = useState<SLATicketRow | null>(null);
+  const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search.trim());
 
   const { data, isLoading, isFetching, error } = useQuery<SLAMetricsResponse>({
-    queryKey: ["sla-metrics", dateFrom, dateTo],
-    queryFn: () => api.getSLAMetrics(dateFrom || undefined, dateTo || undefined),
+    queryKey: ["sla-metrics", dateFrom, dateTo, deferredSearch],
+    queryFn: () => api.getSLAMetrics({
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      search: deferredSearch || undefined,
+    }),
     placeholderData: (prev) => prev,
   });
 
   // Filter / sort state
-  const [search, setSearch] = useState("");
   const [filterPriority, setFilterPriority] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterAssignee, setFilterAssignee] = useState("");
@@ -526,13 +538,6 @@ export default function SLAPage() {
 
   const processed = useMemo(() => {
     let list = tickets;
-    if (search) {
-      const q = search.toLowerCase();
-      list = list.filter((t) =>
-        t.key.toLowerCase().includes(q) ||
-        t.summary.toLowerCase().includes(q) ||
-        (t.assignee ?? "").toLowerCase().includes(q));
-    }
     if (filterPriority) list = list.filter((t) => t.priority === filterPriority);
     if (filterStatus) list = list.filter((t) => t.status === filterStatus);
     if (filterAssignee) list = list.filter((t) => t.assignee === filterAssignee);
@@ -554,7 +559,7 @@ export default function SLAPage() {
     if (openOnly) list = list.filter((t) => t.status_category !== "Done");
     if (staleOnly) list = list.filter((t) => t.status_category !== "Done" && (t.days_since_update ?? 0) >= 1);
     return [...list].sort((a, b) => compareTickets(a, b, sortField, sortDir));
-  }, [tickets, search, filterPriority, filterStatus, filterAssignee, filterSLA, bucketFilter, openOnly, staleOnly, sortField, sortDir]);
+  }, [tickets, filterPriority, filterStatus, filterAssignee, filterSLA, bucketFilter, openOnly, staleOnly, sortField, sortDir]);
 
   // Infinite scroll
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);

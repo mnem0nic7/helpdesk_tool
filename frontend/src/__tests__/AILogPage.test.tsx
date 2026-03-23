@@ -100,7 +100,7 @@ describe("AILogPage", () => {
       remaining_count: 0,
       processed_count: 0,
     });
-    mockApi.getTriageLog.mockResolvedValue([
+    const triageLogEntries = [
       {
         key: "OIT-1",
         field: "priority",
@@ -112,8 +112,19 @@ describe("AILogPage", () => {
         approved_by: null,
         timestamp: "2026-03-03T10:00:00Z",
       },
-    ]);
-    mockApi.getTechnicianScores.mockResolvedValue([
+      {
+        key: "OIT-2",
+        field: "status",
+        old_value: "Open",
+        new_value: "Waiting on VPN reset",
+        confidence: 0.78,
+        model: "gpt-4.1-mini",
+        source: "user",
+        approved_by: "Sam Analyst",
+        timestamp: "2026-03-03T12:00:00Z",
+      },
+    ];
+    const technicianScoreEntries = [
       {
         key: "OIT-1",
         communication_score: 4,
@@ -129,7 +140,51 @@ describe("AILogPage", () => {
         ticket_assignee: "Ada Lovelace",
         ticket_resolved: "2026-03-03T09:30:00Z",
       },
-    ]);
+      {
+        key: "OIT-2",
+        communication_score: 2,
+        communication_notes: "Updates mentioned the VPN issue but were too brief.",
+        documentation_score: 2,
+        documentation_notes: "Resolution details did not explain the password reset path.",
+        overall_score: 2,
+        score_summary: "VPN reset resolution needs clearer documentation.",
+        model_used: "gpt-4.1-mini",
+        created_at: "2026-03-03T12:30:00Z",
+        ticket_summary: "VPN password reset",
+        ticket_status: "Closed",
+        ticket_assignee: "Sam Analyst",
+        ticket_resolved: "2026-03-03T12:15:00Z",
+      },
+    ];
+    mockApi.getTriageLog.mockImplementation(async (params?: { search?: string }) => {
+      const query = (params?.search || "").toLowerCase();
+      if (!query) return triageLogEntries;
+      return triageLogEntries.filter((entry) =>
+        [entry.key, entry.field, entry.old_value, entry.new_value, entry.model, entry.approved_by || ""]
+          .join(" ")
+          .toLowerCase()
+          .includes(query),
+      );
+    });
+    mockApi.getTechnicianScores.mockImplementation(async (params?: { search?: string }) => {
+      const query = (params?.search || "").toLowerCase();
+      if (!query) return technicianScoreEntries;
+      return technicianScoreEntries.filter((entry) =>
+        [
+          entry.key,
+          entry.ticket_summary,
+          entry.ticket_status,
+          entry.ticket_assignee,
+          entry.score_summary,
+          entry.communication_notes,
+          entry.documentation_notes,
+          entry.model_used,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(query),
+      );
+    });
     mockApi.cancelTriageRun.mockResolvedValue({ cancelled: true });
     mockApi.cancelTechnicianScoreRun.mockResolvedValue({ cancelled: true });
     mockApi.runTriageAll.mockResolvedValue({ started: true, total_tickets: 1 });
@@ -185,6 +240,26 @@ describe("AILogPage", () => {
 
     await waitFor(() => {
       expect(mockApi.runClosedTicketScoring).toHaveBeenCalledWith();
+    });
+  });
+
+  it("filters technician scores and change log entries with the search box", async () => {
+    const user = userEvent.setup();
+
+    render(<AILogPage />);
+
+    await screen.findByText("Printer is offline");
+    await screen.findByText("VPN password reset");
+
+    await user.type(screen.getByRole("searchbox", { name: "Search AI log" }), "vpn");
+
+    await waitFor(() => {
+      expect(mockApi.getTriageLog).toHaveBeenLastCalledWith({ search: "vpn" });
+      expect(mockApi.getTechnicianScores).toHaveBeenLastCalledWith({ search: "vpn" });
+      expect(screen.queryByText("Printer is offline")).not.toBeInTheDocument();
+      expect(screen.queryByText("Good communication with moderate documentation detail.")).not.toBeInTheDocument();
+      expect(screen.getByText("VPN password reset")).toBeInTheDocument();
+      expect(screen.getByText("Waiting on VPN reset")).toBeInTheDocument();
     });
   });
 });

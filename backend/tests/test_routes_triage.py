@@ -58,6 +58,81 @@ class TestTechnicianScoringRoutes:
         assert all(score["overall_score"] == 3.5 for score in scores)
         assert {score["key"] for score in scores} == {"OIT-300", "OIT-400"}
 
+    def test_triage_log_supports_server_side_search(self, test_client, monkeypatch):
+        import routes_triage
+
+        monkeypatch.setattr(
+            routes_triage.store,
+            "get_triage_log",
+            lambda limit=500, search="": [
+                {
+                    "key": "OIT-300",
+                    "field": "status",
+                    "old_value": "Open",
+                    "new_value": "Waiting on printer vendor",
+                    "confidence": 0.9,
+                    "model": "gpt-test",
+                    "source": "auto",
+                    "approved_by": None,
+                    "timestamp": "2026-03-04T12:00:00+00:00",
+                }
+            ]
+            if search == "printer"
+            else [],
+        )
+
+        resp = test_client.get("/api/triage/log?search=printer")
+
+        assert resp.status_code == 200
+        assert resp.json() == [
+            {
+                "key": "OIT-300",
+                "field": "status",
+                "old_value": "Open",
+                "new_value": "Waiting on printer vendor",
+                "confidence": 0.9,
+                "model": "gpt-test",
+                "source": "auto",
+                "approved_by": None,
+                "timestamp": "2026-03-04T12:00:00+00:00",
+            }
+        ]
+
+    def test_technician_scores_support_server_side_search(self, test_client, monkeypatch):
+        import routes_triage
+
+        monkeypatch.setattr(
+            routes_triage.store,
+            "list_technician_scores",
+            lambda limit=500: [
+                TechnicianScore(
+                    key="OIT-300",
+                    communication_score=4,
+                    communication_notes="Clear printer update.",
+                    documentation_score=3,
+                    documentation_notes="Documented the printer vendor callback.",
+                    score_summary="Printer ticket was handled clearly.",
+                    model_used="gpt-test",
+                    created_at="2026-03-04T12:00:00+00:00",
+                ),
+                TechnicianScore(
+                    key="OIT-400",
+                    communication_score=2,
+                    communication_notes="Sparse VPN notes.",
+                    documentation_score=2,
+                    documentation_notes="VPN reset details missing.",
+                    score_summary="VPN documentation needs work.",
+                    model_used="gpt-test",
+                    created_at="2026-03-04T12:30:00+00:00",
+                ),
+            ],
+        )
+
+        resp = test_client.get("/api/triage/technician-scores?search=printer")
+
+        assert resp.status_code == 200
+        assert [item["key"] for item in resp.json()] == ["OIT-300"]
+
 
 class TestSuggestionApplyRoutes:
     def test_apply_single_field_updates_reporter_with_account_id(self, test_client, mock_cache, monkeypatch):

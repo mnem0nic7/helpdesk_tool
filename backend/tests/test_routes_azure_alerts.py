@@ -87,6 +87,30 @@ def test_test_rule_dry_run(test_client, monkeypatch, tmp_path):
     assert resp.json()["match_count"] == 1
 
 
+def test_test_rule_logs_evaluation_failures(test_client, monkeypatch, tmp_path, caplog):
+    import routes_azure_alerts
+    import azure_alert_store as store_mod
+
+    store = store_mod.AzureAlertStore(str(tmp_path / "a.db"))
+    rule = store.create_rule(RULE_BODY)
+    monkeypatch.setattr(routes_azure_alerts, "azure_alert_store", store)
+    monkeypatch.setattr(
+        routes_azure_alerts,
+        "_evaluate_rule",
+        lambda r: (_ for _ in ()).throw(RuntimeError("dry run exploded")),
+    )
+
+    with caplog.at_level("ERROR"):
+        resp = test_client.post(f"/api/azure/alerts/rules/{rule['id']}/test", headers=AZURE_HOST)
+
+    assert resp.status_code == 500
+    assert resp.json() == {"detail": "Evaluation error: dry run exploded"}
+    assert any(
+        f"Azure alert rule dry run failed for {rule['id']}" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_trigger_types_catalog(test_client):
     resp = test_client.get("/api/azure/alerts/trigger-types", headers=AZURE_HOST)
     assert resp.status_code == 200

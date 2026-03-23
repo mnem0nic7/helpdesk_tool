@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useDeferredValue, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type AzureManagedDisk, type AzureStorageAccount } from "../lib/api.ts";
@@ -42,17 +42,19 @@ function StatCard({
   );
 }
 
-function AccountsTable({ accounts, costAvailable }: { accounts: AzureStorageAccount[]; costAvailable: boolean }) {
-  const [search, setSearch] = useState("");
+function AccountsTable({
+  accounts,
+  costAvailable,
+  search,
+  onSearchChange,
+}: {
+  accounts: AzureStorageAccount[];
+  costAvailable: boolean;
+  search: string;
+  onSearchChange: (value: string) => void;
+}) {
   const { sortKey, sortDir, toggleSort } = useTableSort<AccountSortKey>("name");
-  const filtered = accounts.filter((a) => {
-    if (!search.trim()) return true;
-    const h = [a.name, a.kind, a.sku_name, a.location, a.subscription_name || a.subscription_id, a.resource_group]
-      .join(" ")
-      .toLowerCase();
-    return h.includes(search.trim().toLowerCase());
-  });
-  const sorted = sortRows(filtered, sortKey, sortDir, (a, key) => {
+  const sorted = sortRows(accounts, sortKey, sortDir, (a, key) => {
     if (key === "subscription") return a.subscription_name || a.subscription_id;
     if (key === "cost") return a.cost;
     return (a as unknown as Record<string, unknown>)[key] as string;
@@ -65,14 +67,14 @@ function AccountsTable({ accounts, costAvailable }: { accounts: AzureStorageAcco
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-slate-900">Storage Accounts</h2>
         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-          {filtered.length.toLocaleString()} accounts
+          {accounts.length.toLocaleString()} accounts
         </span>
       </div>
       <input
         className="mt-3 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm placeholder-slate-400 focus:border-blue-500 focus:outline-none"
         placeholder="Search by name, kind, SKU, location, subscription…"
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => onSearchChange(e.target.value)}
       />
       <div className="mt-4 max-h-[60vh] overflow-auto">
         <table className="min-w-full text-left text-sm">
@@ -109,7 +111,7 @@ function AccountsTable({ accounts, costAvailable }: { accounts: AzureStorageAcco
         </table>
         {hasMore ? (
           <div ref={sentinelRef} className="border-t border-slate-200 px-4 py-3 text-center text-xs text-slate-400">
-            Showing {visible.length.toLocaleString()} of {filtered.length.toLocaleString()} — scroll for more
+            Showing {visible.length.toLocaleString()} of {accounts.length.toLocaleString()} — scroll for more
           </div>
         ) : null}
       </div>
@@ -117,20 +119,23 @@ function AccountsTable({ accounts, costAvailable }: { accounts: AzureStorageAcco
   );
 }
 
-function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costAvailable: boolean }) {
-  const [search, setSearch] = useState("");
-  const [showUnattached, setShowUnattached] = useState(false);
+function DisksTable({
+  disks,
+  costAvailable,
+  search,
+  onSearchChange,
+  showUnattached,
+  onToggleUnattached,
+}: {
+  disks: AzureManagedDisk[];
+  costAvailable: boolean;
+  search: string;
+  onSearchChange: (value: string) => void;
+  showUnattached: boolean;
+  onToggleUnattached: () => void;
+}) {
   const { sortKey, sortDir, toggleSort } = useTableSort<DiskSortKey>("name");
-
-  const filtered = disks.filter((d) => {
-    if (showUnattached && d.managed_by) return false;
-    if (!search.trim()) return true;
-    const h = [d.name, d.sku_name, d.location, d.subscription_name || d.subscription_id, d.resource_group]
-      .join(" ")
-      .toLowerCase();
-    return h.includes(search.trim().toLowerCase());
-  });
-  const sorted = sortRows(filtered, sortKey, sortDir, (d, key) => {
+  const sorted = sortRows(disks, sortKey, sortDir, (d, key) => {
     if (key === "subscription") return d.subscription_name || d.subscription_id;
     if (key === "cost") return d.cost;
     return (d as unknown as Record<string, unknown>)[key] as string | number;
@@ -145,7 +150,7 @@ function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costA
         <h2 className="text-lg font-semibold text-slate-900">Managed Disks</h2>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setShowUnattached((v) => !v)}
+            onClick={onToggleUnattached}
             className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
               showUnattached
                 ? "bg-amber-100 text-amber-800"
@@ -155,7 +160,7 @@ function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costA
             Unattached only
           </button>
           <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-            {filtered.length.toLocaleString()} disks
+            {disks.length.toLocaleString()} disks
           </span>
         </div>
       </div>
@@ -163,7 +168,7 @@ function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costA
         className="mt-3 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm placeholder-slate-400 focus:border-blue-500 focus:outline-none"
         placeholder="Search by name, SKU, location, subscription…"
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => onSearchChange(e.target.value)}
       />
       <div className="mt-4 max-h-[60vh] overflow-auto">
         <table className="min-w-full text-left text-sm">
@@ -223,7 +228,7 @@ function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costA
         </table>
         {hasMore ? (
           <div ref={sentinelRef} className="border-t border-slate-200 px-4 py-3 text-center text-xs text-slate-400">
-            Showing {visible.length.toLocaleString()} of {filtered.length.toLocaleString()} — scroll for more
+            Showing {visible.length.toLocaleString()} of {disks.length.toLocaleString()} — scroll for more
           </div>
         ) : null}
       </div>
@@ -231,17 +236,19 @@ function DisksTable({ disks, costAvailable }: { disks: AzureManagedDisk[]; costA
   );
 }
 
-function SnapshotsTable({ snapshots, costAvailable }: { snapshots: AzureManagedDisk[]; costAvailable: boolean }) {
-  const [search, setSearch] = useState("");
+function SnapshotsTable({
+  snapshots,
+  costAvailable,
+  search,
+  onSearchChange,
+}: {
+  snapshots: AzureManagedDisk[];
+  costAvailable: boolean;
+  search: string;
+  onSearchChange: (value: string) => void;
+}) {
   const { sortKey, sortDir, toggleSort } = useTableSort<SnapshotSortKey>("name");
-  const filtered = snapshots.filter((s) => {
-    if (!search.trim()) return true;
-    const h = [s.name, s.sku_name, s.location, s.subscription_name || s.subscription_id, s.resource_group]
-      .join(" ")
-      .toLowerCase();
-    return h.includes(search.trim().toLowerCase());
-  });
-  const sorted = sortRows(filtered, sortKey, sortDir, (s, key) => {
+  const sorted = sortRows(snapshots, sortKey, sortDir, (s, key) => {
     if (key === "subscription") return s.subscription_name || s.subscription_id;
     if (key === "cost") return s.cost;
     return (s as unknown as Record<string, unknown>)[key] as string | number;
@@ -254,14 +261,14 @@ function SnapshotsTable({ snapshots, costAvailable }: { snapshots: AzureManagedD
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-slate-900">Snapshots</h2>
         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-          {filtered.length.toLocaleString()} snapshots
+          {snapshots.length.toLocaleString()} snapshots
         </span>
       </div>
       <input
         className="mt-3 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm placeholder-slate-400 focus:border-blue-500 focus:outline-none"
         placeholder="Search by name, SKU, location, subscription…"
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => onSearchChange(e.target.value)}
       />
       <div className="mt-4 max-h-[60vh] overflow-auto">
         <table className="min-w-full text-left text-sm">
@@ -302,7 +309,7 @@ function SnapshotsTable({ snapshots, costAvailable }: { snapshots: AzureManagedD
         </table>
         {hasMore ? (
           <div ref={sentinelRef} className="border-t border-slate-200 px-4 py-3 text-center text-xs text-slate-400">
-            Showing {visible.length.toLocaleString()} of {filtered.length.toLocaleString()} — scroll for more
+            Showing {visible.length.toLocaleString()} of {snapshots.length.toLocaleString()} — scroll for more
           </div>
         ) : null}
       </div>
@@ -312,10 +319,32 @@ function SnapshotsTable({ snapshots, costAvailable }: { snapshots: AzureManagedD
 
 export default function AzureStoragePage() {
   const [activeTab, setActiveTab] = useState<StorageTab>("accounts");
+  const [accountSearch, setAccountSearch] = useState("");
+  const [diskSearch, setDiskSearch] = useState("");
+  const [snapshotSearch, setSnapshotSearch] = useState("");
+  const [showUnattachedOnly, setShowUnattachedOnly] = useState(false);
+  const deferredAccountSearch = useDeferredValue(accountSearch.trim());
+  const deferredDiskSearch = useDeferredValue(diskSearch.trim());
+  const deferredSnapshotSearch = useDeferredValue(snapshotSearch.trim());
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["azure", "storage"],
-    queryFn: () => api.getAzureStorage(),
+    queryKey: [
+      "azure",
+      "storage",
+      {
+        deferredAccountSearch,
+        deferredDiskSearch,
+        deferredSnapshotSearch,
+        showUnattachedOnly,
+      },
+    ],
+    queryFn: () => api.getAzureStorage({
+      account_search: deferredAccountSearch,
+      disk_search: deferredDiskSearch,
+      snapshot_search: deferredSnapshotSearch,
+      disk_unattached_only: showUnattachedOnly,
+    }),
+    placeholderData: (prev) => prev,
     refetchInterval: 60_000,
   });
   const storageSavingsQuery = useQuery({
@@ -479,9 +508,32 @@ export default function AzureStoragePage() {
         ))}
       </div>
 
-      {activeTab === "accounts" && <AccountsTable accounts={data.storage_accounts} costAvailable={cost_available} />}
-      {activeTab === "disks" && <DisksTable disks={data.managed_disks} costAvailable={cost_available} />}
-      {activeTab === "snapshots" && <SnapshotsTable snapshots={data.snapshots} costAvailable={cost_available} />}
+      {activeTab === "accounts" && (
+        <AccountsTable
+          accounts={data.storage_accounts}
+          costAvailable={cost_available}
+          search={accountSearch}
+          onSearchChange={setAccountSearch}
+        />
+      )}
+      {activeTab === "disks" && (
+        <DisksTable
+          disks={data.managed_disks}
+          costAvailable={cost_available}
+          search={diskSearch}
+          onSearchChange={setDiskSearch}
+          showUnattached={showUnattachedOnly}
+          onToggleUnattached={() => setShowUnattachedOnly((value) => !value)}
+        />
+      )}
+      {activeTab === "snapshots" && (
+        <SnapshotsTable
+          snapshots={data.snapshots}
+          costAvailable={cost_available}
+          search={snapshotSearch}
+          onSearchChange={setSnapshotSearch}
+        />
+      )}
     </div>
   );
 }

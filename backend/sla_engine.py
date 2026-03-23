@@ -287,6 +287,7 @@ def compute_sla_for_issues(
     config: SLAConfig | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    search: str = "",
     settings: dict[str, str] | None = None,
     targets: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -470,6 +471,22 @@ def compute_sla_for_issues(
             "p95_elapsed_minutes": _percentile(elapsed_list, 95),
             "distribution": _distribution(elapsed_list, buckets),
         }
+
+    search_lower = search.strip().lower()
+    if search_lower:
+        ticket_rows = [
+            row
+            for row in ticket_rows
+            if search_lower in " ".join(
+                [
+                    str(row.get("key") or ""),
+                    str(row.get("summary") or ""),
+                    str(row.get("assignee") or ""),
+                    str(row.get("status") or ""),
+                    str(row.get("priority") or ""),
+                ]
+            ).lower()
+        ]
 
     return {
         "summary": {

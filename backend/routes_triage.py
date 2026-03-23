@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 
 from ai_client import analyze_ticket, get_available_models, score_closed_ticket, validate_suggestions
 from auth import get_session
@@ -53,6 +53,25 @@ def _ensure_ticket_visible(key: str) -> None:
         raise HTTPException(status_code=404, detail=f"Ticket {key} is not available on this site")
 
 
+def _matches_technician_score_search(score: dict[str, Any], search: str) -> bool:
+    query = search.strip().lower()
+    if not query:
+        return True
+    haystack = " ".join(
+        [
+            str(score.get("key") or ""),
+            str(score.get("ticket_summary") or ""),
+            str(score.get("ticket_status") or ""),
+            str(score.get("ticket_assignee") or ""),
+            str(score.get("score_summary") or ""),
+            str(score.get("communication_notes") or ""),
+            str(score.get("documentation_notes") or ""),
+            str(score.get("model_used") or ""),
+        ]
+    ).lower()
+    return query in haystack
+
+
 @router.get("/models")
 async def list_models() -> list[dict[str, Any]]:
     """Return available AI models (filtered by configured API keys)."""
@@ -60,10 +79,14 @@ async def list_models() -> list[dict[str, Any]]:
 
 
 @router.get("/log")
-async def get_triage_log() -> list[dict[str, Any]]:
+async def get_triage_log(search: str = Query(default="", max_length=200)) -> list[dict[str, Any]]:
     """Return all AI triage changes applied to Jira (auto and user-approved)."""
     visible_keys = _visible_issue_keys()
-    return [entry for entry in store.get_triage_log(limit=500) if entry.get("key") in visible_keys]
+    return [
+        entry
+        for entry in store.get_triage_log(limit=500, search=search)
+        if entry.get("key") in visible_keys
+    ]
 
 
 @router.get("/run-status")
@@ -159,7 +182,7 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
 
 
 @router.get("/technician-scores")
-async def get_technician_scores() -> list[dict[str, Any]]:
+async def get_technician_scores(search: str = Query(default="", max_length=200)) -> list[dict[str, Any]]:
     """Return stored technician QA scores for closed tickets."""
     visible_keys = _visible_issue_keys()
     issues_by_key = {
@@ -181,7 +204,7 @@ async def get_technician_scores() -> list[dict[str, Any]]:
             "ticket_assignee": ticket.get("assignee", "") if ticket else "",
             "ticket_resolved": ticket.get("resolved", "") if ticket else "",
         })
-    return results
+    return [score for score in results if _matches_technician_score_search(score, search)]
 
 
 @router.get("/score-run-status")

@@ -313,6 +313,7 @@ def _get_assignable_display_name(account_id: str | None) -> str:
     try:
         users = _client.get_users_assignable(JIRA_PROJECT)
     except Exception:
+        logger.exception("Failed to resolve Jira display name from assignable users for account %s", account_id)
         return ""
     for user in users:
         if user.get("accountId") == account_id:
@@ -329,6 +330,7 @@ def _get_user_display_name(account_id: str | None) -> str:
     try:
         return (_client.get_user(account_id) or {}).get("displayName", "")
     except Exception:
+        logger.exception("Failed to resolve Jira display name for account %s", account_id)
         return ""
 
 
@@ -560,6 +562,7 @@ async def get_statuses(key: str) -> list[dict[str, Any]]:
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
     except Exception:
+        logger.exception("Failed to load transitions for ticket %s", key)
         raise HTTPException(status_code=404, detail=f"Could not get transitions for {key}")
     return [
         {
@@ -625,6 +628,7 @@ async def get_ticket(key: str) -> dict[str, Any]:
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
     except Exception:
+        logger.exception("Failed to load ticket detail for %s", key)
         raise HTTPException(status_code=404, detail=f"Issue {key} not found")
 
 

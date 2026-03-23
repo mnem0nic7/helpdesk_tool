@@ -84,9 +84,14 @@ def test_ingest_delivery_records_manifest_and_stage_snapshot():
     assert result.was_duplicate is False
     assert result.manifest["parse_status"] == "parsed"
     assert result.manifest["row_count"] == 4
+    assert result.manifest["parser_version"] == "focus-csv-v1"
+    assert result.manifest["schema_signature"].startswith("sha256:")
+    assert result.manifest["schema_compatible"] is True
     assert result.manifest["summary"]["actual_cost_total"] == pytest.approx(25.5)
     assert store.get_manifest("exports/2026-03-20/focus_daily_sample.csv") is not None
     assert store.stage_models["exports/2026-03-20/focus_daily_sample.csv"]["summary"]["row_count"] == 4
+    assert store.stage_models["exports/2026-03-20/focus_daily_sample.csv"]["parser_version"] == "focus-csv-v1"
+    assert store.stage_models["exports/2026-03-20/focus_daily_sample.csv"]["schema_signature"].startswith("sha256:")
 
 
 def test_ingest_delivery_records_quarantine_manifest_for_malformed_content():
@@ -106,6 +111,9 @@ def test_ingest_delivery_records_quarantine_manifest_for_malformed_content():
 
     assert result.staged_model is None
     assert result.manifest["parse_status"] == "quarantined"
+    assert result.manifest["parser_version"] == "focus-csv-v1"
+    assert result.manifest["schema_signature"].startswith("sha256:")
+    assert result.manifest["schema_compatible"] is False
     assert "missing required columns" in result.manifest["error_details"]
     assert store.get_manifest("exports/2026-03-20/focus_malformed_missing_cost.csv") is not None
     assert store.quarantine
@@ -131,6 +139,7 @@ def test_ingest_delivery_retries_quarantined_delivery_after_fix():
     assert len(pending_after_quarantine) == 1
     assert second.was_duplicate is False
     assert second.manifest["parse_status"] == "parsed"
+    assert second.manifest["schema_compatible"] is True
     assert store.get_manifest("exports/2026-03-20/focus_retry.csv")["parse_status"] == "parsed"
     assert store.stage_models["exports/2026-03-20/focus_retry.csv"]["summary"]["row_count"] == 2
 

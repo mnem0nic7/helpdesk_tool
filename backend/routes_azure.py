@@ -24,6 +24,12 @@ from auth import is_admin_user, require_admin, require_authenticated_user
 from azure_cache import azure_cache
 from azure_cost_exports import azure_cost_export_service
 from azure_vm_export_jobs import azure_vm_export_jobs
+from config import (
+    AZURE_REPORTING_COST_ANALYSIS_LABEL,
+    AZURE_REPORTING_COST_ANALYSIS_URL,
+    AZURE_REPORTING_POWER_BI_LABEL,
+    AZURE_REPORTING_POWER_BI_URL,
+)
 from models import (
     AzureCostChatRequest,
     AzureSavingsOpportunity,
@@ -215,6 +221,38 @@ def _ensure_export_job_access(job_id: str, session: dict[str, Any]) -> dict[str,
 def _azure_status_with_exports(payload: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(payload)
     enriched["cost_exports"] = azure_cost_export_service.status()
+    enriched["reporting"] = {
+        "power_bi": {
+            "label": AZURE_REPORTING_POWER_BI_LABEL,
+            "url": AZURE_REPORTING_POWER_BI_URL or None,
+            "configured": bool(AZURE_REPORTING_POWER_BI_URL),
+            "description": "Shared finance and showback reporting from governed Cost Management exports.",
+        },
+        "cost_analysis": {
+            "label": AZURE_REPORTING_COST_ANALYSIS_LABEL,
+            "url": AZURE_REPORTING_COST_ANALYSIS_URL or None,
+            "configured": bool(AZURE_REPORTING_COST_ANALYSIS_URL),
+            "description": "Interactive Azure-native cost exploration and saved views for drill-down analysis.",
+        },
+        "sources": {
+            "overview": {
+                "label": "Cached app data",
+                "description": "Overview metrics come from the app's cached Azure snapshots and cost queries.",
+            },
+            "cost": {
+                "label": "Cached app data",
+                "description": "Cost charts and tables use cached Azure Cost Management query results for operator workflows.",
+            },
+            "savings": {
+                "label": "Heuristic operational guidance",
+                "description": "Savings recommendations blend cached Azure data, Advisor signals, and app heuristics.",
+            },
+            "exports": {
+                "label": "Export-backed governed reporting",
+                "description": "Shared reporting should come from Cost Management exports and governed BI assets.",
+            },
+        },
+    }
     return enriched
 
 
@@ -763,15 +801,25 @@ async def export_savings_excel(
 
 
 @router.get("/storage")
-async def get_storage() -> dict[str, Any]:
+async def get_storage(
+    account_search: str = Query(default=""),
+    disk_search: str = Query(default=""),
+    snapshot_search: str = Query(default=""),
+    disk_unattached_only: bool = Query(default=False),
+) -> dict[str, Any]:
     _ensure_azure_site()
-    return azure_cache.get_storage_summary()
+    return azure_cache.get_storage_summary(
+        account_search=account_search,
+        disk_search=disk_search,
+        snapshot_search=snapshot_search,
+        disk_unattached_only=disk_unattached_only,
+    )
 
 
 @router.get("/compute/optimization")
-async def get_compute_optimization() -> dict[str, Any]:
+async def get_compute_optimization(idle_vm_search: str = Query(default="")) -> dict[str, Any]:
     _ensure_azure_site()
-    return azure_cache.get_compute_optimization()
+    return azure_cache.get_compute_optimization(idle_vm_search=idle_vm_search)
 
 
 @router.get("/ai/models")

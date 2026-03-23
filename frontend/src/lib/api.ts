@@ -5,6 +5,8 @@
  * so we use relative URLs starting with /api.
  */
 
+import { logClientError } from "./errorLogging.ts";
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -736,6 +738,29 @@ export interface AzureCostExportStatus {
   health: AzureCostExportHealth;
 }
 
+export interface AzureReportingTarget {
+  label: string;
+  url: string | null;
+  configured: boolean;
+  description: string;
+}
+
+export interface AzureReportingSource {
+  label: string;
+  description: string;
+}
+
+export interface AzureReporting {
+  power_bi: AzureReportingTarget;
+  cost_analysis: AzureReportingTarget;
+  sources: {
+    overview: AzureReportingSource;
+    cost: AzureReportingSource;
+    savings: AzureReportingSource;
+    exports: AzureReportingSource;
+  };
+}
+
 export interface AzureStatus {
   configured: boolean;
   initialized: boolean;
@@ -743,6 +768,7 @@ export interface AzureStatus {
   last_refresh: string | null;
   datasets: AzureDatasetStatus[];
   cost_exports?: AzureCostExportStatus;
+  reporting?: AzureReporting;
 }
 
 export interface AzureCostSummary {
@@ -770,6 +796,7 @@ export interface AzureOverviewResponse {
   datasets: AzureDatasetStatus[];
   last_refresh: string | null;
   cost_exports?: AzureCostExportStatus;
+  reporting?: AzureReporting;
 }
 
 export interface AzureSubscription {
@@ -1544,6 +1571,14 @@ export interface MetricsQueryParams {
   date_to?: string;
 }
 
+export interface SLAMetricsQueryParams extends MetricsQueryParams {
+  search?: string;
+}
+
+export interface TriageLogQueryParams {
+  search?: string;
+}
+
 export interface AzureResourceQueryParams {
   search?: string;
   subscription_id?: string;
@@ -1576,6 +1611,17 @@ export interface AzureSavingsQueryParams {
   quantified_only?: boolean;
 }
 
+export interface AzureStorageQueryParams {
+  account_search?: string;
+  disk_search?: string;
+  snapshot_search?: string;
+  disk_unattached_only?: boolean;
+}
+
+export interface AzureComputeOptimizationQueryParams {
+  idle_vm_search?: string;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildQuery(params: Record<string, any>): string {
   const qs = new URLSearchParams();
@@ -1601,7 +1647,10 @@ export const api = {
   async getMe(): Promise<UserInfo | null> {
     try {
       return await fetchJSON<UserInfo>("/api/auth/me");
-    } catch {
+    } catch (err) {
+      if (!(err instanceof Error && err.message === "Not authenticated")) {
+        logClientError("Auth bootstrap failed", err, { url: "/api/auth/me" });
+      }
       return null;
     }
   },
@@ -1673,11 +1722,8 @@ export const api = {
   // Custom SLA
   // -------------------------------------------------------------------------
 
-  /** Fetch computed SLA metrics with optional date range filter. */
-  getSLAMetrics(dateFrom?: string, dateTo?: string): Promise<SLAMetricsResponse> {
-    const params: Record<string, string> = {};
-    if (dateFrom) params.date_from = dateFrom;
-    if (dateTo) params.date_to = dateTo;
+  /** Fetch computed SLA metrics with optional date range and search filters. */
+  getSLAMetrics(params: SLAMetricsQueryParams = {}): Promise<SLAMetricsResponse> {
     return fetchJSON<SLAMetricsResponse>(`/api/sla/metrics${buildQuery(params)}`);
   },
 
@@ -2029,12 +2075,12 @@ export const api = {
     return `/api/azure/savings/export.xlsx${buildQuery(params)}`;
   },
 
-  getAzureStorage(): Promise<AzureStorageSummary> {
-    return fetchJSON<AzureStorageSummary>("/api/azure/storage");
+  getAzureStorage(params: AzureStorageQueryParams = {}): Promise<AzureStorageSummary> {
+    return fetchJSON<AzureStorageSummary>(`/api/azure/storage${buildQuery(params)}`);
   },
 
-  getAzureComputeOptimization(): Promise<AzureComputeOptimizationResponse> {
-    return fetchJSON<AzureComputeOptimizationResponse>("/api/azure/compute/optimization");
+  getAzureComputeOptimization(params: AzureComputeOptimizationQueryParams = {}): Promise<AzureComputeOptimizationResponse> {
+    return fetchJSON<AzureComputeOptimizationResponse>(`/api/azure/compute/optimization${buildQuery(params)}`);
   },
 
   getAzureAIModels(): Promise<AIModel[]> {
@@ -2187,13 +2233,13 @@ export const api = {
   },
 
   /** Fetch AI triage change log. */
-  getTriageLog(): Promise<TriageLogEntry[]> {
-    return fetchJSON<TriageLogEntry[]>("/api/triage/log");
+  getTriageLog(params: TriageLogQueryParams = {}): Promise<TriageLogEntry[]> {
+    return fetchJSON<TriageLogEntry[]>(`/api/triage/log${buildQuery(params)}`);
   },
 
   /** Fetch technician QA scores for closed tickets. */
-  getTechnicianScores(): Promise<TechnicianScoreEntry[]> {
-    return fetchJSON<TechnicianScoreEntry[]>("/api/triage/technician-scores");
+  getTechnicianScores(params: TriageLogQueryParams = {}): Promise<TechnicianScoreEntry[]> {
+    return fetchJSON<TechnicianScoreEntry[]>(`/api/triage/technician-scores${buildQuery(params)}`);
   },
 
   /** Fetch all cached triage suggestions. */

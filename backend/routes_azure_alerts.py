@@ -109,6 +109,7 @@ def test_rule(rule_id: str, _session: dict = Depends(require_authenticated_user)
     try:
         items = _evaluate_rule(rule)
     except Exception as exc:
+        logger.exception("Azure alert rule dry run failed for %s", rule_id)
         raise HTTPException(status_code=500, detail=f"Evaluation error: {exc}") from exc
     return {"match_count": len(items), "sample_items": items[:10]}
 

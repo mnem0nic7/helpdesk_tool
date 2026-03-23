@@ -8,6 +8,7 @@ existing live Azure cache so the export lane can evolve independently.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import uuid
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 _ALLOWED_PARSE_STATUSES = {"discovered", "staged", "parsed", "quarantined", "failed"}
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> str:
@@ -77,6 +80,9 @@ class ExportDeliveryMetadata:
     summary: dict[str, Any] | None = None
     source_etag: str | None = None
     source_size_bytes: int = 0
+    parser_version: str = ""
+    schema_signature: str = ""
+    schema_compatible: bool = True
     delivery_id: str = ""
 
     def to_row(self) -> dict[str, Any]:
@@ -94,6 +100,9 @@ class ExportDeliveryMetadata:
         payload["parse_status"] = _coerce_text(self.parse_status) or "discovered"
         payload["row_count"] = int(self.row_count)
         payload["source_size_bytes"] = int(self.source_size_bytes)
+        payload["parser_version"] = _coerce_text(self.parser_version)
+        payload["schema_signature"] = _coerce_text(self.schema_signature)
+        payload["schema_compatible"] = 1 if self.schema_compatible else 0
         payload["delivery_id"] = _coerce_text(self.delivery_id) or uuid.uuid4().hex
         return payload
 
@@ -132,11 +141,30 @@ class AzureExportStore:
                     summary_json TEXT NOT NULL DEFAULT '{}',
                     source_etag TEXT,
                     source_size_bytes INTEGER NOT NULL DEFAULT 0,
+                    parser_version TEXT NOT NULL DEFAULT '',
+                    schema_signature TEXT NOT NULL DEFAULT '',
+                    schema_compatible INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
             )
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(export_deliveries)").fetchall()
+            }
+            if "parser_version" not in columns:
+                conn.execute(
+                    "ALTER TABLE export_deliveries ADD COLUMN parser_version TEXT NOT NULL DEFAULT ''"
+                )
+            if "schema_signature" not in columns:
+                conn.execute(
+                    "ALTER TABLE export_deliveries ADD COLUMN schema_signature TEXT NOT NULL DEFAULT ''"
+                )
+            if "schema_compatible" not in columns:
+                conn.execute(
+                    "ALTER TABLE export_deliveries ADD COLUMN schema_compatible INTEGER NOT NULL DEFAULT 1"
+                )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_export_deliveries_dataset_scope
@@ -176,9 +204,14 @@ class AzureExportStore:
         payload = dict(row)
         payload["row_count"] = int(payload.get("row_count") or 0)
         payload["source_size_bytes"] = int(payload.get("source_size_bytes") or 0)
+        payload["schema_compatible"] = bool(int(payload.get("schema_compatible") or 0))
         try:
             payload["summary"] = json.loads(str(payload.get("summary_json") or "{}"))
         except json.JSONDecodeError:
+            logger.exception(
+                "Failed to decode summary_json for delivery %s",
+                payload.get("delivery_id") or payload.get("delivery_key") or payload.get("landing_path") or "<unknown>",
+            )
             payload["summary"] = {}
         return payload
 
@@ -207,6 +240,9 @@ class AzureExportStore:
         payload["summary_json"] = json.dumps(payload.get("summary") or {}, sort_keys=True)
         payload["source_etag"] = _coerce_text(payload.get("source_etag")) or None
         payload["source_size_bytes"] = int(payload.get("source_size_bytes") or 0)
+        payload["parser_version"] = _coerce_text(payload.get("parser_version"))
+        payload["schema_signature"] = _coerce_text(payload.get("schema_signature"))
+        payload["schema_compatible"] = 1 if bool(payload.get("schema_compatible", True)) else 0
         payload["delivery_id"] = _coerce_text(payload.get("delivery_id")) or uuid.uuid4().hex
         payload["created_at"] = _utcnow()
         payload["updated_at"] = payload["created_at"]
@@ -238,6 +274,9 @@ class AzureExportStore:
                     summary_json,
                     source_etag,
                     source_size_bytes,
+                    parser_version,
+                    schema_signature,
+                    schema_compatible,
                     created_at,
                     updated_at
                 )
@@ -258,6 +297,9 @@ class AzureExportStore:
                     :summary_json,
                     :source_etag,
                     :source_size_bytes,
+                    :parser_version,
+                    :schema_signature,
+                    :schema_compatible,
                     :created_at,
                     :updated_at
                 )
@@ -276,6 +318,9 @@ class AzureExportStore:
                     summary_json = excluded.summary_json,
                     source_etag = excluded.source_etag,
                     source_size_bytes = excluded.source_size_bytes,
+                    parser_version = excluded.parser_version,
+                    schema_signature = excluded.schema_signature,
+                    schema_compatible = excluded.schema_compatible,
                     updated_at = excluded.updated_at
                 """,
                 payload,
@@ -355,6 +400,9 @@ class AzureExportStore:
             "summary",
             "source_etag",
             "source_size_bytes",
+            "parser_version",
+            "schema_signature",
+            "schema_compatible",
         }
         updates: dict[str, Any] = {}
         for key, value in fields.items():
@@ -369,6 +417,8 @@ class AzureExportStore:
                 "manifest_path",
                 "source_etag",
                 "error_message",
+                "parser_version",
+                "schema_signature",
             }:
                 updates[key] = _coerce_text(value) if value is not None else None
             elif key == "delivery_date":
@@ -379,6 +429,8 @@ class AzureExportStore:
                 updates["summary_json"] = json.dumps(value or {}, sort_keys=True)
             elif key in {"row_count", "source_size_bytes"}:
                 updates[key] = int(value or 0)
+            elif key == "schema_compatible":
+                updates[key] = 1 if bool(value) else 0
             elif key in {"discovered_at", "parsed_at"}:
                 updates[key] = _coerce_timestamp(value)
 
@@ -412,6 +464,9 @@ class AzureExportStore:
             "row_count": record["row_count"],
             "error_details": record["error_message"] or "",
             "summary": record.get("summary") or {},
+            "parser_version": record.get("parser_version") or "",
+            "schema_signature": record.get("schema_signature") or "",
+            "schema_compatible": bool(record.get("schema_compatible")),
             "recorded_at": record["updated_at"],
         }
 
@@ -437,6 +492,9 @@ class AzureExportStore:
                 "parsed_at": manifest.get("parsed_at"),
                 "error_message": manifest.get("error_details") or manifest.get("error_message"),
                 "summary": manifest.get("summary") or {},
+                "parser_version": manifest.get("parser_version") or "",
+                "schema_signature": manifest.get("schema_signature") or "",
+                "schema_compatible": manifest.get("schema_compatible", True),
             }
         )
 

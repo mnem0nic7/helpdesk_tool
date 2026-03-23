@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
+import { logClientError } from "../lib/errorLogging.ts";
 import type {
   Assignee,
   OasisDevWorkloadReportRequest,
@@ -627,7 +628,7 @@ export default function ReportsPage() {
     try {
       await api.exportReport(config);
     } catch (err) {
-      console.error("Export failed:", err);
+      logClientError("Export failed", err, { kind: "report" });
     } finally {
       setExporting(false);
     }
@@ -638,7 +639,7 @@ export default function ReportsPage() {
     try {
       await api.exportOasisDevWorkloadReport(workloadRequest);
     } catch (err) {
-      console.error("OasisDev workload export failed:", err);
+      logClientError("OasisDev workload export failed", err, { kind: "workload" });
     } finally {
       setWorkloadExporting(false);
     }

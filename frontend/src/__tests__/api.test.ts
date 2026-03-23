@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { api } from "../lib/api.ts";
 
+const logClientError = vi.fn();
+
+vi.mock("../lib/errorLogging.ts", () => ({
+  logClientError,
+}));
+
 // ---------------------------------------------------------------------------
 // Mock fetch
 // ---------------------------------------------------------------------------
@@ -20,6 +26,7 @@ function mockFetch(response: unknown, status = 200) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  logClientError.mockClear();
 });
 
 afterEach(() => {
@@ -114,6 +121,16 @@ describe("error handling", () => {
   it("throws on 4xx/5xx", async () => {
     mockFetch({ detail: "Not found" }, 404);
     await expect(api.getMetrics()).rejects.toThrow("failed (404)");
+  });
+
+  it("logs auth bootstrap failures and still returns null", async () => {
+    mockFetch({ detail: "Server error" }, 500);
+    await expect(api.getMe()).resolves.toBeNull();
+    expect(logClientError).toHaveBeenCalledWith(
+      "Auth bootstrap failed",
+      expect.any(Error),
+      { url: "/api/auth/me" },
+    );
   });
 });
 

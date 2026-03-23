@@ -2881,7 +2881,14 @@ class AzureCache:
             })
         return result
 
-    def get_storage_summary(self) -> dict[str, Any]:
+    def get_storage_summary(
+        self,
+        *,
+        account_search: str = "",
+        disk_search: str = "",
+        snapshot_search: str = "",
+        disk_unattached_only: bool = False,
+    ) -> dict[str, Any]:
         """Return storage inventory grouped by type with per-resource cost annotations."""
         resources = self._snapshot("resources") or []
         cost_status = self._get_resource_cost_status()
@@ -2954,10 +2961,43 @@ class AzureCache:
             if any(kw in str(item.get("label") or "").lower() for kw in ["storage", "disk", "backup", "bandwidth"])
         ]
 
+        def matches_storage_search(item: dict[str, Any], search: str, *, include_source: bool = False) -> bool:
+            query = search.strip().lower()
+            if not query:
+                return True
+            haystack_parts = [
+                str(item.get("name") or ""),
+                str(item.get("kind") or ""),
+                str(item.get("sku_name") or ""),
+                str(item.get("access_tier") or ""),
+                str(item.get("location") or ""),
+                str(item.get("subscription_name") or item.get("subscription_id") or ""),
+                str(item.get("resource_group") or ""),
+                str(item.get("disk_state") or ""),
+                str(item.get("managed_by") or ""),
+            ]
+            if include_source:
+                haystack_parts.append(str(item.get("source_resource_id") or ""))
+            haystack = " ".join(haystack_parts).lower()
+            return query in haystack
+
+        filtered_accounts = [item for item in annotated_accounts if matches_storage_search(item, account_search)]
+        filtered_disks = [
+            item
+            for item in annotated_disks
+            if matches_storage_search(item, disk_search, include_source=True)
+            and (not disk_unattached_only or not str(item.get("managed_by") or "").strip())
+        ]
+        filtered_snapshots = [
+            item
+            for item in annotated_snapshots
+            if matches_storage_search(item, snapshot_search, include_source=True)
+        ]
+
         return {
-            "storage_accounts": annotated_accounts,
-            "managed_disks": annotated_disks,
-            "snapshots": annotated_snapshots,
+            "storage_accounts": filtered_accounts,
+            "managed_disks": filtered_disks,
+            "snapshots": filtered_snapshots,
             "summary": {
                 "total_storage_accounts": len(storage_accounts),
                 "total_managed_disks": len(managed_disks),
@@ -2978,7 +3018,7 @@ class AzureCache:
             "cost_basis": cost_status.get("cost_basis"),
         }
 
-    def get_compute_optimization(self) -> dict[str, Any]:
+    def get_compute_optimization(self, *, idle_vm_search: str = "") -> dict[str, Any]:
         """Synthesized compute optimization analysis from cached snapshots."""
         all_resources = self._snapshot("resources") or []
         all_vms = [item for item in all_resources if self._is_virtual_machine(item)]
@@ -2998,8 +3038,29 @@ class AzureCache:
             annotated.append(row)
 
         idle_states = {"deallocated", "stopped"}
+        all_idle_vms = [v for v in annotated if v["power_state"].lower() in idle_states]
+        idle_vm_search_lower = idle_vm_search.strip().lower()
         idle_vms = sorted(
-            [v for v in annotated if v["power_state"].lower() in idle_states],
+            [
+                v
+                for v in all_idle_vms
+                if (
+                    not idle_vm_search_lower
+                    or idle_vm_search_lower in " ".join(
+                        [
+                            str(v.get("name") or ""),
+                            str(v.get("subscription_name") or v.get("subscription_id") or ""),
+                            str(v.get("resource_group") or ""),
+                            str(v.get("location") or ""),
+                            str(v.get("size") or ""),
+                            str(v.get("power_state") or ""),
+                            " ".join(
+                                f"{key}:{value}" for key, value in (v.get("tags") or {}).items()
+                            ),
+                        ]
+                    ).lower()
+                )
+            ],
             key=lambda v: (v["cost"] is None, -(v["cost"] or 0)),
         )
         running_vms = [v for v in annotated if v["power_state"].lower() == "running"]
@@ -3022,7 +3083,7 @@ class AzureCache:
             "summary": {
                 "total_vms": len(all_vms),
                 "running_vms": len(running_vms),
-                "idle_vms": len(idle_vms),
+                "idle_vms": len(all_idle_vms),
                 "total_running_cost": total_running_cost,
                 "total_advisor_savings": round(
                     sum(r.get("monthly_savings", 0) for r in advisor_recs), 2

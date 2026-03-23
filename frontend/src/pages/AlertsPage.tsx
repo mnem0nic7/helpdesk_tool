@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
+import { logClientError } from "../lib/errorLogging.ts";
 import type { AlertRule, AlertTriggerType, AlertTestResult } from "../lib/api.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
 
@@ -227,6 +228,7 @@ function RuleModal({
     try {
       await onSave(form as Partial<AlertRule>);
     } catch (err) {
+      logClientError("Failed to save alert rule", err, { ruleName: form.name });
       alert(`Failed to save: ${err}`);
     } finally {
       setSaving(false);

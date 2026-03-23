@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useDeferredValue, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
@@ -13,11 +13,19 @@ export default function AzureResourcesPage() {
   const [resourceType, setResourceType] = useState("");
   const [location, setLocation] = useState("");
   const [state, setState] = useState("");
+  const deferredSearch = useDeferredValue(search.trim());
   const { sortKey, sortDir, toggleSort } = useTableSort<ResourceSortKey>("name");
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["azure", "resources"],
-    queryFn: () => api.getAzureResources(),
+    queryKey: ["azure", "resources", { deferredSearch, subscriptionId, resourceType, location, state }],
+    queryFn: () => api.getAzureResources({
+      search: deferredSearch,
+      subscription_id: subscriptionId,
+      resource_type: resourceType,
+      location,
+      state,
+    }),
+    placeholderData: (prev) => prev,
     refetchInterval: 30_000,
   });
   const networkSavingsQuery = useQuery({
@@ -33,28 +41,7 @@ export default function AzureResourcesPage() {
   const resourceTypes = Array.from(new Set(resources.map((item) => item.resource_type).filter(Boolean))).sort();
   const locations = Array.from(new Set(resources.map((item) => item.location).filter(Boolean))).sort();
   const states = Array.from(new Set(resources.map((item) => item.state).filter(Boolean))).sort();
-  const filtered = resources.filter((item) => {
-    const searchLower = search.trim().toLowerCase();
-    if (searchLower) {
-      const haystack = [
-        item.name,
-        item.resource_type,
-        item.subscription_name,
-        item.resource_group,
-        item.location,
-        item.sku_name,
-        item.vm_size,
-        item.state,
-        ...Object.entries(item.tags || {}).map(([key, value]) => `${key}:${value}`),
-      ].join(" ").toLowerCase();
-      if (!haystack.includes(searchLower)) return false;
-    }
-    if (subscriptionId && (item.subscription_name || item.subscription_id) !== subscriptionId) return false;
-    if (resourceType && item.resource_type !== resourceType) return false;
-    if (location && item.location !== location) return false;
-    if (state && item.state !== state) return false;
-    return true;
-  });
+  const filtered = resources;
   const sorted = sortRows(filtered, sortKey, sortDir, (item, key) => {
     if (key === "subscription") return item.subscription_name || item.subscription_id;
     if (key === "sku") return item.vm_size || item.sku_name;

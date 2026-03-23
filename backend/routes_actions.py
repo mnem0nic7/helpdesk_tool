@@ -55,7 +55,11 @@ async def bulk_status(req: BulkStatusRequest, _admin: dict = Depends(require_adm
                     transition_name = t.get("to", {}).get("name", t.get("name", ""))
                     break
         except Exception:
-            pass
+            logger.exception(
+                "Bulk status transition lookup failed for %s via %s",
+                allowed_keys[0],
+                req.transition_id,
+            )
 
     for key in allowed_keys:
         try:
@@ -64,6 +68,7 @@ async def bulk_status(req: BulkStatusRequest, _admin: dict = Depends(require_adm
             if transition_name:
                 cache.update_cached_field(key, "status", transition_name)
         except Exception as exc:
+            logger.exception("Bulk status transition failed for %s via %s", key, req.transition_id)
             failed.append({"key": key, "error": str(exc)})
 
     return _bulk_result(success, failed)
@@ -80,16 +85,22 @@ async def bulk_assign(req: BulkAssignRequest, _admin: dict = Depends(require_adm
 
     # Resolve display name for cache update
     display_name = ""
+    project_name = ""
     if req.account_id:
         try:
             from config import JIRA_PROJECT
+            project_name = JIRA_PROJECT
             users = _client.get_users_assignable(JIRA_PROJECT)
             for u in users:
                 if u.get("accountId") == req.account_id:
                     display_name = u.get("displayName", "")
                     break
         except Exception:
-            pass
+            logger.exception(
+                "Bulk assignee lookup failed for %s in project %s",
+                req.account_id,
+                project_name or "(unknown)",
+            )
 
     for key in allowed_keys:
         try:
@@ -101,6 +112,7 @@ async def bulk_assign(req: BulkAssignRequest, _admin: dict = Depends(require_adm
                 {"displayName": display_name, "accountId": req.account_id},
             )
         except Exception as exc:
+            logger.exception("Bulk assign failed for %s to %s", key, req.account_id)
             failed.append({"key": key, "error": str(exc)})
 
     return _bulk_result(success, failed)
@@ -121,6 +133,7 @@ async def bulk_priority(req: BulkPriorityRequest, _admin: dict = Depends(require
             success.append(key)
             cache.update_cached_field(key, "priority", req.priority)
         except Exception as exc:
+            logger.exception("Bulk priority update failed for %s to %s", key, req.priority)
             failed.append({"key": key, "error": str(exc)})
 
     return _bulk_result(success, failed)
@@ -142,6 +155,7 @@ async def bulk_comment(req: BulkCommentRequest, _admin: dict = Depends(require_a
             # Bump updated timestamp in cache
             cache.update_cached_field(key, "updated", "")
         except Exception as exc:
+            logger.exception("Bulk comment failed for %s", key)
             failed.append({"key": key, "error": str(exc)})
 
     return _bulk_result(success, failed)

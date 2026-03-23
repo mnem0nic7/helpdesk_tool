@@ -10,7 +10,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping
 
-from azure_focus_staging import FocusDeliveryRef, FocusParseError, normalize_focus_delivery, stage_focus_delivery
+from azure_focus_staging import (
+    FOCUS_PARSER_VERSION,
+    FocusDeliveryRef,
+    FocusParseError,
+    describe_focus_schema,
+    normalize_focus_delivery,
+    stage_focus_delivery,
+)
 
 _RETRYABLE_STATUSES = {"quarantined", "failed"}
 
@@ -61,6 +68,7 @@ class FocusExportIngestor:
             )
             return FocusIngestionResult(manifest=manifest, staged_model=None, was_duplicate=True)
 
+        schema = describe_focus_schema(content)
         try:
             staged_model = stage_focus_delivery(
                 content,
@@ -68,12 +76,18 @@ class FocusExportIngestor:
                 delivery_time=normalized.delivery_time,
                 delivery_key=normalized.delivery_key,
             )
+            staged_model["parser_version"] = FOCUS_PARSER_VERSION
+            staged_model["schema_signature"] = schema["schema_signature"]
+            staged_model["schema_compatible"] = bool(schema["schema_compatible"])
             manifest = self._manifest_for_delivery(
                 normalized,
                 parse_status="parsed",
                 row_count=len(staged_model["rows"]),
                 error_details="",
                 summary=staged_model["summary"],
+                parser_version=FOCUS_PARSER_VERSION,
+                schema_signature=str(schema["schema_signature"] or ""),
+                schema_compatible=bool(schema["schema_compatible"]),
             )
             self._store_manifest(manifest)
             self._store_stage_model(normalized.delivery_key, staged_model)
@@ -84,6 +98,9 @@ class FocusExportIngestor:
                 parse_status="quarantined",
                 row_count=0,
                 error_details=str(exc),
+                parser_version=FOCUS_PARSER_VERSION,
+                schema_signature=str(schema["schema_signature"] or ""),
+                schema_compatible=bool(schema["schema_compatible"]),
             )
             self._store_manifest(manifest)
             self._store_quarantine(manifest, content)
@@ -116,6 +133,9 @@ class FocusExportIngestor:
         row_count: int,
         error_details: str,
         summary: Mapping[str, Any] | None = None,
+        parser_version: str = "",
+        schema_signature: str = "",
+        schema_compatible: bool = True,
     ) -> dict[str, Any]:
         return {
             "dataset": delivery.dataset,
@@ -127,6 +147,9 @@ class FocusExportIngestor:
             "row_count": row_count,
             "error_details": error_details,
             "summary": dict(summary or {}),
+            "parser_version": str(parser_version or ""),
+            "schema_signature": str(schema_signature or ""),
+            "schema_compatible": bool(schema_compatible),
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
 

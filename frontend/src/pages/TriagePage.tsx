@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api.ts";
+import { logClientError } from "../lib/errorLogging.ts";
 import type {
   TicketRow,
   TicketQueryParams,
@@ -72,6 +73,10 @@ function SuggestionCard({
       setStatus("applied");
       onAccepted(issueKey, suggestion.field);
     } catch (err) {
+      logClientError("Failed to apply triage suggestion", err, {
+        issueKey,
+        field: suggestion.field,
+      });
       setStatus("error");
       setErrorMsg(err instanceof Error ? err.message : "Failed to apply");
     }
@@ -368,6 +373,11 @@ export default function TriagePage() {
         setLocalResults((prev) => ({ ...prev, ...newResults }));
         queryClient.invalidateQueries({ queryKey: ["triage-suggestions"] });
       } catch (err) {
+        logClientError("Failed to analyze tickets", err, {
+          keys,
+          force,
+          selectedModel,
+        });
         setAnalyzeError(
           err instanceof Error ? err.message : "Analysis failed"
         );
@@ -517,8 +527,8 @@ export default function TriagePage() {
         return next;
       });
       queryClient.invalidateQueries({ queryKey: ["triage-suggestions"] });
-    } catch {
-      // Error visible in UI
+    } catch (err) {
+      logClientError("Failed to dismiss triage suggestions", err, { key });
     } finally {
       setDismissingKey(null);
     }

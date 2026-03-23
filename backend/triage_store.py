@@ -200,14 +200,30 @@ class TriageStore:
                 (key, field, old_value, new_value, confidence, model, source, approved_by, now),
             )
 
-    def get_triage_log(self, limit: int = 500) -> list[dict]:
+    def get_triage_log(self, limit: int = 500, search: str = "") -> list[dict]:
         """Return recent triage changes, newest first."""
+        normalized_search = search.strip().lower()
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT key, field, old_value, new_value, confidence, model, source, approved_by, timestamp "
-                "FROM auto_triage_log ORDER BY timestamp DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            if normalized_search:
+                rows = conn.execute(
+                    "SELECT key, field, old_value, new_value, confidence, model, source, approved_by, timestamp "
+                    "FROM auto_triage_log "
+                    "WHERE lower(coalesce(key, '')) LIKE ? "
+                    "OR lower(coalesce(field, '')) LIKE ? "
+                    "OR lower(coalesce(old_value, '')) LIKE ? "
+                    "OR lower(coalesce(new_value, '')) LIKE ? "
+                    "OR lower(coalesce(model, '')) LIKE ? "
+                    "OR lower(coalesce(source, '')) LIKE ? "
+                    "OR lower(coalesce(approved_by, '')) LIKE ? "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    tuple([f"%{normalized_search}%"] * 7 + [limit]),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT key, field, old_value, new_value, confidence, model, source, approved_by, timestamp "
+                    "FROM auto_triage_log ORDER BY timestamp DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
         return [
             {
                 "key": r[0],

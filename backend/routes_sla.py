@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from issue_cache import cache
 from sla_engine import sla_config, compute_sla_for_issues
@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/sla")
 async def get_sla_metrics(
     date_from: str | None = None,
     date_to: str | None = None,
+    search: str = Query(default="", max_length=200),
 ) -> dict[str, Any]:
     """Compute custom SLA metrics for all filtered issues, optionally narrowed by date range."""
     from datetime import date
@@ -30,7 +31,7 @@ async def get_sla_metrics(
             except ValueError:
                 raise HTTPException(400, f"Invalid {label} format: expected YYYY-MM-DD")
     issues = get_scoped_issues()
-    return compute_sla_for_issues(issues, date_from=date_from, date_to=date_to)
+    return compute_sla_for_issues(issues, date_from=date_from, date_to=date_to, search=search)
 
 
 @router.get("/config")

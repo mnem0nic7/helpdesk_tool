@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api, type AzureSavingsOpportunity } from "../lib/api.ts";
+import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzureSavingsHighlightsSection, { formatAzureCurrency } from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
@@ -283,6 +284,18 @@ export default function AzureSavingsPage() {
           <p className="mt-1 text-sm text-slate-500">
             Ranked Azure cost-cutting opportunities across compute, storage, network cleanup, and reservation strategy.
           </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <AzureSourceBadge
+              label="Heuristic operational guidance"
+              description="Savings opportunities blend cached Azure data, Advisor signals, and app heuristics; this page is for operator triage."
+              tone="amber"
+            />
+            <AzureSourceBadge
+              label="Not invoice-grade reporting"
+              description="Use the governed reporting handoff on Azure Overview for shared finance and showback reporting."
+              tone="emerald"
+            />
+          </div>
         </div>
         <div className="flex flex-wrap gap-3">
           <a

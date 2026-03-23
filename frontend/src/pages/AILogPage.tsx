@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useDeferredValue, useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api.ts";
+import { logClientError } from "../lib/errorLogging.ts";
 import type { TechnicianScoreEntry, TriageLogEntry } from "../lib/api.ts";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
@@ -33,6 +34,8 @@ export default function AILogPage() {
   const [message, setMessage] = useState<{ text: string; type: "error" | "info" } | null>(null);
   const [scoreStarting, setScoreStarting] = useState(false);
   const [scoreMessage, setScoreMessage] = useState<{ text: string; type: "error" | "info" } | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery.trim());
 
   // Always poll run status so progress survives navigation
   const { data: runStatus } = useQuery({
@@ -75,6 +78,11 @@ export default function AILogPage() {
       }
       queryClient.invalidateQueries({ queryKey: ["triage-run-status"] });
     } catch (err) {
+      logClientError("Failed to run triage", err, {
+        limit,
+        reset,
+        reprocess,
+      });
       setMessage({ text: `Error: ${err instanceof Error ? err.message : String(err)}`, type: "error" });
     } finally {
       setStarting(false);
@@ -95,6 +103,7 @@ export default function AILogPage() {
       queryClient.invalidateQueries({ queryKey: ["technician-score-run-status"] });
       queryClient.invalidateQueries({ queryKey: ["technician-scores"] });
     } catch (err) {
+      logClientError("Failed to score closed tickets", err);
       setScoreMessage({
         text: `Error: ${err instanceof Error ? err.message : String(err)}`,
         type: "error",
@@ -105,28 +114,33 @@ export default function AILogPage() {
   }
 
   const { data: log, isLoading } = useQuery({
-    queryKey: ["triage-log"],
-    queryFn: () => api.getTriageLog(),
+    queryKey: ["triage-log", deferredSearchQuery],
+    queryFn: () => api.getTriageLog({ search: deferredSearchQuery }),
+    placeholderData: (prev) => prev,
     refetchInterval: isRunning ? 5_000 : 30_000,
   });
   const { data: technicianScores = [], isLoading: scoresLoading } = useQuery({
-    queryKey: ["technician-scores"],
-    queryFn: () => api.getTechnicianScores(),
+    queryKey: ["technician-scores", deferredSearchQuery],
+    queryFn: () => api.getTechnicianScores({ search: deferredSearchQuery }),
+    placeholderData: (prev) => prev,
     refetchInterval: isScoring ? 5_000 : 30_000,
   });
 
   const entries = log ?? [];
+  const filteredEntries = entries;
+  const filteredTechnicianScores = technicianScores;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const activeSearchLabel = deferredSearchQuery || searchQuery.trim();
 
   // Reset visible count when data changes
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [entries.length]);
+  }, [filteredEntries.length, deferredSearchQuery]);
 
   const loadMore = useCallback(() => {
-    setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, entries.length));
-  }, [entries.length]);
+    setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, filteredEntries.length));
+  }, [filteredEntries.length]);
 
   useEffect(() => {
     const el = sentinelRef.current;
@@ -139,8 +153,8 @@ export default function AILogPage() {
     return () => observer.disconnect();
   }, [loadMore, visibleCount]);
 
-  const visibleEntries = entries.slice(0, visibleCount);
-  const hasMore = visibleCount < entries.length;
+  const visibleEntries = filteredEntries.slice(0, visibleCount);
+  const hasMore = visibleCount < filteredEntries.length;
 
   return (
     <div className="space-y-4">
@@ -215,6 +229,47 @@ export default function AILogPage() {
       )}
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Search AI Activity</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Search both technician QA scores and AI change history by ticket, summary, field, model, source, and notes.
+            </p>
+          </div>
+          <div className="w-full max-w-xl">
+            <label htmlFor="ai-log-search" className="sr-only">Search AI log</label>
+            <div className="flex gap-2">
+              <input
+                id="ai-log-search"
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search ticket, summary, field, model, user, or notes…"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+          <span className="rounded-full bg-slate-100 px-3 py-1">
+            QA matches: {filteredTechnicianScores.length.toLocaleString()}
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1">
+            Change matches: {filteredEntries.length.toLocaleString()}
+          </span>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Technician QA Scores</h2>
@@ -278,12 +333,14 @@ export default function AILogPage() {
               Loading technician QA scores…
             </div>
           )}
-          {!scoresLoading && technicianScores.length === 0 && (
+          {!scoresLoading && filteredTechnicianScores.length === 0 && (
             <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-400">
-              No closed-ticket QA scores yet.
+              {activeSearchLabel
+                ? `No technician QA scores match "${activeSearchLabel}".`
+                : "No closed-ticket QA scores yet."}
             </div>
           )}
-          {technicianScores.map((score: TechnicianScoreEntry) => (
+          {filteredTechnicianScores.map((score: TechnicianScoreEntry) => (
             <article key={score.key} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 shadow-sm">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -355,10 +412,12 @@ export default function AILogPage() {
                   </td>
                 </tr>
               )}
-              {!isLoading && entries.length === 0 && (
+              {!isLoading && filteredEntries.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
-                    No AI changes recorded yet.
+                    {activeSearchLabel
+                      ? `No AI changes match "${activeSearchLabel}".`
+                      : "No AI changes recorded yet."}
                   </td>
                 </tr>
               )}
@@ -416,7 +475,7 @@ export default function AILogPage() {
           </table>
           {hasMore && (
             <div ref={sentinelRef} className="px-4 py-3 text-center text-xs text-gray-400">
-              Showing {visibleCount} of {entries.length} entries — scroll for more
+              Showing {visibleCount} of {filteredEntries.length} entries — scroll for more
             </div>
           )}
         </div>

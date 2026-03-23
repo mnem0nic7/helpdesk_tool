@@ -100,11 +100,49 @@ describe("AzureOverviewPage", () => {
           reason: "Recent parsed delivery available",
         },
       },
+      reporting: {
+        power_bi: {
+          label: "Shared Cost Dashboard",
+          url: "https://app.powerbi.com/groups/example",
+          configured: true,
+          description: "Shared finance and showback reporting from governed Cost Management exports.",
+        },
+        cost_analysis: {
+          label: "Azure Cost Analysis",
+          url: null,
+          configured: false,
+          description: "Interactive Azure-native cost exploration and saved views for drill-down analysis.",
+        },
+        sources: {
+          overview: {
+            label: "Cached app data",
+            description: "Overview metrics come from the app's cached Azure snapshots and cost queries.",
+          },
+          cost: {
+            label: "Cached app data",
+            description: "Cost charts and tables use cached Azure Cost Management query results for operator workflows.",
+          },
+          savings: {
+            label: "Heuristic operational guidance",
+            description: "Savings recommendations blend cached Azure data, Advisor signals, and app heuristics.",
+          },
+          exports: {
+            label: "Export-backed governed reporting",
+            description: "Shared reporting should come from Cost Management exports and governed BI assets.",
+          },
+        },
+      },
     });
 
     render(<AzureOverviewPage />);
 
     expect(await screen.findByText("Cost Export Health")).toBeInTheDocument();
+    expect(screen.getByText("Reporting Handoff")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Shared Cost Dashboard" })).toHaveAttribute(
+      "href",
+      "https://app.powerbi.com/groups/example",
+    );
+    expect(screen.getByText("Not configured yet")).toBeInTheDocument();
     expect(screen.getByText("Healthy")).toBeInTheDocument();
     expect(screen.getByText("Deliveries")).toBeInTheDocument();
     expect(screen.getByText("Parsed")).toBeInTheDocument();

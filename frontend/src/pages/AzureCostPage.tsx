@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "../lib/api.ts";
+import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
@@ -84,6 +85,17 @@ export default function AzureCostPage() {
         <p className="mt-1 text-sm text-slate-500">
           Spend trend, top cost drivers, and Advisor savings opportunities from cached Azure data.
         </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <AzureSourceBadge
+            label="Cached app data"
+            description="This page is an operational summary built from cached Azure Cost Management query results in the app."
+          />
+          <AzureSourceBadge
+            label="Use governed reporting for finance"
+            description="Shared finance and showback reporting should come from the governed reporting handoff on Azure Overview."
+            tone="emerald"
+          />
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

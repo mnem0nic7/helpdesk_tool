@@ -125,6 +125,7 @@ Duration: 1 week
 Repo impact:
 
 - Mostly documentation and operational runbooks.
+- Add the operator handoff note in `docs/runbooks/azure-reporting-handoff-runbook.md` so the Azure Overview launchpad and source badges are easy to interpret.
 - Optional future enhancement: expose deep links from the Azure portal pages into the matching Azure Cost Analysis saved views.
 
 Exit criteria:
@@ -238,6 +239,86 @@ Trigger only if needed.
 - Phase 4: `APP-001`, `APP-002`, `APP-003`, `APP-004`, `APP-005`, `APP-006`, `APP-007`, `APP-008`, `DATA-009`
 - Phase 5: `DATA-005`, `DATA-010`, `BI-011`, `BI-012`
 - Phase 6: `BI-010`
+
+### Progress Update
+
+As of `2026-03-20`, the repo groundwork is materially ahead of the full program. Most remaining work is now external to the repo: Azure signoff, Azure RBAC and provisioning, live Cost Management exports, and Power BI assets.
+
+Status key:
+
+- `done`: acceptance is met for the current story scope.
+- `in_progress_repo`: meaningful repo work is landed, but the story is not fully closed yet.
+- `blocked_external`: the next meaningful step is mainly outside the repo.
+- `not_started`: no meaningful story work has been landed yet.
+
+Current counts:
+
+- Total stories: `37`
+- `done`: `1`
+- `in_progress_repo`: `6`
+- `blocked_external`: `17`
+- `not_started`: `13`
+
+Phase summary:
+
+- Phase 0: `3 blocked_external`, `1 not_started`
+- Phase 1: `3 not_started`
+- Phase 2: `2 in_progress_repo`, `3 blocked_external`, `2 not_started`
+- Phase 3: `9 blocked_external`
+- Phase 4: `1 done`, `4 in_progress_repo`, `2 blocked_external`, `2 not_started`
+- Phase 5: `4 not_started`
+- Phase 6: `1 not_started`
+
+Current story status:
+
+- `GOV-001`: `blocked_external` - scope decision and billing hierarchy drafts exist, but finance and engineering signoff is still external.
+- `GOV-002`: `blocked_external` - ownership matrix, access matrix, and access-request runbook exist, but real DRI assignment and Azure RBAC are still external.
+- `GOV-003`: `blocked_external` - tag policy, baseline audit, and remediation runbook exist, but ratification, inheritance decisions, and remediation ownership are still external.
+- `GOV-004`: `not_started` - the showback versus shared-cost allocation decision does not yet have a dedicated repo artifact.
+- `GOV-005`: `not_started` - no saved-view catalog or launch-URL pack is published yet.
+- `GOV-006`: `not_started` - budgets, anomaly monitoring, and scheduled notifications are still Azure-side setup work.
+- `GOV-007`: `not_started` - the governance operating cadence and app handoff boundary are not yet published as a dedicated artifact.
+
+- `DATA-001`: `blocked_external` - the landing-zone contract, runbook, and metadata store foundation exist, but real ADLS Gen2 provisioning and RBAC validation are still external.
+- `DATA-002`: `blocked_external` - FOCUS ingestion scaffolding is landed, but completion requires live scheduled FOCUS deliveries.
+- `DATA-003`: `not_started` - Price Sheet ingestion is not implemented yet.
+- `DATA-004`: `not_started` - Reservation Recommendations ingestion is not implemented yet.
+- `DATA-005`: `not_started` - optional Reservation Details and Transactions pipelines are not implemented yet.
+- `DATA-006`: `blocked_external` - export freshness and health are surfaced in-product, but completion depends on live dataset cadence and real deliveries.
+- `DATA-007`: `in_progress_repo` - schema and parser version tracking is implemented for the current FOCUS lane, but broader dataset coverage is still ahead.
+- `DATA-008`: `in_progress_repo` - config, provenance, reporting handoff, and export health touchpoints are landed, but the full migration and dataset config surface is not fully closed.
+- `DATA-009`: `not_started` - `/api/azure/cost/*` is still query-driven and has not been cut over to export-backed reads.
+- `DATA-010`: `not_started` - savings-plan utilization ingestion is not implemented or documented yet.
+
+- `BI-001`: `blocked_external` - live exports and a real Power BI refresh path are still missing.
+- `BI-002`: `blocked_external` - no semantic model or star schema exists yet, and it depends on upstream BI and governance milestones.
+- `BI-003`: `blocked_external` - measures and reconciliation rules depend on a real semantic layer and export-backed data.
+- `BI-004`: `blocked_external` - no Power BI report shell, workspace, or distribution model exists yet.
+- `BI-005`: `blocked_external` - the Executive Summary page depends on BI foundations that are not in place yet.
+- `BI-006`: `blocked_external` - the Cost Drivers page depends on the semantic layer, measures, and report shell.
+- `BI-007`: `blocked_external` - the Waste and Actions page depends on export-backed BI assets that do not exist yet.
+- `BI-008`: `blocked_external` - the Commitments and Discounts page depends on BI foundations plus live recommendation data.
+- `BI-009`: `blocked_external` - the Chargeback and Allocation page depends on BI foundations and an allocation posture decision.
+- `BI-010`: `not_started` - scale-up triggers should wait until the base BI layer is running in production.
+- `BI-011`: `not_started` - later commitments-page expansion work should wait for the base BI layer and optional datasets.
+- `BI-012`: `not_started` - later shared-cost allocation deepening should wait for baseline showback.
+
+- `APP-001`: `in_progress_repo` - the Overview now separates governed reporting handoff from operational workflows, but there is no explicit published IA or nav split yet.
+- `APP-002`: `in_progress_repo` - the Overview launchpad exists with Power BI and Cost Analysis targets, unconfigured handling, and explanatory copy, but it still depends on real external targets and final IA.
+- `APP-003`: `blocked_external` - Cost Analysis deep-link mapping depends on published saved views and final IA decisions.
+- `APP-004`: `blocked_external` - the minimal Power BI handoff target exists, but the full integration shell depends on a real BI report.
+- `APP-005`: `done` - export freshness and provenance are surfaced in-product separately from cache freshness, with source badges and fallback messaging.
+- `APP-006`: `not_started` - the retained-vs-redirected page matrix is not yet published.
+- `APP-007`: `in_progress_repo` - Cost, Overview, and Savings now show source badges and reporting handoff copy, but the broader route matrix and labeling cleanup are not fully finished.
+- `APP-008`: `in_progress_repo` - targeted tests and operator docs exist for the launchpad and provenance surface, but the broader blended-experience coverage is not fully complete.
+
+Current next queue:
+
+1. External signoff for `GOV-001`, `GOV-002`, and `GOV-003`
+2. ADLS Gen2 provisioning and RBAC validation for `DATA-001`
+3. Live scheduled FOCUS export landing for `DATA-002` and `DATA-006`
+4. Azure Cost Analysis saved-view publication for `GOV-005` and `APP-003`
+5. Power BI workspace, report shell, and refresh path for `BI-001` through `BI-004`
 
 ### Governance Stories
 

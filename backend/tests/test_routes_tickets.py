@@ -398,6 +398,80 @@ class TestTicketDetailAndActions:
         assert data["issue_links"][0]["key"] == "OIT-456"
         mock_cache.upsert_issue.assert_called_once_with(issue)
 
+    def test_get_assignable_display_name_logs_and_falls_back_when_lookup_fails(self, monkeypatch, caplog):
+        import routes_tickets
+
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_users_assignable",
+            lambda project: (_ for _ in ()).throw(RuntimeError("jira unavailable")),
+        )
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_user",
+            lambda account_id: {"displayName": "Fallback User"},
+        )
+
+        with caplog.at_level("ERROR"):
+            result = routes_tickets._get_user_display_name("acct-123")
+
+        assert result == "Fallback User"
+        assert any(
+            "Failed to resolve Jira display name from assignable users for account acct-123" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_get_user_display_name_logs_and_falls_back_when_direct_lookup_fails(self, monkeypatch, caplog):
+        import routes_tickets
+
+        monkeypatch.setattr(routes_tickets._client, "get_users_assignable", lambda project: [])
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_user",
+            lambda account_id: (_ for _ in ()).throw(RuntimeError("jira unavailable")),
+        )
+
+        with caplog.at_level("ERROR"):
+            result = routes_tickets._get_user_display_name("acct-456")
+
+        assert result == ""
+        assert any(
+            "Failed to resolve Jira display name for account acct-456" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_get_statuses_logs_ticket_transition_lookup_failures(self, test_client, monkeypatch, caplog):
+        import routes_tickets
+
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(routes_tickets._client, "get_transitions", lambda key: (_ for _ in ()).throw(RuntimeError("jira unavailable")))
+
+        with caplog.at_level("ERROR"):
+            resp = test_client.get("/api/statuses/OIT-123")
+
+        assert resp.status_code == 404
+        assert resp.json() == {"detail": "Could not get transitions for OIT-123"}
+        assert any(
+            "Failed to load transitions for ticket OIT-123" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_get_ticket_logs_detail_load_failures(self, test_client, monkeypatch, caplog):
+        import routes_tickets
+
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: (_ for _ in ()).throw(RuntimeError("jira unavailable")))
+
+        with caplog.at_level("ERROR"):
+            resp = test_client.get("/api/tickets/OIT-123")
+
+        assert resp.status_code == 404
+        assert resp.json() == {"detail": "Issue OIT-123 not found"}
+        assert any(
+            "Failed to load ticket detail for OIT-123" in record.getMessage()
+            for record in caplog.records
+        )
+
     def test_get_priorities_and_request_types(self, test_client, monkeypatch):
         import routes_tickets
 
