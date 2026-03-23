@@ -78,6 +78,15 @@ _VIRTUAL_DESKTOP_ASSIGNMENT_TAG_KEYS = (
     "primaryuser",
     "email",
 )
+_VIRTUAL_DESKTOP_HINT_TOKENS = ("avd", "wvd")
+_VIRTUAL_DESKTOP_HOST_POOL_TAG_KEYS = (
+    "cm-resource-parent",
+    "cm_resource_parent",
+    "resource-parent",
+    "resource_parent",
+    "hostpool",
+    "host_pool",
+)
 
 
 class AzureCache:
@@ -1713,6 +1722,43 @@ class AzureCache:
             }
         return None
 
+    def _virtual_desktop_platform_hint_assignment(
+        self,
+        vm_item: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        tags = vm_item.get("tags") if isinstance(vm_item.get("tags"), dict) else {}
+        for key, value in tags.items():
+            normalized_key = self._normalize_user_lookup_key(key).replace(" ", "")
+            raw_value = str(value or "").strip()
+            if not raw_value:
+                continue
+            host_pool_name = ""
+            if normalized_key in _VIRTUAL_DESKTOP_HOST_POOL_TAG_KEYS:
+                host_pool_name = self._resource_id_segment(raw_value, "hostPools")
+            elif "desktopvirtualization/hostpools/" in raw_value.lower():
+                host_pool_name = self._resource_id_segment(raw_value, "hostPools")
+            if host_pool_name:
+                return {
+                    "assigned_user": "",
+                    "assignment_source": f"host-pool-tag:{key}",
+                    "assigned_user_record": None,
+                    "host_pool_name": host_pool_name,
+                    "session_host_name": "",
+                }
+
+        name = str(vm_item.get("name") or "")
+        resource_group = str(vm_item.get("resource_group") or "")
+        haystack = f"{name} {resource_group}".lower()
+        if any(token in haystack for token in _VIRTUAL_DESKTOP_HINT_TOKENS):
+            return {
+                "assigned_user": "",
+                "assignment_source": "heuristic:name-pattern",
+                "assigned_user_record": None,
+                "host_pool_name": "",
+                "session_host_name": "",
+            }
+        return None
+
     def _build_virtual_desktop_assignment_index(
         self,
         resources: list[dict[str, Any]],
@@ -1734,6 +1780,23 @@ class AzureCache:
                 "session_host_name": str(item.get("name") or ""),
             }
         return assignment_by_vm_id
+
+    def _is_virtual_desktop_candidate_vm(
+        self,
+        vm_item: dict[str, Any],
+        assignment_by_vm_id: dict[str, dict[str, Any]],
+        user_index: dict[str, dict[str, Any]],
+    ) -> bool:
+        if not self._is_virtual_machine(vm_item):
+            return False
+        normalized_vm_id = self._normalize_resource_id(vm_item.get("id"))
+        if normalized_vm_id and normalized_vm_id in assignment_by_vm_id:
+            return True
+        if self._virtual_desktop_assignment_from_tags(vm_item, user_index):
+            return True
+        if self._virtual_desktop_platform_hint_assignment(vm_item):
+            return True
+        return False
 
     def _build_resource_graph_indexes(
         self,
@@ -2022,13 +2085,14 @@ class AzureCache:
 
         all_rows: list[dict[str, Any]] = []
         for item in resource_rows:
-            if not self._is_virtual_machine(item):
+            if not self._is_virtual_desktop_candidate_vm(item, assignment_by_vm_id, user_index):
                 continue
 
             normalized_vm_id = self._normalize_resource_id(item.get("id"))
             session_host_assignment = assignment_by_vm_id.get(normalized_vm_id)
             tag_assignment = self._virtual_desktop_assignment_from_tags(item, user_index)
-            assignment = session_host_assignment or tag_assignment
+            hint_assignment = self._virtual_desktop_platform_hint_assignment(item)
+            assignment = session_host_assignment or tag_assignment or hint_assignment
             if (
                 session_host_assignment
                 and tag_assignment
@@ -2038,6 +2102,12 @@ class AzureCache:
                 )
             ):
                 assignment = tag_assignment
+            elif (
+                not session_host_assignment
+                and not tag_assignment
+                and hint_assignment
+            ):
+                assignment = hint_assignment
             if not assignment:
                 continue
 

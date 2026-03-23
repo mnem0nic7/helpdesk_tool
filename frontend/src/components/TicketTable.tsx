@@ -9,6 +9,7 @@ import type { SortingState } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import api from "../lib/api.ts";
 import type { TicketRow } from "../lib/api.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
@@ -27,6 +28,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const colHelper = createColumnHelper<TicketRow>();
+const TICKET_TABLE_PAGE_SIZE = 75;
 
 function buildColumns(
   selectable: boolean,
@@ -311,12 +313,21 @@ export default function TicketTable({
   }
 
   const rows = table.getRowModel().rows;
+  const visibleRowsResetKey = `${data[0]?.key ?? ""}|${data[data.length - 1]?.key ?? ""}|${sorting
+    .map((entry) => `${entry.id}:${entry.desc ? "desc" : "asc"}`)
+    .join(",")}`;
+  const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(
+    rows.length,
+    TICKET_TABLE_PAGE_SIZE,
+    visibleRowsResetKey,
+  );
+  const visibleRows = rows.slice(0, visibleCount);
 
   return (
     <div>
-      <div className="overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
+      <div className="max-h-[72vh] overflow-auto rounded-lg border border-gray-200 shadow-sm">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
-          <thead className="bg-gray-50">
+          <thead className="sticky top-0 z-10 bg-gray-50">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
                 {hg.headers.map((header) => {
@@ -349,7 +360,7 @@ export default function TicketTable({
             ))}
           </thead>
           <tbody className="divide-y divide-gray-100 bg-white">
-            {rows.map((row, idx) => (
+            {visibleRows.map((row, idx) => (
               <tr
                 key={row.id}
                 className={[
@@ -368,6 +379,15 @@ export default function TicketTable({
             ))}
           </tbody>
         </table>
+        {hasMore ? (
+          <div
+            ref={sentinelRef}
+            className="border-t border-gray-200 px-4 py-3 text-center text-xs text-gray-400"
+          >
+            Showing {visibleRows.length.toLocaleString()} of {rows.length.toLocaleString()} tickets on
+            this page — scroll for more
+          </div>
+        ) : null}
       </div>
     </div>
   );

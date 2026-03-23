@@ -74,8 +74,19 @@ const ticketDetail = {
 };
 
 describe("TicketsPage", () => {
+  const originalIntersectionObserver = globalThis.IntersectionObserver;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    globalThis.IntersectionObserver = vi.fn().mockImplementation(() => ({
+      observe: vi.fn(),
+      disconnect: vi.fn(),
+      unobserve: vi.fn(),
+      takeRecords: vi.fn(() => []),
+      root: null,
+      rootMargin: "",
+      thresholds: [],
+    })) as unknown as typeof IntersectionObserver;
     window.history.pushState({}, "", "/tickets");
     mockApi.getTickets.mockResolvedValue({
       tickets: [ticketRow],
@@ -104,6 +115,10 @@ describe("TicketsPage", () => {
     mockApi.getPriorities.mockResolvedValue([{ id: "1", name: "High" }]);
     mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Hardware", description: "" }]);
     mockApi.getTransitions.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    globalThis.IntersectionObserver = originalIntersectionObserver;
   });
 
   it("opens the local ticket view when the key link is clicked", async () => {
@@ -159,5 +174,24 @@ describe("TicketsPage", () => {
     await waitFor(() => {
       expect(mockApi.refreshVisibleTickets).toHaveBeenCalledWith(["OIT-1"]);
     });
+  });
+
+  it("renders large ticket pages progressively", async () => {
+    const manyTickets = Array.from({ length: 90 }, (_, index) => ({
+      ...ticketRow,
+      key: `OIT-${index + 1}`,
+      summary: `Printer issue ${index + 1}`,
+    }));
+    mockApi.getTickets.mockResolvedValue({
+      tickets: manyTickets,
+      matched_count: manyTickets.length,
+      total_count: manyTickets.length,
+    });
+
+    render(<TicketsPage />);
+
+    await screen.findByText("Showing 75 of 90 tickets on this page — scroll for more");
+    expect(screen.getByRole("link", { name: "OIT-75" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "OIT-90" })).not.toBeInTheDocument();
   });
 });

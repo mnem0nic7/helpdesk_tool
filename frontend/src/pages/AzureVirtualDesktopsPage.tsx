@@ -91,7 +91,7 @@ function reasonBadges(reasons: string[]) {
 
 export default function AzureVirtualDesktopsPage() {
   const [search, setSearch] = useState("");
-  const [removalOnly, setRemovalOnly] = useState(true);
+  const [removalOnly, setRemovalOnly] = useState(false);
   const deferredSearch = useDeferredValue(search.trim());
   const { sortKey, sortDir, toggleSort } = useTableSort<DesktopSortKey>("power_signal", "desc");
 

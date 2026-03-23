@@ -106,7 +106,7 @@ describe("AzureVirtualDesktopsPage", () => {
     await waitFor(() => {
       expect(mockApi.getAzureVirtualDesktopRemovalCandidates).toHaveBeenLastCalledWith({
         search: "ada",
-        removal_only: true,
+        removal_only: false,
       });
     });
   });

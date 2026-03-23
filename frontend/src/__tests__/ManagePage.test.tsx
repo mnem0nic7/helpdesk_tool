@@ -73,8 +73,19 @@ const ticketDetail = {
 };
 
 describe("ManagePage", () => {
+  const originalIntersectionObserver = globalThis.IntersectionObserver;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    globalThis.IntersectionObserver = vi.fn().mockImplementation(() => ({
+      observe: vi.fn(),
+      disconnect: vi.fn(),
+      unobserve: vi.fn(),
+      takeRecords: vi.fn(() => []),
+      root: null,
+      rootMargin: "",
+      thresholds: [],
+    })) as unknown as typeof IntersectionObserver;
     window.history.pushState({}, "", "/manage");
     mockApi.getTickets.mockResolvedValue({
       tickets: [ticketRow],
@@ -97,6 +108,10 @@ describe("ManagePage", () => {
     mockApi.getTransitions.mockResolvedValue([]);
     mockApi.transitionTicket.mockResolvedValue(ticketDetail);
     mockApi.refreshCacheIncremental.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    globalThis.IntersectionObserver = originalIntersectionObserver;
   });
 
   it("supports a kanban view that still opens the local ticket drawer", async () => {
@@ -172,5 +187,27 @@ describe("ManagePage", () => {
       expect(within(inProgressColumn!).getByText(ticketRow.summary)).toBeInTheDocument();
       expect(within(todoColumn!).queryByText(ticketRow.summary)).not.toBeInTheDocument();
     });
+  });
+
+  it("renders large kanban columns progressively", async () => {
+    const manyTickets = Array.from({ length: 55 }, (_, index) => ({
+      ...ticketRow,
+      key: `OIT-${index + 1}`,
+      summary: `Suspicious login ${index + 1}`,
+    }));
+    mockApi.getTickets.mockResolvedValue({
+      tickets: manyTickets,
+      matched_count: manyTickets.length,
+      total_count: manyTickets.length,
+    });
+
+    const user = userEvent.setup();
+    render(<ManagePage />);
+
+    await user.click(screen.getByRole("button", { name: "Kanban" }));
+
+    await screen.findByText("Showing 40 of 55 cards — scroll for more");
+    expect(screen.getByText("Suspicious login 40")).toBeInTheDocument();
+    expect(screen.queryByText("Suspicious login 55")).not.toBeInTheDocument();
   });
 });

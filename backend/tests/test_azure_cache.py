@@ -1478,6 +1478,52 @@ def test_list_virtual_desktop_removal_candidates_marks_stale_and_disabled_assign
     assert vm_by_name["avd-vm-2"]["account_action"] == "Already unlicensed"
 
 
+def test_list_virtual_desktop_removal_candidates_includes_wvd_vm_from_platform_hints(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    now = datetime.now(timezone.utc)
+    recent_power = (now - timedelta(days=1)).isoformat()
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-wvd/providers/Microsoft.Compute/virtualMachines/KHMUSRWVD-101",
+                    "name": "KHMUSRWVD-101",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-wvd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {
+                        "cm-resource-parent": "/subscriptions/sub-1/resourceGroups/rg-wvd/providers/Microsoft.DesktopVirtualization/hostPools/KHMWUWVDPOOL01"
+                    },
+                }
+            ],
+            "users": [],
+            "vm_run_observations": {
+                "/subscriptions/sub-1/resourcegroups/rg-wvd/providers/microsoft.compute/virtualmachines/khmusrwvd-101": recent_power,
+            },
+        }
+    )
+
+    payload = cache.list_virtual_desktop_removal_candidates()
+
+    assert payload["summary"]["tracked_desktops"] == 1
+    assert payload["summary"]["removal_candidates"] == 0
+    assert payload["summary"]["assignment_review_required"] == 1
+
+    row = payload["desktops"][0]
+    assert row["name"] == "KHMUSRWVD-101"
+    assert row["assignment_source"] == "host-pool-tag:cm-resource-parent"
+    assert row["assignment_status"] == "missing"
+    assert row["host_pool_name"] == "KHMWUWVDPOOL01"
+    assert row["mark_for_removal"] is False
+
+
 def test_get_storage_summary_filters_tab_searches_server_side(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     cache._update_snapshots(
