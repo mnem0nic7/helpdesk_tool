@@ -78,7 +78,6 @@ _VIRTUAL_DESKTOP_ASSIGNMENT_TAG_KEYS = (
     "primaryuser",
     "email",
 )
-_VIRTUAL_DESKTOP_HINT_TOKENS = ("avd", "wvd")
 _VIRTUAL_DESKTOP_HOST_POOL_TAG_KEYS = (
     "cm-resource-parent",
     "cm_resource_parent",
@@ -1745,18 +1744,6 @@ class AzureCache:
                     "host_pool_name": host_pool_name,
                     "session_host_name": "",
                 }
-
-        name = str(vm_item.get("name") or "")
-        resource_group = str(vm_item.get("resource_group") or "")
-        haystack = f"{name} {resource_group}".lower()
-        if any(token in haystack for token in _VIRTUAL_DESKTOP_HINT_TOKENS):
-            return {
-                "assigned_user": "",
-                "assignment_source": "heuristic:name-pattern",
-                "assigned_user_record": None,
-                "host_pool_name": "",
-                "session_host_name": "",
-            }
         return None
 
     def _build_virtual_desktop_assignment_index(
@@ -1791,8 +1778,6 @@ class AzureCache:
             return False
         normalized_vm_id = self._normalize_resource_id(vm_item.get("id"))
         if normalized_vm_id and normalized_vm_id in assignment_by_vm_id:
-            return True
-        if self._virtual_desktop_assignment_from_tags(vm_item, user_index):
             return True
         if self._virtual_desktop_platform_hint_assignment(vm_item):
             return True
@@ -2092,22 +2077,29 @@ class AzureCache:
             session_host_assignment = assignment_by_vm_id.get(normalized_vm_id)
             tag_assignment = self._virtual_desktop_assignment_from_tags(item, user_index)
             hint_assignment = self._virtual_desktop_platform_hint_assignment(item)
-            assignment = session_host_assignment or tag_assignment or hint_assignment
-            if (
-                session_host_assignment
-                and tag_assignment
-                and (
-                    not session_host_assignment.get("assigned_user")
-                    or not session_host_assignment.get("assigned_user_record")
-                )
-            ):
-                assignment = tag_assignment
-            elif (
-                not session_host_assignment
-                and not tag_assignment
-                and hint_assignment
-            ):
-                assignment = hint_assignment
+            assignment: dict[str, Any] | None = None
+            if session_host_assignment:
+                assignment = dict(session_host_assignment)
+                if (
+                    tag_assignment
+                    and (
+                        not assignment.get("assigned_user")
+                        or not assignment.get("assigned_user_record")
+                    )
+                ):
+                    assignment["assigned_user"] = str(tag_assignment.get("assigned_user") or "")
+                    assignment["assigned_user_record"] = tag_assignment.get("assigned_user_record")
+                    assignment["assignment_source"] = (
+                        f"{session_host_assignment.get('assignment_source')} + {tag_assignment.get('assignment_source')}"
+                    )
+            elif hint_assignment:
+                assignment = dict(hint_assignment)
+                if tag_assignment:
+                    assignment["assigned_user"] = str(tag_assignment.get("assigned_user") or "")
+                    assignment["assigned_user_record"] = tag_assignment.get("assigned_user_record")
+                    assignment["assignment_source"] = (
+                        f"{hint_assignment.get('assignment_source')} + {tag_assignment.get('assignment_source')}"
+                    )
             if not assignment:
                 continue
 

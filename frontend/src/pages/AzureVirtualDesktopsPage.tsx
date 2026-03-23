@@ -176,8 +176,8 @@ export default function AzureVirtualDesktopsPage() {
           <div className="max-w-3xl">
             <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Azure Virtual Desktop Cleanup</h1>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Track personal desktops that should be removed when they have gone inactive, their assigned user is
-              disabled or unlicensed, or the assigned user has not signed in recently.
+              Track desktops assigned to an AVD host pool that should be removed when they have gone inactive, their
+              assigned user is disabled or unlicensed, or the assigned user has not signed in recently.
             </p>
           </div>
           <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">

@@ -1459,10 +1459,10 @@ def test_list_virtual_desktop_removal_candidates_marks_stale_and_disabled_assign
 
     payload = cache.list_virtual_desktop_removal_candidates()
 
-    assert payload["summary"]["tracked_desktops"] == 2
-    assert payload["summary"]["removal_candidates"] == 2
+    assert payload["summary"]["tracked_desktops"] == 1
+    assert payload["summary"]["removal_candidates"] == 1
     assert payload["summary"]["stale_power_signals"] == 1
-    assert payload["summary"]["disabled_or_unlicensed_assignments"] == 2
+    assert payload["summary"]["disabled_or_unlicensed_assignments"] == 1
 
     vm_by_name = {item["name"]: item for item in payload["desktops"]}
 
@@ -1471,12 +1471,6 @@ def test_list_virtual_desktop_removal_candidates_marks_stale_and_disabled_assign
     assert vm_by_name["avd-vm-1"]["mark_for_removal"] is True
     assert "Assigned user is disabled" in vm_by_name["avd-vm-1"]["removal_reasons"]
     assert any("No running signal" in reason for reason in vm_by_name["avd-vm-1"]["removal_reasons"])
-
-    assert vm_by_name["avd-vm-2"]["assignment_source"] == "tag:assigned_user"
-    assert vm_by_name["avd-vm-2"]["assigned_user_licensed"] is False
-    assert vm_by_name["avd-vm-2"]["mark_for_removal"] is True
-    assert vm_by_name["avd-vm-2"]["account_action"] == "Already unlicensed"
-
 
 def test_list_virtual_desktop_removal_candidates_includes_wvd_vm_from_platform_hints(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
@@ -1522,6 +1516,108 @@ def test_list_virtual_desktop_removal_candidates_includes_wvd_vm_from_platform_h
     assert row["assignment_status"] == "missing"
     assert row["host_pool_name"] == "KHMWUWVDPOOL01"
     assert row["mark_for_removal"] is False
+
+
+def test_list_virtual_desktop_removal_candidates_merges_user_tag_when_host_pool_assignment_exists(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    now = datetime.now(timezone.utc)
+    stale_login = (now - timedelta(days=20)).isoformat()
+    recent_power = (now - timedelta(days=1)).isoformat()
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-22",
+                    "name": "avd-vm-22",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-avd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {
+                        "assigned_user": "linus@example.com",
+                        "cm-resource-parent": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-22",
+                    },
+                }
+            ],
+            "users": [
+                {
+                    "id": "user-22",
+                    "display_name": "Linus Example",
+                    "object_type": "user",
+                    "principal_name": "linus@example.com",
+                    "mail": "linus@example.com",
+                    "enabled": True,
+                    "app_id": "",
+                    "extra": {
+                        "is_licensed": "",
+                        "last_successful_utc": stale_login,
+                        "last_successful_local": "stale",
+                        "on_prem_sam_account_name": "linus",
+                    },
+                },
+            ],
+            "vm_run_observations": {
+                "/subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-22": recent_power,
+            },
+        }
+    )
+
+    payload = cache.list_virtual_desktop_removal_candidates()
+
+    assert payload["summary"]["tracked_desktops"] == 1
+    assert payload["summary"]["removal_candidates"] == 1
+
+    row = payload["desktops"][0]
+    assert row["name"] == "avd-vm-22"
+    assert row["assignment_source"] == "host-pool-tag:cm-resource-parent + tag:assigned_user"
+    assert row["host_pool_name"] == "hostpool-22"
+    assert row["assigned_user_display_name"] == "Linus Example"
+    assert row["assigned_user_principal_name"] == "linus@example.com"
+    assert row["assigned_user_licensed"] is False
+    assert "Assigned user is unlicensed" in row["removal_reasons"]
+
+
+def test_list_virtual_desktop_removal_candidates_excludes_vm_without_host_pool_assignment(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    now = datetime.now(timezone.utc)
+    recent_power = (now - timedelta(days=1)).isoformat()
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-wvd/providers/Microsoft.Compute/virtualMachines/KHMUSRWVD-101",
+                    "name": "KHMUSRWVD-101",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-wvd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {"assigned_user": "someone@example.com"},
+                }
+            ],
+            "users": [],
+            "vm_run_observations": {
+                "/subscriptions/sub-1/resourcegroups/rg-wvd/providers/microsoft.compute/virtualmachines/khmusrwvd-101": recent_power,
+            },
+        }
+    )
+
+    payload = cache.list_virtual_desktop_removal_candidates()
+
+    assert payload["summary"]["tracked_desktops"] == 0
+    assert payload["summary"]["removal_candidates"] == 0
+    assert payload["desktops"] == []
 
 
 def test_get_storage_summary_filters_tab_searches_server_side(tmp_path):
