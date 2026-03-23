@@ -436,7 +436,12 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     monkeypatch.setattr(routes_user_exit, "user_exit_workflows", mock_user_exit_workflows)
 
     # Import app *after* patching
-    from main import app
+    import main
+    mock_technician_scoring_manager = MagicMock()
+    mock_technician_scoring_manager.start_worker = AsyncMock()
+    mock_technician_scoring_manager.stop_worker = AsyncMock()
+    monkeypatch.setattr(main, "technician_scoring_manager", mock_technician_scoring_manager)
+    app = main.app
     from starlette.testclient import TestClient
     from auth import create_session
 

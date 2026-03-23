@@ -262,6 +262,17 @@ class TriageStore:
             ).fetchall()
         return [TechnicianScore(**json.loads(row[0])) for row in rows]
 
+    def get_technician_score(self, key: str) -> TechnicianScore | None:
+        """Return the technician QA score for a specific ticket, if present."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT data FROM technician_scores WHERE key = ? LIMIT 1",
+                (key,),
+            ).fetchone()
+        if not row:
+            return None
+        return TechnicianScore(**json.loads(row[0]))
+
     def get_technician_scored_keys(self) -> set[str]:
         """Return keys that already have a technician QA score."""
         with self._conn() as conn:

@@ -564,7 +564,11 @@ Resources
     accessTier       = tostring(properties.accessTier),
     sourceResourceId = tostring(properties.creationData.sourceResourceId),
     createdTime      = tostring(coalesce(properties.timeCreated, systemData.createdAt)),
-    diskIOPS         = tolong(properties.diskIOPSReadWrite)
+    diskIOPS         = tolong(properties.diskIOPSReadWrite),
+    avdAssignedUser  = tostring(properties.assignedUser),
+    avdResourceId    = tostring(properties.resourceId),
+    avdUserPrincipal = tostring(properties.userPrincipalName),
+    avdCreateTime    = tostring(properties.createTime)
 """
         rows: list[dict[str, Any]] = []
         skip_token: str | None = None
@@ -621,6 +625,10 @@ Resources
                         "access_tier":        item.get("accessTier") or "",
                         "source_resource_id": item.get("sourceResourceId") or "",
                         "disk_iops":          item.get("diskIOPS"),
+                        "avd_assigned_user":  item.get("avdAssignedUser") or "",
+                        "avd_resource_id":    item.get("avdResourceId") or "",
+                        "avd_user_principal": item.get("avdUserPrincipal") or "",
+                        "avd_create_time":    item.get("avdCreateTime") or "",
                     }
                 )
             skip_token = payload.get("$skipToken") or payload.get("skipToken")

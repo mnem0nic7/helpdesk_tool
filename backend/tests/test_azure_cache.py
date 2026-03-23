@@ -1362,6 +1362,122 @@ def test_list_virtual_machines_matches_reservations_by_sku_and_region(tmp_path):
     ]
 
 
+def test_list_virtual_desktop_removal_candidates_marks_stale_and_disabled_assignments(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    now = datetime.now(timezone.utc)
+    stale_power = (now - timedelta(days=21)).isoformat()
+    recent_power = (now - timedelta(days=2)).isoformat()
+    stale_login = (now - timedelta(days=30)).isoformat()
+    recent_login = (now - timedelta(days=1)).isoformat()
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "vm-1",
+                    "name": "avd-vm-1",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-avd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/deallocated",
+                    "tags": {},
+                },
+                {
+                    "id": "vm-2",
+                    "name": "avd-vm-2",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-avd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {"assigned_user": "linus@example.com"},
+                },
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-1/sessionHosts/avd-vm-1.contoso.local",
+                    "name": "hostpool-1/avd-vm-1.contoso.local",
+                    "resource_type": "Microsoft.DesktopVirtualization/hostPools/sessionHosts",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-avd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "",
+                    "state": "Succeeded",
+                    "tags": {},
+                    "avd_assigned_user": "ada@example.com",
+                    "avd_resource_id": "vm-1",
+                },
+            ],
+            "users": [
+                {
+                    "id": "user-1",
+                    "display_name": "Ada Lovelace",
+                    "object_type": "user",
+                    "principal_name": "ada@example.com",
+                    "mail": "ada@example.com",
+                    "enabled": False,
+                    "app_id": "",
+                    "extra": {
+                        "is_licensed": "true",
+                        "last_successful_utc": stale_login,
+                        "last_successful_local": "stale",
+                        "on_prem_sam_account_name": "ada",
+                    },
+                },
+                {
+                    "id": "user-2",
+                    "display_name": "Linus Example",
+                    "object_type": "user",
+                    "principal_name": "linus@example.com",
+                    "mail": "linus@example.com",
+                    "enabled": True,
+                    "app_id": "",
+                    "extra": {
+                        "is_licensed": "",
+                        "last_successful_utc": recent_login,
+                        "last_successful_local": "recent",
+                        "on_prem_sam_account_name": "linus",
+                    },
+                },
+            ],
+            "vm_run_observations": {
+                "vm-1": stale_power,
+                "vm-2": recent_power,
+            },
+        }
+    )
+
+    payload = cache.list_virtual_desktop_removal_candidates()
+
+    assert payload["summary"]["tracked_desktops"] == 2
+    assert payload["summary"]["removal_candidates"] == 2
+    assert payload["summary"]["stale_power_signals"] == 1
+    assert payload["summary"]["disabled_or_unlicensed_assignments"] == 2
+
+    vm_by_name = {item["name"]: item for item in payload["desktops"]}
+
+    assert vm_by_name["avd-vm-1"]["assignment_source"] == "session-host"
+    assert vm_by_name["avd-vm-1"]["host_pool_name"] == "hostpool-1"
+    assert vm_by_name["avd-vm-1"]["mark_for_removal"] is True
+    assert "Assigned user is disabled" in vm_by_name["avd-vm-1"]["removal_reasons"]
+    assert any("No running signal" in reason for reason in vm_by_name["avd-vm-1"]["removal_reasons"])
+
+    assert vm_by_name["avd-vm-2"]["assignment_source"] == "tag:assigned_user"
+    assert vm_by_name["avd-vm-2"]["assigned_user_licensed"] is False
+    assert vm_by_name["avd-vm-2"]["mark_for_removal"] is True
+    assert vm_by_name["avd-vm-2"]["account_action"] == "Already unlicensed"
+
+
 def test_get_storage_summary_filters_tab_searches_server_side(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     cache._update_snapshots(

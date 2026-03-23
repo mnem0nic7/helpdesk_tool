@@ -368,6 +368,18 @@ async def get_virtual_machines(
     )
 
 
+@router.get("/virtual-desktops/removal-candidates")
+async def get_virtual_desktop_removal_candidates(
+    search: str = Query(default=""),
+    removal_only: bool = Query(default=False),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    return azure_cache.list_virtual_desktop_removal_candidates(
+        search=search,
+        removal_only=removal_only,
+    )
+
+
 @router.get("/vms/detail")
 async def get_virtual_machine_detail(resource_id: str = Query(default="")) -> AzureVirtualMachineDetailResponse:
     _ensure_azure_site()

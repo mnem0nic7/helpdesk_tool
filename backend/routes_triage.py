@@ -7,13 +7,15 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 
-from ai_client import analyze_ticket, get_available_models, score_closed_ticket, validate_suggestions
+from ai_client import analyze_ticket, get_available_models, validate_suggestions
 from auth import get_session
+from config import TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES
 from issue_cache import cache
 from jira_client import JiraClient
 from metrics import _is_open, issue_to_row
 from models import TriageAnalyzeRequest, TriageApplyRequest, TriageFieldAction, TriageDismissRequest
 from site_context import get_current_site_scope, get_scoped_issues, key_is_visible_in_scope
+from technician_scoring_manager import TechnicianScoringManager, new_progress_state
 from triage_store import store
 
 logger = logging.getLogger(__name__)
@@ -31,9 +33,16 @@ _run_progress: dict[str, dict[str, Any]] = {
     "oasisdev": _new_progress_state(),
 }
 _score_progress: dict[str, dict[str, Any]] = {
-    "primary": _new_progress_state(),
-    "oasisdev": _new_progress_state(),
+    "primary": new_progress_state(),
+    "oasisdev": new_progress_state(),
 }
+
+technician_scoring_manager = TechnicianScoringManager(
+    client=_client,
+    store=store,
+    progress_by_scope=_score_progress,
+    poll_interval_seconds=TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES * 60,
+)
 
 
 def _current_run_progress() -> dict[str, Any]:
@@ -41,7 +50,7 @@ def _current_run_progress() -> dict[str, Any]:
 
 
 def _current_score_progress() -> dict[str, Any]:
-    return _score_progress[get_current_site_scope()]
+    return technician_scoring_manager.get_progress(get_current_site_scope())
 
 
 def _visible_issue_keys() -> set[str]:
@@ -182,7 +191,10 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
 
 
 @router.get("/technician-scores")
-async def get_technician_scores(search: str = Query(default="", max_length=200)) -> list[dict[str, Any]]:
+async def get_technician_scores(
+    search: str = Query(default="", max_length=200),
+    key: str = Query(default="", max_length=40),
+) -> list[dict[str, Any]]:
     """Return stored technician QA scores for closed tickets."""
     visible_keys = _visible_issue_keys()
     issues_by_key = {
@@ -190,6 +202,26 @@ async def get_technician_scores(search: str = Query(default="", max_length=200))
         for issue in get_scoped_issues()
         if issue.get("key")
     }
+    exact_key = key.strip().upper()
+
+    if exact_key:
+        if exact_key not in visible_keys:
+            return []
+        score = store.get_technician_score(exact_key)
+        if not score:
+            return []
+        issue = issues_by_key.get(score.key)
+        ticket = issue_to_row(issue) if issue else None
+        result = {
+            **score.model_dump(),
+            "overall_score": round((score.communication_score + score.documentation_score) / 2, 1),
+            "ticket_summary": ticket.get("summary", "") if ticket else "",
+            "ticket_status": ticket.get("status", "") if ticket else "",
+            "ticket_assignee": ticket.get("assignee", "") if ticket else "",
+            "ticket_resolved": ticket.get("resolved", "") if ticket else "",
+        }
+        return [result] if _matches_technician_score_search(result, search) else []
+
     results: list[dict[str, Any]] = []
     for score in store.list_technician_scores(limit=500):
         if score.key not in visible_keys:
@@ -225,10 +257,8 @@ async def get_technician_score_run_status() -> dict[str, Any]:
 @router.post("/score-cancel")
 async def cancel_closed_ticket_scoring() -> dict[str, Any]:
     """Cancel the current closed-ticket QA scoring run."""
-    progress = _current_score_progress()
-    if not progress["running"]:
+    if not technician_scoring_manager.cancel_scope(get_current_site_scope()):
         return {"cancelled": False, "message": "No technician scoring run in progress"}
-    progress["cancel"] = True
     return {"cancelled": True}
 
 
@@ -238,9 +268,8 @@ async def run_closed_ticket_scoring(
     body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run technician QA scoring for closed tickets already in the cache."""
-    from config import AUTO_TRIAGE_MODEL
     site_scope = get_current_site_scope()
-    progress = _score_progress[site_scope]
+    progress = technician_scoring_manager.get_progress(site_scope)
 
     if progress["running"]:
         return {
@@ -249,74 +278,26 @@ async def run_closed_ticket_scoring(
             "message": "Technician scoring run already in progress",
         }
 
-    available = get_available_models()
-    if not available:
-        raise HTTPException(
-            status_code=400,
-            detail="No AI model available. Ensure Ollama is running and the configured local model is pulled before scoring technician responses.",
-        )
-    available_ids = {model.id for model in available}
-    model_id = AUTO_TRIAGE_MODEL if AUTO_TRIAGE_MODEL in available_ids else available[0].id
-
-    issues = get_scoped_issues()
-    issues_by_key = {issue.get("key", ""): issue for issue in issues if issue.get("key")}
-    all_closed_keys = [key for key, issue in issues_by_key.items() if not _is_open(issue)]
-
     reset = bool((body or {}).get("reset", False))
-    already_scored = store.get_technician_scored_keys()
-    keys_to_process = all_closed_keys if reset else [key for key in all_closed_keys if key not in already_scored]
-
     limit = (body or {}).get("limit")
-    if isinstance(limit, int) and limit > 0:
-        keys_to_process = keys_to_process[:limit]
+    try:
+        preview = technician_scoring_manager.preview_scope_run(
+            site_scope,
+            reset=reset,
+            limit=limit if isinstance(limit, int) and limit > 0 else None,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    progress.update(
-        running=True,
-        processed=0,
-        total=len(keys_to_process),
-        current_key=None,
-        cancel=False,
+    background_tasks.add_task(
+        technician_scoring_manager.run_scope_once,
+        site_scope,
+        reset=reset,
+        limit=limit if isinstance(limit, int) and limit > 0 else None,
+        trigger="manual",
     )
 
-    async def _run() -> None:
-        import asyncio
-
-        loop = asyncio.get_running_loop()
-        try:
-            for index, key in enumerate(keys_to_process):
-                if progress.get("cancel"):
-                    logger.info("Technician scoring cancelled after %d/%d", index, len(keys_to_process))
-                    break
-                progress.update(processed=index, current_key=key)
-
-                issue = issues_by_key.get(key)
-                if not issue or _is_open(issue):
-                    continue
-
-                try:
-                    request_comments = await loop.run_in_executor(None, _client.get_request_comments, key)
-                except Exception:
-                    logger.exception("Failed to load request comments for %s during technician scoring", key)
-                    request_comments = []
-
-                score = await loop.run_in_executor(
-                    None,
-                    score_closed_ticket,
-                    issue,
-                    request_comments,
-                    model_id,
-                )
-                store.save_technician_score(score)
-
-            progress.update(processed=len(keys_to_process))
-        except Exception:
-            logger.exception("Closed-ticket technician scoring failed")
-        finally:
-            progress.update(running=False, current_key=None, cancel=False)
-
-    background_tasks.add_task(_run)
-
-    return {"started": True, "total_tickets": len(keys_to_process)}
+    return {"started": True, "total_tickets": preview["total_tickets"]}
 
 
 @router.get("/suggestions")

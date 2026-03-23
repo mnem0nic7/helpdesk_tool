@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import HTTPException
 from starlette.testclient import TestClient
@@ -14,9 +15,14 @@ def _ensure_route(app, path: str, endpoint, *, methods: list[str] | None = None)
 
 def _build_client() -> TestClient:
     from auth import create_session
-    from main import app
+    import main
 
-    client = TestClient(app, raise_server_exceptions=False)
+    mock_technician_scoring_manager = MagicMock()
+    mock_technician_scoring_manager.start_worker = AsyncMock()
+    mock_technician_scoring_manager.stop_worker = AsyncMock()
+    main.technician_scoring_manager = mock_technician_scoring_manager
+
+    client = TestClient(main.app, raise_server_exceptions=False)
     sid = create_session("test@example.com", "Test User")
     client.cookies.set("session_id", sid)
     return client
@@ -78,4 +84,3 @@ def test_unhandled_exceptions_are_logged(caplog):
         "Unhandled exception for GET /api/test-error-logging/unhandled" in record.getMessage()
         for record in caplog.records
     )
-

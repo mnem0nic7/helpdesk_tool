@@ -573,6 +573,83 @@ def test_azure_vms_returns_cached_vm_inventory(test_client, monkeypatch):
     assert body["by_size"][0]["region"] == "eastus"
 
 
+def test_azure_virtual_desktop_removal_candidates_returns_cached_payload(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.list_virtual_desktop_removal_candidates.return_value = {
+        "desktops": [
+            {
+                "id": "vm-1",
+                "name": "avd-vm-1",
+                "resource_type": "Microsoft.Compute/virtualMachines",
+                "subscription_id": "sub-1",
+                "subscription_name": "Prod",
+                "resource_group": "rg-avd",
+                "location": "eastus",
+                "kind": "",
+                "sku_name": "",
+                "vm_size": "Standard_D4s_v5",
+                "state": "PowerState/deallocated",
+                "tags": {},
+                "size": "Standard_D4s_v5",
+                "power_state": "Deallocated",
+                "assigned_user_display_name": "Ada Lovelace",
+                "assigned_user_principal_name": "ada@example.com",
+                "assigned_user_enabled": False,
+                "assigned_user_licensed": True,
+                "assigned_user_last_successful_utc": "2026-02-18T00:00:00+00:00",
+                "assigned_user_last_successful_local": "2026-02-17 04:00 PM PST",
+                "assignment_source": "session-host",
+                "assignment_status": "resolved",
+                "host_pool_name": "hostpool-1",
+                "session_host_name": "hostpool-1/avd-vm-1.contoso.local",
+                "last_power_signal_utc": "2026-02-20T00:00:00+00:00",
+                "last_power_signal_local": "2026-02-19 04:00 PM PST",
+                "days_since_power_signal": 32,
+                "days_since_assigned_user_login": 34,
+                "power_signal_stale": True,
+                "power_signal_pending": False,
+                "user_signin_stale": True,
+                "mark_for_removal": True,
+                "mark_account_for_follow_up": True,
+                "account_action": "Already disabled",
+                "removal_reasons": [
+                    "No running signal in 14+ days",
+                    "Assigned user is disabled",
+                ],
+            }
+        ],
+        "matched_count": 1,
+        "total_count": 1,
+        "summary": {
+            "threshold_days": 14,
+            "tracked_desktops": 1,
+            "removal_candidates": 1,
+            "stale_power_signals": 1,
+            "disabled_or_unlicensed_assignments": 1,
+            "stale_assigned_user_signins": 1,
+            "assignment_review_required": 0,
+            "power_signal_pending": 0,
+            "account_follow_up_count": 1,
+        },
+        "generated_at": "2026-03-23T00:00:00+00:00",
+    }
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get(
+        "/api/azure/virtual-desktops/removal-candidates",
+        headers={"host": "azure.movedocs.com"},
+        params={"search": "ada", "removal_only": "true"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["summary"]["removal_candidates"] == 1
+    assert body["desktops"][0]["assignment_source"] == "session-host"
+    mock_cache.list_virtual_desktop_removal_candidates.assert_called_once_with(search="ada", removal_only=True)
+
+
 def test_azure_vm_detail_returns_cached_vm_drilldown(test_client, monkeypatch):
     import routes_azure
 

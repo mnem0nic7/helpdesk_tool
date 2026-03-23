@@ -21,6 +21,7 @@ from config import (
     AZURE_COST_REFRESH_MINUTES,
     AZURE_DIRECTORY_REFRESH_MINUTES,
     AZURE_INVENTORY_REFRESH_MINUTES,
+    AZURE_VIRTUAL_DESKTOP_REMOVAL_THRESHOLD_DAYS,
     AZURE_VM_EXPORT_COST_CHUNK_SIZE,
     AZURE_VM_EXPORT_COST_INTER_CHUNK_DELAY_SECONDS,
     AZURE_VM_EXPORT_MAX_RUNTIME_MINUTES,
@@ -63,6 +64,20 @@ _DATASET_CONFIG: dict[str, dict[str, Any]] = {
 _SAVINGS_MONTHLY_PROXY_DAYS = 30
 _STALE_SNAPSHOT_DAYS = 60
 _USER_AUDIT_TIMEZONE = ZoneInfo("America/Los_Angeles")
+_VIRTUAL_DESKTOP_ASSIGNMENT_TAG_KEYS = (
+    "assigned_user",
+    "assigneduser",
+    "assigned-user",
+    "userprincipalname",
+    "user_principal_name",
+    "upn",
+    "owner",
+    "user",
+    "username",
+    "primary_user",
+    "primaryuser",
+    "email",
+)
 
 
 class AzureCache:
@@ -325,6 +340,7 @@ class AzureCache:
                     exc,
                 )
                 reservation_status = {"available": False, "error": str(exc)}
+            vm_run_observations = self._build_vm_run_observations(resources)
             self._update_snapshots(
                 {
                     "subscriptions": subscriptions,
@@ -333,6 +349,7 @@ class AzureCache:
                     "role_assignments": role_assignments,
                     "reservations": reservations,
                     "reservation_status": reservation_status,
+                    "vm_run_observations": vm_run_observations,
                 }
             )
             updated_at = datetime.now(timezone.utc).isoformat()
@@ -648,6 +665,34 @@ class AzureCache:
         if parsed.tzinfo is None:
             return parsed.replace(tzinfo=timezone.utc)
         return parsed
+
+    def _build_vm_run_observations(self, resources: list[dict[str, Any]]) -> dict[str, str]:
+        previous = self._snapshot("vm_run_observations") or {}
+        observations: dict[str, str] = {}
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        if isinstance(previous, dict):
+            for raw_id, raw_value in previous.items():
+                normalized_id = self._normalize_resource_id(raw_id)
+                if normalized_id and self._parse_datetime(raw_value):
+                    observations[normalized_id] = str(raw_value)
+
+        current_vm_ids: set[str] = set()
+        for item in resources:
+            if not self._is_virtual_machine(item):
+                continue
+            normalized_id = self._normalize_resource_id(item.get("id"))
+            if not normalized_id:
+                continue
+            current_vm_ids.add(normalized_id)
+            if self._vm_power_state(item).lower() == "running":
+                observations[normalized_id] = now_iso
+
+        return {
+            normalized_id: value
+            for normalized_id, value in observations.items()
+            if normalized_id in current_vm_ids
+        }
 
     @staticmethod
     def _format_currency_text(value: Any, currency: str = "USD") -> str:
@@ -1589,6 +1634,107 @@ class AzureCache:
             return ""
         return text.split("/")[-1]
 
+    @staticmethod
+    def _resource_id_segment(resource_id: Any, segment_name: str) -> str:
+        parts = str(resource_id or "").strip().strip("/").split("/")
+        lowered_segment = segment_name.strip().lower()
+        for index, part in enumerate(parts[:-1]):
+            if part.lower() == lowered_segment:
+                return parts[index + 1]
+        return ""
+
+    @staticmethod
+    def _normalize_user_lookup_key(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        if text.startswith("mailto:"):
+            text = text[7:]
+        if "\\" in text:
+            text = text.rsplit("\\", 1)[-1]
+        return text
+
+    def _build_virtual_desktop_user_index(
+        self,
+        users: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        user_index: dict[str, dict[str, Any]] = {}
+        display_name_candidates: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+        for user in users:
+            principal_name = self._normalize_user_lookup_key(user.get("principal_name"))
+            mail = self._normalize_user_lookup_key(user.get("mail"))
+            display_name = self._normalize_user_lookup_key(user.get("display_name"))
+            extra = user.get("extra") if isinstance(user.get("extra"), dict) else {}
+            sam_account = self._normalize_user_lookup_key(extra.get("on_prem_sam_account_name"))
+
+            for candidate in (principal_name, mail, sam_account):
+                if candidate and candidate not in user_index:
+                    user_index[candidate] = user
+
+            if display_name:
+                display_name_candidates[display_name].append(user)
+
+        for display_name, matches in display_name_candidates.items():
+            if len(matches) == 1 and display_name not in user_index:
+                user_index[display_name] = matches[0]
+
+        return user_index
+
+    def _resolve_virtual_desktop_user(
+        self,
+        identifier: Any,
+        user_index: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        normalized_identifier = self._normalize_user_lookup_key(identifier)
+        if not normalized_identifier:
+            return None
+        return user_index.get(normalized_identifier)
+
+    def _virtual_desktop_assignment_from_tags(
+        self,
+        vm_item: dict[str, Any],
+        user_index: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        tags = vm_item.get("tags") if isinstance(vm_item.get("tags"), dict) else {}
+        for key, value in tags.items():
+            normalized_key = self._normalize_user_lookup_key(key).replace(" ", "")
+            if normalized_key not in _VIRTUAL_DESKTOP_ASSIGNMENT_TAG_KEYS:
+                continue
+            raw_value = str(value or "").strip()
+            if not raw_value:
+                continue
+            return {
+                "assigned_user": raw_value,
+                "assignment_source": f"tag:{key}",
+                "assigned_user_record": self._resolve_virtual_desktop_user(raw_value, user_index),
+                "host_pool_name": "",
+                "session_host_name": "",
+            }
+        return None
+
+    def _build_virtual_desktop_assignment_index(
+        self,
+        resources: list[dict[str, Any]],
+        user_index: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        assignment_by_vm_id: dict[str, dict[str, Any]] = {}
+        for item in resources:
+            if str(item.get("resource_type") or "").lower() != "microsoft.desktopvirtualization/hostpools/sessionhosts":
+                continue
+            vm_resource_id = self._normalize_resource_id(item.get("avd_resource_id"))
+            if not vm_resource_id:
+                continue
+            assigned_user = str(item.get("avd_assigned_user") or "").strip()
+            assignment_by_vm_id[vm_resource_id] = {
+                "assigned_user": assigned_user,
+                "assignment_source": "session-host",
+                "assigned_user_record": self._resolve_virtual_desktop_user(assigned_user, user_index),
+                "host_pool_name": self._resource_id_segment(item.get("id"), "hostPools"),
+                "session_host_name": str(item.get("name") or ""),
+            }
+        return assignment_by_vm_id
+
     def _build_resource_graph_indexes(
         self,
         resources: list[dict[str, Any]],
@@ -1851,6 +1997,208 @@ class AzureCache:
             "reservation_error": reservation_status.get("error"),
             "cost_available": cost_status["available"],
             "cost_basis": cost_status.get("cost_basis"),
+        }
+
+    def list_virtual_desktop_removal_candidates(
+        self,
+        *,
+        search: str = "",
+        removal_only: bool = False,
+    ) -> dict[str, Any]:
+        threshold_days = max(1, int(AZURE_VIRTUAL_DESKTOP_REMOVAL_THRESHOLD_DAYS or 14))
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=threshold_days)
+
+        resources = self._snapshot("resources") or []
+        users = self._snapshot("users") or []
+        vm_run_observations = self._snapshot("vm_run_observations") or {}
+        resource_rows = resources if isinstance(resources, list) else []
+        user_rows = users if isinstance(users, list) else []
+        user_index = self._build_virtual_desktop_user_index(user_rows)
+        assignment_by_vm_id = self._build_virtual_desktop_assignment_index(
+            resource_rows,
+            user_index,
+        )
+
+        all_rows: list[dict[str, Any]] = []
+        for item in resource_rows:
+            if not self._is_virtual_machine(item):
+                continue
+
+            normalized_vm_id = self._normalize_resource_id(item.get("id"))
+            session_host_assignment = assignment_by_vm_id.get(normalized_vm_id)
+            tag_assignment = self._virtual_desktop_assignment_from_tags(item, user_index)
+            assignment = session_host_assignment or tag_assignment
+            if (
+                session_host_assignment
+                and tag_assignment
+                and (
+                    not session_host_assignment.get("assigned_user")
+                    or not session_host_assignment.get("assigned_user_record")
+                )
+            ):
+                assignment = tag_assignment
+            if not assignment:
+                continue
+
+            assigned_user_record = (
+                assignment.get("assigned_user_record")
+                if isinstance(assignment.get("assigned_user_record"), dict)
+                else None
+            )
+            assigned_user_raw = str(assignment.get("assigned_user") or "").strip()
+            assigned_user_display = (
+                str(assigned_user_record.get("display_name") or "").strip()
+                if assigned_user_record
+                else ""
+            )
+            assigned_user_principal = (
+                str(assigned_user_record.get("principal_name") or "").strip()
+                if assigned_user_record
+                else assigned_user_raw
+            )
+            assigned_user_extra = (
+                assigned_user_record.get("extra")
+                if assigned_user_record and isinstance(assigned_user_record.get("extra"), dict)
+                else {}
+            )
+            assigned_user_enabled = (
+                assigned_user_record.get("enabled")
+                if assigned_user_record and assigned_user_record.get("enabled") is not None
+                else None
+            )
+            assigned_user_licensed = None
+            if assigned_user_record:
+                assigned_user_licensed = assigned_user_extra.get("is_licensed") == "true"
+
+            last_successful_utc = str(assigned_user_extra.get("last_successful_utc") or "")
+            last_successful_local = str(assigned_user_extra.get("last_successful_local") or "")
+            last_successful_dt = self._parse_datetime(last_successful_utc)
+            days_since_user_login = (now - last_successful_dt).days if last_successful_dt else None
+            user_signin_stale = bool(
+                assigned_user_record and (last_successful_dt is None or last_successful_dt < cutoff)
+            )
+            user_disabled = bool(assigned_user_record and assigned_user_enabled is False)
+            user_unlicensed = bool(assigned_user_record and assigned_user_licensed is False)
+
+            last_running_utc = ""
+            if isinstance(vm_run_observations, dict):
+                last_running_utc = str(vm_run_observations.get(normalized_vm_id) or "")
+            last_running_local = self._format_local_datetime_text(last_running_utc)
+            last_running_dt = self._parse_datetime(last_running_utc)
+            days_since_power_signal = (now - last_running_dt).days if last_running_dt else None
+            power_signal_stale = bool(last_running_dt and last_running_dt < cutoff)
+            power_signal_pending = last_running_dt is None
+
+            assignment_status = "resolved"
+            if not assigned_user_raw:
+                assignment_status = "missing"
+            elif not assigned_user_record:
+                assignment_status = "unresolved"
+
+            removal_reasons: list[str] = []
+            if power_signal_stale:
+                removal_reasons.append(f"No running signal in {threshold_days}+ days")
+            if user_disabled:
+                removal_reasons.append("Assigned user is disabled")
+            if user_unlicensed:
+                removal_reasons.append("Assigned user is unlicensed")
+            if user_signin_stale:
+                removal_reasons.append(f"Assigned user has no successful Entra sign-in in {threshold_days}+ days")
+
+            account_action = ""
+            if user_disabled and user_unlicensed:
+                account_action = "Already disabled and unlicensed"
+            elif user_disabled:
+                account_action = "Already disabled"
+            elif user_unlicensed:
+                account_action = "Already unlicensed"
+            elif user_signin_stale:
+                account_action = "Review for disablement or unlicensing"
+
+            row = dict(item)
+            row["size"] = self._vm_size(item)
+            row["power_state"] = self._vm_power_state(item)
+            row["assigned_user_display_name"] = assigned_user_display or assigned_user_raw or "Unassigned"
+            row["assigned_user_principal_name"] = assigned_user_principal
+            row["assigned_user_enabled"] = assigned_user_enabled
+            row["assigned_user_licensed"] = assigned_user_licensed
+            row["assigned_user_last_successful_utc"] = last_successful_utc
+            row["assigned_user_last_successful_local"] = last_successful_local
+            row["assignment_source"] = str(assignment.get("assignment_source") or "")
+            row["assignment_status"] = assignment_status
+            row["host_pool_name"] = str(assignment.get("host_pool_name") or "")
+            row["session_host_name"] = str(assignment.get("session_host_name") or "")
+            row["last_power_signal_utc"] = last_running_utc
+            row["last_power_signal_local"] = last_running_local
+            row["days_since_power_signal"] = days_since_power_signal
+            row["days_since_assigned_user_login"] = days_since_user_login
+            row["power_signal_stale"] = power_signal_stale
+            row["power_signal_pending"] = power_signal_pending
+            row["user_signin_stale"] = user_signin_stale
+            row["mark_for_removal"] = bool(removal_reasons)
+            row["mark_account_for_follow_up"] = bool(account_action)
+            row["account_action"] = account_action
+            row["removal_reasons"] = removal_reasons
+            all_rows.append(row)
+
+        all_rows.sort(
+            key=lambda item: (
+                0 if item.get("mark_for_removal") else 1,
+                0 if item.get("power_signal_stale") else 1,
+                0 if (item.get("assigned_user_enabled") is False or item.get("assigned_user_licensed") is False) else 1,
+                str(item.get("name") or "").lower(),
+            )
+        )
+
+        summary = {
+            "threshold_days": threshold_days,
+            "tracked_desktops": len(all_rows),
+            "removal_candidates": sum(1 for item in all_rows if item.get("mark_for_removal")),
+            "stale_power_signals": sum(1 for item in all_rows if item.get("power_signal_stale")),
+            "disabled_or_unlicensed_assignments": sum(
+                1
+                for item in all_rows
+                if item.get("assigned_user_enabled") is False or item.get("assigned_user_licensed") is False
+            ),
+            "stale_assigned_user_signins": sum(1 for item in all_rows if item.get("user_signin_stale")),
+            "assignment_review_required": sum(1 for item in all_rows if item.get("assignment_status") != "resolved"),
+            "power_signal_pending": sum(1 for item in all_rows if item.get("power_signal_pending")),
+            "account_follow_up_count": sum(1 for item in all_rows if item.get("mark_account_for_follow_up")),
+        }
+
+        search_lower = search.strip().lower()
+        matched: list[dict[str, Any]] = []
+        for item in all_rows:
+            if removal_only and not item.get("mark_for_removal"):
+                continue
+            if search_lower:
+                haystack = " ".join(
+                    [
+                        str(item.get("name") or ""),
+                        str(item.get("subscription_name") or ""),
+                        str(item.get("resource_group") or ""),
+                        str(item.get("location") or ""),
+                        str(item.get("host_pool_name") or ""),
+                        str(item.get("session_host_name") or ""),
+                        str(item.get("assigned_user_display_name") or ""),
+                        str(item.get("assigned_user_principal_name") or ""),
+                        str(item.get("assignment_source") or ""),
+                        str(item.get("assignment_status") or ""),
+                        str(item.get("account_action") or ""),
+                        " ".join(item.get("removal_reasons") or []),
+                    ]
+                ).lower()
+                if search_lower not in haystack:
+                    continue
+            matched.append(item)
+
+        return {
+            "desktops": matched,
+            "matched_count": len(matched),
+            "total_count": len(all_rows),
+            "summary": summary,
+            "generated_at": now.isoformat(),
         }
 
     def list_directory_objects(self, snapshot_name: str, *, search: str = "") -> list[dict[str, Any]]:

@@ -26,6 +26,7 @@ const AzureComputeOptimizationPage = lazy(() => import("./pages/AzureComputeOpti
 const AzureUsersPage = lazy(() => import("./pages/AzureUsersPage"));
 const AzureAlertsPage = lazy(() => import("./pages/AzureAlertsPage"));
 const AzureAccountHealthPage = lazy(() => import("./pages/AzureAccountHealthPage"));
+const AzureVirtualDesktopsPage = lazy(() => import("./pages/AzureVirtualDesktopsPage"));
 
 function PageFallback() {
   return (
@@ -51,6 +52,7 @@ export default function App() {
               <>
                 <Route index element={<AzureOverviewPage />} />
                 <Route path="vms" element={<AzureVMsPage />} />
+                <Route path="virtual-desktops" element={<AzureVirtualDesktopsPage />} />
                 <Route path="resources" element={<AzureResourcesPage />} />
                 <Route path="identity" element={<AzureIdentityPage />} />
                 <Route path="users" element={<AzureUsersPage />} />

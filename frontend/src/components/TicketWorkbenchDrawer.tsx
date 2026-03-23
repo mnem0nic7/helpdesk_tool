@@ -6,6 +6,7 @@ import type {
   Assignee,
   PriorityOption,
   TicketComment,
+  TechnicianScoreEntry,
   RequestTypeOption,
   TicketDetail,
   TicketRow,
@@ -102,6 +103,10 @@ function normalizeSummaryInput(value: string): string {
   return value.replace(/\r?\n+/g, " ");
 }
 
+function formatScore(score: number): string {
+  return `${score.toFixed(1)}/5`;
+}
+
 export default function TicketWorkbenchDrawer({
   ticketKey,
   initialTicket,
@@ -179,6 +184,13 @@ export default function TicketWorkbenchDrawer({
     queryFn: () => api.getFilterOptions(),
     staleTime: 5 * 60 * 1000,
     enabled: !!ticketKey,
+  });
+
+  const { data: technicianScores = [], isLoading: isLoadingTechnicianScores } = useQuery({
+    queryKey: ["technician-scores", ticketKey],
+    queryFn: () => api.getTechnicianScores({ key: ticketKey ?? "" }),
+    enabled: !!ticketKey,
+    staleTime: 5 * 60 * 1000,
   });
 
   useEffect(() => {
@@ -512,6 +524,7 @@ export default function TicketWorkbenchDrawer({
   const recentHistoryItems = historyItems.slice(0, 2);
   const customerReplyCount = historyItems.filter((item) => item.public).length;
   const internalNoteCount = historyItems.length - customerReplyCount;
+  const technicianScore = technicianScores[0] ?? null;
 
   return (
     <div className="fixed inset-0 z-50 flex bg-slate-950/35" onClick={onClose}>
@@ -1108,6 +1121,98 @@ export default function TicketWorkbenchDrawer({
                     </pre>
                   </details>
                 </div>
+              </section>
+
+              <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">
+                      Technician QA
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      AI review of technician communication and documentation quality for this ticket.
+                    </p>
+                  </div>
+                  {technicianScore ? (
+                    <div className="rounded-xl bg-white px-3 py-2 text-right shadow-sm">
+                      <div className="text-[11px] uppercase tracking-wide text-slate-400">Overall</div>
+                      <div className="text-lg font-semibold text-slate-900">
+                        {formatScore(technicianScore.overall_score)}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                {isLoadingTechnicianScores ? (
+                  <div className="mt-4 rounded-lg border border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">
+                    Loading technician QA score...
+                  </div>
+                ) : !technicianScore ? (
+                  <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
+                    No technician QA score yet for this ticket.
+                  </div>
+                ) : (
+                  <>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 shadow-sm">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Communication</div>
+                        <div className="mt-2 text-2xl font-semibold text-blue-700">
+                          {formatScore(technicianScore.communication_score)}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 shadow-sm">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Documentation</div>
+                        <div className="mt-2 text-2xl font-semibold text-amber-700">
+                          {formatScore(technicianScore.documentation_score)}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 shadow-sm">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Model</div>
+                        <div className="mt-2 break-words text-sm font-semibold text-slate-900">
+                          {technicianScore.model_used || "—"}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 shadow-sm">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Scored</div>
+                        <div className="mt-2 text-sm font-semibold text-slate-900">
+                          {formatDateTime(technicianScore.created_at)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                      <div className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Communication Notes
+                          </span>
+                          <span className={chipClass("blue")}>{formatScore(technicianScore.communication_score)}</span>
+                        </div>
+                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                          {technicianScore.communication_notes || "No communication notes."}
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Documentation Notes
+                          </span>
+                          <span className={chipClass("amber")}>{formatScore(technicianScore.documentation_score)}</span>
+                        </div>
+                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                          {technicianScore.documentation_notes || "No documentation notes."}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Summary</div>
+                      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                        {technicianScore.score_summary || "No technician QA summary."}
+                      </p>
+                    </div>
+                  </>
+                )}
               </section>
             </>
           )}

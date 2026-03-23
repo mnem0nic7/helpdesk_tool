@@ -23,6 +23,7 @@ ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
 # Auto-triage model (runs automatically on new tickets during cache refresh)
 AUTO_TRIAGE_MODEL: str = os.getenv("AUTO_TRIAGE_MODEL", os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
+TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES: int = int(os.getenv("TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES", "60"))
 
 # Microsoft Entra ID (Azure AD) authentication
 ENTRA_TENANT_ID: str = os.getenv("ENTRA_TENANT_ID", "")
@@ -98,6 +99,9 @@ AZURE_COST_EXPORT_QUARANTINE_DIR: str = os.getenv(
 )
 AZURE_COST_EXPORT_EXPECTED_CADENCE_HOURS: int = int(os.getenv("AZURE_COST_EXPORT_EXPECTED_CADENCE_HOURS", "24"))
 AZURE_COST_EXPORT_POLL_INTERVAL_MINUTES: int = int(os.getenv("AZURE_COST_EXPORT_POLL_INTERVAL_MINUTES", "15"))
+AZURE_VIRTUAL_DESKTOP_REMOVAL_THRESHOLD_DAYS: int = int(
+    os.getenv("AZURE_VIRTUAL_DESKTOP_REMOVAL_THRESHOLD_DAYS", "14")
+)
 AZURE_REPORTING_POWER_BI_URL: str = os.getenv("AZURE_REPORTING_POWER_BI_URL", "").strip()
 AZURE_REPORTING_POWER_BI_LABEL: str = os.getenv("AZURE_REPORTING_POWER_BI_LABEL", "Shared Cost Dashboard").strip()
 AZURE_REPORTING_COST_ANALYSIS_URL: str = os.getenv("AZURE_REPORTING_COST_ANALYSIS_URL", "").strip()

@@ -32,6 +32,7 @@ const helpdeskNavItems: NavItem[] = [
 const azureNavItems: NavItem[] = [
   { to: "/", label: "Overview", icon: "\u25A3" },
   { to: "/vms", label: "VMs", icon: "\u25A1" },
+  { to: "/virtual-desktops", label: "Desktops", icon: "\u25A9" },
   { to: "/compute", label: "Compute", icon: "\u29C6" },
   { to: "/resources", label: "Resources", icon: "\u25C8" },
   { to: "/storage", label: "Storage", icon: "\u25A7" },

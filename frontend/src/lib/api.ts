@@ -889,6 +889,50 @@ export interface AzureVirtualMachineListResponse {
   cost_basis: string | null;
 }
 
+export interface AzureVirtualDesktopRow extends AzureVirtualMachineRow {
+  assigned_user_display_name: string;
+  assigned_user_principal_name: string;
+  assigned_user_enabled: boolean | null;
+  assigned_user_licensed: boolean | null;
+  assigned_user_last_successful_utc: string;
+  assigned_user_last_successful_local: string;
+  assignment_source: string;
+  assignment_status: "resolved" | "missing" | "unresolved";
+  host_pool_name: string;
+  session_host_name: string;
+  last_power_signal_utc: string;
+  last_power_signal_local: string;
+  days_since_power_signal: number | null;
+  days_since_assigned_user_login: number | null;
+  power_signal_stale: boolean;
+  power_signal_pending: boolean;
+  user_signin_stale: boolean;
+  mark_for_removal: boolean;
+  mark_account_for_follow_up: boolean;
+  account_action: string;
+  removal_reasons: string[];
+}
+
+export interface AzureVirtualDesktopRemovalSummary {
+  threshold_days: number;
+  tracked_desktops: number;
+  removal_candidates: number;
+  stale_power_signals: number;
+  disabled_or_unlicensed_assignments: number;
+  stale_assigned_user_signins: number;
+  assignment_review_required: number;
+  power_signal_pending: number;
+  account_follow_up_count: number;
+}
+
+export interface AzureVirtualDesktopRemovalResponse {
+  desktops: AzureVirtualDesktopRow[];
+  matched_count: number;
+  total_count: number;
+  summary: AzureVirtualDesktopRemovalSummary;
+  generated_at: string;
+}
+
 export interface AzureVirtualMachineAssociatedResource {
   id: string;
   name: string;
@@ -1579,6 +1623,11 @@ export interface TriageLogQueryParams {
   search?: string;
 }
 
+export interface TechnicianScoreQueryParams {
+  search?: string;
+  key?: string;
+}
+
 export interface AzureResourceQueryParams {
   search?: string;
   subscription_id?: string;
@@ -1597,6 +1646,11 @@ export interface AzureVirtualMachineQueryParams {
   location?: string;
   state?: string;
   size?: string;
+}
+
+export interface AzureVirtualDesktopRemovalQueryParams {
+  search?: string;
+  removal_only?: boolean;
 }
 
 export interface AzureSavingsQueryParams {
@@ -1900,6 +1954,14 @@ export const api = {
 
   getAzureVMs(params: AzureVirtualMachineQueryParams = {}): Promise<AzureVirtualMachineListResponse> {
     return fetchJSON<AzureVirtualMachineListResponse>(`/api/azure/vms${buildQuery(params)}`);
+  },
+
+  getAzureVirtualDesktopRemovalCandidates(
+    params: AzureVirtualDesktopRemovalQueryParams = {},
+  ): Promise<AzureVirtualDesktopRemovalResponse> {
+    return fetchJSON<AzureVirtualDesktopRemovalResponse>(
+      `/api/azure/virtual-desktops/removal-candidates${buildQuery(params)}`,
+    );
   },
 
   getAzureVMDetail(resource_id: string): Promise<AzureVirtualMachineDetailResponse> {
@@ -2238,7 +2300,7 @@ export const api = {
   },
 
   /** Fetch technician QA scores for closed tickets. */
-  getTechnicianScores(params: TriageLogQueryParams = {}): Promise<TechnicianScoreEntry[]> {
+  getTechnicianScores(params: TechnicianScoreQueryParams = {}): Promise<TechnicianScoreEntry[]> {
     return fetchJSON<TechnicianScoreEntry[]>(`/api/triage/technician-scores${buildQuery(params)}`);
   },
 

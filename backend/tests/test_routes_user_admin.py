@@ -122,10 +122,14 @@ def test_user_admin_capabilities_require_auth(monkeypatch):
     monkeypatch.setattr(user_admin_providers_module, "user_admin_providers", mock_user_admin_providers)
     monkeypatch.setattr(routes_user_admin, "user_admin_providers", mock_user_admin_providers)
 
-    from main import app
+    import main
+    mock_technician_scoring_manager = MagicMock()
+    mock_technician_scoring_manager.start_worker = AsyncMock()
+    mock_technician_scoring_manager.stop_worker = AsyncMock()
+    monkeypatch.setattr(main, "technician_scoring_manager", mock_technician_scoring_manager)
     from starlette.testclient import TestClient
 
-    client = TestClient(app)
+    client = TestClient(main.app)
     resp = client.get("/api/user-admin/capabilities", headers={"host": "it-app.movedocs.com"})
 
     assert resp.status_code == 401

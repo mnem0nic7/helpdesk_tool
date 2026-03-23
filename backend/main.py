@@ -27,7 +27,7 @@ from routes_actions import router as actions_router
 from routes_export import router as export_router
 from routes_cache import router as cache_router
 from routes_chart import router as chart_router
-from routes_triage import router as triage_router
+from routes_triage import router as triage_router, technician_scoring_manager
 from routes_auth import router as auth_router
 from routes_sla import router as sla_router
 from routes_alerts import router as alerts_router
@@ -62,6 +62,7 @@ async def lifespan(app: FastAPI):
     await azure_cache.start_background_refresh()
     await azure_cost_export_service.start()
     await azure_vm_export_jobs.start_worker()
+    await technician_scoring_manager.start_worker()
     await user_admin_jobs.start_worker()
     await user_exit_workflows.start_worker()
     await start_azure_alert_loop()
@@ -69,6 +70,7 @@ async def lifespan(app: FastAPI):
     await stop_azure_alert_loop()
     await user_exit_workflows.stop_worker()
     await user_admin_jobs.stop_worker()
+    await technician_scoring_manager.stop_worker()
     await azure_vm_export_jobs.stop_worker()
     await azure_cost_export_service.stop()
     await azure_cache.stop_background_refresh()

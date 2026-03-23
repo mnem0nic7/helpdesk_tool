@@ -12,6 +12,7 @@ const { mockApi } = vi.hoisted(() => ({
     getPriorities: vi.fn(),
     getRequestTypes: vi.fn(),
     getTransitions: vi.fn(),
+    getTechnicianScores: vi.fn(),
     syncTicketReporter: vi.fn(),
     updateTicket: vi.fn(),
     transitionTicket: vi.fn(),
@@ -121,6 +122,7 @@ describe("TicketWorkbenchDrawer", () => {
     mockApi.getPriorities.mockResolvedValue([{ id: "1", name: "High" }]);
     mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Hardware", description: "" }]);
     mockApi.getTransitions.mockResolvedValue([]);
+    mockApi.getTechnicianScores.mockResolvedValue([]);
     mockApi.syncTicketReporter.mockResolvedValue({
       updated: false,
       message: "Reporter already matches Grace Hopper.",
@@ -387,6 +389,42 @@ describe("TicketWorkbenchDrawer", () => {
     });
 
     expect(await screen.findByText("Reporter updated to Raza Abidi.")).toBeInTheDocument();
+  });
+
+  it("shows the technician QA scorecard at the bottom of the drawer", async () => {
+    mockApi.getTechnicianScores.mockResolvedValue([
+      {
+        key: "OIT-1",
+        communication_score: 4,
+        communication_notes: "The customer got a clear and timely update.",
+        documentation_score: 3,
+        documentation_notes: "Resolution notes could be more specific.",
+        overall_score: 3.5,
+        score_summary: "Good customer communication with average documentation.",
+        model_used: "qwen2.5:7b",
+        created_at: "2026-03-04T12:00:00+00:00",
+        ticket_summary: ticketRow.summary,
+        ticket_status: ticketRow.status,
+        ticket_assignee: ticketRow.assignee,
+        ticket_resolved: "",
+      },
+    ]);
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Technician QA");
+
+    expect(mockApi.getTechnicianScores).toHaveBeenCalledWith({ key: "OIT-1" });
+    expect(screen.getByText("3.5/5")).toBeInTheDocument();
+    expect(screen.getByText("The customer got a clear and timely update.")).toBeInTheDocument();
+    expect(screen.getByText("Resolution notes could be more specific.")).toBeInTheDocument();
+    expect(screen.getByText("Good customer communication with average documentation.")).toBeInTheDocument();
   });
 
   it("hides duplicate status labels in the drawer transition list", async () => {

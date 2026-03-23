@@ -23,6 +23,7 @@ class TestTechnicianScoringRoutes:
 
     def test_score_closed_persists_scores_for_closed_tickets(self, test_client, monkeypatch):
         import routes_triage
+        import technician_scoring_manager as scoring_manager_module
         from triage_store import store
 
         store.clear_technician_scores()
@@ -31,13 +32,13 @@ class TestTechnicianScoringRoutes:
         )
 
         monkeypatch.setattr(
-            routes_triage,
+            scoring_manager_module,
             "get_available_models",
             lambda: [AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama")],
         )
         monkeypatch.setattr(routes_triage._client, "get_request_comments", lambda key: [])
         monkeypatch.setattr(
-            routes_triage,
+            scoring_manager_module,
             "score_closed_ticket",
             lambda issue, request_comments, model_id: TechnicianScore(
                 key=issue.get("key", ""),
@@ -137,6 +138,34 @@ class TestTechnicianScoringRoutes:
 
         assert resp.status_code == 200
         assert [item["key"] for item in resp.json()] == ["OIT-300"]
+
+    def test_technician_scores_support_exact_ticket_lookup(self, test_client, monkeypatch):
+        import routes_triage
+
+        monkeypatch.setattr(
+            routes_triage.store,
+            "get_technician_score",
+            lambda key: TechnicianScore(
+                key=key,
+                communication_score=5,
+                communication_notes="Excellent follow-up.",
+                documentation_score=4,
+                documentation_notes="Clear resolution notes.",
+                score_summary="Strong closeout quality.",
+                model_used="qwen2.5:7b",
+                created_at="2026-03-04T12:00:00+00:00",
+            )
+            if key == "OIT-300"
+            else None,
+        )
+
+        resp = test_client.get("/api/triage/technician-scores?key=OIT-300")
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert len(payload) == 1
+        assert payload[0]["key"] == "OIT-300"
+        assert payload[0]["overall_score"] == 4.5
 
 
 class TestSuggestionApplyRoutes:
