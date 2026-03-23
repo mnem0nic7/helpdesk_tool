@@ -196,6 +196,12 @@ describe("AILogPage", () => {
       current_key: null,
       remaining_count: 1,
       processed_count: 0,
+      priority_blocked: false,
+      priority_message: "",
+      priority_reason: "",
+      priority_pending_count: 0,
+      priority_running: false,
+      priority_current_key: null,
     });
     mockApi.getTicket.mockResolvedValue(ticketDetail);
     mockApi.getAssignees.mockResolvedValue([]);
@@ -241,6 +247,33 @@ describe("AILogPage", () => {
     await waitFor(() => {
       expect(mockApi.runClosedTicketScoring).toHaveBeenCalledWith();
     });
+  });
+
+  it("disables technician QA scoring while new-ticket auto-triage has priority", async () => {
+    mockApi.getTechnicianScoreRunStatus.mockResolvedValue({
+      running: false,
+      processed: 0,
+      total: 0,
+      current_key: null,
+      remaining_count: 1,
+      processed_count: 0,
+      priority_blocked: true,
+      priority_message:
+        "Processing new tickets takes priority over technician QA scoring.",
+      priority_reason: "auto_triage_priority",
+      priority_pending_count: 3,
+      priority_running: true,
+      priority_current_key: "OIT-500",
+    });
+
+    render(<AILogPage />);
+
+    expect(
+      await screen.findByText("Processing new tickets takes priority over technician QA scoring."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Score Closed Tickets (1)" }),
+    ).toBeDisabled();
   });
 
   it("filters technician scores and change log entries with the search box", async () => {

@@ -13,9 +13,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from config import DATA_DIR, JIRA_PROJECT
+from ai_background_worker import background_ai_worker
 from jira_client import JiraClient
 from request_type import extract_request_type_name_from_fields, has_request_type
-from site_context import filter_issues_for_scope
+from site_context import SiteScope, filter_issues_for_scope
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,10 @@ class IssueCache:
 
         # Auto-triage: keys already processed (lazy-loaded from DB)
         self._auto_triage_seen: set[str] | None = None
+        self._auto_triage_running = False
+        self._auto_triage_current_key: str | None = None
+        self._auto_triage_last_started: datetime | None = None
+        self._auto_triage_last_finished: datetime | None = None
 
         # Refresh progress tracking
         self._refresh_progress: dict[str, Any] = {}
@@ -129,6 +134,35 @@ class IssueCache:
             if self._refresh_progress:
                 result["refresh_progress"] = dict(self._refresh_progress)
             return result
+
+    def auto_triage_status(self, scope: SiteScope | None = None) -> dict[str, Any]:
+        seen = self._load_auto_triage_seen()
+        with self._lock:
+            issues = list(self._all_issues.values())
+            running = self._auto_triage_running
+            current_key = self._auto_triage_current_key
+            last_started = self._auto_triage_last_started.isoformat() if self._auto_triage_last_started else None
+            last_finished = self._auto_triage_last_finished.isoformat() if self._auto_triage_last_finished else None
+
+        if scope in ("primary", "oasisdev"):
+            issues = filter_issues_for_scope(issues, scope)
+        elif scope == "azure":
+            issues = []
+
+        pending_keys = [
+            issue.get("key", "")
+            for issue in issues
+            if issue.get("key") and issue.get("key") not in seen
+        ]
+
+        return {
+            "running": running,
+            "current_key": current_key,
+            "pending_count": len(pending_keys),
+            "pending_keys": pending_keys[:25],
+            "last_started": last_started,
+            "last_finished": last_finished,
+        }
 
     def update_cached_field(self, key: str, field: str, value: str | dict[str, str] | None) -> None:
         """Update a field in the cached issue data (in-memory + SQLite).
@@ -755,121 +789,140 @@ class IssueCache:
         logger.info("Auto-triage: processing %d new tickets", len(keys_to_process))
         client = JiraClient()
         loop = asyncio.get_running_loop()
+        with self._lock:
+            self._auto_triage_running = True
+            self._auto_triage_current_key = None
+            self._auto_triage_last_started = datetime.now(timezone.utc)
 
-        for i, key in enumerate(keys_to_process):
-            try:
-                if progress is not None:
-                    if progress.get("cancel"):
-                        logger.info("Auto-triage: cancelled by user after %d/%d", i, len(keys_to_process))
-                        break
-                    progress.update(processed=i, current_key=key)
+        try:
+            for i, key in enumerate(keys_to_process):
+                try:
+                    with self._lock:
+                        self._auto_triage_current_key = key
+                    if progress is not None:
+                        if progress.get("cancel"):
+                            logger.info("Auto-triage: cancelled by user after %d/%d", i, len(keys_to_process))
+                            break
+                        progress.update(processed=i, current_key=key)
 
-                with self._lock:
-                    issue = self._all_issues.get(key)
-                if not issue:
-                    continue
+                    with self._lock:
+                        issue = self._all_issues.get(key)
+                    if not issue:
+                        continue
 
-                # Apply deterministic rules first (e.g. Security Alert → High)
-                await loop.run_in_executor(None, self._apply_priority_rules, key, issue)
+                    # Apply deterministic rules first (e.g. Security Alert -> High)
+                    await loop.run_in_executor(None, self._apply_priority_rules, key, issue)
 
-                result = await loop.run_in_executor(
-                    None, analyze_ticket, issue, AUTO_TRIAGE_MODEL
-                )
-                result.suggestions = validate_suggestions(key, result.suggestions)
-                store.save(result)
+                    async def _run_ai_triage() -> Any:
+                        return await loop.run_in_executor(
+                            None, analyze_ticket, issue, AUTO_TRIAGE_MODEL
+                        )
 
-                # Auto-apply priority, request_type, and explicit reporter hints when safe.
-                priority_updated = False
-                request_type_updated = False
-                reporter_updated = False
-                applied_fields: list[str] = []
-                for s in result.suggestions:
-                    try:
-                        if s.field == "priority" and s.confidence >= 0.7:
-                            await loop.run_in_executor(
-                                None, client.update_priority, key, s.suggested_value
-                            )
-                            store.log_change(
-                                key, "priority", s.current_value, s.suggested_value,
-                                s.confidence, AUTO_TRIAGE_MODEL,
-                            )
-                            # Update local cache
-                            self.update_cached_field(key, "priority", s.suggested_value)
-                            priority_updated = True
-                            applied_fields.append("priority")
-                            logger.info(
-                                "Auto-triage: %s priority %s → %s (conf=%.2f)",
-                                key, s.current_value, s.suggested_value, s.confidence,
-                            )
-                        elif s.field == "request_type" and s.confidence >= 0.9:
-                            from ai_client import get_request_type_id
-                            rt_id = get_request_type_id(s.suggested_value)
-                            if rt_id:
+                    result = await background_ai_worker.run_item(
+                        lane="auto_triage",
+                        key=key,
+                        work=_run_ai_triage,
+                    )
+                    result.suggestions = validate_suggestions(key, result.suggestions)
+                    store.save(result)
+
+                    # Auto-apply priority, request_type, and explicit reporter hints when safe.
+                    priority_updated = False
+                    request_type_updated = False
+                    reporter_updated = False
+                    applied_fields: list[str] = []
+                    for s in result.suggestions:
+                        try:
+                            if s.field == "priority" and s.confidence >= 0.7:
                                 await loop.run_in_executor(
-                                    None, client.set_request_type, key, rt_id
+                                    None, client.update_priority, key, s.suggested_value
                                 )
                                 store.log_change(
-                                    key, "request_type", s.current_value, s.suggested_value,
+                                    key, "priority", s.current_value, s.suggested_value,
                                     s.confidence, AUTO_TRIAGE_MODEL,
                                 )
                                 # Update local cache
-                                self.update_cached_field(key, "request_type", s.suggested_value)
-                                request_type_updated = True
-                                applied_fields.append("request_type")
+                                self.update_cached_field(key, "priority", s.suggested_value)
+                                priority_updated = True
+                                applied_fields.append("priority")
                                 logger.info(
-                                    "Auto-triage: %s request_type %s → %s (conf=%.2f)",
+                                    "Auto-triage: %s priority %s -> %s (conf=%.2f)",
                                     key, s.current_value, s.suggested_value, s.confidence,
                                 )
-                        elif s.field == "reporter" and s.confidence >= 0.95:
-                            account_id = client.find_user_account_id(s.suggested_value)
-                            if account_id:
-                                await loop.run_in_executor(
-                                    None, client.update_reporter, key, account_id
-                                )
-                                store.log_change(
-                                    key, "reporter", s.current_value, s.suggested_value,
-                                    s.confidence, AUTO_TRIAGE_MODEL,
-                                )
-                                self.update_cached_field(
-                                    key,
-                                    "reporter",
-                                    {"displayName": s.suggested_value, "accountId": account_id},
-                                )
-                                reporter_updated = True
-                                applied_fields.append("reporter")
-                                logger.info(
-                                    "Auto-triage: %s reporter %s → %s (conf=%.2f)",
-                                    key, s.current_value, s.suggested_value, s.confidence,
-                                )
-                    except Exception:
-                        logger.exception("Auto-triage: failed to apply %s for %s", s.field, key)
+                            elif s.field == "request_type" and s.confidence >= 0.9:
+                                from ai_client import get_request_type_id
+                                rt_id = get_request_type_id(s.suggested_value)
+                                if rt_id:
+                                    await loop.run_in_executor(
+                                        None, client.set_request_type, key, rt_id
+                                    )
+                                    store.log_change(
+                                        key, "request_type", s.current_value, s.suggested_value,
+                                        s.confidence, AUTO_TRIAGE_MODEL,
+                                    )
+                                    # Update local cache
+                                    self.update_cached_field(key, "request_type", s.suggested_value)
+                                    request_type_updated = True
+                                    applied_fields.append("request_type")
+                                    logger.info(
+                                        "Auto-triage: %s request_type %s -> %s (conf=%.2f)",
+                                        key, s.current_value, s.suggested_value, s.confidence,
+                                    )
+                            elif s.field == "reporter" and s.confidence >= 0.95:
+                                account_id = client.find_user_account_id(s.suggested_value)
+                                if account_id:
+                                    await loop.run_in_executor(
+                                        None, client.update_reporter, key, account_id
+                                    )
+                                    store.log_change(
+                                        key, "reporter", s.current_value, s.suggested_value,
+                                        s.confidence, AUTO_TRIAGE_MODEL,
+                                    )
+                                    self.update_cached_field(
+                                        key,
+                                        "reporter",
+                                        {"displayName": s.suggested_value, "accountId": account_id},
+                                    )
+                                    reporter_updated = True
+                                    applied_fields.append("reporter")
+                                    logger.info(
+                                        "Auto-triage: %s reporter %s -> %s (conf=%.2f)",
+                                        key, s.current_value, s.suggested_value, s.confidence,
+                                    )
+                        except Exception:
+                            logger.exception("Auto-triage: failed to apply %s for %s", s.field, key)
 
-                # If AI reclassified the request type, re-run priority rules — the new type
-                # may now trigger a rule (e.g. newly classified as Security Alert → High).
-                if request_type_updated and not priority_updated:
-                    with self._lock:
-                        updated_issue = self._all_issues.get(key, issue)
-                    await loop.run_in_executor(
-                        None, self._apply_priority_rules, key, updated_issue
-                    )
+                    # If AI reclassified the request type, re-run priority rules - the new type
+                    # may now trigger a rule (e.g. newly classified as Security Alert -> High).
+                    if request_type_updated and not priority_updated:
+                        with self._lock:
+                            updated_issue = self._all_issues.get(key, issue)
+                        await loop.run_in_executor(
+                            None, self._apply_priority_rules, key, updated_issue
+                        )
 
-                # Remove priority and request_type suggestions entirely — auto-triage owns these fields.
-                # Applied ones are already written to Jira; unapplied ones (low confidence) should not
-                # clutter the manual Triage tab since auto-triage has already made a decision.
-                for field in ("priority", "request_type"):
-                    store.remove_field(key, field)
-                if reporter_updated:
-                    store.remove_field(key, "reporter")
+                    # Remove priority and request_type suggestions entirely - auto-triage owns these fields.
+                    # Applied ones are already written to Jira; unapplied ones (low confidence) should not
+                    # clutter the manual Triage tab since auto-triage has already made a decision.
+                    for field in ("priority", "request_type"):
+                        store.remove_field(key, field)
+                    if reporter_updated:
+                        store.remove_field(key, "reporter")
 
-                store.mark_auto_triaged(key, priority_updated=priority_updated, request_type_updated=request_type_updated)
-                seen.add(key)
-                logger.info("Auto-triage: %s completed (%d suggestions)", key, len(result.suggestions))
+                    store.mark_auto_triaged(key, priority_updated=priority_updated, request_type_updated=request_type_updated)
+                    seen.add(key)
+                    logger.info("Auto-triage: %s completed (%d suggestions)", key, len(result.suggestions))
 
-            except Exception:
-                logger.exception("Auto-triage: failed for %s", key)
+                except Exception:
+                    logger.exception("Auto-triage: failed for %s", key)
 
-        if progress is not None:
-            progress.update(processed=len(keys_to_process))
+            if progress is not None:
+                progress.update(processed=len(keys_to_process))
+        finally:
+            with self._lock:
+                self._auto_triage_running = False
+                self._auto_triage_current_key = None
+                self._auto_triage_last_finished = datetime.now(timezone.utc)
 
     # ------------------------------------------------------------------
     # Background task lifecycle

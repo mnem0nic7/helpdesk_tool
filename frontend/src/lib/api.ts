@@ -2343,7 +2343,20 @@ export const api = {
   },
 
   /** Get progress of the current closed-ticket scoring run. */
-  getTechnicianScoreRunStatus(): Promise<{ running: boolean; processed: number; total: number; current_key: string | null; remaining_count?: number; processed_count?: number }> {
+  getTechnicianScoreRunStatus(): Promise<{
+    running: boolean;
+    processed: number;
+    total: number;
+    current_key: string | null;
+    remaining_count?: number;
+    processed_count?: number;
+    priority_blocked?: boolean;
+    priority_message?: string;
+    priority_reason?: string;
+    priority_pending_count?: number;
+    priority_running?: boolean;
+    priority_current_key?: string | null;
+  }> {
     return fetchJSON("/api/triage/score-run-status");
   },
 

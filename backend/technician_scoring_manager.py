@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from ai_background_worker import background_ai_worker
 from ai_client import get_available_models, score_closed_ticket
 from config import AUTO_TRIAGE_MODEL
 from issue_cache import cache
@@ -20,10 +21,70 @@ logger = logging.getLogger(__name__)
 
 _MANAGED_SCOPES: tuple[SiteScope, ...] = ("primary", "oasisdev")
 _CACHE_WARMING_MESSAGE = "Issue cache is still warming. Wait a moment and try again."
+_AUTO_TRIAGE_PRIORITY_MESSAGE = (
+    "Processing new tickets takes priority over technician QA scoring. "
+    "Technician QA waits until auto-prioritization and categorization are caught up."
+)
 
 
 def _cache_is_warming() -> bool:
     return bool(getattr(cache, "warming", False))
+
+
+def _get_auto_triage_priority_state() -> dict[str, Any]:
+    getter = getattr(cache, "auto_triage_status", None)
+    if not callable(getter):
+        return {
+            "blocked": False,
+            "message": "",
+            "pending_count": 0,
+            "running": False,
+            "current_key": None,
+        }
+
+    try:
+        status = getter()
+    except Exception:
+        logger.exception("Failed to read auto-triage priority status")
+        return {
+            "blocked": False,
+            "message": "",
+            "pending_count": 0,
+            "running": False,
+            "current_key": None,
+        }
+
+    pending_count = int(status.get("pending_count") or 0)
+    running = bool(status.get("running"))
+    current_key = str(status.get("current_key") or "").strip() or None
+    blocked = running or pending_count > 0
+    if not blocked:
+        return {
+            "blocked": False,
+            "message": "",
+            "pending_count": pending_count,
+            "running": running,
+            "current_key": current_key,
+        }
+
+    detail = _AUTO_TRIAGE_PRIORITY_MESSAGE
+    if running and current_key:
+        detail = (
+            f"{_AUTO_TRIAGE_PRIORITY_MESSAGE} "
+            f"Auto-triage is currently working on {current_key}."
+        )
+    elif pending_count > 0:
+        detail = (
+            f"{_AUTO_TRIAGE_PRIORITY_MESSAGE} "
+            f"{pending_count} ticket(s) still need auto-triage."
+        )
+    return {
+        "blocked": True,
+        "message": detail,
+        "pending_count": pending_count,
+        "running": running,
+        "current_key": current_key,
+    }
 
 
 def new_progress_state() -> dict[str, Any]:
@@ -70,6 +131,40 @@ class TechnicianScoringManager:
         progress["cancel"] = True
         return True
 
+    def get_priority_gate(self, scope: SiteScope) -> dict[str, Any]:
+        if _cache_is_warming():
+            return {
+                "blocked": True,
+                "message": _CACHE_WARMING_MESSAGE,
+                "reason": "cache_warming",
+                "pending_count": 0,
+                "running": False,
+                "current_key": None,
+                "scope": scope,
+            }
+
+        auto_triage_state = _get_auto_triage_priority_state()
+        if auto_triage_state["blocked"]:
+            return {
+                "blocked": True,
+                "message": auto_triage_state["message"],
+                "reason": "auto_triage_priority",
+                "pending_count": auto_triage_state["pending_count"],
+                "running": auto_triage_state["running"],
+                "current_key": auto_triage_state["current_key"],
+                "scope": scope,
+            }
+
+        return {
+            "blocked": False,
+            "message": "",
+            "reason": "",
+            "pending_count": auto_triage_state["pending_count"],
+            "running": auto_triage_state["running"],
+            "current_key": auto_triage_state["current_key"],
+            "scope": scope,
+        }
+
     async def start_worker(self) -> None:
         if self._bg_task and not self._bg_task.done():
             return
@@ -92,8 +187,9 @@ class TechnicianScoringManager:
         reset: bool = False,
         limit: int | None = None,
     ) -> dict[str, Any]:
-        if _cache_is_warming():
-            raise RuntimeError(_CACHE_WARMING_MESSAGE)
+        priority_gate = self.get_priority_gate(scope)
+        if priority_gate["blocked"]:
+            raise RuntimeError(str(priority_gate["message"]))
         model_id = self._select_model_id()
         if not model_id:
             raise RuntimeError(
@@ -125,11 +221,12 @@ class TechnicianScoringManager:
                 "message": "Technician scoring run already in progress",
             }
 
-        if _cache_is_warming():
-            progress["last_error"] = _CACHE_WARMING_MESSAGE
+        priority_gate = self.get_priority_gate(scope)
+        if priority_gate["blocked"]:
+            progress["last_error"] = str(priority_gate["message"])
             if trigger == "manual":
-                raise RuntimeError(_CACHE_WARMING_MESSAGE)
-            return {"started": False, "total_tickets": 0, "message": _CACHE_WARMING_MESSAGE}
+                raise RuntimeError(str(priority_gate["message"]))
+            return {"started": False, "total_tickets": 0, "message": str(priority_gate["message"])}
 
         try:
             preview = self.preview_scope_run(scope, reset=reset, limit=limit)
@@ -168,6 +265,18 @@ class TechnicianScoringManager:
                         )
                         break
 
+                    priority_gate = self.get_priority_gate(scope)
+                    if priority_gate["blocked"]:
+                        progress["last_error"] = str(priority_gate["message"])
+                        logger.info(
+                            "Pausing technician scoring for %s after %d/%d: %s",
+                            scope,
+                            completed_count,
+                            len(preview["keys_to_process"]),
+                            priority_gate["message"],
+                        )
+                        break
+
                     progress.update(processed=completed_count, current_key=key)
                     issue = preview["issues_by_key"].get(key)
                     if not issue or _is_open(issue):
@@ -182,12 +291,19 @@ class TechnicianScoringManager:
                         request_comments = []
 
                     try:
-                        score = await loop.run_in_executor(
-                            None,
-                            score_closed_ticket,
-                            issue,
-                            request_comments,
-                            preview["model_id"],
+                        async def _run_ai_scoring() -> TechnicianScore:
+                            return await loop.run_in_executor(
+                                None,
+                                score_closed_ticket,
+                                issue,
+                                request_comments,
+                                preview["model_id"],
+                            )
+
+                        score = await background_ai_worker.run_item(
+                            lane="technician_scoring",
+                            key=key,
+                            work=_run_ai_scoring,
                         )
                         await loop.run_in_executor(None, self._store.save_technician_score, score)
                     except Exception:

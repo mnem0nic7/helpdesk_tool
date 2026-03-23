@@ -51,6 +51,8 @@ export default function AILogPage() {
 
   const isRunning = runStatus?.running ?? false;
   const isScoring = scoreRunStatus?.running ?? false;
+  const technicianScoringPriorityBlocked = Boolean(scoreRunStatus?.priority_blocked);
+  const technicianScoringBlockedMessage = scoreRunStatus?.priority_message?.trim() || "";
 
   const cancelRun = useMutation({
     mutationFn: () => api.cancelTriageRun(),
@@ -295,7 +297,7 @@ export default function AILogPage() {
             ) : (
               <button
                 onClick={() => handleScoreClosedTickets()}
-                disabled={scoreStarting}
+                disabled={scoreStarting || technicianScoringPriorityBlocked}
                 className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {scoreStarting ? "Starting…" : `Score Closed Tickets (${scoreRunStatus?.remaining_count?.toLocaleString() ?? "…"})`}
@@ -303,6 +305,12 @@ export default function AILogPage() {
             )}
           </div>
         </div>
+
+        {!isScoring && technicianScoringPriorityBlocked && technicianScoringBlockedMessage && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {technicianScoringBlockedMessage}
+          </div>
+        )}
 
         {scoreMessage && (
           <div className={`mt-4 rounded-lg px-4 py-3 text-sm ${scoreMessage.type === "error" ? "bg-red-50 text-red-700" : "bg-yellow-50 text-yellow-700"}`}>

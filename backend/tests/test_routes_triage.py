@@ -6,7 +6,7 @@ from models import AIModel, TechnicianScore, TriageResult, TriageSuggestion
 
 
 class TestTechnicianScoringRoutes:
-    def test_score_run_status_counts_closed_tickets(self, test_client):
+    def test_score_run_status_counts_closed_tickets(self, test_client, monkeypatch):
         import routes_triage
         from triage_store import store
 
@@ -14,12 +14,27 @@ class TestTechnicianScoringRoutes:
         routes_triage._score_progress.update(
             running=False, processed=0, total=0, current_key=None, cancel=False
         )
+        monkeypatch.setattr(
+            routes_triage.technician_scoring_manager,
+            "get_priority_gate",
+            lambda scope: {
+                "blocked": True,
+                "message": "Processing new tickets takes priority.",
+                "reason": "auto_triage_priority",
+                "pending_count": 2,
+                "running": True,
+                "current_key": "OIT-1",
+                "scope": scope,
+            },
+        )
 
         resp = test_client.get("/api/triage/score-run-status")
         assert resp.status_code == 200
         data = resp.json()
         assert data["remaining_count"] == 2
         assert data["processed_count"] == 0
+        assert data["priority_blocked"] is True
+        assert data["priority_pending_count"] == 2
 
     def test_score_closed_persists_scores_for_closed_tickets(self, test_client, monkeypatch):
         import routes_triage

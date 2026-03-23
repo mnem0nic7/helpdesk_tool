@@ -242,6 +242,7 @@ async def get_technician_scores(
 @router.get("/score-run-status")
 async def get_technician_score_run_status() -> dict[str, Any]:
     """Return progress for the closed-ticket QA scoring workflow."""
+    site_scope = get_current_site_scope()
     result = dict(_current_score_progress())
     closed_keys = [
         iss.get("key", "")
@@ -251,6 +252,13 @@ async def get_technician_score_run_status() -> dict[str, Any]:
     scored_keys = store.get_technician_scored_keys()
     result["remaining_count"] = len([k for k in closed_keys if k not in scored_keys])
     result["processed_count"] = len([k for k in closed_keys if k in scored_keys])
+    priority_gate = technician_scoring_manager.get_priority_gate(site_scope)
+    result["priority_blocked"] = bool(priority_gate.get("blocked"))
+    result["priority_message"] = str(priority_gate.get("message") or "")
+    result["priority_reason"] = str(priority_gate.get("reason") or "")
+    result["priority_pending_count"] = int(priority_gate.get("pending_count") or 0)
+    result["priority_running"] = bool(priority_gate.get("running"))
+    result["priority_current_key"] = priority_gate.get("current_key")
     return result
 
 
