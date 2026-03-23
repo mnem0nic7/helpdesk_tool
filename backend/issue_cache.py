@@ -99,6 +99,10 @@ class IssueCache:
     def last_refresh(self) -> datetime | None:
         return self._last_refresh
 
+    @property
+    def warming(self) -> bool:
+        return self._start_background_called and not self._initialized
+
     def get_filtered_issues(self) -> list[dict[str, Any]]:
         """Return filtered issues (excludes oasisdev). Blocks until init."""
         self._ensure_initialized()
@@ -470,6 +474,16 @@ class IssueCache:
             self._full_fetch()
         else:
             self._init_event.wait(timeout=120)
+
+    async def wait_until_initialized(self, timeout: float | None = None) -> bool:
+        """Wait asynchronously for the cache to finish its initial load."""
+        if self._initialized:
+            return True
+        if not self._start_background_called:
+            return False
+        loop = asyncio.get_running_loop()
+        ready = await loop.run_in_executor(None, self._init_event.wait, timeout)
+        return bool(ready or self._initialized)
 
     def _progress_callback(self, phase: str, current: int, total: int) -> None:
         """Update refresh progress state for the status endpoint."""

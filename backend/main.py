@@ -89,6 +89,39 @@ def _register_app_task(app: FastAPI, task: asyncio.Task[Any]) -> None:
     task.add_done_callback(tasks.discard)
 
 
+async def _start_deferred_services(app: FastAPI) -> None:
+    """Start non-critical background services after the API is already serving."""
+    await asyncio.sleep(0)
+
+    starters: tuple[tuple[str, Any], ...] = (
+        ("Azure cost export service", azure_cost_export_service.start),
+        ("Azure VM export worker", azure_vm_export_jobs.start_worker),
+        ("User admin worker", user_admin_jobs.start_worker),
+        ("User exit workflow worker", user_exit_workflows.start_worker),
+        ("Azure alert loop", start_azure_alert_loop),
+    )
+
+    for label, starter in starters:
+        try:
+            await starter()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to start %s", label)
+
+    try:
+        while not cache.initialized:
+            ready = await cache.wait_until_initialized(timeout=5)
+            if ready:
+                break
+            logger.info("Waiting for issue cache warm-up before starting technician scoring worker")
+        await technician_scoring_manager.start_worker()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Failed to start technician scoring worker")
+
+
 async def _seed_knowledge_base(app: FastAPI) -> None:
     _set_kb_seed_status(
         app,
@@ -176,12 +209,7 @@ async def lifespan(app: FastAPI):
     _register_app_task(app, asyncio.create_task(_seed_knowledge_base(app)))
     await cache.start_background_refresh()
     await azure_cache.start_background_refresh()
-    await azure_cost_export_service.start()
-    await azure_vm_export_jobs.start_worker()
-    await technician_scoring_manager.start_worker()
-    await user_admin_jobs.start_worker()
-    await user_exit_workflows.start_worker()
-    await start_azure_alert_loop()
+    _register_app_task(app, asyncio.create_task(_start_deferred_services(app)))
     yield
     await stop_azure_alert_loop()
     await user_exit_workflows.stop_worker()

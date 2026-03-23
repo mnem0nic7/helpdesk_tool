@@ -9,6 +9,7 @@ from typing import Any
 
 from ai_client import get_available_models, score_closed_ticket
 from config import AUTO_TRIAGE_MODEL
+from issue_cache import cache
 from jira_client import JiraClient
 from metrics import _is_open
 from models import TechnicianScore
@@ -18,6 +19,11 @@ from triage_store import TriageStore
 logger = logging.getLogger(__name__)
 
 _MANAGED_SCOPES: tuple[SiteScope, ...] = ("primary", "oasisdev")
+_CACHE_WARMING_MESSAGE = "Issue cache is still warming. Wait a moment and try again."
+
+
+def _cache_is_warming() -> bool:
+    return bool(getattr(cache, "warming", False))
 
 
 def new_progress_state() -> dict[str, Any]:
@@ -86,6 +92,8 @@ class TechnicianScoringManager:
         reset: bool = False,
         limit: int | None = None,
     ) -> dict[str, Any]:
+        if _cache_is_warming():
+            raise RuntimeError(_CACHE_WARMING_MESSAGE)
         model_id = self._select_model_id()
         if not model_id:
             raise RuntimeError(
@@ -116,6 +124,12 @@ class TechnicianScoringManager:
                 "total_tickets": int(progress.get("total") or 0),
                 "message": "Technician scoring run already in progress",
             }
+
+        if _cache_is_warming():
+            progress["last_error"] = _CACHE_WARMING_MESSAGE
+            if trigger == "manual":
+                raise RuntimeError(_CACHE_WARMING_MESSAGE)
+            return {"started": False, "total_tickets": 0, "message": _CACHE_WARMING_MESSAGE}
 
         try:
             preview = self.preview_scope_run(scope, reset=reset, limit=limit)

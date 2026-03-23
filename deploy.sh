@@ -93,13 +93,15 @@ classify_mode() {
         case "$file" in
             .deploy-state/*|docs/*|*.md)
                 ;;
-            backend/*)
+            backend/*|Dockerfile.backend)
                 backend_changed=1
                 ;;
-            frontend/*)
+            frontend/*|Dockerfile.frontend|frontend.nginx.conf)
                 frontend_changed=1
                 ;;
-            docker-compose.yml|Caddyfile|Dockerfile*|.dockerignore|deploy.sh|frontend.nginx.conf)
+            deploy.sh)
+                ;;
+            docker-compose.yml|Caddyfile|Dockerfile.caddy|.dockerignore)
                 full_changed=1
                 ;;
             *)
