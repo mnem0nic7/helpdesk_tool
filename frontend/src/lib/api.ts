@@ -898,6 +898,11 @@ export interface AzureVirtualDesktopRow extends AzureVirtualMachineRow {
   assigned_user_last_successful_local: string;
   assignment_source: string;
   assignment_status: "resolved" | "missing" | "unresolved";
+  assigned_user_source: "avd_assigned" | "avd_last_session" | "unassigned";
+  assigned_user_source_label: string;
+  assigned_user_observed_utc: string;
+  assigned_user_observed_local: string;
+  owner_history_status: "available" | "missing_diagnostics" | "query_failed" | "no_history";
   host_pool_name: string;
   session_host_name: string;
   last_power_signal_utc: string;
@@ -923,6 +928,9 @@ export interface AzureVirtualDesktopRemovalSummary {
   assignment_review_required: number;
   power_signal_pending: number;
   account_follow_up_count: number;
+  explicit_avd_assignments: number;
+  fallback_session_history_assignments: number;
+  owner_history_unavailable: number;
 }
 
 export interface AzureVirtualDesktopRemovalResponse {

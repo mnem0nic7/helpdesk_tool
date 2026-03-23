@@ -93,6 +93,35 @@ function userStatusBadges(row: AzureVirtualDesktopRow) {
   return badges;
 }
 
+function assignedUserSourceBadge(row: AzureVirtualDesktopRow) {
+  if (row.assigned_user_source === "avd_assigned") {
+    return statusBadge(row.assigned_user_source_label || "AVD assigned user", "sky");
+  }
+  if (row.assigned_user_source === "avd_last_session") {
+    return statusBadge(row.assigned_user_source_label || "Last AVD session user", "amber");
+  }
+  return statusBadge(row.assigned_user_source_label || "Unassigned", "slate");
+}
+
+function ownerHistoryNote(row: AzureVirtualDesktopRow): string {
+  if (row.assigned_user_source === "avd_last_session" && row.assigned_user_observed_local) {
+    return `Observed ${row.assigned_user_observed_local}`;
+  }
+  if (row.assigned_user_source !== "unassigned") {
+    return "";
+  }
+  if (row.owner_history_status === "missing_diagnostics") {
+    return "AVD connection diagnostics are not configured for fallback owner history";
+  }
+  if (row.owner_history_status === "query_failed") {
+    return "AVD session history could not be queried";
+  }
+  if (row.owner_history_status === "no_history") {
+    return "No recent successful AVD session history found";
+  }
+  return "";
+}
+
 function signalText(days: number | null, localText: string, emptyLabel: string): string {
   if (days === null) return emptyLabel;
   if (days <= 0) return "Today";
@@ -176,8 +205,9 @@ export default function AzureVirtualDesktopsPage() {
           <div className="max-w-3xl">
             <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Azure Virtual Desktop Cleanup</h1>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Track desktops assigned to an AVD host pool that should be removed when they have gone inactive, their
-              assigned user is disabled or unlicensed, or the assigned user has not signed in recently.
+              Track personal AVD desktops that should be removed when they have gone inactive, their assigned user is
+              disabled or unlicensed, or the resolved user has not signed in recently. Owner resolution uses Azure
+              Virtual Desktop assignment first, then falls back to the most recent successful AVD session user.
             </p>
           </div>
           <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -189,12 +219,27 @@ export default function AzureVirtualDesktopsPage() {
         </div>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
         <StatCard label="Tracked Desktops" value={(summary?.tracked_desktops ?? 0).toLocaleString()} />
         <StatCard
           label="Removal Candidates"
           value={(summary?.removal_candidates ?? 0).toLocaleString()}
           tone="text-red-700"
+        />
+        <StatCard
+          label="Explicit AVD Owners"
+          value={(summary?.explicit_avd_assignments ?? 0).toLocaleString()}
+          tone="text-sky-700"
+        />
+        <StatCard
+          label="Last Session Owners"
+          value={(summary?.fallback_session_history_assignments ?? 0).toLocaleString()}
+          tone="text-amber-700"
+        />
+        <StatCard
+          label="Owner History Unavailable"
+          value={(summary?.owner_history_unavailable ?? 0).toLocaleString()}
+          tone="text-slate-700"
         />
         <StatCard
           label="Disabled / Unlicensed"
@@ -274,7 +319,7 @@ export default function AzureVirtualDesktopsPage() {
                   />
                   <SortHeader
                     col="user_login"
-                    label="User Sign-In"
+                    label="Last Successful User Sign-In"
                     sortKey={sortKey}
                     sortDir={sortDir}
                     onSort={toggleSort}
@@ -302,7 +347,11 @@ export default function AzureVirtualDesktopsPage() {
                       <div className="mt-1 text-xs text-slate-500">{desktop.assigned_user_principal_name || "—"}</div>
                       <div className="mt-2 flex flex-wrap gap-1">
                         {assignmentBadge(desktop.assignment_status)}
+                        {assignedUserSourceBadge(desktop)}
                       </div>
+                      {ownerHistoryNote(desktop) ? (
+                        <div className="mt-2 text-xs text-slate-500">{ownerHistoryNote(desktop)}</div>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3 align-top">
                       <div className="flex flex-wrap gap-1">
@@ -313,7 +362,7 @@ export default function AzureVirtualDesktopsPage() {
                     </td>
                     <td className="px-4 py-3 align-top text-slate-600">
                       <div>{desktop.host_pool_name || "—"}</div>
-                      <div className="mt-1 text-xs text-slate-500">{desktop.assignment_source || "—"}</div>
+                      <div className="mt-1 text-xs text-slate-500">{desktop.session_host_name || "—"}</div>
                     </td>
                     <td className="px-4 py-3 align-top">
                       {flagBadge(desktop.mark_for_removal, desktop.power_state || "Unknown", desktop.power_state || "Unknown", desktop.mark_for_removal ? "red" : "emerald")}

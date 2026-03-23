@@ -1362,19 +1362,129 @@ def test_list_virtual_machines_matches_reservations_by_sku_and_region(tmp_path):
     ]
 
 
-def test_list_virtual_desktop_removal_candidates_marks_stale_and_disabled_assignments(tmp_path):
+def test_collect_avd_inventory_discovers_personal_host_pools_and_owner_history(tmp_path, monkeypatch):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+
+    monkeypatch.setattr(
+        cache._client,
+        "list_avd_host_pools",
+        lambda subscription_ids: [
+            {
+                "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/personal-hp",
+                "name": "personal-hp",
+                "subscription_id": "sub-1",
+                "resource_group": "rg-avd",
+                "location": "eastus",
+                "host_pool_type": "Personal",
+                "personal_desktop_assignment_type": "Direct",
+                "friendly_name": "Personal Pool",
+            },
+            {
+                "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/pooled-hp",
+                "name": "pooled-hp",
+                "subscription_id": "sub-1",
+                "resource_group": "rg-avd",
+                "location": "eastus",
+                "host_pool_type": "Pooled",
+                "personal_desktop_assignment_type": "",
+                "friendly_name": "Pooled Pool",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        cache._client,
+        "list_resource_diagnostic_settings",
+        lambda resource_id: [
+            {
+                "id": f"{resource_id}/providers/Microsoft.Insights/diagnosticSettings/send-to-la",
+                "name": "send-to-la",
+                "workspace_id": "/subscriptions/sub-1/resourceGroups/rg-ops/providers/Microsoft.OperationalInsights/workspaces/la-prod",
+                "logs": [{"category": "Connection", "category_group": "", "enabled": True}],
+            }
+        ]
+        if resource_id.endswith("/personal-hp")
+        else [],
+    )
+    monkeypatch.setattr(
+        cache._client,
+        "list_avd_session_hosts",
+        lambda host_pool_id: [
+            {
+                "id": f"{host_pool_id}/sessionHosts/avd-vm-1.contoso.local",
+                "name": "personal-hp/avd-vm-1.contoso.local",
+                "session_host_name": "avd-vm-1.contoso.local",
+                "subscription_id": "sub-1",
+                "resource_group": "rg-avd",
+                "location": "eastus",
+                "host_pool_id": host_pool_id,
+                "host_pool_name": "personal-hp",
+                "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-1",
+                "assigned_user": "",
+                "assigned_user_principal": "",
+                "status": "Available",
+                "allow_new_session": True,
+                "last_heartbeat_utc": "",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        cache._client,
+        "get_log_analytics_workspace",
+        lambda workspace_resource_id: {
+            "id": workspace_resource_id,
+            "name": "la-prod",
+            "subscription_id": "sub-1",
+            "resource_group": "rg-ops",
+            "location": "eastus",
+            "customer_id": "workspace-guid",
+        },
+    )
+    monkeypatch.setattr(
+        cache._client,
+        "query_log_analytics_workspace",
+        lambda workspace_customer_id, query, *, timespan=None: [
+            {
+                "SessionHostAzureVmId": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-1",
+                "UserName": "ada@example.com",
+                "TimeGenerated": "2026-03-22T20:00:00+00:00",
+            }
+        ],
+    )
+
+    host_pools, session_hosts, owner_history = cache._collect_avd_inventory(["sub-1"])
+
+    assert {item["name"] for item in host_pools} == {"personal-hp", "pooled-hp"}
+    personal_pool = next(item for item in host_pools if item["name"] == "personal-hp")
+    pooled_pool = next(item for item in host_pools if item["name"] == "pooled-hp")
+    assert personal_pool["diagnostics_status"] == "available"
+    assert personal_pool["owner_history_status"] == "available"
+    assert pooled_pool["diagnostics_status"] == "missing_diagnostics"
+    assert len(session_hosts) == 1
+    assert session_hosts[0]["host_pool_type"] == "Personal"
+    assert session_hosts[0]["vm_resource_id"] == "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-1"
+    assert owner_history == [
+        {
+            "vm_resource_id": "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-1",
+            "assigned_user": "ada@example.com",
+            "observed_utc": "2026-03-22T20:00:00+00:00",
+            "observed_local": AzureCache._format_local_datetime_text("2026-03-22T20:00:00+00:00"),
+            "workspace_resource_id": "subscriptions/sub-1/resourcegroups/rg-ops/providers/microsoft.operationalinsights/workspaces/la-prod",
+            "workspace_name": "la-prod",
+        }
+    ]
+
+
+def test_list_virtual_desktop_removal_candidates_prefers_explicit_avd_assignment(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     now = datetime.now(timezone.utc)
     stale_power = (now - timedelta(days=21)).isoformat()
-    recent_power = (now - timedelta(days=2)).isoformat()
     stale_login = (now - timedelta(days=30)).isoformat()
-    recent_login = (now - timedelta(days=1)).isoformat()
 
     cache._update_snapshots(
         {
             "resources": [
                 {
-                    "id": "vm-1",
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-1",
                     "name": "avd-vm-1",
                     "resource_type": "Microsoft.Compute/virtualMachines",
                     "subscription_id": "sub-1",
@@ -1386,37 +1496,7 @@ def test_list_virtual_desktop_removal_candidates_marks_stale_and_disabled_assign
                     "vm_size": "Standard_D4s_v5",
                     "state": "PowerState/deallocated",
                     "tags": {},
-                },
-                {
-                    "id": "vm-2",
-                    "name": "avd-vm-2",
-                    "resource_type": "Microsoft.Compute/virtualMachines",
-                    "subscription_id": "sub-1",
-                    "subscription_name": "Prod",
-                    "resource_group": "rg-avd",
-                    "location": "eastus",
-                    "kind": "",
-                    "sku_name": "",
-                    "vm_size": "Standard_D4s_v5",
-                    "state": "PowerState/running",
-                    "tags": {"assigned_user": "linus@example.com"},
-                },
-                {
-                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-1/sessionHosts/avd-vm-1.contoso.local",
-                    "name": "hostpool-1/avd-vm-1.contoso.local",
-                    "resource_type": "Microsoft.DesktopVirtualization/hostPools/sessionHosts",
-                    "subscription_id": "sub-1",
-                    "subscription_name": "Prod",
-                    "resource_group": "rg-avd",
-                    "location": "eastus",
-                    "kind": "",
-                    "sku_name": "",
-                    "vm_size": "",
-                    "state": "Succeeded",
-                    "tags": {},
-                    "avd_assigned_user": "ada@example.com",
-                    "avd_resource_id": "vm-1",
-                },
+                }
             ],
             "users": [
                 {
@@ -1443,17 +1523,48 @@ def test_list_virtual_desktop_removal_candidates_marks_stale_and_disabled_assign
                     "enabled": True,
                     "app_id": "",
                     "extra": {
-                        "is_licensed": "",
-                        "last_successful_utc": recent_login,
+                        "is_licensed": "true",
+                        "last_successful_utc": (now - timedelta(days=1)).isoformat(),
                         "last_successful_local": "recent",
                         "on_prem_sam_account_name": "linus",
                     },
                 },
             ],
             "vm_run_observations": {
-                "vm-1": stale_power,
-                "vm-2": recent_power,
+                "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-1": stale_power,
             },
+            "avd_host_pools": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-1",
+                    "name": "hostpool-1",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Direct",
+                    "owner_history_status": "available",
+                }
+            ],
+            "avd_session_hosts": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-1/sessionHosts/avd-vm-1.contoso.local",
+                    "name": "hostpool-1/avd-vm-1.contoso.local",
+                    "session_host_name": "avd-vm-1.contoso.local",
+                    "host_pool_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-1",
+                    "host_pool_name": "hostpool-1",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Direct",
+                    "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-1",
+                    "assigned_user": "ada@example.com",
+                }
+            ],
+            "avd_owner_history": [
+                {
+                    "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-1",
+                    "assigned_user": "linus@example.com",
+                    "observed_utc": (now - timedelta(days=2)).isoformat(),
+                    "observed_local": "recent",
+                    "workspace_resource_id": "/subscriptions/sub-1/resourceGroups/rg-ops/providers/Microsoft.OperationalInsights/workspaces/la-prod",
+                    "workspace_name": "la-prod",
+                }
+            ],
         }
     )
 
@@ -1461,75 +1572,34 @@ def test_list_virtual_desktop_removal_candidates_marks_stale_and_disabled_assign
 
     assert payload["summary"]["tracked_desktops"] == 1
     assert payload["summary"]["removal_candidates"] == 1
-    assert payload["summary"]["stale_power_signals"] == 1
-    assert payload["summary"]["disabled_or_unlicensed_assignments"] == 1
-
-    vm_by_name = {item["name"]: item for item in payload["desktops"]}
-
-    assert vm_by_name["avd-vm-1"]["assignment_source"] == "session-host"
-    assert vm_by_name["avd-vm-1"]["host_pool_name"] == "hostpool-1"
-    assert vm_by_name["avd-vm-1"]["mark_for_removal"] is True
-    assert "Assigned user is disabled" in vm_by_name["avd-vm-1"]["removal_reasons"]
-    assert any("No running signal" in reason for reason in vm_by_name["avd-vm-1"]["removal_reasons"])
-
-def test_list_virtual_desktop_removal_candidates_includes_wvd_vm_from_platform_hints(tmp_path):
-    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
-    now = datetime.now(timezone.utc)
-    recent_power = (now - timedelta(days=1)).isoformat()
-
-    cache._update_snapshots(
-        {
-            "resources": [
-                {
-                    "id": "/subscriptions/sub-1/resourceGroups/rg-wvd/providers/Microsoft.Compute/virtualMachines/KHMUSRWVD-101",
-                    "name": "KHMUSRWVD-101",
-                    "resource_type": "Microsoft.Compute/virtualMachines",
-                    "subscription_id": "sub-1",
-                    "subscription_name": "Prod",
-                    "resource_group": "rg-wvd",
-                    "location": "eastus",
-                    "kind": "",
-                    "sku_name": "",
-                    "vm_size": "Standard_D4s_v5",
-                    "state": "PowerState/running",
-                    "tags": {
-                        "cm-resource-parent": "/subscriptions/sub-1/resourceGroups/rg-wvd/providers/Microsoft.DesktopVirtualization/hostPools/KHMWUWVDPOOL01"
-                    },
-                }
-            ],
-            "users": [],
-            "vm_run_observations": {
-                "/subscriptions/sub-1/resourcegroups/rg-wvd/providers/microsoft.compute/virtualmachines/khmusrwvd-101": recent_power,
-            },
-        }
-    )
-
-    payload = cache.list_virtual_desktop_removal_candidates()
-
-    assert payload["summary"]["tracked_desktops"] == 1
-    assert payload["summary"]["removal_candidates"] == 0
-    assert payload["summary"]["assignment_review_required"] == 1
+    assert payload["summary"]["explicit_avd_assignments"] == 1
+    assert payload["summary"]["fallback_session_history_assignments"] == 0
 
     row = payload["desktops"][0]
-    assert row["name"] == "KHMUSRWVD-101"
-    assert row["assignment_source"] == "host-pool-tag:cm-resource-parent"
-    assert row["assignment_status"] == "missing"
-    assert row["host_pool_name"] == "KHMWUWVDPOOL01"
-    assert row["mark_for_removal"] is False
+    assert row["assigned_user_display_name"] == "Ada Lovelace"
+    assert row["assigned_user_source"] == "avd_assigned"
+    assert row["assigned_user_source_label"] == "AVD assigned user"
+    assert row["assignment_source"] == "avd:assigned-user"
+    assert row["host_pool_name"] == "hostpool-1"
+    assert row["owner_history_status"] == "available"
+    assert row["mark_for_removal"] is True
+    assert "Assigned user is disabled" in row["removal_reasons"]
+    assert any("No running signal" in reason for reason in row["removal_reasons"])
 
 
-def test_list_virtual_desktop_removal_candidates_merges_user_tag_when_host_pool_assignment_exists(tmp_path):
+def test_list_virtual_desktop_removal_candidates_falls_back_to_last_avd_session_user(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     now = datetime.now(timezone.utc)
-    stale_login = (now - timedelta(days=20)).isoformat()
     recent_power = (now - timedelta(days=1)).isoformat()
+    recent_login = (now - timedelta(days=1)).isoformat()
+    observed_utc = (now - timedelta(hours=8)).isoformat()
 
     cache._update_snapshots(
         {
             "resources": [
                 {
-                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-22",
-                    "name": "avd-vm-22",
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-2",
+                    "name": "avd-vm-2",
                     "resource_type": "Microsoft.Compute/virtualMachines",
                     "subscription_id": "sub-1",
                     "subscription_name": "Prod",
@@ -1539,15 +1609,12 @@ def test_list_virtual_desktop_removal_candidates_merges_user_tag_when_host_pool_
                     "sku_name": "",
                     "vm_size": "Standard_D4s_v5",
                     "state": "PowerState/running",
-                    "tags": {
-                        "assigned_user": "linus@example.com",
-                        "cm-resource-parent": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-22",
-                    },
+                    "tags": {},
                 }
             ],
             "users": [
                 {
-                    "id": "user-22",
+                    "id": "user-2",
                     "display_name": "Linus Example",
                     "object_type": "user",
                     "principal_name": "linus@example.com",
@@ -1555,68 +1622,248 @@ def test_list_virtual_desktop_removal_candidates_merges_user_tag_when_host_pool_
                     "enabled": True,
                     "app_id": "",
                     "extra": {
-                        "is_licensed": "",
-                        "last_successful_utc": stale_login,
-                        "last_successful_local": "stale",
+                        "is_licensed": "true",
+                        "last_successful_utc": recent_login,
+                        "last_successful_local": "recent login",
                         "on_prem_sam_account_name": "linus",
                     },
-                },
+                }
             ],
             "vm_run_observations": {
-                "/subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-22": recent_power,
+                "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-2": recent_power,
             },
+            "avd_host_pools": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-2",
+                    "name": "hostpool-2",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Automatic",
+                    "owner_history_status": "available",
+                }
+            ],
+            "avd_session_hosts": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-2/sessionHosts/avd-vm-2.contoso.local",
+                    "name": "hostpool-2/avd-vm-2.contoso.local",
+                    "session_host_name": "avd-vm-2.contoso.local",
+                    "host_pool_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-2",
+                    "host_pool_name": "hostpool-2",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Automatic",
+                    "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-2",
+                    "assigned_user": "",
+                }
+            ],
+            "avd_owner_history": [
+                {
+                    "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-2",
+                    "assigned_user": "linus@example.com",
+                    "observed_utc": observed_utc,
+                    "observed_local": "2026-03-23 04:00 AM PDT",
+                    "workspace_resource_id": "/subscriptions/sub-1/resourceGroups/rg-ops/providers/Microsoft.OperationalInsights/workspaces/la-prod",
+                    "workspace_name": "la-prod",
+                }
+            ],
         }
     )
 
     payload = cache.list_virtual_desktop_removal_candidates()
 
     assert payload["summary"]["tracked_desktops"] == 1
-    assert payload["summary"]["removal_candidates"] == 1
+    assert payload["summary"]["removal_candidates"] == 0
+    assert payload["summary"]["explicit_avd_assignments"] == 0
+    assert payload["summary"]["fallback_session_history_assignments"] == 1
 
     row = payload["desktops"][0]
-    assert row["name"] == "avd-vm-22"
-    assert row["assignment_source"] == "host-pool-tag:cm-resource-parent + tag:assigned_user"
-    assert row["host_pool_name"] == "hostpool-22"
     assert row["assigned_user_display_name"] == "Linus Example"
-    assert row["assigned_user_principal_name"] == "linus@example.com"
-    assert row["assigned_user_licensed"] is False
-    assert "Assigned user is unlicensed" in row["removal_reasons"]
+    assert row["assigned_user_source"] == "avd_last_session"
+    assert row["assigned_user_source_label"] == "Last AVD session user"
+    assert row["assigned_user_observed_utc"] == observed_utc
+    assert row["assigned_user_observed_local"] == "2026-03-23 04:00 AM PDT"
+    assert row["owner_history_status"] == "available"
+    assert row["assignment_status"] == "resolved"
+    assert row["mark_for_removal"] is False
 
 
-def test_list_virtual_desktop_removal_candidates_excludes_vm_without_host_pool_assignment(tmp_path):
+def test_list_virtual_desktop_removal_candidates_surfaces_missing_diagnostics_without_guessing_owner(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
-    now = datetime.now(timezone.utc)
-    recent_power = (now - timedelta(days=1)).isoformat()
+    recent_power = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
 
     cache._update_snapshots(
         {
             "resources": [
                 {
-                    "id": "/subscriptions/sub-1/resourceGroups/rg-wvd/providers/Microsoft.Compute/virtualMachines/KHMUSRWVD-101",
-                    "name": "KHMUSRWVD-101",
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-3",
+                    "name": "avd-vm-3",
                     "resource_type": "Microsoft.Compute/virtualMachines",
                     "subscription_id": "sub-1",
                     "subscription_name": "Prod",
-                    "resource_group": "rg-wvd",
+                    "resource_group": "rg-avd",
                     "location": "eastus",
                     "kind": "",
                     "sku_name": "",
                     "vm_size": "Standard_D4s_v5",
                     "state": "PowerState/running",
-                    "tags": {"assigned_user": "someone@example.com"},
+                    "tags": {},
                 }
             ],
             "users": [],
             "vm_run_observations": {
-                "/subscriptions/sub-1/resourcegroups/rg-wvd/providers/microsoft.compute/virtualmachines/khmusrwvd-101": recent_power,
+                "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-3": recent_power,
             },
+            "avd_host_pools": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-3",
+                    "name": "hostpool-3",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Automatic",
+                    "owner_history_status": "missing_diagnostics",
+                }
+            ],
+            "avd_session_hosts": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-3/sessionHosts/avd-vm-3.contoso.local",
+                    "name": "hostpool-3/avd-vm-3.contoso.local",
+                    "session_host_name": "avd-vm-3.contoso.local",
+                    "host_pool_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-3",
+                    "host_pool_name": "hostpool-3",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Automatic",
+                    "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-3",
+                    "assigned_user": "",
+                }
+            ],
+            "avd_owner_history": [],
+        }
+    )
+
+    payload = cache.list_virtual_desktop_removal_candidates()
+
+    assert payload["summary"]["tracked_desktops"] == 1
+    assert payload["summary"]["owner_history_unavailable"] == 1
+
+    row = payload["desktops"][0]
+    assert row["assigned_user_display_name"] == "Unassigned"
+    assert row["assigned_user_source"] == "unassigned"
+    assert row["assignment_status"] == "missing"
+    assert row["owner_history_status"] == "missing_diagnostics"
+    assert row["mark_for_removal"] is False
+
+
+def test_list_virtual_desktop_removal_candidates_surfaces_owner_history_query_failure(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    recent_power = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-4",
+                    "name": "avd-vm-4",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-avd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {},
+                }
+            ],
+            "users": [],
+            "vm_run_observations": {
+                "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-4": recent_power,
+            },
+            "avd_host_pools": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-4",
+                    "name": "hostpool-4",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Automatic",
+                    "owner_history_status": "query_failed",
+                }
+            ],
+            "avd_session_hosts": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-4/sessionHosts/avd-vm-4.contoso.local",
+                    "name": "hostpool-4/avd-vm-4.contoso.local",
+                    "session_host_name": "avd-vm-4.contoso.local",
+                    "host_pool_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-4",
+                    "host_pool_name": "hostpool-4",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Automatic",
+                    "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-4",
+                    "assigned_user": "",
+                }
+            ],
+            "avd_owner_history": [],
+        }
+    )
+
+    payload = cache.list_virtual_desktop_removal_candidates()
+
+    assert payload["summary"]["tracked_desktops"] == 1
+    assert payload["summary"]["owner_history_unavailable"] == 1
+    assert payload["desktops"][0]["owner_history_status"] == "query_failed"
+
+
+def test_list_virtual_desktop_removal_candidates_excludes_pooled_host_pools(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    recent_power = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/pooled-vm-1",
+                    "name": "pooled-vm-1",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-avd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {},
+                }
+            ],
+            "users": [],
+            "vm_run_observations": {
+                "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/pooled-vm-1": recent_power,
+            },
+            "avd_host_pools": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/pooled-hp",
+                    "name": "pooled-hp",
+                    "host_pool_type": "Pooled",
+                    "personal_desktop_assignment_type": "",
+                    "owner_history_status": "available",
+                }
+            ],
+            "avd_session_hosts": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/pooled-hp/sessionHosts/pooled-vm-1.contoso.local",
+                    "name": "pooled-hp/pooled-vm-1.contoso.local",
+                    "session_host_name": "pooled-vm-1.contoso.local",
+                    "host_pool_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/pooled-hp",
+                    "host_pool_name": "pooled-hp",
+                    "host_pool_type": "Pooled",
+                    "personal_desktop_assignment_type": "",
+                    "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/pooled-vm-1",
+                    "assigned_user": "someone@example.com",
+                }
+            ],
+            "avd_owner_history": [],
         }
     )
 
     payload = cache.list_virtual_desktop_removal_candidates()
 
     assert payload["summary"]["tracked_desktops"] == 0
-    assert payload["summary"]["removal_candidates"] == 0
     assert payload["desktops"] == []
 
 

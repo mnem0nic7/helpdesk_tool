@@ -26,8 +26,10 @@ logger = logging.getLogger(__name__)
 
 _ARM_BASE = "https://management.azure.com"
 _GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+_LOG_ANALYTICS_BASE = "https://api.loganalytics.azure.com"
 _ARM_SCOPE = "https://management.azure.com/.default"
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
+_LOG_ANALYTICS_SCOPE = "https://api.loganalytics.io/.default"
 _TOKEN_SKEW_SECONDS = 60
 _GRAPH_ROOT = "https://graph.microsoft.com"
 _USER_BASE_SELECT = [
@@ -335,6 +337,18 @@ class AzureClient:
         return "/" + "/".join(parts[:-2])
 
     @staticmethod
+    def _resource_id_segment(resource_id: Any, segment_name: str) -> str:
+        normalized = str(resource_id or "").strip().strip("/")
+        if not normalized:
+            return ""
+        parts = normalized.split("/")
+        segment_lower = segment_name.lower()
+        for index, part in enumerate(parts[:-1]):
+            if part.lower() == segment_lower:
+                return parts[index + 1]
+        return ""
+
+    @staticmethod
     def _walk_path(item: Any, path: tuple[str, ...]) -> Any:
         current = item
         for segment in path:
@@ -374,6 +388,34 @@ class AzureClient:
                     append_if_present(candidate)
                     break
         return results
+
+    @staticmethod
+    def _log_analytics_table_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        tables = payload.get("tables")
+        if not isinstance(tables, list):
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for table in tables:
+            if not isinstance(table, dict):
+                continue
+            columns = table.get("columns")
+            raw_rows = table.get("rows")
+            if not isinstance(columns, list) or not isinstance(raw_rows, list):
+                continue
+            names = [str(column.get("name") or "") for column in columns if isinstance(column, dict)]
+            if not names:
+                continue
+            for raw_row in raw_rows:
+                if not isinstance(raw_row, list):
+                    continue
+                mapped: dict[str, Any] = {}
+                for index, column_name in enumerate(names):
+                    if not column_name:
+                        continue
+                    mapped[column_name] = raw_row[index] if index < len(raw_row) else None
+                rows.append(mapped)
+        return rows
 
     def list_subscriptions(self) -> list[dict[str, Any]]:
         payload = self._request(
@@ -532,6 +574,155 @@ class AzureClient:
                 }
             )
         return results
+
+    def list_avd_host_pools(self, subscription_ids: Iterable[str]) -> list[dict[str, Any]]:
+        host_pools: list[dict[str, Any]] = []
+        for subscription_id in subscription_ids:
+            if not subscription_id:
+                continue
+            rows = self._paged_get(
+                f"{_ARM_BASE}/subscriptions/{subscription_id}/providers/Microsoft.DesktopVirtualization/hostPools",
+                scope=_ARM_SCOPE,
+                params={"api-version": "2024-04-03"},
+            )
+            for item in rows:
+                properties = item.get("properties") if isinstance(item.get("properties"), dict) else {}
+                host_pool_id = str(item.get("id") or "").strip()
+                host_pools.append(
+                    {
+                        "id": host_pool_id,
+                        "name": str(item.get("name") or self._resource_id_segment(host_pool_id, "hostPools") or ""),
+                        "subscription_id": subscription_id,
+                        "resource_group": self._resource_id_segment(host_pool_id, "resourceGroups"),
+                        "location": str(item.get("location") or ""),
+                        "host_pool_type": str(properties.get("hostPoolType") or ""),
+                        "personal_desktop_assignment_type": str(
+                            properties.get("personalDesktopAssignmentType") or ""
+                        ),
+                        "friendly_name": str(properties.get("friendlyName") or ""),
+                    }
+                )
+        return host_pools
+
+    def list_avd_session_hosts(self, host_pool_resource_id: str) -> list[dict[str, Any]]:
+        normalized_host_pool_id = str(host_pool_resource_id or "").strip()
+        if not normalized_host_pool_id:
+            return []
+
+        rows = self._paged_get(
+            f"{_ARM_BASE}{normalized_host_pool_id}/sessionHosts",
+            scope=_ARM_SCOPE,
+            params={"api-version": "2024-04-03"},
+        )
+        host_pool_name = self._resource_id_segment(normalized_host_pool_id, "hostPools")
+        subscription_id = self._resource_id_segment(normalized_host_pool_id, "subscriptions")
+        resource_group = self._resource_id_segment(normalized_host_pool_id, "resourceGroups")
+
+        session_hosts: list[dict[str, Any]] = []
+        for item in rows:
+            properties = item.get("properties") if isinstance(item.get("properties"), dict) else {}
+            session_host_id = str(item.get("id") or "").strip()
+            session_host_name = self._resource_id_segment(session_host_id, "sessionHosts")
+            session_hosts.append(
+                {
+                    "id": session_host_id,
+                    "name": str(item.get("name") or ""),
+                    "session_host_name": session_host_name or str(item.get("name") or "").split("/")[-1],
+                    "subscription_id": subscription_id,
+                    "resource_group": resource_group,
+                    "location": str(item.get("location") or ""),
+                    "host_pool_id": normalized_host_pool_id,
+                    "host_pool_name": host_pool_name,
+                    "vm_resource_id": str(properties.get("resourceId") or ""),
+                    "assigned_user": str(properties.get("assignedUser") or ""),
+                    "assigned_user_principal": str(properties.get("userPrincipalName") or ""),
+                    "status": str(properties.get("status") or ""),
+                    "allow_new_session": properties.get("allowNewSession"),
+                    "last_heartbeat_utc": str(
+                        properties.get("lastHeartBeat") or properties.get("lastHeartbeat") or ""
+                    ),
+                }
+            )
+        return session_hosts
+
+    def list_resource_diagnostic_settings(self, resource_id: str) -> list[dict[str, Any]]:
+        normalized_resource_id = str(resource_id or "").strip()
+        if not normalized_resource_id:
+            return []
+
+        rows = self._paged_get(
+            f"{_ARM_BASE}{normalized_resource_id}/providers/Microsoft.Insights/diagnosticSettings",
+            scope=_ARM_SCOPE,
+            params={"api-version": "2021-05-01-preview"},
+        )
+        settings: list[dict[str, Any]] = []
+        for item in rows:
+            properties = item.get("properties") if isinstance(item.get("properties"), dict) else {}
+            normalized_logs: list[dict[str, Any]] = []
+            for raw_log in properties.get("logs") or []:
+                if not isinstance(raw_log, dict):
+                    continue
+                normalized_logs.append(
+                    {
+                        "category": str(raw_log.get("category") or ""),
+                        "category_group": str(raw_log.get("categoryGroup") or ""),
+                        "enabled": bool(raw_log.get("enabled")),
+                    }
+                )
+            settings.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "name": str(item.get("name") or ""),
+                    "workspace_id": str(properties.get("workspaceId") or ""),
+                    "logs": normalized_logs,
+                }
+            )
+        return settings
+
+    def get_log_analytics_workspace(self, workspace_resource_id: str) -> dict[str, Any]:
+        normalized_workspace_id = str(workspace_resource_id or "").strip()
+        if not normalized_workspace_id:
+            return {}
+
+        payload = self._request(
+            "GET",
+            f"{_ARM_BASE}{normalized_workspace_id}",
+            scope=_ARM_SCOPE,
+            params={"api-version": "2023-09-01"},
+        )
+        properties = payload.get("properties") if isinstance(payload.get("properties"), dict) else {}
+        customer_id = str(properties.get("customerId") or "").strip()
+        return {
+            "id": str(payload.get("id") or normalized_workspace_id),
+            "name": str(payload.get("name") or self._resource_id_segment(normalized_workspace_id, "workspaces") or ""),
+            "subscription_id": self._resource_id_segment(normalized_workspace_id, "subscriptions"),
+            "resource_group": self._resource_id_segment(normalized_workspace_id, "resourceGroups"),
+            "location": str(payload.get("location") or ""),
+            "customer_id": customer_id,
+        }
+
+    def query_log_analytics_workspace(
+        self,
+        workspace_customer_id: str,
+        query: str,
+        *,
+        timespan: str | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_customer_id = str(workspace_customer_id or "").strip()
+        if not normalized_customer_id:
+            return []
+
+        body: dict[str, Any] = {"query": query}
+        if timespan:
+            body["timespan"] = timespan
+        payload = self._request(
+            "POST",
+            f"{_LOG_ANALYTICS_BASE}/v1/workspaces/{normalized_customer_id}/query",
+            scope=_LOG_ANALYTICS_SCOPE,
+            json_body=body,
+            headers={"Content-Type": "application/json"},
+        )
+        return self._log_analytics_table_rows(payload)
 
     def query_resources(self, subscription_ids: list[str]) -> list[dict[str, Any]]:
         if not subscription_ids:

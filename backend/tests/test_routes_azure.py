@@ -600,8 +600,13 @@ def test_azure_virtual_desktop_removal_candidates_returns_cached_payload(test_cl
                 "assigned_user_licensed": True,
                 "assigned_user_last_successful_utc": "2026-02-18T00:00:00+00:00",
                 "assigned_user_last_successful_local": "2026-02-17 04:00 PM PST",
-                "assignment_source": "session-host",
+                "assignment_source": "avd:assigned-user",
                 "assignment_status": "resolved",
+                "assigned_user_source": "avd_assigned",
+                "assigned_user_source_label": "AVD assigned user",
+                "assigned_user_observed_utc": "",
+                "assigned_user_observed_local": "",
+                "owner_history_status": "available",
                 "host_pool_name": "hostpool-1",
                 "session_host_name": "hostpool-1/avd-vm-1.contoso.local",
                 "last_power_signal_utc": "2026-02-20T00:00:00+00:00",
@@ -632,6 +637,9 @@ def test_azure_virtual_desktop_removal_candidates_returns_cached_payload(test_cl
             "assignment_review_required": 0,
             "power_signal_pending": 0,
             "account_follow_up_count": 1,
+            "explicit_avd_assignments": 1,
+            "fallback_session_history_assignments": 0,
+            "owner_history_unavailable": 0,
         },
         "generated_at": "2026-03-23T00:00:00+00:00",
     }
@@ -646,7 +654,7 @@ def test_azure_virtual_desktop_removal_candidates_returns_cached_payload(test_cl
     assert resp.status_code == 200
     body = resp.json()
     assert body["summary"]["removal_candidates"] == 1
-    assert body["desktops"][0]["assignment_source"] == "session-host"
+    assert body["desktops"][0]["assigned_user_source"] == "avd_assigned"
     mock_cache.list_virtual_desktop_removal_candidates.assert_called_once_with(search="ada", removal_only=True)
 
 

@@ -79,6 +79,10 @@ def test_query_resources_captures_vm_size_and_sku(monkeypatch):
             "access_tier": "",
             "source_resource_id": "",
             "disk_iops": None,
+            "avd_assigned_user": "",
+            "avd_resource_id": "",
+            "avd_user_principal": "",
+            "avd_create_time": "",
         }
     ]
 
@@ -174,6 +178,130 @@ def test_query_resources_extracts_vm_relationship_fields(monkeypatch):
         "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/publicIPAddresses/pip-1"
     ]
     assert rows[2]["managed_by"] == "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1"
+
+
+def test_list_avd_host_pools_normalizes_personal_assignment_fields(monkeypatch):
+    client = AzureClient()
+
+    monkeypatch.setattr(
+        client,
+        "_paged_get",
+        lambda url, *, scope, params=None, headers=None: [
+            {
+                "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/personal-hp",
+                "name": "personal-hp",
+                "location": "eastus",
+                "properties": {
+                    "hostPoolType": "Personal",
+                    "personalDesktopAssignmentType": "Direct",
+                    "friendlyName": "Personal Pool",
+                },
+            }
+        ],
+    )
+
+    rows = client.list_avd_host_pools(["sub-1"])
+
+    assert rows == [
+        {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/personal-hp",
+            "name": "personal-hp",
+            "subscription_id": "sub-1",
+            "resource_group": "rg-avd",
+            "location": "eastus",
+            "host_pool_type": "Personal",
+            "personal_desktop_assignment_type": "Direct",
+            "friendly_name": "Personal Pool",
+        }
+    ]
+
+
+def test_list_resource_diagnostic_settings_normalizes_workspace_logs(monkeypatch):
+    client = AzureClient()
+
+    monkeypatch.setattr(
+        client,
+        "_paged_get",
+        lambda url, *, scope, params=None, headers=None: [
+            {
+                "id": "diag-1",
+                "name": "send-to-la",
+                "properties": {
+                    "workspaceId": "/subscriptions/sub-1/resourceGroups/rg-ops/providers/Microsoft.OperationalInsights/workspaces/la-prod",
+                    "logs": [
+                        {"category": "Connection", "enabled": True},
+                        {"categoryGroup": "allLogs", "enabled": False},
+                    ],
+                },
+            }
+        ],
+    )
+
+    rows = client.list_resource_diagnostic_settings(
+        "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/personal-hp"
+    )
+
+    assert rows == [
+        {
+            "id": "diag-1",
+            "name": "send-to-la",
+            "workspace_id": "/subscriptions/sub-1/resourceGroups/rg-ops/providers/Microsoft.OperationalInsights/workspaces/la-prod",
+            "logs": [
+                {"category": "Connection", "category_group": "", "enabled": True},
+                {"category": "", "category_group": "allLogs", "enabled": False},
+            ],
+        }
+    ]
+
+
+def test_query_log_analytics_workspace_returns_table_rows(monkeypatch):
+    client = AzureClient()
+    captured: dict[str, object] = {}
+
+    def fake_request(method, url, *, scope, params=None, json_body=None, headers=None):
+        captured["method"] = method
+        captured["url"] = url
+        captured["scope"] = scope
+        captured["json_body"] = json_body
+        return {
+            "tables": [
+                {
+                    "name": "PrimaryResult",
+                    "columns": [
+                        {"name": "SessionHostAzureVmId", "type": "string"},
+                        {"name": "UserName", "type": "string"},
+                        {"name": "TimeGenerated", "type": "datetime"},
+                    ],
+                    "rows": [
+                        [
+                            "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-1",
+                            "ada@example.com",
+                            "2026-03-22T18:30:00Z",
+                        ]
+                    ],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    rows = client.query_log_analytics_workspace(
+        "workspace-customer-id",
+        "WVDConnections | take 1",
+        timespan="P14D",
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://api.loganalytics.azure.com/v1/workspaces/workspace-customer-id/query"
+    assert captured["scope"] == "https://api.loganalytics.io/.default"
+    assert captured["json_body"] == {"query": "WVDConnections | take 1", "timespan": "P14D"}
+    assert rows == [
+        {
+            "SessionHostAzureVmId": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-1",
+            "UserName": "ada@example.com",
+            "TimeGenerated": "2026-03-22T18:30:00Z",
+        }
+    ]
 
 
 def test_list_reservations_normalizes_active_vm_reservations(monkeypatch):

@@ -66,6 +66,7 @@ def test_reporting_handoff_config_defaults_and_overrides(monkeypatch):
     assert config.AZURE_REPORTING_COST_ANALYSIS_URL.startswith("https://portal.azure.com/")
     assert config.AZURE_REPORTING_POWER_BI_LABEL == "FinOps Workspace"
     assert config.AZURE_REPORTING_COST_ANALYSIS_LABEL == "Azure Cost Analysis"
+    assert config.AZURE_AVD_SESSION_HISTORY_LOOKBACK_DAYS == 90
 
 
 def test_ollama_config_defaults_and_overrides(monkeypatch):

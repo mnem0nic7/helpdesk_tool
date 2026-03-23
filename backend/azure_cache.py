@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from azure_client import AzureApiError, AzureClient
 from config import (
+    AZURE_AVD_SESSION_HISTORY_LOOKBACK_DAYS,
     AZURE_COST_LOOKBACK_DAYS,
     AZURE_COST_REFRESH_MINUTES,
     AZURE_DIRECTORY_REFRESH_MINUTES,
@@ -36,7 +37,16 @@ _DATASET_CONFIG: dict[str, dict[str, Any]] = {
     "inventory": {
         "label": "Inventory",
         "interval_minutes": AZURE_INVENTORY_REFRESH_MINUTES,
-        "snapshots": ["subscriptions", "management_groups", "resources", "role_assignments", "reservations"],
+        "snapshots": [
+            "subscriptions",
+            "management_groups",
+            "resources",
+            "role_assignments",
+            "reservations",
+            "avd_host_pools",
+            "avd_session_hosts",
+            "avd_owner_history",
+        ],
     },
     "directory": {
         "label": "Identity",
@@ -86,6 +96,8 @@ _VIRTUAL_DESKTOP_HOST_POOL_TAG_KEYS = (
     "hostpool",
     "host_pool",
 )
+_AVD_CONNECTION_LOG_CATEGORIES = {"connection"}
+_AVD_DIAGNOSTIC_CATEGORY_GROUPS = {"alllogs", "audit"}
 
 
 class AzureCache:
@@ -349,6 +361,18 @@ class AzureCache:
                 )
                 reservation_status = {"available": False, "error": str(exc)}
             vm_run_observations = self._build_vm_run_observations(resources)
+            avd_host_pools = self._snapshot("avd_host_pools") or []
+            avd_session_hosts = self._snapshot("avd_session_hosts") or []
+            avd_owner_history = self._snapshot("avd_owner_history") or []
+            try:
+                avd_host_pools, avd_session_hosts, avd_owner_history = self._collect_avd_inventory(
+                    list(sub_name_by_id),
+                )
+            except AzureApiError as exc:
+                logger.warning(
+                    "Azure AVD inventory unavailable for this principal; continuing inventory refresh with previous AVD snapshots: %s",
+                    exc,
+                )
             self._update_snapshots(
                 {
                     "subscriptions": subscriptions,
@@ -358,6 +382,9 @@ class AzureCache:
                     "reservations": reservations,
                     "reservation_status": reservation_status,
                     "vm_run_observations": vm_run_observations,
+                    "avd_host_pools": avd_host_pools,
+                    "avd_session_hosts": avd_session_hosts,
+                    "avd_owner_history": avd_owner_history,
                 }
             )
             updated_at = datetime.now(timezone.utc).isoformat()
@@ -701,6 +728,208 @@ class AzureCache:
             for normalized_id, value in observations.items()
             if normalized_id in current_vm_ids
         }
+
+    def _diagnostic_settings_support_avd_connections(self, settings: list[dict[str, Any]]) -> bool:
+        for item in settings:
+            if not isinstance(item, dict):
+                continue
+            for raw_log in item.get("logs") or []:
+                if not isinstance(raw_log, dict) or not raw_log.get("enabled"):
+                    continue
+                category = str(raw_log.get("category") or "").strip().lower().replace(" ", "")
+                category_group = str(raw_log.get("category_group") or "").strip().lower().replace(" ", "")
+                if "connection" in category:
+                    return True
+                if category_group in _AVD_DIAGNOSTIC_CATEGORY_GROUPS:
+                    return True
+        return False
+
+    def _diagnostic_settings_workspace_ids(self, settings: list[dict[str, Any]]) -> list[str]:
+        workspace_ids: list[str] = []
+        if not self._diagnostic_settings_support_avd_connections(settings):
+            return workspace_ids
+
+        for item in settings:
+            if not isinstance(item, dict):
+                continue
+            normalized_workspace_id = self._normalize_resource_id(item.get("workspace_id"))
+            if normalized_workspace_id and normalized_workspace_id not in workspace_ids:
+                workspace_ids.append(normalized_workspace_id)
+        return workspace_ids
+
+    def _collect_avd_inventory(
+        self,
+        subscription_ids: list[str],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        host_pools = self._client.list_avd_host_pools(subscription_ids)
+        normalized_host_pools: list[dict[str, Any]] = []
+        personal_host_pools: list[dict[str, Any]] = []
+
+        for host_pool in host_pools:
+            pool = dict(host_pool)
+            pool["id"] = str(pool.get("id") or "")
+            pool["name"] = str(pool.get("name") or "")
+            pool["host_pool_type"] = str(pool.get("host_pool_type") or "")
+            pool["personal_desktop_assignment_type"] = str(pool.get("personal_desktop_assignment_type") or "")
+            pool["diagnostics_workspace_ids"] = []
+            pool["diagnostics_workspace_names"] = []
+            pool["diagnostics_status"] = "missing_diagnostics"
+            pool["diagnostics_error"] = ""
+            pool["owner_history_status"] = "missing_diagnostics"
+            pool["owner_history_error"] = ""
+            pool["session_host_count"] = 0
+            pool["session_host_query_error"] = ""
+
+            try:
+                diagnostic_settings = self._client.list_resource_diagnostic_settings(pool["id"])
+            except AzureApiError as exc:
+                logger.warning("AVD diagnostic settings lookup failed for host pool %s: %s", pool["id"], exc)
+                pool["diagnostics_status"] = "query_failed"
+                pool["diagnostics_error"] = str(exc)
+                pool["owner_history_status"] = "query_failed"
+                pool["owner_history_error"] = str(exc)
+            else:
+                workspace_ids = self._diagnostic_settings_workspace_ids(diagnostic_settings)
+                pool["diagnostics_workspace_ids"] = workspace_ids
+                pool["diagnostics_workspace_names"] = [
+                    self._resource_id_segment(workspace_id, "workspaces")
+                    for workspace_id in workspace_ids
+                    if workspace_id
+                ]
+                if workspace_ids:
+                    pool["diagnostics_status"] = "available"
+                    pool["owner_history_status"] = "available"
+                else:
+                    pool["diagnostics_status"] = "missing_diagnostics"
+                    pool["owner_history_status"] = "missing_diagnostics"
+
+            normalized_host_pools.append(pool)
+            if pool["host_pool_type"].strip().lower() == "personal":
+                personal_host_pools.append(pool)
+
+        avd_session_hosts: list[dict[str, Any]] = []
+        for host_pool in personal_host_pools:
+            try:
+                session_hosts = self._client.list_avd_session_hosts(str(host_pool.get("id") or ""))
+            except AzureApiError as exc:
+                logger.warning("AVD session host lookup failed for host pool %s: %s", host_pool.get("id"), exc)
+                host_pool["session_host_query_error"] = str(exc)
+                continue
+
+            host_pool["session_host_count"] = len(session_hosts)
+            for session_host in session_hosts:
+                row = dict(session_host)
+                row["host_pool_id"] = str(host_pool.get("id") or row.get("host_pool_id") or "")
+                row["host_pool_name"] = str(host_pool.get("name") or row.get("host_pool_name") or "")
+                row["host_pool_type"] = str(host_pool.get("host_pool_type") or "")
+                row["personal_desktop_assignment_type"] = str(
+                    host_pool.get("personal_desktop_assignment_type") or ""
+                )
+                row["vm_resource_id"] = self._normalize_resource_id(row.get("vm_resource_id"))
+                avd_session_hosts.append(row)
+
+        workspace_resource_ids: set[str] = set()
+        for host_pool in personal_host_pools:
+            if host_pool.get("owner_history_status") != "available":
+                continue
+            for workspace_id in host_pool.get("diagnostics_workspace_ids") or []:
+                normalized_workspace_id = self._normalize_resource_id(workspace_id)
+                if normalized_workspace_id:
+                    workspace_resource_ids.add(normalized_workspace_id)
+
+        workspace_by_resource_id: dict[str, dict[str, Any]] = {}
+        workspace_errors: dict[str, str] = {}
+        for workspace_resource_id in sorted(workspace_resource_ids):
+            try:
+                workspace = self._client.get_log_analytics_workspace(workspace_resource_id)
+            except AzureApiError as exc:
+                logger.warning("Log Analytics workspace lookup failed for %s: %s", workspace_resource_id, exc)
+                workspace_errors[workspace_resource_id] = str(exc)
+                continue
+
+            customer_id = str(workspace.get("customer_id") or "").strip()
+            if not customer_id:
+                message = "Workspace customer ID was not returned"
+                logger.warning("Log Analytics workspace lookup missing customerId for %s", workspace_resource_id)
+                workspace_errors[workspace_resource_id] = message
+                continue
+            workspace_by_resource_id[workspace_resource_id] = workspace
+
+        lookback_days = max(1, int(AZURE_AVD_SESSION_HISTORY_LOOKBACK_DAYS or 90))
+        owner_query = "\n".join(
+            [
+                "WVDConnections",
+                f"| where TimeGenerated >= ago({lookback_days}d)",
+                '| where tolower(tostring(State)) == "connected"',
+                "| where isnotempty(SessionHostAzureVmId)",
+                "| where isnotempty(UserName)",
+                "| summarize arg_max(TimeGenerated, UserName) by SessionHostAzureVmId",
+                "| project SessionHostAzureVmId, UserName, TimeGenerated",
+            ]
+        )
+        workspace_query_errors: dict[str, str] = {}
+        owner_history_by_vm_id: dict[str, dict[str, Any]] = {}
+        for workspace_resource_id, workspace in workspace_by_resource_id.items():
+            try:
+                query_rows = self._client.query_log_analytics_workspace(
+                    str(workspace.get("customer_id") or ""),
+                    owner_query,
+                    timespan=f"P{lookback_days}D",
+                )
+            except AzureApiError as exc:
+                logger.warning("Log Analytics owner history query failed for %s: %s", workspace_resource_id, exc)
+                workspace_query_errors[workspace_resource_id] = str(exc)
+                continue
+
+            for row in query_rows:
+                if not isinstance(row, dict):
+                    continue
+                normalized_vm_id = self._normalize_resource_id(row.get("SessionHostAzureVmId"))
+                assigned_user = str(row.get("UserName") or "").strip()
+                observed_utc = str(row.get("TimeGenerated") or "").strip()
+                observed_dt = self._parse_datetime(observed_utc)
+                if not normalized_vm_id or not assigned_user or not observed_dt:
+                    continue
+                existing = owner_history_by_vm_id.get(normalized_vm_id)
+                existing_dt = self._parse_datetime(existing.get("observed_utc")) if existing else None
+                if existing_dt and existing_dt >= observed_dt:
+                    continue
+                owner_history_by_vm_id[normalized_vm_id] = {
+                    "vm_resource_id": normalized_vm_id,
+                    "assigned_user": assigned_user,
+                    "observed_utc": observed_dt.isoformat(),
+                    "observed_local": self._format_local_datetime_text(observed_dt.isoformat()),
+                    "workspace_resource_id": workspace_resource_id,
+                    "workspace_name": str(workspace.get("name") or ""),
+                }
+
+        for host_pool in personal_host_pools:
+            if host_pool.get("owner_history_status") != "available":
+                continue
+            effective_workspace_ids = [
+                self._normalize_resource_id(workspace_id)
+                for workspace_id in host_pool.get("diagnostics_workspace_ids") or []
+                if self._normalize_resource_id(workspace_id)
+            ]
+            successful_workspace_ids = [
+                workspace_id
+                for workspace_id in effective_workspace_ids
+                if workspace_id not in workspace_errors and workspace_id not in workspace_query_errors
+            ]
+            if successful_workspace_ids:
+                host_pool["owner_history_status"] = "available"
+                host_pool["owner_history_error"] = ""
+                continue
+            host_pool["owner_history_status"] = "query_failed"
+            failure_messages = [
+                workspace_errors.get(workspace_id) or workspace_query_errors.get(workspace_id) or ""
+                for workspace_id in effective_workspace_ids
+            ]
+            host_pool["owner_history_error"] = "; ".join(message for message in failure_messages if message)
+
+        avd_owner_history = list(owner_history_by_vm_id.values())
+        avd_owner_history.sort(key=lambda item: str(item.get("vm_resource_id") or ""))
+        return normalized_host_pools, avd_session_hosts, avd_owner_history
 
     @staticmethod
     def _format_currency_text(value: Any, currency: str = "USD") -> str:
@@ -1746,42 +1975,86 @@ class AzureCache:
                 }
         return None
 
+    def _build_avd_host_pool_index(
+        self,
+        host_pools: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        host_pool_by_id: dict[str, dict[str, Any]] = {}
+        for item in host_pools:
+            if not isinstance(item, dict):
+                continue
+            normalized_id = self._normalize_resource_id(item.get("id"))
+            if not normalized_id:
+                continue
+            host_pool_by_id[normalized_id] = item
+        return host_pool_by_id
+
     def _build_virtual_desktop_assignment_index(
         self,
-        resources: list[dict[str, Any]],
+        session_hosts: list[dict[str, Any]],
         user_index: dict[str, dict[str, Any]],
     ) -> dict[str, dict[str, Any]]:
         assignment_by_vm_id: dict[str, dict[str, Any]] = {}
-        for item in resources:
-            if str(item.get("resource_type") or "").lower() != "microsoft.desktopvirtualization/hostpools/sessionhosts":
+        for item in session_hosts:
+            if not isinstance(item, dict):
                 continue
-            vm_resource_id = self._normalize_resource_id(item.get("avd_resource_id"))
+            host_pool_type = str(item.get("host_pool_type") or "").strip().lower()
+            if host_pool_type and host_pool_type != "personal":
+                continue
+            vm_resource_id = self._normalize_resource_id(item.get("vm_resource_id"))
             if not vm_resource_id:
                 continue
-            assigned_user = str(item.get("avd_assigned_user") or "").strip()
+            assigned_user = str(item.get("assigned_user") or "").strip()
             assignment_by_vm_id[vm_resource_id] = {
                 "assigned_user": assigned_user,
-                "assignment_source": "session-host",
+                "assignment_source": "avd:assigned-user" if assigned_user else "avd:session-host",
+                "assigned_user_source": "avd_assigned" if assigned_user else "unassigned",
+                "assigned_user_source_label": "AVD assigned user" if assigned_user else "Unassigned",
+                "assigned_user_observed_utc": "",
+                "assigned_user_observed_local": "",
                 "assigned_user_record": self._resolve_virtual_desktop_user(assigned_user, user_index),
-                "host_pool_name": self._resource_id_segment(item.get("id"), "hostPools"),
-                "session_host_name": str(item.get("name") or ""),
+                "host_pool_id": str(item.get("host_pool_id") or ""),
+                "host_pool_name": str(item.get("host_pool_name") or ""),
+                "session_host_name": str(item.get("session_host_name") or item.get("name") or ""),
             }
         return assignment_by_vm_id
+
+    def _build_avd_owner_history_index(
+        self,
+        owner_history_rows: list[dict[str, Any]],
+        user_index: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        owner_history_by_vm_id: dict[str, dict[str, Any]] = {}
+        for item in owner_history_rows:
+            if not isinstance(item, dict):
+                continue
+            vm_resource_id = self._normalize_resource_id(item.get("vm_resource_id"))
+            if not vm_resource_id:
+                continue
+            assigned_user = str(item.get("assigned_user") or "").strip()
+            observed_utc = str(item.get("observed_utc") or "").strip()
+            owner_history_by_vm_id[vm_resource_id] = {
+                "assigned_user": assigned_user,
+                "assignment_source": "avd:last-session" if assigned_user else "avd:session-history",
+                "assigned_user_source": "avd_last_session" if assigned_user else "unassigned",
+                "assigned_user_source_label": "Last AVD session user" if assigned_user else "Unassigned",
+                "assigned_user_observed_utc": observed_utc,
+                "assigned_user_observed_local": str(item.get("observed_local") or ""),
+                "assigned_user_record": self._resolve_virtual_desktop_user(assigned_user, user_index),
+                "workspace_resource_id": str(item.get("workspace_resource_id") or ""),
+                "workspace_name": str(item.get("workspace_name") or ""),
+            }
+        return owner_history_by_vm_id
 
     def _is_virtual_desktop_candidate_vm(
         self,
         vm_item: dict[str, Any],
         assignment_by_vm_id: dict[str, dict[str, Any]],
-        user_index: dict[str, dict[str, Any]],
     ) -> bool:
         if not self._is_virtual_machine(vm_item):
             return False
         normalized_vm_id = self._normalize_resource_id(vm_item.get("id"))
-        if normalized_vm_id and normalized_vm_id in assignment_by_vm_id:
-            return True
-        if self._virtual_desktop_platform_hint_assignment(vm_item):
-            return True
-        return False
+        return bool(normalized_vm_id and normalized_vm_id in assignment_by_vm_id)
 
     def _build_resource_graph_indexes(
         self,
@@ -2060,48 +2333,50 @@ class AzureCache:
         resources = self._snapshot("resources") or []
         users = self._snapshot("users") or []
         vm_run_observations = self._snapshot("vm_run_observations") or {}
+        avd_host_pools = self._snapshot("avd_host_pools") or []
+        avd_session_hosts = self._snapshot("avd_session_hosts") or []
+        avd_owner_history = self._snapshot("avd_owner_history") or []
         resource_rows = resources if isinstance(resources, list) else []
         user_rows = users if isinstance(users, list) else []
+        host_pool_rows = avd_host_pools if isinstance(avd_host_pools, list) else []
+        session_host_rows = avd_session_hosts if isinstance(avd_session_hosts, list) else []
+        owner_history_rows = avd_owner_history if isinstance(avd_owner_history, list) else []
         user_index = self._build_virtual_desktop_user_index(user_rows)
-        assignment_by_vm_id = self._build_virtual_desktop_assignment_index(
-            resource_rows,
-            user_index,
-        )
+        host_pool_by_id = self._build_avd_host_pool_index(host_pool_rows)
+        assignment_by_vm_id = self._build_virtual_desktop_assignment_index(session_host_rows, user_index)
+        owner_history_by_vm_id = self._build_avd_owner_history_index(owner_history_rows, user_index)
 
         all_rows: list[dict[str, Any]] = []
         for item in resource_rows:
-            if not self._is_virtual_desktop_candidate_vm(item, assignment_by_vm_id, user_index):
+            if not self._is_virtual_desktop_candidate_vm(item, assignment_by_vm_id):
                 continue
 
             normalized_vm_id = self._normalize_resource_id(item.get("id"))
-            session_host_assignment = assignment_by_vm_id.get(normalized_vm_id)
-            tag_assignment = self._virtual_desktop_assignment_from_tags(item, user_index)
-            hint_assignment = self._virtual_desktop_platform_hint_assignment(item)
-            assignment: dict[str, Any] | None = None
-            if session_host_assignment:
-                assignment = dict(session_host_assignment)
-                if (
-                    tag_assignment
-                    and (
-                        not assignment.get("assigned_user")
-                        or not assignment.get("assigned_user_record")
-                    )
-                ):
-                    assignment["assigned_user"] = str(tag_assignment.get("assigned_user") or "")
-                    assignment["assigned_user_record"] = tag_assignment.get("assigned_user_record")
-                    assignment["assignment_source"] = (
-                        f"{session_host_assignment.get('assignment_source')} + {tag_assignment.get('assignment_source')}"
-                    )
-            elif hint_assignment:
-                assignment = dict(hint_assignment)
-                if tag_assignment:
-                    assignment["assigned_user"] = str(tag_assignment.get("assigned_user") or "")
-                    assignment["assigned_user_record"] = tag_assignment.get("assigned_user_record")
-                    assignment["assignment_source"] = (
-                        f"{hint_assignment.get('assignment_source')} + {tag_assignment.get('assignment_source')}"
-                    )
+            session_host_assignment = assignment_by_vm_id.get(normalized_vm_id) or {}
+            owner_history_assignment = owner_history_by_vm_id.get(normalized_vm_id) or {}
+            assignment: dict[str, Any] | None = dict(session_host_assignment) if session_host_assignment else None
             if not assignment:
                 continue
+
+            if not str(assignment.get("assigned_user") or "").strip() and owner_history_assignment:
+                assignment["assigned_user"] = str(owner_history_assignment.get("assigned_user") or "")
+                assignment["assignment_source"] = str(owner_history_assignment.get("assignment_source") or "")
+                assignment["assigned_user_source"] = str(owner_history_assignment.get("assigned_user_source") or "")
+                assignment["assigned_user_source_label"] = str(
+                    owner_history_assignment.get("assigned_user_source_label") or ""
+                )
+                assignment["assigned_user_observed_utc"] = str(
+                    owner_history_assignment.get("assigned_user_observed_utc") or ""
+                )
+                assignment["assigned_user_observed_local"] = str(
+                    owner_history_assignment.get("assigned_user_observed_local") or ""
+                )
+                assignment["assigned_user_record"] = owner_history_assignment.get("assigned_user_record")
+
+            host_pool = None
+            normalized_host_pool_id = self._normalize_resource_id(assignment.get("host_pool_id"))
+            if normalized_host_pool_id:
+                host_pool = host_pool_by_id.get(normalized_host_pool_id)
 
             assigned_user_record = (
                 assignment.get("assigned_user_record")
@@ -2158,6 +2433,12 @@ class AzureCache:
             elif not assigned_user_record:
                 assignment_status = "unresolved"
 
+            owner_history_status = str(host_pool.get("owner_history_status") or "") if host_pool else ""
+            if not owner_history_status:
+                owner_history_status = "no_history"
+            elif owner_history_status == "available" and not owner_history_assignment and not assigned_user_raw:
+                owner_history_status = "no_history"
+
             removal_reasons: list[str] = []
             if power_signal_stale:
                 removal_reasons.append(f"No running signal in {threshold_days}+ days")
@@ -2189,7 +2470,16 @@ class AzureCache:
             row["assigned_user_last_successful_local"] = last_successful_local
             row["assignment_source"] = str(assignment.get("assignment_source") or "")
             row["assignment_status"] = assignment_status
-            row["host_pool_name"] = str(assignment.get("host_pool_name") or "")
+            row["assigned_user_source"] = str(assignment.get("assigned_user_source") or "unassigned")
+            row["assigned_user_source_label"] = str(assignment.get("assigned_user_source_label") or "Unassigned")
+            row["assigned_user_observed_utc"] = str(assignment.get("assigned_user_observed_utc") or "")
+            row["assigned_user_observed_local"] = str(assignment.get("assigned_user_observed_local") or "")
+            row["owner_history_status"] = owner_history_status
+            row["host_pool_name"] = str(
+                assignment.get("host_pool_name")
+                or (host_pool.get("name") if isinstance(host_pool, dict) else "")
+                or ""
+            )
             row["session_host_name"] = str(assignment.get("session_host_name") or "")
             row["last_power_signal_utc"] = last_running_utc
             row["last_power_signal_local"] = last_running_local
@@ -2227,6 +2517,15 @@ class AzureCache:
             "assignment_review_required": sum(1 for item in all_rows if item.get("assignment_status") != "resolved"),
             "power_signal_pending": sum(1 for item in all_rows if item.get("power_signal_pending")),
             "account_follow_up_count": sum(1 for item in all_rows if item.get("mark_account_for_follow_up")),
+            "explicit_avd_assignments": sum(1 for item in all_rows if item.get("assigned_user_source") == "avd_assigned"),
+            "fallback_session_history_assignments": sum(
+                1 for item in all_rows if item.get("assigned_user_source") == "avd_last_session"
+            ),
+            "owner_history_unavailable": sum(
+                1
+                for item in all_rows
+                if item.get("owner_history_status") in {"missing_diagnostics", "query_failed"}
+            ),
         }
 
         search_lower = search.strip().lower()
@@ -2246,7 +2545,9 @@ class AzureCache:
                         str(item.get("assigned_user_display_name") or ""),
                         str(item.get("assigned_user_principal_name") or ""),
                         str(item.get("assignment_source") or ""),
+                        str(item.get("assigned_user_source_label") or ""),
                         str(item.get("assignment_status") or ""),
+                        str(item.get("owner_history_status") or ""),
                         str(item.get("account_action") or ""),
                         " ".join(item.get("removal_reasons") or []),
                     ]
