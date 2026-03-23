@@ -8,6 +8,8 @@ services:
       - "443:443"
     environment:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+    networks:
+      app_net:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -31,7 +33,16 @@ services:
       - ./private:/app/private:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      app_net:
+        ipv4_address: 172.19.0.10
     restart: unless-stopped
+
+networks:
+  app_net:
+    ipam:
+      config:
+        - subnet: 172.19.0.0/24
 
 volumes:
   cache_data:

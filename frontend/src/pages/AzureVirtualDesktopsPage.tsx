@@ -61,6 +61,38 @@ function assignmentBadge(status: AzureVirtualDesktopRow["assignment_status"]) {
   return flagBadge(true, "Unresolved", "Unresolved", "amber");
 }
 
+function statusBadge(label: string, tone: "red" | "amber" | "emerald" | "sky" | "slate") {
+  const styles = {
+    red: "bg-red-100 text-red-700",
+    amber: "bg-amber-100 text-amber-700",
+    emerald: "bg-emerald-100 text-emerald-700",
+    sky: "bg-sky-100 text-sky-700",
+    slate: "bg-slate-100 text-slate-500",
+  };
+  return <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${styles[tone]}`}>{label}</span>;
+}
+
+function userStatusBadges(row: AzureVirtualDesktopRow) {
+  const badges = [];
+  if (row.assigned_user_enabled === false) {
+    badges.push(statusBadge("Disabled", "red"));
+  } else if (row.assigned_user_enabled === true) {
+    badges.push(statusBadge("Enabled", "emerald"));
+  } else {
+    badges.push(statusBadge("Status unknown", "slate"));
+  }
+
+  if (row.assigned_user_licensed === false) {
+    badges.push(statusBadge("Unlicensed", "amber"));
+  } else if (row.assigned_user_licensed === true) {
+    badges.push(statusBadge("Licensed", "sky"));
+  } else {
+    badges.push(statusBadge("License unknown", "slate"));
+  }
+
+  return badges;
+}
+
 function signalText(days: number | null, localText: string, emptyLabel: string): string {
   if (days === null) return emptyLabel;
   if (days <= 0) return "Today";
@@ -224,6 +256,7 @@ export default function AzureVirtualDesktopsPage() {
                     sortDir={sortDir}
                     onSort={toggleSort}
                   />
+                  <th className="px-4 py-3">User Status</th>
                   <SortHeader col="host_pool" label="Host Pool" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortHeader
                     col="power_state"
@@ -269,8 +302,13 @@ export default function AzureVirtualDesktopsPage() {
                       <div className="mt-1 text-xs text-slate-500">{desktop.assigned_user_principal_name || "—"}</div>
                       <div className="mt-2 flex flex-wrap gap-1">
                         {assignmentBadge(desktop.assignment_status)}
-                        {flagBadge(desktop.assigned_user_enabled === false, "Disabled", "Enabled / Unknown", "red")}
-                        {flagBadge(desktop.assigned_user_licensed === false, "Unlicensed", "Licensed / Unknown", "amber")}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      <div className="flex flex-wrap gap-1">
+                        {userStatusBadges(desktop).map((badge, badgeIndex) => (
+                          <span key={`${desktop.id}-status-${badgeIndex}`}>{badge}</span>
+                        ))}
                       </div>
                     </td>
                     <td className="px-4 py-3 align-top text-slate-600">
@@ -292,10 +330,17 @@ export default function AzureVirtualDesktopsPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 align-top text-slate-600">
-                      {signalText(
-                        desktop.days_since_assigned_user_login,
-                        desktop.assigned_user_last_successful_local,
-                        "No successful Entra sign-in recorded",
+                      {desktop.days_since_assigned_user_login === null ? (
+                        <span className="text-xs font-medium text-amber-700">No successful Entra sign-in recorded</span>
+                      ) : (
+                        <div>
+                          <div className="font-medium text-slate-900">
+                            {desktop.assigned_user_last_successful_local || "Recorded sign-in"}
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {signalText(desktop.days_since_assigned_user_login, "", "No successful Entra sign-in recorded")}
+                          </div>
+                        </div>
                       )}
                     </td>
                     <td className="px-4 py-3 align-top">{reasonBadges(desktop.removal_reasons)}</td>

@@ -8,7 +8,7 @@ it-app.movedocs.com, oasisdev.movedocs.com, azure.movedocs.com {
 		}
 		issuer internal
 	}
-	reverse_proxy dashboard:80 {
+	reverse_proxy 172.19.0.10:80 {
 		header_up Host {http.request.host}
 		header_up X-Forwarded-Host {http.request.host}
 		header_up X-Forwarded-Proto {http.request.scheme}

@@ -96,6 +96,13 @@ describe("AzureVirtualDesktopsPage", () => {
     render(<AzureVirtualDesktopsPage />);
 
     await screen.findByText("avd-vm-1");
+    expect(screen.getByText("Assigned User")).toBeInTheDocument();
+    expect(screen.getByText("User Status")).toBeInTheDocument();
+    expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
+    expect(screen.getByText("Licensed")).toBeInTheDocument();
+    expect(screen.getByText("2026-02-17 04:00 PM PST")).toBeInTheDocument();
+    expect(screen.getByText("34d ago")).toBeInTheDocument();
     expect(screen.getByText("Assigned user is disabled")).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText(/Search desktop, assigned user/i), {
