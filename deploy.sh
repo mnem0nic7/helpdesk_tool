@@ -8,6 +8,8 @@ export COMPOSE_DOCKER_CLI_BUILD=1
 
 STATE_DIR=".deploy-state"
 STATE_FILE="${STATE_DIR}/last_deployed_sha"
+PRIMARY_PUBLIC_HOST="it-app.movedocs.com"
+PRIMARY_PUBLIC_BASE_URL="https://${PRIMARY_PUBLIC_HOST}"
 
 MODE="auto"
 BUILD_FLAGS=()
@@ -236,14 +238,42 @@ wait_for_http() {
     return 1
 }
 
+curl_public_local() {
+    local url="$1"
+    curl -fsS --connect-timeout 5 --max-time 10 \
+        --resolve "${PRIMARY_PUBLIC_HOST}:443:127.0.0.1" "$url"
+}
+
+wait_for_public_https() {
+    local path="$1"
+    local label="$2"
+    local attempts="${3:-120}"
+
+    local url="${PRIMARY_PUBLIC_BASE_URL}${path}"
+
+    echo ">>> Waiting for ${label}..."
+    for _ in $(seq 1 "$attempts"); do
+        if curl_public_local "$url" >/dev/null 2>&1; then
+            echo ">>> ${label} is ready"
+            return 0
+        fi
+        printf "."
+        sleep 1
+    done
+    echo ""
+    echo "ERROR: Timed out waiting for ${label} (${url})"
+    return 1
+}
+
 print_readiness() {
-    if curl -fsS http://localhost:80/api/health/ready; then
+    if curl_public_local "${PRIMARY_PUBLIC_BASE_URL}/api/health/ready"; then
         echo ""
         return 0
     fi
     echo ""
     echo ">>> Readiness still warming:"
-    curl -sS http://localhost:80/api/health/ready || true
+    curl --silent --show-error --resolve "${PRIMARY_PUBLIC_HOST}:443:127.0.0.1" \
+        "${PRIMARY_PUBLIC_BASE_URL}/api/health/ready" || true
     echo ""
 }
 
@@ -293,12 +323,12 @@ esac
 
 if [[ "$BACKEND_REQUIRED" == "1" ]]; then
     verify_backend_ollama
-    wait_for_http "http://localhost:80/api/health" "API liveness"
+    wait_for_public_https "/api/health" "API liveness"
     print_readiness
 fi
 
 if [[ "$FRONTEND_REQUIRED" == "1" || "$FULL_STACK" == "1" ]]; then
-    wait_for_http "http://localhost:80/" "frontend shell"
+    wait_for_public_https "/" "frontend shell"
 fi
 
 mkdir -p "$STATE_DIR"
