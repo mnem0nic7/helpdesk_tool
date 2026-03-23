@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest"
 import { render, screen } from "@testing-library/react"
+import type { ReactElement } from "react"
 import AppErrorBoundary from "../components/AppErrorBoundary"
 
 const logClientError = vi.fn()
@@ -12,7 +13,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function ThrowingChild() {
+function ThrowingChild(): ReactElement {
   throw new Error("render failed")
 }
 
@@ -33,4 +34,3 @@ describe("AppErrorBoundary", () => {
     consoleErrorSpy.mockRestore()
   })
 })
-
