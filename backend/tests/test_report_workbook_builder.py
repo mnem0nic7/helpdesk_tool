@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zipfile
 from datetime import date
 from pathlib import Path
 
@@ -20,7 +21,34 @@ def _make_issue(
     resolved: str | None = None,
     labels: list[str] | None = None,
     components: list[str] | None = None,
+    request_type: str = "Business Application Support",
+    sla_response_status: str | None = None,
+    sla_resolution_status: str | None = None,
 ) -> dict:
+    def _sla_field(status_value: str | None, elapsed_millis: int) -> dict | None:
+        if not status_value:
+            return None
+        normalized = status_value.strip().lower()
+        if normalized == "(none)":
+            return None
+        if normalized in {"met", "breached"}:
+            return {
+                "completedCycles": [
+                    {
+                        "elapsedTime": {"millis": elapsed_millis},
+                        "breached": normalized == "breached",
+                    }
+                ],
+                "ongoingCycle": None,
+            }
+        return {
+            "completedCycles": [],
+            "ongoingCycle": {
+                "paused": normalized == "paused",
+                "elapsedTime": {"millis": elapsed_millis},
+            },
+        }
+
     return {
         "key": key,
         "fields": {
@@ -36,15 +64,45 @@ def _make_issue(
             "resolutiondate": resolved,
             "labels": labels or [],
             "components": [{"name": value} for value in (components or [])],
-            "customfield_11266": None,
-            "customfield_11264": None,
+            "customfield_11266": _sla_field(sla_response_status, 3_600_000),
+            "customfield_11264": _sla_field(sla_resolution_status, 7_200_000),
             "customfield_11239": "Service requests",
-            "customfield_10010": {"requestType": {"name": "Business Application Support"}},
+            "customfield_10010": {"requestType": {"name": request_type}},
             "customfield_10700": [],
             "attachment": [],
             "comment": {"total": 2, "comments": []},
         },
     }
+
+
+def _make_template(
+    *,
+    id: str,
+    name: str,
+    category: str,
+    group_by: str,
+    sort_field: str,
+    readiness: str = "ready",
+    notes: str = "",
+) -> ReportTemplate:
+    return ReportTemplate(
+        id=id,
+        site_scope="primary",
+        name=name,
+        description="",
+        category=category,
+        notes=notes,
+        readiness=readiness,
+        is_seed=True,
+        include_in_master_export=True,
+        created_at="2026-03-24T00:00:00+00:00",
+        updated_at="2026-03-24T00:00:00+00:00",
+        created_by_email="",
+        created_by_name="",
+        updated_by_email="",
+        updated_by_name="",
+        config=ReportConfig(group_by=group_by, sort_field=sort_field),
+    )
 
 
 def test_apply_changelog_tracks_reopens_priority_increases_and_assignee_changes():
@@ -205,9 +263,265 @@ def test_master_workbook_hides_dashboard_helper_columns_and_aligns_first_respons
     report_index = workbook["Report Index"]
     data_gaps = workbook["Data Gaps"]
     helper_sheet = workbook["Executive Dashboard Data"]
+    detail_sheet = workbook["First Response Time 7d"]
+    trends = workbook["Trends"]
 
     assert dashboard["I1"].value is None
     assert dashboard["M1"].value is None
     assert helper_sheet.sheet_state == "hidden"
-    assert report_index["H2"].value == "proxy"
+    assert report_index["A1"].value == "Status"
+    assert report_index["A2"].value == "⚠️"
+    assert report_index["I2"].value == "proxy"
+    assert dashboard["F6"].value == "Trend"
+    assert dashboard["G6"].value == "Key Findings & Actions"
     assert data_gaps["C4"].value == "proxy"
+    assert detail_sheet["B7"].value == "proxy"
+    assert detail_sheet["B7"].comment is not None
+    assert detail_sheet["H13"].value == "Δ Count vs Prior"
+    assert detail_sheet["A15"].value == "Total"
+    assert isinstance(detail_sheet["B15"].value, str) and detail_sheet["B15"].value.startswith("=")
+    assert detail_sheet["A16"].value == "First Response SLA Met %"
+    assert trends["I4"].value == "Created (7d MA)"
+    assert trends["L4"].value == "Day"
+
+
+def test_master_workbook_adds_percent_columns_total_rows_and_dashboard_formulas(tmp_path: Path):
+    builder = ReportWorkbookBuilder(
+        all_issues=[
+            _make_issue(
+                key="OIT-501",
+                created="2026-03-20T00:00:00+00:00",
+                updated="2026-03-22T00:00:00+00:00",
+                resolved="2026-03-22T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+                priority="High",
+                request_type="Access Request",
+                sla_response_status="Met",
+                sla_resolution_status="Met",
+            ),
+            _make_issue(
+                key="OIT-502",
+                created="2026-03-21T00:00:00+00:00",
+                updated="2026-03-23T00:00:00+00:00",
+                resolved="2026-03-23T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+                priority="Low",
+                request_type="Access Request",
+                sla_response_status="BREACHED",
+                sla_resolution_status="BREACHED",
+            ),
+            _make_issue(
+                key="OIT-503",
+                created="2026-03-21T00:00:00+00:00",
+                status="In Progress",
+                status_category="In Progress",
+                priority="Medium",
+                request_type="Laptop",
+                sla_response_status="Running",
+                sla_resolution_status="Running",
+            ),
+        ],
+        site_scope="primary",
+        today=date(2026, 3, 24),
+        enable_changelog_fetch=False,
+    )
+    templates = [
+        _make_template(id="tpl-mttr", name="Mean Time to Resolution", category="Executive", group_by="priority", sort_field="resolved"),
+        _make_template(id="tpl-sla", name="SLA Compliance Rate", category="Executive", group_by="sla_resolution_status", sort_field="created"),
+        _make_template(id="tpl-volume", name="Ticket Volume by Category", category="Executive", group_by="request_type", sort_field="created"),
+        _make_template(id="tpl-backlog", name="Backlog Size & Aging", category="Operational", group_by="status", sort_field="created"),
+        _make_template(id="tpl-escalation", name="Escalation Rate", category="Operational", group_by="assignee", sort_field="updated", readiness="proxy", notes="Proxy escalation review."),
+        _make_template(id="tpl-fr", name="First Response Time", category="Operational", group_by="sla_first_response_status", sort_field="created"),
+        _make_template(id="tpl-fcr", name="First Contact Resolution", category="Quality", group_by="request_type", sort_field="resolved", readiness="proxy", notes="Proxy FCR review."),
+    ]
+    path = tmp_path / "master-structure.xlsx"
+
+    builder.build_master_report(path=str(path), templates=templates)
+
+    workbook = load_workbook(path)
+    ticket_volume = workbook["Ticket Volume by Category 7d"]
+    backlog_7 = workbook["Backlog Size & Aging 7d"]
+    backlog_30 = workbook["Backlog Size & Aging 30d"]
+    escalation = workbook["Escalation Rate 30d"]
+    fcr = workbook["First Contact Resolution 30d"]
+    dashboard = workbook["Executive Dashboard"]
+
+    ticket_total_row = next(row for row in range(14, ticket_volume.max_row + 1) if ticket_volume[f"A{row}"].value == "Total")
+    assert ticket_volume["I13"].value == "% of Total"
+    assert ticket_volume[f"I{ticket_total_row}"].number_format == "0.0%"
+    assert isinstance(ticket_volume[f"I{ticket_total_row}"].value, str) and ticket_volume[f"I{ticket_total_row}"].value.startswith("=")
+    assert backlog_7["C13"].value == "In Progress"
+    assert "Acknowledged" not in [backlog_7.cell(13, idx).value for idx in range(1, 13)]
+    assert backlog_7["L13"].value == "Δ Count vs Prior"
+    assert backlog_30["C13"].value == "Acknowledged"
+    assert backlog_30["M13"].value == "Δ Count vs Prior"
+    assert escalation["I14"].number_format == "0.0%"
+    assert fcr["I14"].number_format == "0.0%"
+    assert isinstance(dashboard["B7"].value, str) and dashboard["B7"].value.startswith("=")
+    assert isinstance(dashboard["B11"].value, str) and dashboard["B11"].value.startswith("=")
+    assert isinstance(dashboard["F7"].value, str) and dashboard["F7"].value.startswith("=")
+    assert dashboard["G6"].value == "Key Findings & Actions"
+
+    with zipfile.ZipFile(path) as workbook_zip:
+        worksheet_xml = "\n".join(
+            workbook_zip.read(name).decode("utf-8", "ignore")
+            for name in workbook_zip.namelist()
+            if name.startswith("xl/worksheets/sheet")
+        )
+
+    assert "sparklineGroup" in worksheet_xml
+
+
+def test_master_workbook_flags_escalation_anomaly(tmp_path: Path):
+    issues = []
+    for idx in range(120):
+        issues.append(
+            _make_issue(
+                key=f"OIT-A-{idx}",
+                created="2026-03-01T00:00:00+00:00",
+                updated="2026-03-06T00:00:00+00:00",
+                resolved="2026-03-06T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+            )
+        )
+    for idx in range(5):
+        issues.append(
+            _make_issue(
+                key=f"OIT-B-{idx}",
+                created="2026-03-01T00:00:00+00:00",
+                updated="2026-03-05T00:00:00+00:00",
+                resolved="2026-03-05T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+            )
+        )
+
+    builder = ReportWorkbookBuilder(
+        all_issues=issues,
+        site_scope="primary",
+        today=date(2026, 3, 24),
+        enable_changelog_fetch=False,
+    )
+    for idx in range(120):
+        fact = builder._facts_by_key[f"OIT-A-{idx}"]
+        builder._apply_changelog(
+            fact,
+            [
+                {
+                    "created": "2026-03-06T01:00:00+00:00",
+                    "items": [{"field": "assignee", "fromString": "Taylor Ops", "toString": "Jordan Tech"}],
+                },
+                {
+                    "created": "2026-03-06T02:00:00+00:00",
+                    "items": [{"field": "assignee", "fromString": "Jordan Tech", "toString": "Morgan Lead"}],
+                },
+            ],
+        )
+        fact.changelog_loaded = True
+    for idx in range(5):
+        fact = builder._facts_by_key[f"OIT-B-{idx}"]
+        builder._apply_changelog(
+            fact,
+            [
+                {
+                    "created": "2026-03-05T01:00:00+00:00",
+                    "items": [{"field": "assignee", "fromString": "Taylor Ops", "toString": "Jordan Tech"}],
+                },
+                {
+                    "created": "2026-03-05T02:00:00+00:00",
+                    "items": [{"field": "assignee", "fromString": "Jordan Tech", "toString": "Morgan Lead"}],
+                },
+            ],
+        )
+        fact.changelog_loaded = True
+
+    template = ReportTemplate(
+        id="tpl-escalation",
+        site_scope="primary",
+        name="Escalation Rate",
+        description="",
+        category="Operational",
+        notes="Proxy escalation review.",
+        readiness="proxy",
+        is_seed=True,
+        include_in_master_export=True,
+        created_at="2026-03-24T00:00:00+00:00",
+        updated_at="2026-03-24T00:00:00+00:00",
+        created_by_email="",
+        created_by_name="",
+        updated_by_email="",
+        updated_by_name="",
+        config=ReportConfig(group_by="assignee", sort_field="updated"),
+    )
+    path = tmp_path / "master-escalation.xlsx"
+
+    builder.build_master_report(path=str(path), templates=[template])
+
+    workbook = load_workbook(path)
+    trends = workbook["Trends"]
+    dashboard = workbook["Executive Dashboard"]
+    data_gaps = workbook["Data Gaps"]
+
+    anomaly_row = None
+    for row_idx in range(5, trends.max_row + 1):
+        if trends[f"A{row_idx}"].value == "2026-03-06":
+            anomaly_row = row_idx
+            break
+
+    assert anomaly_row is not None
+    assert trends[f"H{anomaly_row}"].comment is not None
+    assert "suspected outlier" in dashboard["G11"].value.lower()
+    assert any(data_gaps[f"C{row_idx}"].value == "anomaly" for row_idx in range(4, data_gaps.max_row + 1))
+
+
+def test_master_workbook_chart_xml_uses_dashed_secondary_mttr_axis(tmp_path: Path):
+    builder = ReportWorkbookBuilder(
+        all_issues=[
+            _make_issue(
+                key=f"OIT-MTTR-{idx}",
+                created="2026-03-20T00:00:00+00:00",
+                updated="2026-03-21T00:00:00+00:00",
+                resolved="2026-03-21T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+            )
+            for idx in range(3)
+        ],
+        site_scope="primary",
+        today=date(2026, 3, 24),
+        enable_changelog_fetch=False,
+    )
+    template = ReportTemplate(
+        id="tpl-mttr",
+        site_scope="primary",
+        name="Mean Time to Resolution",
+        description="",
+        category="Executive",
+        notes="",
+        readiness="ready",
+        is_seed=True,
+        include_in_master_export=True,
+        created_at="2026-03-24T00:00:00+00:00",
+        updated_at="2026-03-24T00:00:00+00:00",
+        created_by_email="",
+        created_by_name="",
+        updated_by_email="",
+        updated_by_name="",
+        config=ReportConfig(group_by="priority", sort_field="resolved"),
+    )
+    path = tmp_path / "chart-master.xlsx"
+
+    builder.build_master_report(path=str(path), templates=[template])
+
+    with zipfile.ZipFile(path) as workbook_zip:
+        chart_xml = "\n".join(
+            workbook_zip.read(name).decode("utf-8", "ignore")
+            for name in workbook_zip.namelist()
+            if name.startswith("xl/charts/chart")
+        )
+
+    assert "MTTR P95 (hours)" in chart_xml
+    assert "dash" in chart_xml

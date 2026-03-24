@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Sequence
 
 import xlsxwriter
-from xlsxwriter.utility import xl_col_to_name
+from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 
 from jira_client import JiraClient
 from metrics import extract_sla_info, issue_to_row, parse_dt, percentile
@@ -184,6 +184,39 @@ class ChartTableInfo:
     column_map: dict[str, int]
 
 
+@dataclass
+class MasterSheetSummary:
+    """Metadata for one master-workbook detail sheet."""
+
+    report_name: str
+    sheet_name: str
+    window_label: str
+    window_field_label: str
+    window_start: date
+    window_end: date
+    category: str
+    readiness: str
+    view_type: str
+    row_count: int
+    description: str
+    notes: str
+    report_kind: str
+    table_info: ChartTableInfo
+    total_row: int | None = None
+    metric_row: int | None = None
+
+
+@dataclass
+class TrendAnomaly:
+    """A suspicious daily escalation spike detected during build."""
+
+    row_idx: int
+    excel_row: int
+    day: str
+    count: int
+    baseline_peak: int
+
+
 def _sanitize_for_excel(value: str) -> str:
     if value and value[0] in ("=", "+", "-", "@"):
         return "\t" + value
@@ -200,6 +233,43 @@ def _cell_value(value: Any) -> Any:
     if isinstance(value, str):
         return _sanitize_for_excel(value)
     return value
+
+
+def _cell_ref(row_idx: int, col_idx: int, *, absolute: bool = False) -> str:
+    return xl_rowcol_to_cell(row_idx, col_idx, row_abs=absolute, col_abs=absolute)
+
+
+def _range_ref(
+    first_row: int,
+    first_col: int,
+    last_row: int,
+    last_col: int,
+    *,
+    absolute: bool = False,
+) -> str:
+    start = _cell_ref(first_row, first_col, absolute=absolute)
+    end = _cell_ref(last_row, last_col, absolute=absolute)
+    return f"{start}:{end}"
+
+
+def _safe_sum_formula(range_ref: str) -> str:
+    return f"SUM({range_ref})"
+
+
+def _safe_max_formula(range_ref: str) -> str:
+    return f'IF(COUNTA({range_ref})=0,0,MAX({range_ref}))'
+
+
+def _weighted_average_formula(weight_range: str, value_range: str) -> str:
+    total = _safe_sum_formula(weight_range)
+    return f"IF({total}=0,0,SUMPRODUCT({weight_range},{value_range})/{total})"
+
+
+def _status_match_formula(label_range: str, target: str, value_range: str, denominator_formula: str) -> str:
+    return (
+        f'IF(({denominator_formula})=0,0,IFERROR('
+        f'INDEX({value_range},MATCH("{target}",{label_range},0))/({denominator_formula}),0))'
+    )
 
 
 def _sanitize_sheet_name(name: str) -> str:
@@ -649,7 +719,755 @@ class ReportWorkbookBuilder:
         finally:
             workbook.close()
 
+    def _detect_escalation_anomaly(self, trend_rows: Sequence[dict[str, Any]]) -> TrendAnomaly | None:
+        ranked = sorted(
+            (
+                {
+                    "idx": idx,
+                    "count": int(row.get("escalation_count") or 0),
+                    "date": str(row.get("date") or ""),
+                }
+                for idx, row in enumerate(trend_rows)
+            ),
+            key=lambda item: item["count"],
+            reverse=True,
+        )
+        if not ranked or ranked[0]["count"] < 100:
+            return None
+        baseline = ranked[1]["count"] if len(ranked) > 1 else 0
+        if ranked[0]["count"] < max(1, baseline) * 10:
+            return None
+        row_idx = 4 + ranked[0]["idx"]
+        return TrendAnomaly(
+            row_idx=row_idx,
+            excel_row=row_idx + 1,
+            day=ranked[0]["date"],
+            count=ranked[0]["count"],
+            baseline_peak=baseline,
+        )
+
+    def _write_master_index_sheet(self, worksheet, formats: dict[str, Any], rows: Sequence[dict[str, Any]]) -> None:
+        headers = [
+            "Status",
+            "Report",
+            "Sheet",
+            "Window",
+            "Window Field",
+            "Window Start",
+            "Window End",
+            "Category",
+            "Readiness",
+            "View",
+            "Rows",
+            "Description",
+            "Notes",
+        ]
+        worksheet.write_row(0, 0, headers, formats["header"])
+        if not rows:
+            worksheet.write(1, 1, "No report templates are currently included in the master export.", formats["text"])
+            worksheet.set_column(0, 0, 12)
+            worksheet.freeze_panes(1, 0)
+            return
+        for row_idx, row in enumerate(rows, start=1):
+            readiness = str(row["readiness"] or "").strip().lower()
+            status_value = "✅"
+            status_format = formats["status_ready"]
+            if readiness in {"proxy", "gap"}:
+                status_value = "⚠️"
+                status_format = formats["status_proxy"]
+            if readiness == "anomaly":
+                status_value = "🔴"
+                status_format = formats["status_issue"]
+            worksheet.write(row_idx, 0, status_value, status_format)
+            worksheet.write(row_idx, 1, row["report"], formats["text"])
+            worksheet.write_url(row_idx, 2, f"internal:'{row['sheet']}'!A1", string=row["sheet"], cell_format=formats["link"])
+            worksheet.write(row_idx, 3, row["window"], formats["text"])
+            worksheet.write(row_idx, 4, row["window_field"], formats["text"])
+            worksheet.write(row_idx, 5, row["window_start"], formats["date_text"])
+            worksheet.write(row_idx, 6, row["window_end"], formats["date_text"])
+            worksheet.write(row_idx, 7, row["category"], formats["text"])
+            worksheet.write(row_idx, 8, row["readiness"], formats["text"])
+            worksheet.write(row_idx, 9, row["view"], formats["text"])
+            worksheet.write_number(row_idx, 10, int(row["rows"]), formats["integer"])
+            worksheet.write(row_idx, 11, row["description"], formats["wrap"])
+            worksheet.write(row_idx, 12, row["notes"], formats["wrap"])
+        worksheet.freeze_panes(1, 0)
+        worksheet.autofilter(0, 0, max(1, len(rows)), len(headers) - 1)
+        worksheet.set_column(0, 0, 10)
+        worksheet.set_column(1, 1, 30)
+        worksheet.set_column(2, 2, 28)
+        worksheet.set_column(3, 6, 14)
+        worksheet.set_column(7, 9, 16)
+        worksheet.set_column(10, 10, 10)
+        worksheet.set_column(11, 11, 48)
+        worksheet.set_column(12, 12, 60)
+
+    def _write_master_trends_sheet(
+        self,
+        workbook,
+        formats: dict[str, Any],
+        trend_rows: Sequence[dict[str, Any]],
+        used_names: set[str],
+        *,
+        anomaly: TrendAnomaly | None,
+    ):
+        title = _unique_sheet_name("Trends", used_names)
+        worksheet = workbook.add_worksheet(title)
+        worksheet.write(0, 0, title, formats["title"])
+        worksheet.write(1, 0, "Daily operational trend data for the last 30 days.", formats["text"])
+        headers = [
+            "Date",
+            "Tickets Created",
+            "Tickets Resolved",
+            "MTTR Avg (h)",
+            "MTTR P95 (h)",
+            "SLA Compliance %",
+            "Backlog Count",
+            "Escalation Count",
+            "Created (7d MA)",
+            "SLA Compliance (7d MA)",
+            "MTTR P95 (7d MA)",
+            "Day",
+        ]
+        header_row = 3
+        worksheet.write_row(header_row, 0, headers, formats["header"])
+        for offset, row in enumerate(trend_rows):
+            idx = header_row + 1 + offset
+            worksheet.write(idx, 0, row["date"], formats["date_text"])
+            worksheet.write_number(idx, 1, row["tickets_created"], formats["integer"])
+            worksheet.write_number(idx, 2, row["tickets_resolved"], formats["integer"])
+            worksheet.write_number(idx, 3, row["mttr_avg_hours"], formats["hours"])
+            worksheet.write_number(idx, 4, row["mttr_p95_hours"], formats["hours"])
+            worksheet.write_number(idx, 5, row["sla_compliance_rate"], formats["percent"])
+            worksheet.write_number(idx, 6, row["backlog_count"], formats["integer"])
+            worksheet.write_number(idx, 7, row["escalation_count"], formats["integer"])
+            if offset >= 6:
+                created_range = _range_ref(idx - 6, 1, idx, 1)
+                sla_range = _range_ref(idx - 6, 5, idx, 5)
+                mttr_range = _range_ref(idx - 6, 4, idx, 4)
+                source_rows = trend_rows[offset - 6: offset + 1]
+                worksheet.write_formula(
+                    idx,
+                    8,
+                    f"=AVERAGE({created_range})",
+                    formats["integer"],
+                    round(sum(point["tickets_created"] for point in source_rows) / 7.0, 1),
+                )
+                worksheet.write_formula(
+                    idx,
+                    9,
+                    f"=AVERAGE({sla_range})",
+                    formats["percent"],
+                    round(sum(point["sla_compliance_rate"] for point in source_rows) / 7.0, 4),
+                )
+                worksheet.write_formula(
+                    idx,
+                    10,
+                    f"=AVERAGE({mttr_range})",
+                    formats["hours"],
+                    round(sum(point["mttr_p95_hours"] for point in source_rows) / 7.0, 1),
+                )
+            else:
+                worksheet.write_blank(idx, 8, None, formats["text"])
+                worksheet.write_blank(idx, 9, None, formats["text"])
+                worksheet.write_blank(idx, 10, None, formats["text"])
+            day_label = datetime.fromisoformat(f"{row['date']}T00:00:00+00:00").strftime("%a")
+            worksheet.write_formula(
+                idx,
+                11,
+                f'=TEXT(A{idx + 1},"ddd")',
+                formats["text"],
+                day_label,
+            )
+        if anomaly:
+            worksheet.write_comment(
+                anomaly.row_idx,
+                7,
+                (
+                    f"⚠️ DATA ANOMALY: {anomaly.count:,} escalations on {anomaly.day} "
+                    f"is ~{max(1, round(anomaly.count / max(anomaly.baseline_peak, 1))):,}x the typical daily count "
+                    f"(0-{anomaly.baseline_peak}). May be bulk system action or extraction artifact. Verify with source system."
+                ),
+            )
+        worksheet.freeze_panes(header_row + 1, 0)
+        worksheet.autofilter(header_row, 0, header_row + len(trend_rows), len(headers) - 1)
+        worksheet.set_column(0, 0, 14)
+        worksheet.set_column(1, 2, 16)
+        worksheet.set_column(3, 4, 14)
+        worksheet.set_column(5, 5, 16)
+        worksheet.set_column(6, 7, 16)
+        worksheet.set_column(8, 10, 18)
+        worksheet.set_column(11, 11, 10)
+        first_data_row = header_row + 1
+        last_data_row = header_row + len(trend_rows)
+        worksheet.conditional_format(
+            first_data_row,
+            0,
+            last_data_row,
+            11,
+            {
+                "type": "formula",
+                "criteria": '=OR($L5="Sat",$L5="Sun")',
+                "format": formats["weekend"],
+            },
+        )
+
+        chart = workbook.add_chart({"type": "line"})
+        chart.add_series({
+            "name": "Tickets Created",
+            "categories": [worksheet.name, first_data_row, 0, last_data_row, 0],
+            "values": [worksheet.name, first_data_row, 1, last_data_row, 1],
+            "line": {"color": "#2563EB", "width": 2.0},
+            "marker": {"type": "circle", "size": 4, "border": {"color": "#2563EB"}, "fill": {"color": "#2563EB"}},
+        })
+        chart.add_series({
+            "name": "Tickets Resolved",
+            "categories": [worksheet.name, first_data_row, 0, last_data_row, 0],
+            "values": [worksheet.name, first_data_row, 2, last_data_row, 2],
+            "line": {"color": "#10B981", "width": 2.0},
+            "marker": {"type": "diamond", "size": 4, "border": {"color": "#10B981"}, "fill": {"color": "#10B981"}},
+        })
+        line = workbook.add_chart({"type": "line"})
+        line.add_series({
+            "name": "MTTR P95",
+            "categories": [worksheet.name, first_data_row, 0, last_data_row, 0],
+            "values": [worksheet.name, first_data_row, 4, last_data_row, 4],
+            "y2_axis": True,
+            "line": {"color": "#DC2626", "width": 2.25, "dash_type": "dash"},
+            "marker": {"type": "square", "size": 4, "border": {"color": "#DC2626"}, "fill": {"color": "#DC2626"}},
+        })
+        line.set_y2_axis({"name": "MTTR P95 (hours)"})
+        chart.combine(line)
+        chart.set_y_axis({"name": "Ticket Count"})
+        chart.set_x_axis({"name": "Date", "label_position": "low"})
+        chart.set_legend({"position": "bottom"})
+        chart.set_title({"name": "30-Day Trends"})
+        worksheet.insert_chart("N4", chart, {"x_scale": 1.3, "y_scale": 1.1})
+        return worksheet
+
+    def _write_master_template_window_sheet(
+        self,
+        workbook,
+        formats: dict[str, Any],
+        *,
+        template: ReportTemplate,
+        config: ReportConfig,
+        report_name: str,
+        report_description: str,
+        window_label: str,
+        window_days: int,
+        sheet_name: str,
+    ) -> MasterSheetSummary:
+        view_type = _report_view_type(config)
+        report_kind = _report_kind(report_name, config)
+        window_field = _date_field_for_report_window_config(config, report_name=report_name)
+        window_field_label = _REPORT_WINDOW_LABELS.get(window_field, "Created")
+        current_start, current_end = _window_bounds(window_days, today=self.today)
+        prior_start, prior_end = _prior_window_bounds(window_days, today=self.today)
+        facts = self._facts_for_config(config)
+        current_facts = self._facts_for_window(facts, window_field=window_field, window_start=current_start, window_end=current_end)
+        prior_facts = self._facts_for_window(facts, window_field=window_field, window_start=prior_start, window_end=prior_end)
+        readiness = _template_readiness(template, facts=current_facts)
+        metadata = self._template_window_metadata(
+            report_name=report_name,
+            report_description=report_description,
+            category=(template.category or ""),
+            readiness=readiness,
+            view_type=view_type,
+            notes=(template.notes or ""),
+            window_label=window_label,
+            window_field_label=window_field_label,
+            window_start=current_start,
+            window_end=current_end,
+        )
+        worksheet = workbook.add_worksheet(sheet_name)
+        self._write_metadata_block(worksheet, formats, metadata)
+        self._apply_master_readiness_annotation(worksheet, formats, readiness)
+
+        if report_kind == "backlog":
+            backlog_rows, backlog_statuses = self._backlog_rows(
+                [fact for fact in current_facts if fact.is_open],
+                [fact for fact in prior_facts if fact.is_open],
+            )
+            table_info, total_row = self._write_master_backlog_table(
+                worksheet,
+                formats,
+                backlog_rows,
+                backlog_statuses,
+                window_days=window_days,
+            )
+            self._insert_backlog_chart(worksheet, table_info, workbook)
+            row_count = len(backlog_rows)
+            metric_row = None
+        elif config.group_by:
+            grouped_rows = self._group_summary_rows(
+                facts=current_facts,
+                prior_facts=prior_facts,
+                group_by=config.group_by,
+                report_kind=report_kind,
+            )
+            table_info, total_row, metric_row = self._write_master_grouped_table(
+                worksheet,
+                formats,
+                grouped_rows,
+                group_by=config.group_by,
+                report_kind=report_kind,
+            )
+            self._insert_group_chart(worksheet, table_info, workbook, report_name=report_name, report_kind=report_kind)
+            row_count = len(grouped_rows)
+        else:
+            columns = config.columns or _DEFAULT_COLUMNS
+            self._write_detail_table(worksheet, formats, columns, current_facts)
+            row_count = len(current_facts)
+            table_info = ChartTableInfo(header_row=12, first_data_row=13, last_data_row=12 + row_count, column_map={})
+            total_row = None
+            metric_row = None
+        return MasterSheetSummary(
+            report_name=report_name,
+            sheet_name=sheet_name,
+            window_label=window_label,
+            window_field_label=window_field_label,
+            window_start=current_start,
+            window_end=current_end,
+            category=template.category or "",
+            readiness=readiness,
+            view_type=view_type,
+            row_count=row_count,
+            description=report_description,
+            notes=template.notes or "",
+            report_kind=report_kind,
+            table_info=table_info,
+            total_row=total_row,
+            metric_row=metric_row,
+        )
+
+    def _apply_master_readiness_annotation(self, worksheet, formats: dict[str, Any], readiness: str) -> None:
+        readiness_text = str(readiness or "").strip().lower()
+        cell_format = formats["readiness_ready"]
+        comment = None
+        if readiness_text in {"proxy", "gap", "anomaly"}:
+            cell_format = formats["readiness_proxy"] if readiness_text == "proxy" else formats["readiness_issue"]
+        if readiness_text == "proxy":
+            comment = "⚠️ PROXY METRIC: Uses heuristic approximations. See Data Gaps sheet."
+        worksheet.write(6, 1, readiness, cell_format)
+        if comment:
+            worksheet.write_comment(6, 1, comment)
+
+    def _write_master_grouped_table(
+        self,
+        worksheet,
+        formats: dict[str, Any],
+        rows: Sequence[dict[str, Any]],
+        *,
+        group_by: str,
+        report_kind: str,
+    ) -> tuple[ChartTableInfo, int | None, int | None]:
+        header_row = 12
+        headers = [
+            _FIELD_LABELS.get(group_by, group_by),
+            "Count",
+            "Open",
+            "Avg TTR (h)",
+            "Median TTR (h)",
+            "P95 TTR (h)",
+            "P99 TTR (h)",
+            "Δ Count vs Prior",
+        ]
+        column_map = {
+            "group": 0,
+            "count": 1,
+            "open": 2,
+            "avg_ttr_hours": 3,
+            "median_ttr_hours": 4,
+            "p95_ttr_hours": 5,
+            "p99_ttr_hours": 6,
+            "delta_vs_prior_period": 7,
+        }
+        if report_kind == "ticket_volume":
+            headers.append("% of Total")
+            column_map["percent_of_total"] = len(headers) - 1
+        if report_kind == "fcr":
+            headers.append("FCR %")
+            column_map["fcr_rate"] = len(headers) - 1
+        if report_kind == "escalation":
+            headers.append("Escalation Rate %")
+            column_map["escalation_rate"] = len(headers) - 1
+        worksheet.write_row(header_row, 0, headers, formats["header"])
+
+        data_first_row = header_row + 1
+        row_count = len(rows)
+        data_last_row = header_row + row_count
+        count_range_abs = _range_ref(data_first_row, 1, data_last_row, 1, absolute=True) if row_count else ""
+
+        for row_offset, row in enumerate(rows, start=1):
+            row_idx = header_row + row_offset
+            worksheet.write(row_idx, 0, row["group"], formats["text"])
+            worksheet.write_number(row_idx, 1, row["count"], formats["integer"])
+            worksheet.write_number(row_idx, 2, row["open"], formats["integer"])
+            worksheet.write_number(row_idx, 3, row["avg_ttr_hours"] or 0.0, formats["hours"])
+            worksheet.write_number(row_idx, 4, row["median_ttr_hours"] or 0.0, formats["hours"])
+            worksheet.write_number(row_idx, 5, row["p95_ttr_hours"] or 0.0, formats["hours"])
+            worksheet.write_number(row_idx, 6, row["p99_ttr_hours"] or 0.0, formats["hours"])
+            worksheet.write_number(row_idx, 7, row["delta_vs_prior_period"], formats["integer"])
+            if "percent_of_total" in column_map:
+                formula = f"=IF(SUM({count_range_abs})=0,0,B{row_idx + 1}/SUM({count_range_abs}))" if row_count else "=0"
+                cached = (row["count"] / max(sum(item["count"] for item in rows), 1)) if rows else 0.0
+                worksheet.write_formula(row_idx, column_map["percent_of_total"], formula, formats["percent"], cached)
+            if "fcr_rate" in row:
+                worksheet.write_number(row_idx, column_map["fcr_rate"], row["fcr_rate"], formats["percent"])
+            if "escalation_rate" in row:
+                worksheet.write_number(row_idx, column_map["escalation_rate"], row["escalation_rate"], formats["percent"])
+
+        total_row = data_last_row + 1 if row_count else header_row + 1
+        if row_count:
+            count_range = _range_ref(data_first_row, 1, data_last_row, 1)
+            open_range = _range_ref(data_first_row, 2, data_last_row, 2)
+            avg_range = _range_ref(data_first_row, 3, data_last_row, 3)
+            p95_range = _range_ref(data_first_row, 5, data_last_row, 5)
+            p99_range = _range_ref(data_first_row, 6, data_last_row, 6)
+            delta_range = _range_ref(data_first_row, 7, data_last_row, 7)
+        else:
+            count_range = open_range = avg_range = p95_range = p99_range = delta_range = ""
+
+        total_count = sum(row["count"] for row in rows)
+        total_open = sum(row["open"] for row in rows)
+        weighted_avg = (
+            sum((row["count"] or 0) * float(row["avg_ttr_hours"] or 0.0) for row in rows) / total_count
+            if total_count else 0.0
+        )
+        max_p95 = max((row["p95_ttr_hours"] or 0.0) for row in rows) if rows else 0.0
+        max_p99 = max((row["p99_ttr_hours"] or 0.0) for row in rows) if rows else 0.0
+        delta_total = sum(row["delta_vs_prior_period"] for row in rows)
+        worksheet.write(total_row, 0, "Total", formats["total_text"])
+        worksheet.write_formula(total_row, 1, f"={_safe_sum_formula(count_range)}" if row_count else "=0", formats["total_integer"], total_count)
+        worksheet.write_formula(total_row, 2, f"={_safe_sum_formula(open_range)}" if row_count else "=0", formats["total_integer"], total_open)
+        worksheet.write_formula(
+            total_row,
+            3,
+            f"={_weighted_average_formula(count_range, avg_range)}" if row_count else "=0",
+            formats["total_hours"],
+            round(weighted_avg, 1),
+        )
+        worksheet.write_blank(total_row, 4, None, formats["total_blank"])
+        worksheet.write_formula(total_row, 5, f"={_safe_max_formula(p95_range)}" if row_count else "=0", formats["total_hours"], max_p95)
+        worksheet.write_formula(total_row, 6, f"={_safe_max_formula(p99_range)}" if row_count else "=0", formats["total_hours"], max_p99)
+        worksheet.write_formula(total_row, 7, f"={_safe_sum_formula(delta_range)}" if row_count else "=0", formats["total_integer"], delta_total)
+        if "percent_of_total" in column_map:
+            percent_range = _range_ref(data_first_row, column_map["percent_of_total"], data_last_row, column_map["percent_of_total"])
+            worksheet.write_formula(
+                total_row,
+                column_map["percent_of_total"],
+                f"={_safe_sum_formula(percent_range)}" if row_count else "=0",
+                formats["total_percent"],
+                1.0 if total_count else 0.0,
+            )
+        if "fcr_rate" in column_map:
+            fcr_total = (
+                sum((row["count"] or 0) * float(row.get("fcr_rate") or 0.0) for row in rows) / total_count
+                if total_count else 0.0
+            )
+            rate_range = _range_ref(data_first_row, column_map["fcr_rate"], data_last_row, column_map["fcr_rate"])
+            worksheet.write_formula(
+                total_row,
+                column_map["fcr_rate"],
+                f"={_weighted_average_formula(count_range, rate_range)}" if row_count else "=0",
+                formats["total_percent"],
+                fcr_total,
+            )
+        if "escalation_rate" in column_map:
+            escalation_total = (
+                sum((row["count"] or 0) * float(row.get("escalation_rate") or 0.0) for row in rows) / total_count
+                if total_count else 0.0
+            )
+            rate_range = _range_ref(data_first_row, column_map["escalation_rate"], data_last_row, column_map["escalation_rate"])
+            worksheet.write_formula(
+                total_row,
+                column_map["escalation_rate"],
+                f"={_weighted_average_formula(count_range, rate_range)}" if row_count else "=0",
+                formats["total_percent"],
+                escalation_total,
+            )
+
+        metric_row = None
+        if report_kind in {"sla", "first_response"}:
+            metric_row = total_row + 1
+            label_range = _range_ref(data_first_row, 0, data_last_row, 0, absolute=True) if row_count else ""
+            count_values = _range_ref(data_first_row, 1, data_last_row, 1, absolute=True) if row_count else ""
+            metric_label = "SLA Compliance %" if report_kind == "sla" else "First Response SLA Met %"
+            cached_metric = 0.0
+            met_row = next((row for row in rows if str(row["group"]).strip().lower() == "met"), None)
+            if met_row and total_count:
+                cached_metric = float(met_row["count"]) / total_count
+            worksheet.write(metric_row, 0, metric_label, formats["metric_label"])
+            worksheet.write_formula(
+                metric_row,
+                1,
+                f"={_status_match_formula(label_range, 'Met', count_values, _safe_sum_formula(count_range_abs))}" if row_count else "=0",
+                formats["metric_percent"],
+                cached_metric,
+            )
+
+        worksheet.freeze_panes(header_row + 1, 0)
+        worksheet.autofilter(header_row, 0, header_row + max(1, row_count), len(headers) - 1)
+        worksheet.set_column(0, 0, 30 if report_kind in {"ticket_volume", "escalation", "fcr"} else 24)
+        worksheet.set_column(1, 2, 12)
+        worksheet.set_column(3, 6, 16)
+        worksheet.set_column(7, len(headers) - 1, 18)
+        self._apply_master_group_conditional_formatting(
+            worksheet,
+            formats,
+            report_kind=report_kind,
+            first_row=data_first_row,
+            last_row=data_last_row,
+            last_col=len(headers) - 1,
+            column_map=column_map,
+        )
+        return (
+            ChartTableInfo(
+                header_row=header_row,
+                first_data_row=data_first_row,
+                last_data_row=data_last_row if row_count else header_row,
+                column_map=column_map,
+            ),
+            total_row,
+            metric_row,
+        )
+
+    def _write_master_backlog_table(
+        self,
+        worksheet,
+        formats: dict[str, Any],
+        rows: Sequence[dict[str, Any]],
+        statuses: Sequence[str],
+        *,
+        window_days: int,
+    ) -> tuple[ChartTableInfo, int]:
+        header_row = 12
+        fixed_statuses = (
+            ["In Progress", "Pending", "Waiting for customer", "Waiting for support"]
+            if window_days == 7
+            else ["Acknowledged", "In Progress", "Pending", "Waiting for customer", "Waiting for support"]
+        )
+        headers = [
+            "Aging Bucket",
+            "% of Backlog",
+            *fixed_statuses,
+            "Total",
+            "Avg Age (h)",
+            "Median Age (h)",
+            "P95 Age (h)",
+            "P99 Age (h)",
+            "Δ Count vs Prior",
+        ]
+        worksheet.write_row(header_row, 0, headers, formats["header"])
+        data_first_row = header_row + 1
+        data_last_row = header_row + len(rows)
+        for row_offset, row in enumerate(rows, start=1):
+            row_idx = header_row + row_offset
+            worksheet.write(row_idx, 0, row["bucket"], formats["text"])
+            worksheet.write_number(row_idx, 1, row["percent_of_backlog"], formats["percent"])
+            for status_idx, status in enumerate(fixed_statuses, start=2):
+                worksheet.write_number(row_idx, status_idx, row["status_counts"].get(status, 0), formats["integer"])
+            start_stats_col = 2 + len(fixed_statuses)
+            worksheet.write_number(row_idx, start_stats_col, row["total"], formats["integer"])
+            worksheet.write_number(row_idx, start_stats_col + 1, row["avg_age_hours"] or 0.0, formats["hours"])
+            worksheet.write_number(row_idx, start_stats_col + 2, row["median_age_hours"] or 0.0, formats["hours"])
+            worksheet.write_number(row_idx, start_stats_col + 3, row["p95_age_hours"] or 0.0, formats["hours"])
+            worksheet.write_number(row_idx, start_stats_col + 4, row["p99_age_hours"] or 0.0, formats["hours"])
+            worksheet.write_number(row_idx, start_stats_col + 5, row["delta_vs_prior_period"], formats["integer"])
+        total_row = data_last_row + 1
+        total_col = 2 + len(fixed_statuses)
+        total_total = sum(row["total"] for row in rows)
+        total_avg = (
+            sum((row["total"] or 0) * float(row["avg_age_hours"] or 0.0) for row in rows) / total_total
+            if total_total else 0.0
+        )
+        worksheet.write(total_row, 0, "Total", formats["total_text"])
+        percent_range = _range_ref(data_first_row, 1, data_last_row, 1) if rows else ""
+        worksheet.write_formula(total_row, 1, f"={_safe_sum_formula(percent_range)}" if rows else "=0", formats["total_percent"], 1.0 if total_total else 0.0)
+        for status_idx, _status in enumerate(fixed_statuses, start=2):
+            status_range = _range_ref(data_first_row, status_idx, data_last_row, status_idx) if rows else ""
+            status_total = sum(row["status_counts"].get(fixed_statuses[status_idx - 2], 0) for row in rows)
+            worksheet.write_formula(total_row, status_idx, f"={_safe_sum_formula(status_range)}" if rows else "=0", formats["total_integer"], status_total)
+        total_range = _range_ref(data_first_row, total_col, data_last_row, total_col) if rows else ""
+        avg_range = _range_ref(data_first_row, total_col + 1, data_last_row, total_col + 1) if rows else ""
+        p95_range = _range_ref(data_first_row, total_col + 3, data_last_row, total_col + 3) if rows else ""
+        p99_range = _range_ref(data_first_row, total_col + 4, data_last_row, total_col + 4) if rows else ""
+        delta_range = _range_ref(data_first_row, total_col + 5, data_last_row, total_col + 5) if rows else ""
+        worksheet.write_formula(total_row, total_col, f"={_safe_sum_formula(total_range)}" if rows else "=0", formats["total_integer"], total_total)
+        worksheet.write_formula(
+            total_row,
+            total_col + 1,
+            f"={_weighted_average_formula(total_range, avg_range)}" if rows else "=0",
+            formats["total_hours"],
+            round(total_avg, 1),
+        )
+        worksheet.write_blank(total_row, total_col + 2, None, formats["total_blank"])
+        worksheet.write_formula(
+            total_row,
+            total_col + 3,
+            f"={_safe_max_formula(p95_range)}" if rows else "=0",
+            formats["total_hours"],
+            max((row["p95_age_hours"] or 0.0) for row in rows) if rows else 0.0,
+        )
+        worksheet.write_formula(
+            total_row,
+            total_col + 4,
+            f"={_safe_max_formula(p99_range)}" if rows else "=0",
+            formats["total_hours"],
+            max((row["p99_age_hours"] or 0.0) for row in rows) if rows else 0.0,
+        )
+        worksheet.write_formula(
+            total_row,
+            total_col + 5,
+            f"={_safe_sum_formula(delta_range)}" if rows else "=0",
+            formats["total_integer"],
+            sum(row["delta_vs_prior_period"] for row in rows),
+        )
+        worksheet.freeze_panes(header_row + 1, 0)
+        worksheet.autofilter(header_row, 0, header_row + max(1, len(rows)), len(headers) - 1)
+        worksheet.set_column(0, 0, 28)
+        worksheet.set_column(1, 1, 14)
+        worksheet.set_column(2, 1 + len(fixed_statuses), 18)
+        worksheet.set_column(2 + len(fixed_statuses), len(headers) - 1, 16)
+        self._apply_master_backlog_conditional_formatting(
+            worksheet,
+            formats,
+            first_row=data_first_row,
+            last_row=data_last_row,
+            last_col=len(headers) - 1,
+        )
+        return (
+            ChartTableInfo(
+                header_row=header_row,
+                first_data_row=data_first_row,
+                last_data_row=data_last_row if rows else header_row,
+                column_map={status: 2 + idx for idx, status in enumerate(fixed_statuses)},
+            ),
+            total_row,
+        )
+
+    def _apply_master_group_conditional_formatting(
+        self,
+        worksheet,
+        formats: dict[str, Any],
+        *,
+        report_kind: str,
+        first_row: int,
+        last_row: int,
+        last_col: int,
+        column_map: dict[str, int],
+    ) -> None:
+        if last_row < first_row:
+            return
+        if report_kind == "sla":
+            worksheet.conditional_format(first_row, 0, last_row, last_col, {
+                "type": "formula",
+                "criteria": f'=$A{first_row + 1}="BREACHED"',
+                "format": formats["row_red"],
+            })
+            worksheet.conditional_format(first_row, 0, last_row, last_col, {
+                "type": "formula",
+                "criteria": f'=$A{first_row + 1}="Running"',
+                "format": formats["row_yellow"],
+            })
+        if report_kind == "mttr":
+            for col_idx in (5, 6):
+                worksheet.conditional_format(first_row, col_idx, last_row, col_idx, {
+                    "type": "cell",
+                    "criteria": ">",
+                    "value": 1000,
+                    "format": formats["kpi_bad"],
+                })
+                worksheet.conditional_format(first_row, col_idx, last_row, col_idx, {
+                    "type": "cell",
+                    "criteria": "between",
+                    "minimum": 200,
+                    "maximum": 1000,
+                    "format": formats["kpi_warn"],
+                })
+                worksheet.conditional_format(first_row, col_idx, last_row, col_idx, {
+                    "type": "cell",
+                    "criteria": "<=",
+                    "value": 200,
+                    "format": formats["kpi_good"],
+                })
+        if report_kind == "escalation" and "escalation_rate" in column_map:
+            col_idx = column_map["escalation_rate"]
+            worksheet.conditional_format(first_row, col_idx, last_row, col_idx, {
+                "type": "cell",
+                "criteria": ">",
+                "value": 0.4,
+                "format": formats["kpi_bad"],
+            })
+            worksheet.conditional_format(first_row, col_idx, last_row, col_idx, {
+                "type": "cell",
+                "criteria": "between",
+                "minimum": 0.2,
+                "maximum": 0.4,
+                "format": formats["kpi_warn"],
+            })
+            worksheet.conditional_format(first_row, col_idx, last_row, col_idx, {
+                "type": "cell",
+                "criteria": "<",
+                "value": 0.2,
+                "format": formats["kpi_good"],
+            })
+        if report_kind == "fcr" and "fcr_rate" in column_map:
+            col_idx = column_map["fcr_rate"]
+            worksheet.conditional_format(first_row, col_idx, last_row, col_idx, {
+                "type": "cell",
+                "criteria": ">",
+                "value": 0.3,
+                "format": formats["kpi_good"],
+            })
+            worksheet.conditional_format(first_row, col_idx, last_row, col_idx, {
+                "type": "cell",
+                "criteria": "between",
+                "minimum": 0.15,
+                "maximum": 0.3,
+                "format": formats["kpi_warn"],
+            })
+            worksheet.conditional_format(first_row, col_idx, last_row, col_idx, {
+                "type": "cell",
+                "criteria": "<",
+                "value": 0.15,
+                "format": formats["kpi_bad"],
+            })
+
+    def _apply_master_backlog_conditional_formatting(
+        self,
+        worksheet,
+        formats: dict[str, Any],
+        *,
+        first_row: int,
+        last_row: int,
+        last_col: int,
+    ) -> None:
+        if last_row < first_row:
+            return
+        bucket_formats = {
+            "0-3 days": formats["row_green"],
+            "4-7 days": formats["row_pale_yellow"],
+            "8-14 days": formats["row_orange"],
+            "15-30 days": formats["row_light_red"],
+            "31-60 days": formats["row_red"],
+            "60+ days": formats["row_dark_red"],
+        }
+        for bucket, fmt in bucket_formats.items():
+            worksheet.conditional_format(first_row, 0, last_row, last_col, {
+                "type": "formula",
+                "criteria": f'=$A{first_row + 1}="{bucket}"',
+                "format": fmt,
+            })
+
     def build_master_report(self, *, path: str, templates: Sequence[ReportTemplate]) -> None:
+        if self.site_scope != "primary":
+            self._build_master_report_legacy(path=path, templates=templates)
+            return
+        self._build_master_report_primary(path=path, templates=templates)
+
+    def _build_master_report_legacy(self, *, path: str, templates: Sequence[ReportTemplate]) -> None:
         included_templates = [template for template in templates if template.include_in_master_export]
         self.ensure_changelogs(self._changelog_target_keys_for_master(included_templates))
         workbook = xlsxwriter.Workbook(
@@ -734,6 +1552,123 @@ class ReportWorkbookBuilder:
         finally:
             workbook.close()
 
+    def _build_master_report_primary(self, *, path: str, templates: Sequence[ReportTemplate]) -> None:
+        included_templates = [template for template in templates if template.include_in_master_export]
+        self.ensure_changelogs(self._changelog_target_keys_for_master(included_templates))
+        workbook = xlsxwriter.Workbook(
+            path,
+            {
+                "in_memory": False,
+                "strings_to_numbers": False,
+                "strings_to_formulas": False,
+            },
+        )
+        try:
+            formats = self._build_formats(workbook)
+            used_names: set[str] = set()
+            index_sheet_name = _unique_sheet_name("Report Index", used_names)
+            index_sheet = workbook.add_worksheet(index_sheet_name)
+            index_rows: list[dict[str, Any]] = []
+
+            dashboard_context = self._build_dashboard_context(
+                report_name="Executive Dashboard",
+                report_description="Cross-template operational summary for the current site scope.",
+                facts=list(self._facts_by_key.values()),
+                template=None,
+            )
+            anomaly = self._detect_escalation_anomaly(dashboard_context["trend_rows"])
+            dashboard_info = self._write_master_dashboard_sheet(workbook, formats, dashboard_context, used_names)
+            self._write_master_trends_sheet(
+                workbook,
+                formats,
+                dashboard_context["trend_rows"],
+                used_names,
+                anomaly=anomaly,
+            )
+
+            aggregated_gaps: list[TemplateGap] = []
+            detail_summaries: list[MasterSheetSummary] = []
+
+            for template in included_templates:
+                config = template.config if isinstance(template.config, ReportConfig) else ReportConfig()
+                gap_window_field = _date_field_for_report_window_config(config, report_name=template.name)
+                gap_window_start, gap_window_end = _window_bounds(30, today=self.today)
+                gap_facts = self._facts_for_window(
+                    self._facts_for_config(config),
+                    window_field=gap_window_field,
+                    window_start=gap_window_start,
+                    window_end=gap_window_end,
+                )
+                aggregated_gaps.extend(
+                    self._build_data_gaps(
+                        template=template,
+                        report_name=template.name,
+                        facts=gap_facts,
+                    )
+                )
+                for window_label, window_days in _WINDOW_EXPORT_SPECS:
+                    sheet_name = _unique_sheet_name(f"{template.name} {window_days}d", used_names)
+                    summary = self._write_master_template_window_sheet(
+                        workbook,
+                        formats,
+                        template=template,
+                        config=config,
+                        report_name=template.name,
+                        report_description=template.description or "",
+                        window_label=window_label,
+                        window_days=window_days,
+                        sheet_name=sheet_name,
+                    )
+                    detail_summaries.append(summary)
+                    index_rows.append(
+                        {
+                            "report": summary.report_name,
+                            "sheet": summary.sheet_name,
+                            "window": summary.window_label,
+                            "window_field": summary.window_field_label,
+                            "window_start": summary.window_start.isoformat(),
+                            "window_end": summary.window_end.isoformat(),
+                            "category": summary.category,
+                            "readiness": summary.readiness,
+                            "view": summary.view_type,
+                            "rows": summary.row_count,
+                            "description": summary.description,
+                            "notes": summary.notes,
+                        }
+                    )
+
+            if anomaly:
+                aggregated_gaps.append(
+                    TemplateGap(
+                        "Escalation Rate",
+                        "30 Day",
+                        "anomaly",
+                        (
+                            f"{anomaly.count:,} escalations on {anomaly.day} is "
+                            f"~{max(1, round(anomaly.count / max(anomaly.baseline_peak, 1))):,}x typical daily volume"
+                        ),
+                        "Verify with Jira audit log. If artifact, exclude and re-run.",
+                    )
+                )
+
+            self._write_data_gaps_sheet(
+                workbook,
+                formats,
+                aggregated_gaps,
+                title=_unique_sheet_name("Data Gaps", used_names),
+            )
+            self._write_master_index_sheet(index_sheet, formats, index_rows)
+            self._populate_master_dashboard_sheet(
+                dashboard_info["worksheet"],
+                formats,
+                dashboard_context,
+                helper_sheet_name=dashboard_info["helper_sheet_name"],
+                detail_summaries=detail_summaries,
+                anomaly=anomaly,
+            )
+        finally:
+            workbook.close()
+
     def _write_index_sheet(self, worksheet, formats: dict[str, Any], rows: Sequence[dict[str, Any]]) -> None:
         headers = [
             "Report",
@@ -788,11 +1723,18 @@ class ReportWorkbookBuilder:
         formats: dict[str, Any],
         context: dict[str, Any],
         used_names: set[str],
-    ) -> None:
+    ) -> dict[str, Any]:
         worksheet = workbook.add_worksheet(_unique_sheet_name("Executive Dashboard", used_names))
-        self._write_dashboard_core(worksheet, workbook, formats, context, dashboard_title="Executive Dashboard")
+        helper_sheet_name = self._write_dashboard_core(
+            worksheet,
+            workbook,
+            formats,
+            context,
+            dashboard_title="Executive Dashboard",
+        )
+        return {"worksheet": worksheet, "helper_sheet_name": helper_sheet_name}
 
-    def _write_dashboard_core(self, worksheet, workbook, formats: dict[str, Any], context: dict[str, Any], *, dashboard_title: str) -> None:
+    def _write_dashboard_core(self, worksheet, workbook, formats: dict[str, Any], context: dict[str, Any], *, dashboard_title: str) -> str:
         helper_sheet_name = self._write_dashboard_helper_sheet(workbook, formats, context, dashboard_title=dashboard_title)
         worksheet.write(0, 0, dashboard_title, formats["title"])
         worksheet.write(1, 0, context["report_name"], formats["subtitle"])
@@ -825,17 +1767,17 @@ class ReportWorkbookBuilder:
                 worksheet.write_number(row_idx, 3, metric_row["delta"], formats["hours"])
 
         sparkline_map = {
-            "Ticket Volume": f"'{helper_sheet_name}'!B2:{xl_col_to_name(len(context['trend_rows']) + 1)}2",
-            "Backlog Count": f"'{helper_sheet_name}'!B3:{xl_col_to_name(len(context['trend_rows']) + 1)}3",
-            "MTTR P95 (h)": f"'{helper_sheet_name}'!B4:{xl_col_to_name(len(context['trend_rows']) + 1)}4",
-            "First Response SLA Met %": f"'{helper_sheet_name}'!B5:{xl_col_to_name(len(context['trend_rows']) + 1)}5",
-            "SLA Compliance Rate %": f"'{helper_sheet_name}'!B6:{xl_col_to_name(len(context['trend_rows']) + 1)}6",
+            "Ticket Volume": f"'{helper_sheet_name}'!B2:{xl_col_to_name(len(context['trend_rows']))}2",
+            "Backlog Count": f"'{helper_sheet_name}'!B3:{xl_col_to_name(len(context['trend_rows']))}3",
+            "MTTR P95 (h)": f"'{helper_sheet_name}'!B4:{xl_col_to_name(len(context['trend_rows']))}4",
+            "First Response SLA Met %": f"'{helper_sheet_name}'!B5:{xl_col_to_name(len(context['trend_rows']))}5",
+            "SLA Compliance Rate %": f"'{helper_sheet_name}'!B6:{xl_col_to_name(len(context['trend_rows']))}6",
         }
         for offset, metric_row in enumerate(context["kpis"], start=1):
             row_idx = start_row + offset
             source = sparkline_map.get(metric_row["label"])
             if source:
-                worksheet.add_sparkline(row_idx, 4, {"range": f"'{worksheet.name}'!{source}"})
+                worksheet.add_sparkline(row_idx, 4, {"range": source, "series_color": "#1F4E79"})
 
         worksheet.write(start_row, 6, "Top 3 Problem Areas", formats["header"])
         for idx, problem in enumerate(context["problem_areas"], start=1):
@@ -870,6 +1812,7 @@ class ReportWorkbookBuilder:
         worksheet.set_column(1, 3, 14)
         worksheet.set_column(4, 4, 18)
         worksheet.set_column(6, 6, 42)
+        return helper_sheet_name
 
     def _write_dashboard_helper_sheet(self, workbook, formats: dict[str, Any], context: dict[str, Any], *, dashboard_title: str) -> str:
         worksheet = workbook.add_worksheet(_sanitize_sheet_name(f"{dashboard_title} Data"))
@@ -939,6 +1882,26 @@ class ReportWorkbookBuilder:
         for offset, (label, count) in enumerate(context["first_response_status_counts"].items(), start=1):
             worksheet.write(fr_row + offset, base_col, label, formats["hidden"])
             worksheet.write_number(fr_row + offset, base_col + 1, count, formats["hidden"])
+        worksheet.write_comment(
+            0,
+            0,
+            "Section: Transposed daily data. Row 2=Created, Row 3=Backlog, Row 4=MTTR P95, Row 5=First Response SLA Met %, Row 6=SLA Compliance %.",
+        )
+        worksheet.write_comment(
+            0,
+            12,
+            "Section: Daily Time Series for trend charts and sparklines",
+        )
+        section_labels = {
+            40: "--- SLA Compliance (Doughnut Source) ---",
+            48: "--- MTTR by Priority (Bar Source) ---",
+            56: "--- Ticket Volume by Category (Bar Source) ---",
+            68: "--- Backlog Aging (Stacked Source) ---",
+            82: "--- Escalation by Assignee (Column Source) ---",
+            94: "--- First Response SLA (Doughnut Source) ---",
+        }
+        for row_idx, label in section_labels.items():
+            worksheet.write(row_idx, 10, label, formats["hidden_note"])
         return worksheet.name
 
     def _insert_dashboard_charts(self, worksheet, workbook, context: dict[str, Any], *, helper_sheet_name: str) -> None:
@@ -958,7 +1921,7 @@ class ReportWorkbookBuilder:
             "line": {"color": "#10B981", "width": 2.0},
             "marker": {"type": "diamond", "size": 4, "border": {"color": "#10B981"}, "fill": {"color": "#10B981"}},
         })
-        chart_trends.set_y_axis({"name": "Tickets"})
+        chart_trends.set_y_axis({"name": "Ticket Count"})
         chart_trends.set_x_axis({"name": "Date", "label_position": "low"})
         chart_trends.set_legend({"position": "bottom"})
         chart_trends.set_title({"name": "30-Day Trend"})
@@ -969,10 +1932,10 @@ class ReportWorkbookBuilder:
             "categories": [helper_sheet_name, 1, base_col, len(context["trend_rows"]), base_col],
             "values": [helper_sheet_name, 1, base_col + 3, len(context["trend_rows"]), base_col + 3],
             "y2_axis": True,
-            "line": {"color": "#DC2626", "width": 2.25},
+            "line": {"color": "#DC2626", "width": 2.25, "dash_type": "dash"},
             "marker": {"type": "square", "size": 4, "border": {"color": "#DC2626"}, "fill": {"color": "#DC2626"}},
         })
-        line_chart.set_y2_axis({"name": "MTTR P95 (h)"})
+        line_chart.set_y2_axis({"name": "MTTR P95 (hours)"})
         chart_trends.combine(line_chart)
         worksheet.insert_chart("A14", chart_trends, {"x_scale": 1.35, "y_scale": 1.1})
 
@@ -1047,6 +2010,301 @@ class ReportWorkbookBuilder:
             })
             chart_fr.set_title({"name": "First Response SLA"})
             worksheet.insert_chart("J69", chart_fr, {"x_scale": 1.0, "y_scale": 1.0})
+
+    def _populate_master_dashboard_sheet(
+        self,
+        worksheet,
+        formats: dict[str, Any],
+        context: dict[str, Any],
+        *,
+        helper_sheet_name: str,
+        detail_summaries: Sequence[MasterSheetSummary],
+        anomaly: TrendAnomaly | None,
+    ) -> None:
+        summary_lookup = {(summary.report_name, summary.window_label): summary for summary in detail_summaries}
+        sla_7 = summary_lookup.get(("SLA Compliance Rate", "7 Day"))
+        sla_30 = summary_lookup.get(("SLA Compliance Rate", "30 Day"))
+        mttr_7 = summary_lookup.get(("Mean Time to Resolution", "7 Day"))
+        mttr_30 = summary_lookup.get(("Mean Time to Resolution", "30 Day"))
+        fr_7 = summary_lookup.get(("First Response Time", "7 Day"))
+        fr_30 = summary_lookup.get(("First Response Time", "30 Day"))
+        volume_7 = summary_lookup.get(("Ticket Volume by Category", "7 Day"))
+        volume_30 = summary_lookup.get(("Ticket Volume by Category", "30 Day"))
+        start_row = 5
+        worksheet.write(start_row, 5, "Trend", formats["header"])
+        worksheet.write(start_row, 6, "Key Findings & Actions", formats["header"])
+
+        if sla_7 and sla_30 and sla_7.metric_row is not None and sla_30.metric_row is not None:
+            worksheet.write_formula(
+                start_row + 1,
+                1,
+                f"='{sla_7.sheet_name}'!B{sla_7.metric_row + 1}",
+                formats["percent"],
+                context["kpis"][0]["value_7d"],
+            )
+            worksheet.write_formula(
+                start_row + 1,
+                2,
+                f"='{sla_30.sheet_name}'!B{sla_30.metric_row + 1}",
+                formats["percent"],
+                context["kpis"][0]["value_30d"],
+            )
+            worksheet.write_formula(
+                start_row + 1,
+                3,
+                f"=B{start_row + 2}-C{start_row + 2}",
+                formats["delta_percent"],
+                context["kpis"][0]["value_7d"] - context["kpis"][0]["value_30d"],
+            )
+        if mttr_7 and mttr_30 and mttr_7.total_row is not None and mttr_30.total_row is not None:
+            worksheet.write_formula(
+                start_row + 2,
+                1,
+                f"='{mttr_7.sheet_name}'!F{mttr_7.total_row + 1}",
+                formats["hours"],
+                context["kpis"][1]["value_7d"],
+            )
+            worksheet.write_formula(
+                start_row + 2,
+                2,
+                f"='{mttr_30.sheet_name}'!F{mttr_30.total_row + 1}",
+                formats["hours"],
+                context["kpis"][1]["value_30d"],
+            )
+            worksheet.write_formula(
+                start_row + 2,
+                3,
+                f"=B{start_row + 3}-C{start_row + 3}",
+                formats["hours"],
+                context["kpis"][1]["value_7d"] - context["kpis"][1]["value_30d"],
+            )
+        if fr_7 and fr_30 and fr_7.metric_row is not None and fr_30.metric_row is not None:
+            worksheet.write_formula(
+                start_row + 3,
+                1,
+                f"='{fr_7.sheet_name}'!B{fr_7.metric_row + 1}",
+                formats["percent"],
+                context["kpis"][2]["value_7d"],
+            )
+            worksheet.write_formula(
+                start_row + 3,
+                2,
+                f"='{fr_30.sheet_name}'!B{fr_30.metric_row + 1}",
+                formats["percent"],
+                context["kpis"][2]["value_30d"],
+            )
+            worksheet.write_formula(
+                start_row + 3,
+                3,
+                f"=B{start_row + 4}-C{start_row + 4}",
+                formats["delta_percent"],
+                context["kpis"][2]["value_7d"] - context["kpis"][2]["value_30d"],
+            )
+        worksheet.write_formula(
+            start_row + 4,
+            1,
+            "=INDEX(Trends!G5:G34,COUNTA(Trends!G5:G34))",
+            formats["integer"],
+            context["kpis"][3]["value_7d"],
+        )
+        worksheet.write_formula(
+            start_row + 4,
+            2,
+            f"=B{start_row + 5}",
+            formats["integer"],
+            context["kpis"][3]["value_30d"],
+        )
+        worksheet.write_formula(
+            start_row + 4,
+            3,
+            "=INDEX(Trends!G5:G34,COUNTA(Trends!G5:G34))-INDEX(Trends!G5:G34,1)",
+            formats["integer"],
+            (
+                (context["trend_rows"][-1]["backlog_count"] - context["trend_rows"][0]["backlog_count"])
+                if context["trend_rows"]
+                else 0
+            ),
+        )
+        if volume_7 and volume_30 and volume_7.total_row is not None and volume_30.total_row is not None:
+            worksheet.write_formula(
+                start_row + 5,
+                1,
+                f"='{volume_7.sheet_name}'!B{volume_7.total_row + 1}",
+                formats["integer"],
+                context["kpis"][4]["value_7d"],
+            )
+            worksheet.write_formula(
+                start_row + 5,
+                2,
+                f"='{volume_30.sheet_name}'!B{volume_30.total_row + 1}",
+                formats["integer"],
+                context["kpis"][4]["value_30d"],
+            )
+            worksheet.write_formula(
+                start_row + 5,
+                3,
+                f"=B{start_row + 6}-C{start_row + 6}",
+                formats["integer"],
+                context["kpis"][4]["value_7d"] - context["kpis"][4]["value_30d"],
+            )
+
+        trend_rows = {
+            6: ("=IF(D7>0,\"▲\",IF(D7<0,\"▼\",\"—\"))", "good_up"),
+            7: ("=IF(D8<0,\"▲\",IF(D8>0,\"▼\",\"—\"))", "good_down"),
+            8: ("=IF(D9>0,\"▲\",IF(D9<0,\"▼\",\"—\"))", "good_up"),
+            9: ("=IF(D10<0,\"▲\",IF(D10>0,\"▼\",\"—\"))", "good_down"),
+            10: ("=IF(D11<0,\"▲\",IF(D11>0,\"▼\",\"—\"))", "good_down"),
+        }
+        for row_idx, (formula, direction) in trend_rows.items():
+            cached = "—"
+            delta = context["kpis"][row_idx - 6]["delta"]
+            if direction == "good_up":
+                cached = "▲" if delta > 0 else ("▼" if delta < 0 else "—")
+            else:
+                cached = "▲" if delta < 0 else ("▼" if delta > 0 else "—")
+            worksheet.write_formula(row_idx, 5, formula, formats["trend_arrow"], cached)
+
+        worksheet.conditional_format(6, 5, 10, 5, {
+            "type": "text",
+            "criteria": "containing",
+            "value": "▲",
+            "format": formats["arrow_good"],
+        })
+        worksheet.conditional_format(6, 5, 10, 5, {
+            "type": "text",
+            "criteria": "containing",
+            "value": "▼",
+            "format": formats["arrow_bad"],
+        })
+        worksheet.conditional_format(6, 1, 6, 2, {
+            "type": "cell",
+            "criteria": ">=",
+            "value": 0.9,
+            "format": formats["kpi_good"],
+        })
+        worksheet.conditional_format(6, 1, 6, 2, {
+            "type": "cell",
+            "criteria": "between",
+            "minimum": 0.75,
+            "maximum": 0.9,
+            "format": formats["kpi_warn"],
+        })
+        worksheet.conditional_format(6, 1, 6, 2, {
+            "type": "cell",
+            "criteria": "<",
+            "value": 0.75,
+            "format": formats["kpi_bad"],
+        })
+        worksheet.conditional_format(8, 1, 8, 2, {
+            "type": "cell",
+            "criteria": ">=",
+            "value": 0.9,
+            "format": formats["kpi_good"],
+        })
+        worksheet.conditional_format(8, 1, 8, 2, {
+            "type": "cell",
+            "criteria": "between",
+            "minimum": 0.75,
+            "maximum": 0.9,
+            "format": formats["kpi_warn"],
+        })
+        worksheet.conditional_format(8, 1, 8, 2, {
+            "type": "cell",
+            "criteria": "<",
+            "value": 0.75,
+            "format": formats["kpi_bad"],
+        })
+        worksheet.conditional_format(7, 1, 7, 2, {
+            "type": "cell",
+            "criteria": "<=",
+            "value": 200,
+            "format": formats["kpi_good"],
+        })
+        worksheet.conditional_format(7, 1, 7, 2, {
+            "type": "cell",
+            "criteria": "between",
+            "minimum": 200,
+            "maximum": 1000,
+            "format": formats["kpi_warn"],
+        })
+        worksheet.conditional_format(7, 1, 7, 2, {
+            "type": "cell",
+            "criteria": ">",
+            "value": 1000,
+            "format": formats["kpi_bad"],
+        })
+
+        findings = self._build_key_findings(context, anomaly=anomaly)
+        for offset, finding in enumerate(findings, start=1):
+            row_idx = start_row + offset
+            worksheet.write(row_idx, 6, finding, formats["finding_text"])
+            worksheet.set_row(row_idx, 42)
+
+        worksheet.set_column(5, 5, 12)
+        worksheet.set_column(6, 6, 58)
+
+    def _build_key_findings(self, context: dict[str, Any], *, anomaly: TrendAnomaly | None) -> list[str]:
+        def _group_row(rows: Sequence[dict[str, Any]], label: str) -> dict[str, Any] | None:
+            return next((row for row in rows if str(row.get("group") or "").strip().lower() == label.lower()), None)
+
+        sla_rate = context["kpis"][0]["value_30d"]
+        sla_rows_30 = context.get("sla_rows_30") or []
+        breached_sla = _group_row(sla_rows_30, "BREACHED") or {}
+        met_sla = _group_row(sla_rows_30, "Met") or {}
+        sla_icon = "🔴" if sla_rate < 0.9 else "🟢"
+
+        mttr_rows = context.get("mttr_priority_rows") or []
+        worst_mttr = max(mttr_rows, key=lambda row: row.get("p95_ttr_hours") or 0.0) if mttr_rows else {"group": "(none)", "p95_ttr_hours": 0.0}
+
+        fr_rate = context["kpis"][2]["value_30d"]
+        fr_rows_30 = context.get("first_response_rows_30") or []
+        breached_fr = _group_row(fr_rows_30, "BREACHED") or {}
+        fr_icon = "🟢" if fr_rate >= 0.9 else ("🟡" if fr_rate >= 0.75 else "🔴")
+
+        backlog_rows = context.get("backlog_rows") or []
+        fresh_backlog = _group_row(backlog_rows, "0-3 days") or {}
+        oldest_backlog = _group_row(backlog_rows, "60+ days") or {}
+        trend_rows = context.get("trend_rows") or []
+        backlog_current = trend_rows[-1]["backlog_count"] if trend_rows else 0
+        backlog_start = trend_rows[0]["backlog_count"] if trend_rows else 0
+        backlog_icon = "🟢" if not (oldest_backlog.get("total") or 0) else "🟡"
+        old_tickets_text = (
+            "No tickets >60 days."
+            if not (oldest_backlog.get("total") or 0)
+            else f"{int(oldest_backlog.get('total') or 0):,} tickets are >60 days old."
+        )
+
+        findings = [
+            (
+                f"{sla_icon} SLA Compliance: {sla_rate:.1%} (30d) — below 90% target. "
+                f"BREACHED tickets avg {(breached_sla.get('avg_ttr_hours') or 0.0):.1f}h TTR vs "
+                f"{(met_sla.get('avg_ttr_hours') or 0.0):.1f}h for Met. "
+                f"Focus: reduce breach count from {int(breached_sla.get('count') or 0):,}."
+            ),
+            (
+                f"🔴 MTTR Tail Risk: {worst_mttr.get('group') or '(none)'} P95 = "
+                f"{(worst_mttr.get('p95_ttr_hours') or 0.0):,.1f}h. "
+                "Worst tail in the portfolio. Action: review that queue for stale tickets."
+            ),
+            (
+                f"{fr_icon} First Response: {fr_rate:.1%} Met (30d). "
+                f"{int(breached_fr.get('count') or 0):,} BREACHED avg {(breached_fr.get('avg_ttr_hours') or 0.0):.1f}h. "
+                "Action: triage BREACHED first-response tickets."
+            ),
+            (
+                f"{backlog_icon} Backlog: {backlog_current:,} open tickets, "
+                f"{(fresh_backlog.get('percent_of_backlog') or 0.0):.0%} in 0-3d bucket. "
+                f"{'Down' if backlog_current <= backlog_start else 'Up'} from {backlog_start:,}. "
+                f"{old_tickets_text}"
+            ),
+        ]
+        if anomaly:
+            findings.append(
+                f"⚠️ Data Quality: Escalation Rate & FCR are proxy metrics. {anomaly.count:,} escalation spike on {anomaly.day} is a suspected outlier and needs verification."
+            )
+        else:
+            findings.append("⚠️ Data Quality: Escalation Rate and FCR are proxy metrics. See Data Gaps for current limitations.")
+        return findings
 
     def _build_dashboard_context(
         self,
@@ -1136,6 +2394,18 @@ class ReportWorkbookBuilder:
             group_by="priority",
             report_kind="mttr",
         )
+        sla_rows_30 = self._group_summary_rows(
+            facts=mttr_30,
+            prior_facts=mttr_prior_30,
+            group_by="sla_resolution_status",
+            report_kind="sla",
+        )
+        first_response_rows_30 = self._group_summary_rows(
+            facts=fr_30,
+            prior_facts=fr_prior_30,
+            group_by="sla_first_response_status",
+            report_kind="first_response",
+        )
         backlog_rows, backlog_statuses = self._backlog_rows(backlog_open, backlog_prior)
         escalation_rows = [
             row
@@ -1167,6 +2437,8 @@ class ReportWorkbookBuilder:
             "sla_status_counts": sla_30,
             "first_response_status_counts": fr_status_30,
             "mttr_priority_rows": mttr_priority_rows,
+            "sla_rows_30": sla_rows_30,
+            "first_response_rows_30": first_response_rows_30,
             "top_category_rows": top_category_rows,
             "backlog_rows": backlog_rows,
             "backlog_statuses": backlog_statuses,
@@ -1859,4 +3131,30 @@ class ReportWorkbookBuilder:
             "kpi_warn": workbook.add_format({"bg_color": "#FEF3C7"}),
             "kpi_bad": workbook.add_format({"bg_color": "#FEE2E2"}),
             "hidden": workbook.add_format({"font_color": "#FFFFFF"}),
+            "hidden_note": workbook.add_format({"font_color": "#FFFFFF", "italic": True}),
+            "total_text": workbook.add_format({"bold": True, "top": 1, "valign": "top"}),
+            "total_integer": workbook.add_format({"bold": True, "top": 1, "valign": "top", "num_format": "#,##0"}),
+            "total_hours": workbook.add_format({"bold": True, "top": 1, "valign": "top", "num_format": "0.0"}),
+            "total_percent": workbook.add_format({"bold": True, "top": 1, "valign": "top", "num_format": "0.0%"}),
+            "total_blank": workbook.add_format({"bold": True, "top": 1, "valign": "top"}),
+            "metric_label": workbook.add_format({"bold": True, "valign": "top"}),
+            "metric_percent": workbook.add_format({"bold": True, "valign": "top", "num_format": "0.0%", "bg_color": "#FEF08A"}),
+            "readiness_ready": workbook.add_format({"bold": True, "bg_color": "#DCFCE7", "font_color": "#0F172A"}),
+            "readiness_proxy": workbook.add_format({"bold": True, "bg_color": "#FEF3C7", "font_color": "#0F172A"}),
+            "readiness_issue": workbook.add_format({"bold": True, "bg_color": "#FEE2E2", "font_color": "#7F1D1D"}),
+            "status_ready": workbook.add_format({"bold": True, "align": "center", "bg_color": "#DCFCE7"}),
+            "status_proxy": workbook.add_format({"bold": True, "align": "center", "bg_color": "#FEF3C7"}),
+            "status_issue": workbook.add_format({"bold": True, "align": "center", "bg_color": "#FEE2E2"}),
+            "trend_arrow": workbook.add_format({"bold": True, "font_size": 14, "align": "center", "valign": "vcenter"}),
+            "arrow_good": workbook.add_format({"bold": True, "font_size": 14, "font_color": "#16A34A", "align": "center"}),
+            "arrow_bad": workbook.add_format({"bold": True, "font_size": 14, "font_color": "#DC2626", "align": "center"}),
+            "finding_text": workbook.add_format({"font_size": 10, "valign": "top", "text_wrap": True}),
+            "weekend": workbook.add_format({"bg_color": "#F1F5F9"}),
+            "row_green": workbook.add_format({"bg_color": "#DCFCE7"}),
+            "row_pale_yellow": workbook.add_format({"bg_color": "#FEF9C3"}),
+            "row_orange": workbook.add_format({"bg_color": "#FED7AA"}),
+            "row_light_red": workbook.add_format({"bg_color": "#FECACA"}),
+            "row_red": workbook.add_format({"bg_color": "#FCA5A5"}),
+            "row_dark_red": workbook.add_format({"bg_color": "#F87171", "font_color": "#FFFFFF"}),
+            "row_yellow": workbook.add_format({"bg_color": "#FEF3C7"}),
         }

@@ -506,8 +506,9 @@ class TestReportTemplates:
         assert "Backlog Size & Aging 30d" in workbook.sheetnames
 
         index_ws = workbook["Report Index"]
-        headers = [index_ws.cell(row=1, column=idx).value for idx in range(1, 13)]
+        headers = [index_ws.cell(row=1, column=idx).value for idx in range(1, 14)]
         assert headers == [
+            "Status",
             "Report",
             "Sheet",
             "Window",
@@ -521,9 +522,10 @@ class TestReportTemplates:
             "Description",
             "Notes",
         ]
-        report_names = [index_ws.cell(row=row_idx, column=1).value for row_idx in range(2, index_ws.max_row + 1)]
+        report_names = [index_ws.cell(row=row_idx, column=2).value for row_idx in range(2, index_ws.max_row + 1)]
         assert "First Response Time" in report_names
-        assert index_ws["B2"].hyperlink is not None
+        assert index_ws["A2"].value in {"✅", "⚠️", "🔴"}
+        assert index_ws["C2"].hyperlink is not None
 
         frt_ws = workbook["First Response Time 7d"]
         assert frt_ws["A1"].value == "Report"
@@ -533,7 +535,10 @@ class TestReportTemplates:
         assert frt_ws["A3"].value == "Window Field"
         assert frt_ws["B3"].value == "Created"
         assert frt_ws["A7"].value == "Readiness"
-        assert frt_ws["B7"].value == "ready"
+        assert frt_ws["H13"].value == "Δ Count vs Prior"
+        labels = [frt_ws.cell(row=row_idx, column=1).value for row_idx in range(14, frt_ws.max_row + 1)]
+        assert "Total" in labels
+        assert "First Response SLA Met %" in labels
 
     def test_master_workbook_build_runs_via_asyncio_to_thread(self, test_client, monkeypatch):
         calls: list[str] = []
@@ -571,7 +576,7 @@ class TestReportTemplates:
         assert "First Response Time 30d" not in workbook.sheetnames
 
         index_ws = workbook["Report Index"]
-        report_names = [index_ws.cell(row=row_idx, column=1).value for row_idx in range(2, index_ws.max_row + 1)]
+        report_names = [index_ws.cell(row=row_idx, column=2).value for row_idx in range(2, index_ws.max_row + 1)]
         assert "First Response Time" not in report_names
 
     def test_seed_template_export_selection_can_be_toggled_without_full_edit(self, test_client):
