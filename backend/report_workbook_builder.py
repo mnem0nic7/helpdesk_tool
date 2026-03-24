@@ -154,6 +154,7 @@ class ReportIssueFact:
     priority_increase_count: int = 0
     is_escalated: bool = False
     escalation_reasons: list[str] = field(default_factory=list)
+    escalation_event_dates: set[date] = field(default_factory=set)
     changelog_loaded: bool = False
     changelog_error: str = ""
 
@@ -344,12 +345,16 @@ def _metric_values_for_kind(report_kind: str, facts: Sequence[ReportIssueFact]) 
     return [fact.ttr_hours for fact in facts if fact.ttr_hours is not None]
 
 
-def _template_readiness(template: ReportTemplate, *, changelog_available: bool) -> str:
+def _template_readiness(template: ReportTemplate, *, facts: Sequence[ReportIssueFact]) -> str:
     name = template.name.strip().lower()
+    changelog_available = any(fact.changelog_loaded and not fact.changelog_error for fact in facts)
     if "csat" in name:
         return "gap"
     if "first contact" in name:
         return "proxy"
+    if "first response" in name:
+        missing_first_response = any(fact.first_response_hours is None for fact in facts)
+        return "proxy" if missing_first_response else (template.readiness or "custom")
     if "escalation" in name:
         return "proxy" if changelog_available else "gap"
     if "reopen" in name:
@@ -405,6 +410,29 @@ class ReportWorkbookBuilder:
             )
             labels_lower = [str(label).strip().lower() for label in (row.get("labels") or [])]
             components_lower = [str(component).strip().lower() for component in (row.get("components") or [])]
+            marker_escalated = _matches_escalation_markers(
+                ReportIssueFact(
+                    key=str(issue.get("key") or ""),
+                    issue=issue,
+                    row=row,
+                    created_dt=created_dt,
+                    updated_dt=updated_dt,
+                    resolved_dt=resolved_dt,
+                    ttr_hours=row.get("calendar_ttr_hours"),
+                    open_age_hours=None,
+                    first_response_hours=first_response_hours,
+                    resolution_sla_elapsed_hours=resolution_sla_elapsed_hours,
+                    sla_response_status=str(row.get("sla_first_response_status") or ""),
+                    sla_resolution_status=str(row.get("sla_resolution_status") or ""),
+                    comment_count=int(row.get("comment_count") or 0),
+                    labels_lower=labels_lower,
+                    components_lower=components_lower,
+                )
+            )
+            marker_event_dates: set[date] = set()
+            marker_anchor = created_dt or updated_dt or resolved_dt
+            if marker_escalated and marker_anchor:
+                marker_event_dates.add(marker_anchor.date())
             fact = ReportIssueFact(
                 key=str(issue.get("key") or ""),
                 issue=issue,
@@ -421,28 +449,9 @@ class ReportWorkbookBuilder:
                 comment_count=int(row.get("comment_count") or 0),
                 labels_lower=labels_lower,
                 components_lower=components_lower,
-                is_escalated=_matches_escalation_markers(
-                    ReportIssueFact(
-                        key=str(issue.get("key") or ""),
-                        issue=issue,
-                        row=row,
-                        created_dt=created_dt,
-                        updated_dt=updated_dt,
-                        resolved_dt=resolved_dt,
-                        ttr_hours=row.get("calendar_ttr_hours"),
-                        open_age_hours=None,
-                        first_response_hours=first_response_hours,
-                        resolution_sla_elapsed_hours=resolution_sla_elapsed_hours,
-                        sla_response_status=str(row.get("sla_first_response_status") or ""),
-                        sla_resolution_status=str(row.get("sla_resolution_status") or ""),
-                        comment_count=int(row.get("comment_count") or 0),
-                        labels_lower=labels_lower,
-                        components_lower=components_lower,
-                    )
-                ),
-                escalation_reasons=["Escalation marker"] if any(
-                    marker in token for token in (labels_lower + components_lower) for marker in _ESCALATION_MARKERS
-                ) else [],
+                is_escalated=marker_escalated,
+                escalation_reasons=["Escalation marker"] if marker_escalated else [],
+                escalation_event_dates=marker_event_dates,
             )
             self._facts_by_key[fact.key] = fact
 
@@ -529,6 +538,7 @@ class ReportWorkbookBuilder:
         reopen_count = 0
         assignee_changes = 0
         priority_increase_count = 0
+        escalation_event_dates = set(fact.escalation_event_dates)
         for history in sorted(histories, key=lambda item: parse_dt(item.get("created")) or datetime.min.replace(tzinfo=timezone.utc)):
             history_created = parse_dt(history.get("created"))
             for change in history.get("items") or []:
@@ -537,8 +547,12 @@ class ReportWorkbookBuilder:
                 to_string = str(change.get("toString") or "")
                 if field_name == "assignee" and from_string != to_string:
                     assignee_changes += 1
+                    if assignee_changes > 1 and history_created:
+                        escalation_event_dates.add(history_created.date())
                 if field_name == "priority" and _priority_increase(from_string, to_string):
                     priority_increase_count += 1
+                    if history_created:
+                        escalation_event_dates.add(history_created.date())
                 if field_name == "status":
                     if _is_terminal_status_name(to_string) and history_created and first_resolved is None:
                         first_resolved = history_created
@@ -551,6 +565,7 @@ class ReportWorkbookBuilder:
         fact.reopen_count = reopen_count
         fact.assignee_change_count = assignee_changes
         fact.priority_increase_count = priority_increase_count
+        fact.escalation_event_dates = escalation_event_dates
         if assignee_changes > 1 and "Reassigned more than once" not in fact.escalation_reasons:
             fact.escalation_reasons.append("Reassigned more than once")
         if priority_increase_count > 0 and "Priority increased" not in fact.escalation_reasons:
@@ -661,11 +676,19 @@ class ReportWorkbookBuilder:
             aggregated_gaps: list[TemplateGap] = list(dashboard_context["gaps"])
             for template in included_templates:
                 config = template.config if isinstance(template.config, ReportConfig) else ReportConfig()
+                gap_window_field = _date_field_for_report_window_config(config, report_name=template.name)
+                gap_window_start, gap_window_end = _window_bounds(30, today=self.today)
+                gap_facts = self._facts_for_window(
+                    self._facts_for_config(config),
+                    window_field=gap_window_field,
+                    window_start=gap_window_start,
+                    window_end=gap_window_end,
+                )
                 aggregated_gaps.extend(
                     self._build_data_gaps(
                         template=template,
                         report_name=template.name,
-                        facts=self._facts_for_config(config),
+                        facts=gap_facts,
                     )
                 )
             self._write_master_dashboard_sheet(workbook, formats, dashboard_context, used_names)
@@ -770,6 +793,7 @@ class ReportWorkbookBuilder:
         self._write_dashboard_core(worksheet, workbook, formats, context, dashboard_title="Executive Dashboard")
 
     def _write_dashboard_core(self, worksheet, workbook, formats: dict[str, Any], context: dict[str, Any], *, dashboard_title: str) -> None:
+        helper_sheet_name = self._write_dashboard_helper_sheet(workbook, formats, context, dashboard_title=dashboard_title)
         worksheet.write(0, 0, dashboard_title, formats["title"])
         worksheet.write(1, 0, context["report_name"], formats["subtitle"])
         worksheet.write(2, 0, context["report_description"], formats["text"])
@@ -800,30 +824,12 @@ class ReportWorkbookBuilder:
                 worksheet.write_number(row_idx, 2, metric_row["value_30d"], formats["hours"])
                 worksheet.write_number(row_idx, 3, metric_row["delta"], formats["hours"])
 
-        helper_col = 8
-        worksheet.write_row(0, helper_col, [point["date"] for point in context["trend_rows"]], formats["hidden"])
-        ticket_volume_values = [point["tickets_created"] for point in context["trend_rows"]]
-        backlog_values = [point["backlog_count"] for point in context["trend_rows"]]
-        mttr_p95_values = [point["mttr_p95_hours"] or 0.0 for point in context["trend_rows"]]
-        first_response_values = [point["first_response_met_rate"] for point in context["trend_rows"]]
-        sla_values = [point["sla_compliance_rate"] for point in context["trend_rows"]]
-        helper_rows = [
-            ("Ticket Volume", ticket_volume_values),
-            ("Backlog Count", backlog_values),
-            ("MTTR P95", mttr_p95_values),
-            ("First Response SLA", first_response_values),
-            ("SLA Compliance", sla_values),
-        ]
-        for idx, (_, values) in enumerate(helper_rows, start=1):
-            worksheet.write(idx, helper_col - 1, "", formats["hidden"])
-            worksheet.write_row(idx, helper_col, values, formats["hidden"])
-
         sparkline_map = {
-            "Ticket Volume": f"{xl_col_to_name(helper_col)}2:{xl_col_to_name(helper_col + len(ticket_volume_values) - 1)}2",
-            "Backlog Count": f"{xl_col_to_name(helper_col)}3:{xl_col_to_name(helper_col + len(backlog_values) - 1)}3",
-            "MTTR P95 (h)": f"{xl_col_to_name(helper_col)}4:{xl_col_to_name(helper_col + len(mttr_p95_values) - 1)}4",
-            "First Response SLA Met %": f"{xl_col_to_name(helper_col)}5:{xl_col_to_name(helper_col + len(first_response_values) - 1)}5",
-            "SLA Compliance Rate %": f"{xl_col_to_name(helper_col)}6:{xl_col_to_name(helper_col + len(sla_values) - 1)}6",
+            "Ticket Volume": f"'{helper_sheet_name}'!B2:{xl_col_to_name(len(context['trend_rows']) + 1)}2",
+            "Backlog Count": f"'{helper_sheet_name}'!B3:{xl_col_to_name(len(context['trend_rows']) + 1)}3",
+            "MTTR P95 (h)": f"'{helper_sheet_name}'!B4:{xl_col_to_name(len(context['trend_rows']) + 1)}4",
+            "First Response SLA Met %": f"'{helper_sheet_name}'!B5:{xl_col_to_name(len(context['trend_rows']) + 1)}5",
+            "SLA Compliance Rate %": f"'{helper_sheet_name}'!B6:{xl_col_to_name(len(context['trend_rows']) + 1)}6",
         }
         for offset, metric_row in enumerate(context["kpis"], start=1):
             row_idx = start_row + offset
@@ -835,8 +841,7 @@ class ReportWorkbookBuilder:
         for idx, problem in enumerate(context["problem_areas"], start=1):
             worksheet.write(start_row + idx, 6, problem, formats["wrap"])
 
-        self._write_dashboard_helper_tables(worksheet, formats, context)
-        self._insert_dashboard_charts(worksheet, workbook, context)
+        self._insert_dashboard_charts(worksheet, workbook, context, helper_sheet_name=helper_sheet_name)
 
         for offset, metric_row in enumerate(context["kpis"], start=1):
             if metric_row["type"] != "percent":
@@ -865,9 +870,27 @@ class ReportWorkbookBuilder:
         worksheet.set_column(1, 3, 14)
         worksheet.set_column(4, 4, 18)
         worksheet.set_column(6, 6, 42)
-        worksheet.set_column(helper_col, helper_col + 40, None, None, {"hidden": True})
 
-    def _write_dashboard_helper_tables(self, worksheet, formats: dict[str, Any], context: dict[str, Any]) -> None:
+    def _write_dashboard_helper_sheet(self, workbook, formats: dict[str, Any], context: dict[str, Any], *, dashboard_title: str) -> str:
+        worksheet = workbook.add_worksheet(_sanitize_sheet_name(f"{dashboard_title} Data"))
+        worksheet.hide()
+        base_col = 0
+        worksheet.write_row(0, base_col, [point["date"] for point in context["trend_rows"]], formats["hidden"])
+        ticket_volume_values = [point["tickets_created"] for point in context["trend_rows"]]
+        backlog_values = [point["backlog_count"] for point in context["trend_rows"]]
+        mttr_p95_values = [point["mttr_p95_hours"] or 0.0 for point in context["trend_rows"]]
+        first_response_values = [point["first_response_met_rate"] for point in context["trend_rows"]]
+        sla_values = [point["sla_compliance_rate"] for point in context["trend_rows"]]
+        helper_rows = [
+            ticket_volume_values,
+            backlog_values,
+            mttr_p95_values,
+            first_response_values,
+            sla_values,
+        ]
+        for idx, values in enumerate(helper_rows, start=1):
+            worksheet.write_row(idx, base_col + 1, values, formats["hidden"])
+
         base_col = 12
         worksheet.write_row(0, base_col, ["Date", "Created", "Resolved", "MTTR P95", "SLA Compliance %"], formats["hidden"])
         for idx, point in enumerate(context["trend_rows"], start=1):
@@ -916,24 +939,38 @@ class ReportWorkbookBuilder:
         for offset, (label, count) in enumerate(context["first_response_status_counts"].items(), start=1):
             worksheet.write(fr_row + offset, base_col, label, formats["hidden"])
             worksheet.write_number(fr_row + offset, base_col + 1, count, formats["hidden"])
+        return worksheet.name
 
-    def _insert_dashboard_charts(self, worksheet, workbook, context: dict[str, Any]) -> None:
+    def _insert_dashboard_charts(self, worksheet, workbook, context: dict[str, Any], *, helper_sheet_name: str) -> None:
         base_col = 12
-        chart_trends = workbook.add_chart({"type": "column"})
+        chart_trends = workbook.add_chart({"type": "line"})
         chart_trends.add_series({
             "name": "Tickets Created",
-            "categories": [worksheet.name, 1, base_col, len(context["trend_rows"]), base_col],
-            "values": [worksheet.name, 1, base_col + 1, len(context["trend_rows"]), base_col + 1],
+            "categories": [helper_sheet_name, 1, base_col, len(context["trend_rows"]), base_col],
+            "values": [helper_sheet_name, 1, base_col + 1, len(context["trend_rows"]), base_col + 1],
+            "line": {"color": "#2563EB", "width": 2.0},
+            "marker": {"type": "circle", "size": 4, "border": {"color": "#2563EB"}, "fill": {"color": "#2563EB"}},
+        })
+        chart_trends.add_series({
+            "name": "Tickets Resolved",
+            "categories": [helper_sheet_name, 1, base_col, len(context["trend_rows"]), base_col],
+            "values": [helper_sheet_name, 1, base_col + 2, len(context["trend_rows"]), base_col + 2],
+            "line": {"color": "#10B981", "width": 2.0},
+            "marker": {"type": "diamond", "size": 4, "border": {"color": "#10B981"}, "fill": {"color": "#10B981"}},
         })
         chart_trends.set_y_axis({"name": "Tickets"})
-        chart_trends.set_x_axis({"name": "Date"})
+        chart_trends.set_x_axis({"name": "Date", "label_position": "low"})
+        chart_trends.set_legend({"position": "bottom"})
         chart_trends.set_title({"name": "30-Day Trend"})
+        chart_trends.set_plotarea({"border": {"none": True}})
         line_chart = workbook.add_chart({"type": "line"})
         line_chart.add_series({
             "name": "MTTR P95",
-            "categories": [worksheet.name, 1, base_col, len(context["trend_rows"]), base_col],
-            "values": [worksheet.name, 1, base_col + 3, len(context["trend_rows"]), base_col + 3],
+            "categories": [helper_sheet_name, 1, base_col, len(context["trend_rows"]), base_col],
+            "values": [helper_sheet_name, 1, base_col + 3, len(context["trend_rows"]), base_col + 3],
             "y2_axis": True,
+            "line": {"color": "#DC2626", "width": 2.25},
+            "marker": {"type": "square", "size": 4, "border": {"color": "#DC2626"}, "fill": {"color": "#DC2626"}},
         })
         line_chart.set_y2_axis({"name": "MTTR P95 (h)"})
         chart_trends.combine(line_chart)
@@ -944,8 +981,8 @@ class ReportWorkbookBuilder:
         if status_count > 0:
             chart_sla.add_series({
                 "name": "SLA Compliance",
-                "categories": [worksheet.name, 41, base_col, 40 + status_count, base_col],
-                "values": [worksheet.name, 41, base_col + 1, 40 + status_count, base_col + 1],
+                "categories": [helper_sheet_name, 41, base_col, 40 + status_count, base_col],
+                "values": [helper_sheet_name, 41, base_col + 1, 40 + status_count, base_col + 1],
             })
             chart_sla.set_title({"name": "SLA Compliance"})
             worksheet.insert_chart("J14", chart_sla, {"x_scale": 1.0, "y_scale": 1.0})
@@ -955,13 +992,13 @@ class ReportWorkbookBuilder:
             chart_mttr = workbook.add_chart({"type": "bar"})
             chart_mttr.add_series({
                 "name": "Avg TTR",
-                "categories": [worksheet.name, 49, base_col, 48 + mttr_count, base_col],
-                "values": [worksheet.name, 49, base_col + 1, 48 + mttr_count, base_col + 1],
+                "categories": [helper_sheet_name, 49, base_col, 48 + mttr_count, base_col],
+                "values": [helper_sheet_name, 49, base_col + 1, 48 + mttr_count, base_col + 1],
             })
             chart_mttr.add_series({
                 "name": "P95 TTR",
-                "categories": [worksheet.name, 49, base_col, 48 + mttr_count, base_col],
-                "values": [worksheet.name, 49, base_col + 2, 48 + mttr_count, base_col + 2],
+                "categories": [helper_sheet_name, 49, base_col, 48 + mttr_count, base_col],
+                "values": [helper_sheet_name, 49, base_col + 2, 48 + mttr_count, base_col + 2],
             })
             chart_mttr.set_title({"name": "MTTR by Priority"})
             worksheet.insert_chart("A33", chart_mttr, {"x_scale": 1.2, "y_scale": 1.1})
@@ -971,8 +1008,8 @@ class ReportWorkbookBuilder:
             chart_volume = workbook.add_chart({"type": "bar"})
             chart_volume.add_series({
                 "name": "Tickets",
-                "categories": [worksheet.name, 57, base_col, 56 + volume_count, base_col],
-                "values": [worksheet.name, 57, base_col + 1, 56 + volume_count, base_col + 1],
+                "categories": [helper_sheet_name, 57, base_col, 56 + volume_count, base_col],
+                "values": [helper_sheet_name, 57, base_col + 1, 56 + volume_count, base_col + 1],
             })
             chart_volume.set_title({"name": "Ticket Volume by Category"})
             worksheet.insert_chart("J33", chart_volume, {"x_scale": 1.0, "y_scale": 1.0})
@@ -983,8 +1020,8 @@ class ReportWorkbookBuilder:
             for offset, status in enumerate(context["backlog_statuses"], start=1):
                 chart_backlog.add_series({
                     "name": status,
-                    "categories": [worksheet.name, 69, base_col, 68 + backlog_row_count, base_col],
-                    "values": [worksheet.name, 69, base_col + offset, 68 + backlog_row_count, base_col + offset],
+                    "categories": [helper_sheet_name, 69, base_col, 68 + backlog_row_count, base_col],
+                    "values": [helper_sheet_name, 69, base_col + offset, 68 + backlog_row_count, base_col + offset],
                 })
             chart_backlog.set_title({"name": "Backlog Aging"})
             worksheet.insert_chart("A52", chart_backlog, {"x_scale": 1.2, "y_scale": 1.0})
@@ -994,8 +1031,8 @@ class ReportWorkbookBuilder:
             chart_escalation = workbook.add_chart({"type": "column"})
             chart_escalation.add_series({
                 "name": "Escalated Tickets",
-                "categories": [worksheet.name, 83, base_col, 82 + escalation_count, base_col],
-                "values": [worksheet.name, 83, base_col + 1, 82 + escalation_count, base_col + 1],
+                "categories": [helper_sheet_name, 83, base_col, 82 + escalation_count, base_col],
+                "values": [helper_sheet_name, 83, base_col + 1, 82 + escalation_count, base_col + 1],
             })
             chart_escalation.set_title({"name": "Escalation by Assignee"})
             worksheet.insert_chart("J52", chart_escalation, {"x_scale": 1.0, "y_scale": 1.0})
@@ -1005,8 +1042,8 @@ class ReportWorkbookBuilder:
             chart_fr = workbook.add_chart({"type": "doughnut"})
             chart_fr.add_series({
                 "name": "First Response SLA",
-                "categories": [worksheet.name, 95, base_col, 94 + fr_count, base_col],
-                "values": [worksheet.name, 95, base_col + 1, 94 + fr_count, base_col + 1],
+                "categories": [helper_sheet_name, 95, base_col, 94 + fr_count, base_col],
+                "values": [helper_sheet_name, 95, base_col + 1, 94 + fr_count, base_col + 1],
             })
             chart_fr.set_title({"name": "First Response SLA"})
             worksheet.insert_chart("J69", chart_fr, {"x_scale": 1.0, "y_scale": 1.0})
@@ -1111,7 +1148,16 @@ class ReportWorkbookBuilder:
             if row.get("escalated_count")
         ][:10]
 
-        gaps = self._build_data_gaps(template=template, report_name=report_name, facts=facts)
+        gap_facts = facts
+        if template is not None:
+            gap_window_field = _date_field_for_report_window_config(template.config, report_name=report_name)
+            gap_facts = self._facts_for_window(
+                facts,
+                window_field=gap_window_field,
+                window_start=current_30_start,
+                window_end=current_30_end,
+            )
+        gaps = self._build_data_gaps(template=template, report_name=report_name, facts=gap_facts)
         problem_areas = self._problem_areas(mttr_priority_rows, top_category_rows, backlog_rows)
         return {
             "report_name": report_name,
@@ -1140,9 +1186,7 @@ class ReportWorkbookBuilder:
                 for fact in facts
                 if fact.created_dt and fact.created_dt.date() <= day and (not fact.resolved_dt or fact.resolved_dt.date() > day)
             ]
-            escalated = [
-                fact for fact in facts if fact.is_escalated and fact.updated_dt and fact.updated_dt.date() == day
-            ]
+            escalated = [fact for fact in facts if day in fact.escalation_event_dates]
             sla_counts = self._sla_status_counts(resolved)
             fr_counts = self._first_response_status_counts(created)
             rows.append(
@@ -1169,12 +1213,13 @@ class ReportWorkbookBuilder:
     ) -> list[TemplateGap]:
         name = report_name.strip().lower()
         gaps: list[TemplateGap] = []
+        template_readiness = "proxy"
         if template is not None:
-            readiness = _template_readiness(template, changelog_available=any(fact.changelog_loaded and not fact.changelog_error for fact in facts))
-            if readiness in {"gap", "proxy"}:
+            template_readiness = _template_readiness(template, facts=facts)
+            if template_readiness in {"gap", "proxy"}:
                 limitation = template.notes or "This report relies on partial source data."
                 recommendation = "Review the configured Jira fields or workflow history to improve readiness."
-                gaps.append(TemplateGap(template.name, "All", readiness, limitation, recommendation))
+                gaps.append(TemplateGap(template.name, "All", template_readiness, limitation, recommendation))
         if "first response" in name:
             missing = sum(1 for fact in facts if fact.first_response_hours is None)
             if missing:
@@ -1182,7 +1227,7 @@ class ReportWorkbookBuilder:
                     TemplateGap(
                         report_name,
                         "All",
-                        "proxy",
+                        template_readiness,
                         f"{missing} tickets are missing Jira first-response elapsed time, so percentile reporting is partial.",
                         "Ensure the Jira first-response SLA timer is populated for all relevant requests.",
                     )
@@ -1283,15 +1328,20 @@ class ReportWorkbookBuilder:
         worksheet.set_column(6, 7, 16)
 
         chart = workbook.add_chart({"type": "column"})
+        chart = workbook.add_chart({"type": "line"})
         chart.add_series({
             "name": "Tickets Created",
             "categories": [worksheet.name, header_row + 1, 0, header_row + len(trend_rows), 0],
             "values": [worksheet.name, header_row + 1, 1, header_row + len(trend_rows), 1],
+            "line": {"color": "#2563EB", "width": 2.0},
+            "marker": {"type": "circle", "size": 4, "border": {"color": "#2563EB"}, "fill": {"color": "#2563EB"}},
         })
         chart.add_series({
             "name": "Tickets Resolved",
             "categories": [worksheet.name, header_row + 1, 0, header_row + len(trend_rows), 0],
             "values": [worksheet.name, header_row + 1, 2, header_row + len(trend_rows), 2],
+            "line": {"color": "#10B981", "width": 2.0},
+            "marker": {"type": "diamond", "size": 4, "border": {"color": "#10B981"}, "fill": {"color": "#10B981"}},
         })
         line = workbook.add_chart({"type": "line"})
         line.add_series({
@@ -1299,9 +1349,14 @@ class ReportWorkbookBuilder:
             "categories": [worksheet.name, header_row + 1, 0, header_row + len(trend_rows), 0],
             "values": [worksheet.name, header_row + 1, 4, header_row + len(trend_rows), 4],
             "y2_axis": True,
+            "line": {"color": "#DC2626", "width": 2.25},
+            "marker": {"type": "square", "size": 4, "border": {"color": "#DC2626"}, "fill": {"color": "#DC2626"}},
         })
         line.set_y2_axis({"name": "MTTR P95 (h)"})
         chart.combine(line)
+        chart.set_y_axis({"name": "Tickets"})
+        chart.set_x_axis({"name": "Date", "label_position": "low"})
+        chart.set_legend({"position": "bottom"})
         chart.set_title({"name": "30-Day Trends"})
         worksheet.insert_chart("J4", chart, {"x_scale": 1.3, "y_scale": 1.1})
 
@@ -1376,7 +1431,7 @@ class ReportWorkbookBuilder:
         facts = self._facts_for_config(config)
         current_facts = self._facts_for_window(facts, window_field=window_field, window_start=current_start, window_end=current_end)
         prior_facts = self._facts_for_window(facts, window_field=window_field, window_start=prior_start, window_end=prior_end)
-        readiness = _template_readiness(template, changelog_available=any(fact.changelog_loaded and not fact.changelog_error for fact in current_facts)) if template else "custom"
+        readiness = _template_readiness(template, facts=current_facts) if template else "custom"
         metadata = self._template_window_metadata(
             report_name=report_name,
             report_description=report_description,
