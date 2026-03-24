@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from typing import Any
 
 import requests
@@ -88,6 +89,21 @@ class JiraClient:
                 "Content-Type": "application/json",
             }
         )
+        self._thread_local = threading.local()
+
+    def _get_thread_session(self) -> requests.Session:
+        """Return a per-thread session for concurrent Jira access.
+
+        ``requests.Session`` is not safe to share across worker threads.
+        Master report changelog prefetch uses a thread pool, so each thread
+        needs its own session with the same auth and headers.
+        """
+        if not hasattr(self._thread_local, "session"):
+            session = requests.Session()
+            session.auth = self.session.auth
+            session.headers.update(dict(self.session.headers))
+            self._thread_local.session = session
+        return self._thread_local.session
 
     # ------------------------------------------------------------------
     # Helpers
@@ -276,7 +292,7 @@ class JiraClient:
         """Fetch one page of Jira changelog history for an issue."""
         validate_jira_key(key)
         url = f"{self.base_url}/rest/api/3/issue/{key}/changelog"
-        resp = self.session.get(
+        resp = self._get_thread_session().get(
             url,
             params={"startAt": start_at, "maxResults": max_results},
             timeout=self._TIMEOUT,

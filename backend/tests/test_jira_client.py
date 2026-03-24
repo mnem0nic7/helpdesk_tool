@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock
 
 from jira_client import JiraClient
@@ -115,3 +116,25 @@ def test_get_issue_changelog_all_paginates(monkeypatch):
 
     assert [item["id"] for item in histories] == ["1", "2", "3"]
     assert calls == [0, 2]
+
+
+def test_get_thread_session_is_isolated_per_thread():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+
+    main_session = client._get_thread_session()
+    worker_sessions: list[object] = []
+
+    def _worker() -> None:
+        worker_sessions.append(client._get_thread_session())
+
+    first = threading.Thread(target=_worker)
+    second = threading.Thread(target=_worker)
+    first.start()
+    second.start()
+    first.join()
+    second.join()
+
+    assert len(worker_sessions) == 2
+    assert worker_sessions[0] is not main_session
+    assert worker_sessions[1] is not main_session
+    assert worker_sessions[0] is not worker_sessions[1]
