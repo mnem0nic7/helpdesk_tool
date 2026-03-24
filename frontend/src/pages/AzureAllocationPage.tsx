@@ -1,6 +1,8 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
+import AzureExportSetupCard from "../components/AzureExportSetupCard.tsx";
+import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import {
   api,
   type AzureAllocationDimension,
@@ -430,7 +432,7 @@ export default function AzureAllocationPage() {
   );
 
   if (baseLoading) {
-    return <div className="text-sm text-slate-500">Loading allocation workspace...</div>;
+    return <AzurePageSkeleton titleWidth="w-48" subtitleWidth="w-[34rem]" statCount={5} sectionCount={3} />;
   }
 
   if (baseFailure || !status.data) {
@@ -475,10 +477,10 @@ export default function AzureAllocationPage() {
       </div>
 
       {!status.data.available ? (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          Allocation is waiting on export-backed cost records. Once the local cost store has data, you can run team and
-          application allocation here.
-        </div>
+        <AzureExportSetupCard
+          title="Allocation unlocks after cost exports are enabled"
+          body="Step 1: enable and validate the export-backed cost lane. Step 2: allocation runs become available automatically here for team and application showback."
+        />
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -531,7 +533,8 @@ export default function AzureAllocationPage() {
               value={runLabel}
               onChange={(event) => setRunLabel(event.target.value)}
               placeholder="Optional label for this snapshot"
-              className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+              disabled={!status.data.available}
+              className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
             />
           </label>
           <label className="block">
@@ -540,7 +543,8 @@ export default function AzureAllocationPage() {
               value={runNote}
               onChange={(event) => setRunNote(event.target.value)}
               placeholder="Optional note about why this run was triggered"
-              className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+              disabled={!status.data.available}
+              className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
             />
           </label>
           <div className="flex items-end">
@@ -554,6 +558,11 @@ export default function AzureAllocationPage() {
             </button>
           </div>
         </div>
+        {!status.data.available ? (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            These run controls stay disabled until export-backed cost records are landing in the local FinOps store.
+          </div>
+        ) : null}
         {!isAdmin ? (
           <div className="mt-3 text-xs text-slate-500">Admin access is required to trigger new allocation runs.</div>
         ) : null}

@@ -1,5 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
+import AzureExportSetupCard from "../components/AzureExportSetupCard.tsx";
+import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { api, type AzureCostExportStatus, type AzureReportingTarget } from "../lib/api.ts";
 
 function MetricCard({ label, value, accent = "text-sky-700" }: { label: string; value: string; accent?: string }) {
@@ -11,7 +14,7 @@ function MetricCard({ label, value, accent = "text-sky-700" }: { label: string; 
   );
 }
 
-function ReportingCard({ target }: { target: AzureReportingTarget }) {
+function ReportingCard({ target, exportsEnabled }: { target: AzureReportingTarget; exportsEnabled: boolean }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Governed Reporting</div>
@@ -26,9 +29,19 @@ function ReportingCard({ target }: { target: AzureReportingTarget }) {
         >
           Open {target.label}
         </a>
-      ) : (
+      ) : exportsEnabled ? (
         <div className="mt-4 rounded-xl border border-dashed border-slate-300 px-4 py-3 text-sm text-slate-500">
-          Not configured yet
+          Reporting target is not configured yet.
+        </div>
+      ) : (
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="font-semibold">Set up cost exports first</div>
+          <div className="mt-1 text-amber-800">
+            This reporting handoff stays locked until export-backed cost deliveries are enabled and parsing cleanly.
+          </div>
+          <Link to="/cost" className="mt-3 inline-flex rounded-lg bg-amber-700 px-3 py-2 text-sm font-medium text-white hover:bg-amber-800">
+            View setup steps
+          </Link>
         </div>
       )}
     </div>
@@ -88,7 +101,7 @@ export default function AzureOverviewPage() {
   });
 
   if (isLoading) {
-    return <div className="text-sm text-slate-500">Loading Azure overview...</div>;
+    return <AzurePageSkeleton titleWidth="w-64" subtitleWidth="w-[34rem]" statCount={6} sectionCount={3} />;
   }
 
   if (isError || !data) {
@@ -102,6 +115,7 @@ export default function AzureOverviewPage() {
   const exportHealth = getExportHealthView(data.cost_exports);
   const coverageWindow = formatCoverageWindow(data.cost.window_start, data.cost.window_end);
   const showAmortized = Boolean(data.cost.export_backed);
+  const costExportsEnabled = Boolean(data.cost_exports?.enabled);
 
   return (
     <div className="space-y-6">
@@ -112,7 +126,7 @@ export default function AzureOverviewPage() {
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <AzureSourceBadge
-            label={data.reporting?.sources.overview.label || data.cost.source_label || "Cached app data"}
+            label={data.reporting?.sources.overview.label || data.cost.source_label || "Cached inventory + cost context"}
             description={
               data.reporting?.sources.overview.description ||
               (data.cost.export_backed
@@ -121,7 +135,7 @@ export default function AzureOverviewPage() {
             }
           />
           <AzureSourceBadge
-            label={data.cost.source_label || "Cached app data"}
+            label={data.cost.source_label || "Operational app cost context"}
             description={
               data.cost.export_backed
                 ? "Spend totals on this page are coming from the local DuckDB FinOps lane built from parsed Azure Cost Management exports."
@@ -130,12 +144,14 @@ export default function AzureOverviewPage() {
             tone={data.cost.export_backed ? "sky" : "amber"}
           />
           <AzureSourceBadge
-            label={data.reporting?.sources.exports.label || "Export-backed governed reporting"}
+            label={costExportsEnabled ? (data.reporting?.sources.exports.label || "Governed reporting ready") : "Governed reporting setup required"}
             description={
-              data.reporting?.sources.exports.description ||
-              "Shared reporting should come from Cost Management exports and governed BI assets."
+              costExportsEnabled
+                ? (data.reporting?.sources.exports.description ||
+                    "Shared reporting should come from Cost Management exports and governed BI assets.")
+                : "Shared finance, validation signoff, and allocation stay blocked until cost exports are enabled."
             }
-            tone="emerald"
+            tone={costExportsEnabled ? "emerald" : "amber"}
           />
         </div>
         {coverageWindow ? (
@@ -161,11 +177,15 @@ export default function AzureOverviewPage() {
             />
           </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <ReportingCard target={data.reporting.power_bi} />
-            <ReportingCard target={data.reporting.cost_analysis} />
+            <ReportingCard target={data.reporting.power_bi} exportsEnabled={costExportsEnabled} />
+            <ReportingCard target={data.reporting.cost_analysis} exportsEnabled={costExportsEnabled} />
           </div>
         </section>
       )}
+
+      {!costExportsEnabled ? (
+        <AzureExportSetupCard title="Enable Cost Exports to Unlock Governed Reporting" />
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Subscriptions" value={data.subscriptions.toLocaleString()} />

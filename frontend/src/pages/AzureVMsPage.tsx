@@ -1,5 +1,6 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
 type VMSortKey = "name" | "size" | "power_state" | "subscription" | "resource_group" | "location" | "cost";
@@ -452,7 +453,8 @@ function VMCostExportDialog({
 }
 
 export default function AzureVMsPage() {
-  const [search, setSearch] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [search, setSearch] = useState(() => searchParams.get("search") || "");
   const [subscriptionId, setSubscriptionId] = useState("");
   const [size, setSize] = useState("");
   const [location, setLocation] = useState("");
@@ -460,9 +462,10 @@ export default function AzureVMsPage() {
   const [isCoverageOpen, setIsCoverageOpen] = useState(true);
   const [selectedVm, setSelectedVm] = useState<AzureVirtualMachineRow | null>(null);
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
-  const [exportScope, setExportScope] = useState<AzureVirtualMachineCostExportScope>("all");
+  const [exportScope, setExportScope] = useState<AzureVirtualMachineCostExportScope>("filtered");
   const [exportLookbackDays, setExportLookbackDays] = useState<AzureVirtualMachineCostExportLookbackDays>(30);
   const [activeExportJobId, setActiveExportJobId] = useState<string | null>(null);
+  const [visibleVmCount, setVisibleVmCount] = useState(50);
 
   const meQuery = useQuery({
     queryKey: ["auth", "me"],
@@ -526,11 +529,45 @@ export default function AzureVMsPage() {
   const filterKey = [search, subscriptionId, size, location, state, vmSortKey, vmSortDir].join("|");
   const coverageScroll = useInfiniteScrollCount(coverageRows.length, 20, filterKey);
   const visibleCoverage = coverageRows.slice(0, coverageScroll.visibleCount);
-  const vmScroll = useInfiniteScrollCount(sortedVMs.length, 20, filterKey);
-  const visibleVMs = sortedVMs.slice(0, vmScroll.visibleCount);
+  const visibleVMs = sortedVMs.slice(0, visibleVmCount);
   const exportJob = activeExportJobId
     ? exportJobQuery.data ?? createExportJobMutation.data ?? null
     : null;
+
+  useEffect(() => {
+    const routeSearch = searchParams.get("search") || "";
+    setSearch((current) => (current === routeSearch ? current : routeSearch));
+  }, [searchParams]);
+
+  useEffect(() => {
+    const vmId = searchParams.get("vmId");
+    if (!vmId) {
+      setSelectedVm((current) => (current ? null : current));
+      return;
+    }
+    const matched = vmRows.find((row) => row.id === vmId);
+    if (matched && selectedVm?.id !== matched.id) {
+      setSelectedVm(matched);
+    }
+  }, [searchParams, vmRows, selectedVm?.id]);
+
+  useEffect(() => {
+    setVisibleVmCount(50);
+  }, [filterKey]);
+
+  function updateRouteParams(next: { search?: string | null; vmId?: string | null }) {
+    const params = new URLSearchParams(searchParams);
+    if (next.search !== undefined) {
+      const value = next.search?.trim();
+      if (value) params.set("search", value);
+      else params.delete("search");
+    }
+    if (next.vmId !== undefined) {
+      if (next.vmId) params.set("vmId", next.vmId);
+      else params.delete("vmId");
+    }
+    setSearchParams(params, { replace: true });
+  }
 
   if (isLoading) {
     return <div className="text-sm text-slate-500">Loading Azure virtual machines...</div>;
@@ -571,16 +608,20 @@ export default function AzureVMsPage() {
           <p className="mt-1 text-sm text-slate-500">
             Review VM inventory here, then jump straight into Azure Portal for hands-on management.
           </p>
+          <p className="mt-2 text-xs font-medium uppercase tracking-wide text-slate-400">
+            Cost export defaults to the current filtered VM set.
+          </p>
         </div>
         <button
           type="button"
           onClick={() => {
             createExportJobMutation.reset();
+            setExportScope("filtered");
             setIsExportDialogOpen(true);
           }}
           className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
         >
-          Export VM Costs
+          Export Filtered VM Costs
         </button>
       </div>
 
@@ -759,7 +800,11 @@ export default function AzureVMsPage() {
       <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-2 xl:grid-cols-5">
         <input
           value={search}
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value;
+            setSearch(value);
+            updateRouteParams({ search: value, vmId: null });
+          }}
           placeholder="Search VM name, size, tag..."
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500"
         />
@@ -786,6 +831,8 @@ export default function AzureVMsPage() {
           Showing <span className="font-semibold text-slate-900">{visibleVMs.length.toLocaleString()}</span> of {data.matched_count.toLocaleString()} matched VMs
           <span className="text-slate-400"> | </span>
           {data.total_count.toLocaleString()} total VMs
+          <span className="text-slate-400"> | </span>
+          Export action uses the current filters by default
         </div>
         <div className="max-h-[70vh] overflow-auto">
           <table className="min-w-full text-left text-sm">
@@ -814,15 +861,20 @@ export default function AzureVMsPage() {
               {visibleVMs.map((item, index) => (
                 <tr
                   key={item.id}
-                  onClick={() => setSelectedVm(item)}
+                  onClick={() => {
+                    setSelectedVm(item);
+                    updateRouteParams({ vmId: item.id });
+                  }}
                   className={[
                     "cursor-pointer transition hover:bg-sky-50/60",
                     selectedVm?.id === item.id ? "bg-sky-50" : index % 2 === 0 ? "bg-white" : "bg-slate-50/50",
                   ].join(" ")}
                 >
                   <td className="px-4 py-3">
-                    <div className="font-medium text-slate-900">{item.name}</div>
-                    <div className="mt-1 max-w-xl truncate text-xs text-slate-500">{item.id}</div>
+                    <div className="font-medium text-slate-900" title={item.id}>{item.name}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {(item.subscription_name || item.subscription_id || "No subscription")}{item.resource_group ? ` / ${item.resource_group}` : ""}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-slate-700">{item.size}</td>
                   <td className="px-4 py-3 text-slate-700">{item.power_state}</td>
@@ -849,11 +901,24 @@ export default function AzureVMsPage() {
               ))}
             </tbody>
           </table>
-          {vmScroll.hasMore ? (
-            <div ref={vmScroll.sentinelRef} className="border-t border-slate-200 px-4 py-3 text-center text-xs text-slate-400">
-              Showing {visibleVMs.length.toLocaleString()} of {data.vms.length.toLocaleString()} VMs — scroll for more
+          {visibleVmCount < sortedVMs.length ? (
+            <div className="border-t border-slate-200 px-4 py-4 text-center">
+              <div className="mb-3 text-xs text-slate-400">
+                Showing {visibleVMs.length.toLocaleString()} of {sortedVMs.length.toLocaleString()} filtered VMs
+              </div>
+              <button
+                type="button"
+                onClick={() => setVisibleVmCount((current) => Math.min(current + 50, sortedVMs.length))}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+              >
+                Load 50 more
+              </button>
             </div>
-          ) : null}
+          ) : (
+            <div className="border-t border-slate-200 px-4 py-3 text-center text-xs text-slate-400">
+              Showing all {sortedVMs.length.toLocaleString()} filtered VMs
+            </div>
+          )}
         </div>
       </section>
 
@@ -863,7 +928,10 @@ export default function AzureVMsPage() {
           detail={vmDetailQuery.data}
           isLoading={vmDetailQuery.isLoading}
           error={vmDetailQuery.error instanceof Error ? vmDetailQuery.error : null}
-          onClose={() => setSelectedVm(null)}
+          onClose={() => {
+            setSelectedVm(null);
+            updateRouteParams({ vmId: null });
+          }}
         />
       ) : null}
 

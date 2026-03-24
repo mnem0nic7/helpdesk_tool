@@ -31,6 +31,25 @@ function getDirectoryLabel(user: AzureDirectoryObject): string {
   return "Cloud";
 }
 
+function accountClassLabel(user: AzureDirectoryObject): string {
+  if (user.extra.account_class === "shared_or_service") return "Shared / Service";
+  if (user.extra.account_class === "guest_external") return "Guest";
+  if (user.extra.account_class === "person_synced") return "Person (On-Prem Synced)";
+  return "Person";
+}
+
+function priorityScore(user: AzureDirectoryObject): number {
+  return Number(user.extra.priority_score || 0);
+}
+
+function isSharedOrService(user: AzureDirectoryObject): boolean {
+  return user.extra.account_class === "shared_or_service";
+}
+
+function missingFieldLabel(user: AzureDirectoryObject): string {
+  return user.extra.missing_profile_fields || "";
+}
+
 // ── Guide card ────────────────────────────────────────────────────────────────
 
 function Guide({
@@ -159,7 +178,7 @@ function DisabledSection({ users }: { users: AzureDirectoryObject[] }) {
                   <td className="px-4 py-2 font-medium text-slate-900">{u.display_name}</td>
                   <td className="px-4 py-2 text-xs text-slate-500 font-mono">{u.principal_name}</td>
                   <td className="px-4 py-2 text-slate-600 text-xs">{getDirectoryLabel(u)}</td>
-                  <td className="px-4 py-2 text-slate-600">{u.extra.user_type || "Member"}</td>
+                    <td className="px-4 py-2 text-slate-600">{accountClassLabel(u)}</td>
                   <td className="px-4 py-2"><ManageLink id={u.id} /></td>
                 </tr>
               ))}
@@ -328,23 +347,26 @@ function OldGuestSection({ users, threshold }: { users: AzureDirectoryObject[]; 
 type ProfileSortKey = "display_name" | "principal_name" | "directory" | "missing";
 
 function IncompleteProfileSection({ users }: { users: AzureDirectoryObject[] }) {
+  const [missingFieldFilter, setMissingFieldFilter] = useState<"all" | "department" | "job_title" | "both">("all");
   const incomplete = users.filter((u) => {
     if (!u.enabled) return false;
     if (u.extra.user_type === "Guest") return false;
     return !u.extra.department || !u.extra.job_title;
   });
+  const filteredIncomplete = incomplete.filter((user) => {
+    const missing = missingFieldLabel(user);
+    if (missingFieldFilter === "department") return missing === "Department";
+    if (missingFieldFilter === "job_title") return missing === "Job Title";
+    if (missingFieldFilter === "both") return missing.includes("Department") && missing.includes("Job Title");
+    return true;
+  });
   const { sortKey, sortDir, toggleSort } = useTableSort<ProfileSortKey>("display_name");
-  const sorted = sortRows(incomplete, sortKey, sortDir, (u, key) => {
+  const sorted = sortRows(filteredIncomplete, sortKey, sortDir, (u, key) => {
     if (key === "directory") return getDirectoryLabel(u);
-    if (key === "missing") {
-      const m: string[] = [];
-      if (!u.extra.department) m.push("Department");
-      if (!u.extra.job_title) m.push("Job Title");
-      return m.join(", ");
-    }
+    if (key === "missing") return missingFieldLabel(u);
     return (u as unknown as Record<string, unknown>)[key] as string;
   });
-  const scroll = useInfiniteScrollCount(sorted.length, 50, `profile|${sortKey}|${sortDir}`);
+  const scroll = useInfiniteScrollCount(sorted.length, 50, `profile|${sortKey}|${sortDir}|${missingFieldFilter}`);
   const visible = sorted.slice(0, scroll.visibleCount);
 
   return (
@@ -356,6 +378,27 @@ function IncompleteProfileSection({ users }: { users: AzureDirectoryObject[] }) 
         why="Complete profiles are required for accurate ticket routing, reporting, and user lookup. Missing department and job title also interfere with dynamic group membership rules and automated workflows."
         action="Update the missing fields directly in Entra ID via the Manage in Entra link, or coordinate with HR to sync profile data from your identity source. On-prem synced accounts should be updated in Active Directory."
       />
+      <div className="flex flex-wrap gap-2">
+        {([
+          ["all", "All incomplete"],
+          ["department", "Missing Department"],
+          ["job_title", "Missing Job Title"],
+          ["both", "Missing Both"],
+        ] as const).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setMissingFieldFilter(value)}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+              missingFieldFilter === value
+                ? "bg-sky-600 text-white"
+                : "bg-white text-slate-600 hover:bg-slate-100"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       {incomplete.length === 0 ? (
         <p className="text-sm text-emerald-700 font-medium">✓ All enabled employee profiles are complete.</p>
       ) : (
@@ -409,6 +452,7 @@ function IncompleteProfileSection({ users }: { users: AzureDirectoryObject[] }) 
 export default function AzureAccountHealthPage() {
   const [staleThreshold, setStaleThreshold] = useState(90);
   const [guestThreshold, setGuestThreshold] = useState(180);
+  const [includeSharedService, setIncludeSharedService] = useState(false);
 
   const { data: users = [], isLoading, isError, error } = useQuery({
     queryKey: ["azure", "users", { search: "" }],
@@ -428,11 +472,20 @@ export default function AzureAccountHealthPage() {
     );
   }
 
-  const disabledCount   = users.filter((u) => u.enabled === false).length;
-  const staleCount      = users.filter((u) => u.enabled && u.extra.on_prem_sync !== "true" && u.extra.user_type !== "Guest" && u.extra.last_password_change && daysSince(u.extra.last_password_change) >= staleThreshold).length;
+  const scopedUsers = includeSharedService ? users : users.filter((user) => !isSharedOrService(user));
+  const disabledCount   = scopedUsers.filter((u) => u.enabled === false).length;
+  const staleCount      = scopedUsers.filter((u) => u.enabled && u.extra.on_prem_sync !== "true" && u.extra.user_type !== "Guest" && u.extra.last_password_change && daysSince(u.extra.last_password_change) >= staleThreshold).length;
   const oldGuestCount   = users.filter((u) => u.extra.user_type === "Guest" && u.extra.created_datetime && daysSince(u.extra.created_datetime) >= guestThreshold).length;
-  const incompleteCount = users.filter((u) => u.enabled && u.extra.user_type !== "Guest" && (!u.extra.department || !u.extra.job_title)).length;
+  const incompleteCount = scopedUsers.filter((u) => u.enabled && u.extra.user_type !== "Guest" && (!u.extra.department || !u.extra.job_title)).length;
   const totalIssues     = disabledCount + staleCount + oldGuestCount + incompleteCount;
+  const triageRows = [
+    ...scopedUsers.filter((u) => u.enabled && u.extra.on_prem_sync !== "true" && u.extra.user_type !== "Guest" && u.extra.last_password_change && daysSince(u.extra.last_password_change) >= staleThreshold),
+    ...scopedUsers.filter((u) => u.enabled === false),
+    ...users.filter((u) => u.extra.user_type === "Guest" && u.extra.created_datetime && daysSince(u.extra.created_datetime) >= guestThreshold),
+    ...scopedUsers.filter((u) => u.enabled && u.extra.user_type !== "Guest" && (!u.extra.department || !u.extra.job_title)),
+  ]
+    .sort((a, b) => priorityScore(b) - priorityScore(a))
+    .slice(0, 3);
 
   return (
     <div className="space-y-6">
@@ -471,6 +524,16 @@ export default function AzureAccountHealthPage() {
             />
             days
           </label>
+          <span className="text-slate-300">|</span>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={includeSharedService}
+              onChange={(event) => setIncludeSharedService(event.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+            />
+            Include shared / service-style accounts
+          </label>
         </div>
       </div>
 
@@ -504,11 +567,44 @@ export default function AzureAccountHealthPage() {
         </div>
       ) : null}
 
+      {triageRows.length > 0 ? (
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Start Here</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Highest-priority account hygiene issues based on licensing waste, stale credential risk, guest age, and missing profile data.
+              </p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+              {includeSharedService ? "Including shared/service" : "People accounts first"}
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            {triageRows.map((user) => (
+              <div key={user.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="font-medium text-slate-900">{user.display_name}</div>
+                  <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                    {user.extra.priority_band}
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-slate-500">{user.principal_name || user.mail || user.id}</div>
+                <div className="mt-3 text-sm text-slate-700">{user.extra.priority_reason}</div>
+                <div className="mt-3 text-xs text-slate-500">
+                  {accountClassLabel(user)} • {getDirectoryLabel(user)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {/* Sections */}
-      <DisabledSection users={users} />
-      <StalePasswordSection users={users} threshold={staleThreshold} />
+      <StalePasswordSection users={scopedUsers} threshold={staleThreshold} />
+      <DisabledSection users={scopedUsers} />
       <OldGuestSection users={users} threshold={guestThreshold} />
-      <IncompleteProfileSection users={users} />
+      <IncompleteProfileSection users={scopedUsers} />
     </div>
   );
 }

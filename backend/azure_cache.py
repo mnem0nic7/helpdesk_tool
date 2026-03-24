@@ -13,6 +13,7 @@ from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
 from azure_client import AzureApiError, AzureClient
@@ -98,6 +99,21 @@ _VIRTUAL_DESKTOP_HOST_POOL_TAG_KEYS = (
 )
 _AVD_CONNECTION_LOG_CATEGORIES = {"connection"}
 _AVD_DIAGNOSTIC_CATEGORY_GROUPS = {"alllogs", "audit"}
+_SHARED_ACCOUNT_MARKERS = (
+    "shared",
+    "svc",
+    "service",
+    "mailbox",
+    "noreply",
+    "no-reply",
+    "conference",
+    "room",
+    "reception",
+    "frontdesk",
+    "front-desk",
+    "support",
+    "helpdesk",
+)
 
 
 class AzureCache:
@@ -450,6 +466,71 @@ class AzureCache:
                 names.append(display_name)
         return names
 
+    @staticmethod
+    def _missing_profile_fields(item: dict[str, Any]) -> list[str]:
+        missing: list[str] = []
+        if not str(item.get("department") or "").strip():
+            missing.append("Department")
+        if not str(item.get("jobTitle") or "").strip():
+            missing.append("Job Title")
+        return missing
+
+    @staticmethod
+    def _classify_account(item: dict[str, Any]) -> tuple[str, str]:
+        user_type = str(item.get("userType") or "Member").strip()
+        if user_type.lower() == "guest":
+            return "guest_external", "Guest account invited from an external tenant"
+
+        principal_name = str(item.get("userPrincipalName") or "").strip().lower()
+        mail = str(item.get("mail") or "").strip().lower()
+        display_name = str(item.get("displayName") or "").strip().lower()
+        employee_type = str(item.get("employeeType") or "").strip().lower()
+        haystack = " ".join(part for part in (principal_name, mail, display_name, employee_type) if part)
+
+        if employee_type in {"shared", "service", "resource"}:
+            return "shared_or_service", f"Classified from employee type '{employee_type}'"
+        if any(marker in haystack for marker in _SHARED_ACCOUNT_MARKERS):
+            return "shared_or_service", "Classified from shared/service naming markers"
+        if item.get("onPremisesSyncEnabled"):
+            return "person_synced", "Synced from on-premises Active Directory"
+        return "person_cloud", "Cloud-managed member account"
+
+    @classmethod
+    def _account_priority(cls, item: dict[str, Any], *, license_data_available: bool, assigned_license_names: list[str]) -> tuple[str, int, str]:
+        enabled = item.get("accountEnabled")
+        account_class, _ = cls._classify_account(item)
+        stale_password_days: int | None = None
+        last_password_change = str(item.get("lastPasswordChangeDateTime") or "").strip()
+        if last_password_change:
+            parsed = cls._parse_datetime(last_password_change)
+            if parsed:
+                stale_password_days = max(0, int((datetime.now(timezone.utc) - parsed).total_seconds() // 86_400))
+
+        created_days: int | None = None
+        created_datetime = str(item.get("createdDateTime") or "").strip()
+        if created_datetime:
+            parsed_created = cls._parse_datetime(created_datetime)
+            if parsed_created:
+                created_days = max(0, int((datetime.now(timezone.utc) - parsed_created).total_seconds() // 86_400))
+
+        missing_fields = cls._missing_profile_fields(item)
+
+        if enabled is False and license_data_available and assigned_license_names:
+            return "critical", 100, "Disabled account still has active licenses assigned"
+        if enabled is True and stale_password_days is not None and stale_password_days >= 365 and account_class == "person_cloud":
+            return "high", 90, "Enabled cloud account has not changed its password in over a year"
+        if enabled is True and stale_password_days is not None and stale_password_days >= 180 and account_class == "person_cloud":
+            return "high", 80, "Enabled cloud account has a stale password"
+        if account_class == "guest_external" and created_days is not None and created_days >= 365:
+            return "medium", 70, "Guest account is more than one year old"
+        if missing_fields and account_class in {"person_cloud", "person_synced"}:
+            return "medium", 60, f"Missing profile fields: {', '.join(missing_fields)}"
+        if enabled is False and account_class == "shared_or_service":
+            return "low", 35, "Disabled shared or service-style account"
+        if enabled is False:
+            return "medium", 55, "Disabled member account"
+        return "low", 20, "No urgent account hygiene signal detected"
+
     @classmethod
     def _normalize_user(cls, item: dict[str, Any]) -> dict[str, Any]:
         assigned_licenses_raw = item.get("assignedLicenses")
@@ -465,6 +546,13 @@ class AzureCache:
         license_status = ""
         if license_data_available:
             license_status = "true" if assigned_license_names else "false"
+        account_class, account_class_reason = cls._classify_account(item)
+        priority_band, priority_score, priority_reason = cls._account_priority(
+            item,
+            license_data_available=license_data_available,
+            assigned_license_names=assigned_license_names,
+        )
+        missing_profile_fields = cls._missing_profile_fields(item)
         return {
             "id": item.get("id") or "",
             "display_name": item.get("displayName") or "",
@@ -500,6 +588,14 @@ class AzureCache:
                 "last_noninteractive_local": cls._format_local_datetime_text(last_noninteractive),
                 "last_successful_utc": last_successful,
                 "last_successful_local": cls._format_local_datetime_text(last_successful),
+                "employee_type": item.get("employeeType") or "",
+                "account_class": account_class,
+                "priority_band": priority_band,
+                "priority_score": str(priority_score),
+                "priority_reason": priority_reason,
+                "missing_profile_fields": ", ".join(missing_profile_fields),
+                "mailbox_type_hint": "",
+                "account_class_reason": account_class_reason,
             },
         }
 
@@ -2650,6 +2746,146 @@ class AzureCache:
             if search_lower in haystack:
                 result.append(item)
         return result
+
+    def quick_search(self, search: str) -> list[dict[str, Any]]:
+        query = search.strip()
+        query_lower = query.lower()
+        if len(query_lower) < 2:
+            return []
+        encoded_query = quote_plus(query)
+
+        results: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add_result(kind: str, item_id: str, label: str, subtitle: str, route: str) -> None:
+            key = (kind, item_id)
+            if not label or key in seen:
+                return
+            seen.add(key)
+            results.append(
+                {
+                    "id": item_id,
+                    "kind": kind,
+                    "label": label,
+                    "subtitle": subtitle,
+                    "route": route,
+                }
+            )
+
+        page_definitions = [
+            ("page", "overview", "Overview", "Tenant-wide Azure inventory, identity, and cost posture", "/"),
+            ("page", "vms", "VMs", "Virtual machine inventory and cost drill-in", "/vms"),
+            ("page", "desktops", "Desktops", "Azure Virtual Desktop cleanup tracker", "/virtual-desktops"),
+            ("page", "compute", "Compute", "RI coverage, idle VMs, and compute optimization", "/compute"),
+            ("page", "resources", "Resources", "Cross-subscription resource inventory", "/resources"),
+            ("page", "storage", "Storage", "Storage accounts, disks, and snapshots", "/storage"),
+            ("page", "identity", "Identity", "Users, groups, enterprise apps, and roles", "/identity"),
+            ("page", "users", "Users", "Directory user health and sign-in analysis", "/users"),
+            ("page", "cost", "Cost", "Spend trend and FinOps validation", "/cost"),
+            ("page", "allocations", "Allocation", "Showback rules and allocation runs", "/allocations"),
+            ("page", "ai-costs", "AI Cost", "Ollama AI usage and estimated cost", "/ai-costs"),
+            ("page", "savings", "Savings", "Ranked Azure savings opportunities", "/savings"),
+            ("page", "copilot", "Copilot", "Ask grounded Azure cost and governance questions", "/copilot"),
+            ("page", "alerts", "Alerts", "Azure alert rules and delivery history", "/alerts"),
+            ("page", "account-health", "Account Health", "Account hygiene and identity cleanup", "/account-health"),
+        ]
+        for kind, item_id, label, subtitle, route in page_definitions:
+            if query_lower in label.lower() or query_lower in subtitle.lower():
+                add_result(kind, item_id, label, subtitle, route)
+
+        for item in self.list_virtual_machines(search=query).get("vms") or []:
+            add_result(
+                "vm",
+                str(item.get("id") or ""),
+                str(item.get("name") or item.get("id") or ""),
+                " / ".join(
+                    part
+                    for part in (
+                        str(item.get("subscription_name") or item.get("subscription_id") or "").strip(),
+                        str(item.get("resource_group") or "").strip(),
+                        str(item.get("power_state") or "").strip(),
+                    )
+                    if part
+                ),
+                f"/vms?search={encoded_query}&vmId={quote_plus(str(item.get('id') or ''))}",
+            )
+            if len(results) >= 24:
+                return results[:24]
+
+        desktops = self.list_virtual_desktop_removal_candidates(search=query, removal_only=False).get("desktops") or []
+        for item in desktops:
+            add_result(
+                "desktop",
+                str(item.get("id") or ""),
+                str(item.get("name") or item.get("id") or ""),
+                " / ".join(
+                    part
+                    for part in (
+                        str(item.get("assigned_user_display_name") or "").strip(),
+                        str(item.get("host_pool_name") or "").strip(),
+                        str(item.get("subscription_name") or item.get("subscription_id") or "").strip(),
+                    )
+                    if part
+                ),
+                f"/virtual-desktops?search={encoded_query}&desktopId={quote_plus(str(item.get('id') or ''))}",
+            )
+            if len(results) >= 24:
+                return results[:24]
+
+        for item in (self.list_resources(search=query).get("resources") or []):
+            if self._is_virtual_machine(item):
+                continue
+            add_result(
+                "resource",
+                str(item.get("id") or ""),
+                str(item.get("name") or item.get("id") or ""),
+                " / ".join(
+                    part
+                    for part in (
+                        str(item.get("resource_type") or "").strip(),
+                        str(item.get("resource_group") or "").strip(),
+                        str(item.get("subscription_name") or item.get("subscription_id") or "").strip(),
+                    )
+                    if part
+                ),
+                f"/resources?search={encoded_query}&resourceId={quote_plus(str(item.get('id') or ''))}",
+            )
+            if len(results) >= 24:
+                return results[:24]
+
+        directory_snapshots = [
+            ("users", "user", "users", "principal_name"),
+            ("groups", "group", "groups", "display_name"),
+            ("service_principals", "enterprise_app", "enterprise-apps", "display_name"),
+            ("applications", "app_registration", "app-registrations", "display_name"),
+            ("directory_roles", "directory_role", "roles", "display_name"),
+        ]
+        for snapshot_name, kind, tab_key, search_field in directory_snapshots:
+            for item in self.list_directory_objects(snapshot_name, search=query)[:5]:
+                search_value = str(item.get(search_field) or item.get("display_name") or "").strip()
+                subtitle = " / ".join(
+                    part
+                    for part in (
+                        str(item.get("mail") or "").strip(),
+                        str(item.get("app_id") or "").strip(),
+                        str((item.get("extra") or {}).get("account_class") or "").replace("_", " ").strip(),
+                    )
+                    if part
+                )
+                route_query = search_value or query
+                add_result(
+                    kind,
+                    str(item.get("id") or ""),
+                    str(item.get("display_name") or item.get("principal_name") or item.get("id") or ""),
+                    subtitle,
+                    f"/identity?tab={quote_plus(tab_key)}&search={quote_plus(route_query)}&objectId={quote_plus(str(item.get('id') or ''))}"
+                    if kind != "user"
+                    else f"/users?search={quote_plus(route_query)}&userId={quote_plus(str(item.get('id') or ''))}",
+                )
+                if len(results) >= 24:
+                    return results[:24]
+
+        return results[:24]
 
     def get_cost_summary(self) -> dict[str, Any]:
         return self._snapshot("cost_summary") or {

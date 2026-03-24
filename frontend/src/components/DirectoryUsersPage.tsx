@@ -1,5 +1,6 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import {
   api,
   type AzureDirectoryObject,
@@ -1665,8 +1666,9 @@ function UserDetailDrawer({
 }
 
 export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageMode }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(searchParams.get("search") || "");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [licenseFilter, setLicenseFilter] = useState<LicenseFilter>("all");
@@ -1685,6 +1687,13 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
   const [activeJobResults, setActiveJobResults] = useState<UserAdminJobResult[] | null>(null);
   const [lastHandledJobId, setLastHandledJobId] = useState<string | null>(null);
   const { sortKey, sortDir, toggleSort } = useTableSort<UserColKey>("display_name");
+
+  useEffect(() => {
+    const nextSearch = searchParams.get("search") || "";
+    if (nextSearch !== search) {
+      setSearch(nextSearch);
+    }
+  }, [search, searchParams]);
 
   const { data: me } = useQuery({
     queryKey: ["auth", "me"],
@@ -2052,6 +2061,29 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
     );
   }
 
+  useEffect(() => {
+    const targetUserId = searchParams.get("userId");
+    if (!targetUserId) return;
+    const matched = users.find((user) => user.id === targetUserId);
+    if (matched && matched.id !== selectedUser?.id) {
+      setSelectedUser(matched);
+    }
+  }, [searchParams, selectedUser?.id, users]);
+
+  function updateRouteParams(next: { search?: string; userId?: string | null }) {
+    const params = new URLSearchParams(searchParams);
+    if (next.search !== undefined) {
+      if (next.search) params.set("search", next.search);
+      else params.delete("search");
+    }
+    if (next.userId === null) {
+      params.delete("userId");
+    } else if (next.userId) {
+      params.set("userId", next.userId);
+    }
+    setSearchParams(params, { replace: true });
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -2130,11 +2162,19 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
         />
       </div>
 
+      <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+        The summary boxes above are clickable filter shortcuts. Use them to jump straight into disabled, licensed, stale-sign-in, guest, or synced account slices.
+      </div>
+
       <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
           <input
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              setSearch(nextValue);
+              updateRouteParams({ search: nextValue, userId: null });
+            }}
             placeholder="Search name, email, department..."
             className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500"
           />
@@ -2308,7 +2348,7 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
                 <SortHeader col="department" label="Department" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortHeader col="job_title" label="Job Title" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortHeader col="is_licensed" label="Licensed" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortHeader col="last_successful_utc" label="Last Successful" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader col="last_successful_utc" label="Last Successful Sign-In" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortHeader col="on_prem_domain" label="Directory" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Type</th>
@@ -2326,7 +2366,10 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
               {visibleUsers.map((user, index) => (
                 <tr
                   key={user.id}
-                  onClick={() => setSelectedUser(user)}
+                  onClick={() => {
+                    setSelectedUser(user);
+                    updateRouteParams({ search, userId: user.id });
+                  }}
                   className={[
                     "cursor-pointer transition hover:bg-sky-50/60",
                     selectedUser?.id === user.id ? "bg-sky-50" : index % 2 === 0 ? "bg-white" : "bg-slate-50/50",
@@ -2343,8 +2386,8 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
                     </td>
                   ) : null}
                   <td className="px-4 py-3 font-medium text-slate-900">{user.display_name}</td>
-                  <td className="max-w-[180px] truncate px-4 py-3 text-xs text-slate-500">{user.principal_name}</td>
-                  <td className="px-4 py-3 text-slate-700">{user.mail || "—"}</td>
+                  <td className="max-w-[280px] truncate px-4 py-3 text-xs text-slate-500" title={user.principal_name}>{user.principal_name}</td>
+                  <td className="max-w-[280px] truncate px-4 py-3 text-slate-700" title={user.mail || ""}>{user.mail || "—"}</td>
                   <td className="px-4 py-3 text-slate-700">{user.extra.department || "—"}</td>
                   <td className="px-4 py-3 text-slate-700">{user.extra.job_title || "—"}</td>
                   <td className="px-4 py-3 text-slate-700">{isLicensedUser(user) ? `Yes${licenseCount(user) > 0 ? ` (${licenseCount(user)})` : ""}` : "No"}</td>
@@ -2376,7 +2419,10 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
           mode={mode}
           user={selectedUser}
           capabilities={capabilities}
-          onClose={() => setSelectedUser(null)}
+          onClose={() => {
+            setSelectedUser(null);
+            updateRouteParams({ userId: null });
+          }}
           onQueueAction={(action) => setPendingAction(action)}
         />
       ) : null}

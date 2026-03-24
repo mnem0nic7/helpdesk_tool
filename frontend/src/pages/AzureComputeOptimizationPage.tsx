@@ -8,6 +8,7 @@ import {
   type AzureVirtualMachineRow,
 } from "../lib/api.ts";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
+import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
@@ -345,6 +346,11 @@ function AdvisorSection({ recs }: { recs: AzureAdvisorRecommendation[] }) {
                 <tr key={rec.id} className="border-t border-slate-100 hover:bg-slate-50">
                   <td className="px-4 py-2">
                     <div className="font-medium text-slate-900">{rec.title}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {[rec.resource_id ? rec.resource_id.split("/").pop() || rec.resource_id : "", rec.subscription_name || rec.subscription_id || ""]
+                        .filter(Boolean)
+                        .join(" / ") || "Scoped recommendation"}
+                    </div>
                     {rec.description && (
                       <div className="mt-0.5 text-xs text-slate-400 line-clamp-2">{rec.description}</div>
                     )}
@@ -392,11 +398,7 @@ export default function AzureComputeOptimizationPage() {
   });
 
   if (isLoading) {
-    return (
-      <div className="flex h-64 items-center justify-center text-slate-400 text-sm">
-        Loading compute optimization data…
-      </div>
-    );
+    return <AzurePageSkeleton titleWidth="w-72" subtitleWidth="w-[34rem]" statCount={5} sectionCount={4} />;
   }
 
   if (isError || !data) {

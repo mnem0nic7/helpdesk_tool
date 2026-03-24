@@ -237,10 +237,12 @@ describe("AILogPage", () => {
 
     render(<AILogPage />);
 
-    await screen.findByText("Technician QA Scores");
-    expect(await screen.findByText("Good communication with moderate documentation detail.")).toBeInTheDocument();
-    expect(screen.getByText("Communication")).toBeInTheDocument();
-    expect(screen.getByText("Documentation")).toBeInTheDocument();
+    await screen.findByText("Technician QA Scoring");
+    expect(
+      screen.getByText("Run AI reviews for closed tickets here. Open an individual ticket to view the actual technician QA score and notes."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Technician QA Scores")).not.toBeInTheDocument();
+    expect(screen.queryByText("Good communication with moderate documentation detail.")).not.toBeInTheDocument();
 
     await user.click(await screen.findByRole("button", { name: "Score Closed Tickets (1)" }));
 
@@ -282,17 +284,25 @@ describe("AILogPage", () => {
     render(<AILogPage />);
 
     await screen.findByText("Printer is offline");
-    await screen.findByText("VPN password reset");
+    expect(screen.queryByText("VPN password reset")).not.toBeInTheDocument();
 
     await user.type(screen.getByRole("searchbox", { name: "Search AI log" }), "vpn");
 
     await waitFor(() => {
       expect(mockApi.getTriageLog).toHaveBeenLastCalledWith({ search: "vpn" });
-      expect(mockApi.getTechnicianScores).toHaveBeenLastCalledWith({ search: "vpn" });
       expect(screen.queryByText("Printer is offline")).not.toBeInTheDocument();
-      expect(screen.queryByText("Good communication with moderate documentation detail.")).not.toBeInTheDocument();
-      expect(screen.getByText("VPN password reset")).toBeInTheDocument();
       expect(screen.getByText("Waiting on VPN reset")).toBeInTheDocument();
     });
+  });
+
+  it("does not fetch technician QA score lists on the AI log page", async () => {
+    render(<AILogPage />);
+
+    await screen.findByText("AI Change Log");
+
+    await waitFor(() => {
+      expect(mockApi.getTriageLog).toHaveBeenCalled();
+    });
+    expect(mockApi.getTechnicianScores).not.toHaveBeenCalled();
   });
 });

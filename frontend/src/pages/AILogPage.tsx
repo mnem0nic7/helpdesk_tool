@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api.ts";
 import { logClientError } from "../lib/errorLogging.ts";
-import type { TechnicianScoreEntry, TriageLogEntry } from "../lib/api.ts";
+import type { TriageLogEntry } from "../lib/api.ts";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
 
@@ -103,7 +103,6 @@ export default function AILogPage() {
         });
       }
       queryClient.invalidateQueries({ queryKey: ["technician-score-run-status"] });
-      queryClient.invalidateQueries({ queryKey: ["technician-scores"] });
     } catch (err) {
       logClientError("Failed to score closed tickets", err);
       setScoreMessage({
@@ -121,16 +120,9 @@ export default function AILogPage() {
     placeholderData: (prev) => prev,
     refetchInterval: isRunning ? 5_000 : 30_000,
   });
-  const { data: technicianScores = [], isLoading: scoresLoading } = useQuery({
-    queryKey: ["technician-scores", deferredSearchQuery],
-    queryFn: () => api.getTechnicianScores({ search: deferredSearchQuery }),
-    placeholderData: (prev) => prev,
-    refetchInterval: isScoring ? 5_000 : 30_000,
-  });
 
   const entries = log ?? [];
   const filteredEntries = entries;
-  const filteredTechnicianScores = technicianScores;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const activeSearchLabel = deferredSearchQuery || searchQuery.trim();
@@ -235,7 +227,7 @@ export default function AILogPage() {
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Search AI Activity</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Search both technician QA scores and AI change history by ticket, summary, field, model, source, and notes.
+              Search AI triage changes by ticket, summary, field, model, source, and notes.
             </p>
           </div>
           <div className="w-full max-w-xl">
@@ -263,9 +255,6 @@ export default function AILogPage() {
         </div>
         <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
           <span className="rounded-full bg-slate-100 px-3 py-1">
-            QA matches: {filteredTechnicianScores.length.toLocaleString()}
-          </span>
-          <span className="rounded-full bg-slate-100 px-3 py-1">
             Change matches: {filteredEntries.length.toLocaleString()}
           </span>
         </div>
@@ -274,9 +263,9 @@ export default function AILogPage() {
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Technician QA Scores</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Technician QA Scoring</h2>
             <p className="mt-1 text-sm text-slate-500">
-              AI review of closed tickets only, focused on end-user communication and resolution documentation.
+              Run AI reviews for closed tickets here. Open an individual ticket to view the actual technician QA score and notes.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -334,68 +323,6 @@ export default function AILogPage() {
             </div>
           </div>
         )}
-
-        <div className="mt-5 grid gap-4 lg:grid-cols-2">
-          {scoresLoading && (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-400">
-              Loading technician QA scores…
-            </div>
-          )}
-          {!scoresLoading && filteredTechnicianScores.length === 0 && (
-            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-400">
-              {activeSearchLabel
-                ? `No technician QA scores match "${activeSearchLabel}".`
-                : "No closed-ticket QA scores yet."}
-            </div>
-          )}
-          {filteredTechnicianScores.map((score: TechnicianScoreEntry) => (
-            <article key={score.key} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 shadow-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <Link to={buildTicketHref(score.key)} className="font-mono text-xs text-blue-700 underline">
-                    {score.key}
-                  </Link>
-                  <h3 className="mt-2 text-sm font-semibold leading-5 text-slate-900">
-                    {score.ticket_summary || "Closed ticket"}
-                  </h3>
-                </div>
-                <div className="rounded-xl bg-white px-3 py-2 text-right shadow-sm">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">Overall</div>
-                  <div className="text-lg font-semibold text-slate-900">{score.overall_score.toFixed(1)}/5</div>
-                </div>
-              </div>
-
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <div className="rounded-xl bg-white px-3 py-3 shadow-sm">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Communication</span>
-                    <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                      {score.communication_score}/5
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm leading-5 text-slate-700">{score.communication_notes}</p>
-                </div>
-                <div className="rounded-xl bg-white px-3 py-3 shadow-sm">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Documentation</span>
-                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">
-                      {score.documentation_score}/5
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm leading-5 text-slate-700">{score.documentation_notes}</p>
-                </div>
-              </div>
-
-              <p className="mt-4 text-sm font-medium text-slate-900">{score.score_summary}</p>
-              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
-                <span>Status: {score.ticket_status || "—"}</span>
-                <span>Assignee: {score.ticket_assignee || "Unassigned"}</span>
-                <span>Resolved: {score.ticket_resolved ? formatTimestamp(score.ticket_resolved) : "—"}</span>
-                <span>Model: {score.model_used}</span>
-              </div>
-            </article>
-          ))}
-        </div>
       </section>
 
       <div className="rounded-lg border border-gray-200 bg-white shadow-sm">

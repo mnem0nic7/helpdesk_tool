@@ -635,6 +635,12 @@ async def get_overview() -> dict[str, Any]:
     return _azure_status_with_exports(azure_cache.get_overview())
 
 
+@router.get("/search")
+async def get_quick_search(search: str = Query(default="")) -> dict[str, Any]:
+    _ensure_azure_site()
+    return {"results": azure_cache.quick_search(search)}
+
+
 @router.get("/subscriptions")
 async def list_subscriptions() -> list[dict[str, Any]]:
     _ensure_azure_site()

@@ -64,6 +64,21 @@ const EMPTY_RULE: AzureAlertRuleCreate = {
   recipients: "", teams_webhook_url: "", custom_subject: "", custom_message: "",
 };
 
+const STARTER_ALERTS = [
+  {
+    title: "Cost guardrail",
+    description: "Notify finance when monthly Azure spend crosses a threshold or spikes week over week.",
+  },
+  {
+    title: "VM hygiene",
+    description: "Alert when a VM is deallocated or idle for multiple days so cleanup does not get missed.",
+  },
+  {
+    title: "Identity watch",
+    description: "Notify security when new guests appear or stale guest buildup starts to grow.",
+  },
+];
+
 // ── Quick Builder Modal ───────────────────────────────────────────────────────
 
 function QuickBuilderModal({
@@ -568,7 +583,7 @@ export default function AzureAlertsPage() {
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Alerts</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Monitor Azure and get notified when conditions are met.
+            Monitor Azure and get notified when conditions are met. Builder supports email recipients and Teams webhook delivery.
           </p>
         </div>
         <div className="flex overflow-hidden rounded-lg border border-slate-300 shadow-sm">
@@ -613,8 +628,21 @@ export default function AzureAlertsPage() {
           {rulesQuery.isLoading ? (
             <div className="px-4 py-8 text-center text-sm text-slate-500">Loading alert rules...</div>
           ) : rules.length === 0 ? (
-            <div className="px-4 py-12 text-center text-sm text-slate-500">
-              No alert rules yet — use Quick or Builder to create your first one.
+            <div className="space-y-5 px-4 py-8">
+              <div className="text-center text-sm text-slate-500">
+                No alert rules yet. Start with Quick (AI) for a natural-language draft or use Builder for a fully guided rule.
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                {STARTER_ALERTS.map((item) => (
+                  <div key={item.title} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="text-sm font-semibold text-slate-900">{item.title}</div>
+                    <div className="mt-2 text-sm text-slate-600">{item.description}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+                Delivery channels currently supported here: email recipients and Microsoft Teams webhooks.
+              </div>
             </div>
           ) : (
             <div className="overflow-auto">
@@ -701,7 +729,12 @@ export default function AzureAlertsPage() {
           {historyQuery.isLoading ? (
             <div className="px-4 py-8 text-center text-sm text-slate-500">Loading alert history...</div>
           ) : history.length === 0 ? (
-            <div className="px-4 py-12 text-center text-sm text-slate-500">No alert history yet.</div>
+            <div className="space-y-3 px-4 py-12 text-center text-sm text-slate-500">
+              <div>No alert history yet.</div>
+              <div className="text-xs text-slate-400">
+                Delivery attempts will appear here after the first rule runs or after you test a saved rule.
+              </div>
+            </div>
           ) : (
             <div className="overflow-auto">
               <table className="min-w-full text-left text-sm">

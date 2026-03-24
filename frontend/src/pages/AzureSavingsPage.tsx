@@ -12,6 +12,7 @@ import {
   type AzureRecommendationSendAlertResponse,
 } from "../lib/api.ts";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
+import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import AzureSavingsHighlightsSection, { formatAzureCurrency } from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
@@ -85,14 +86,16 @@ function StatCard({
   value,
   sub,
   tone = "text-slate-900",
+  title,
 }: {
   label: string;
   value: string;
   sub?: string;
   tone?: string;
+  title?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" title={title}>
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
       <div className={`mt-2 text-3xl font-semibold ${tone}`}>{value}</div>
       {sub ? <div className="mt-1 text-xs text-slate-400">{sub}</div> : null}
@@ -710,9 +713,10 @@ function OpportunityDrawer({
           </a>
           <Link
             to={opportunity.follow_up_route}
+            title="Open the in-app MoveDocs follow-up workspace for this recommendation."
             className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
-            Open follow-up page
+            Open MoveDocs follow-up
           </Link>
         </section>
       </div>
@@ -951,7 +955,7 @@ export default function AzureSavingsPage() {
   const coverageWindow = formatCoverageWindow(costContext?.window_start, costContext?.window_end);
 
   if (summaryQuery.isLoading || opportunitiesQuery.isLoading) {
-    return <div className="text-sm text-slate-500">Loading Azure savings opportunities...</div>;
+    return <AzurePageSkeleton titleWidth="w-44" subtitleWidth="w-[34rem]" statCount={4} sectionCount={4} />;
   }
 
   if (summaryQuery.isError || opportunitiesQuery.isError || !summary) {
@@ -1053,6 +1057,7 @@ export default function AzureSavingsPage() {
           value={summary.quick_win_count.toLocaleString()}
           sub={`${formatAzureCurrency(summary.quick_win_monthly_savings, summary.currency)} quantified`}
           tone="text-sky-700"
+          title="Quick Wins are low-effort, low-risk opportunities. They are not always the biggest savings items."
         />
         <StatCard
           label="Total Opportunities"
@@ -1063,6 +1068,7 @@ export default function AzureSavingsPage() {
           label="Commitment Strategy"
           value={summary.unquantified_opportunity_count.toLocaleString()}
           sub="Unquantified reservation and commitment follow-up"
+          title="These items need reservation or commitment review before a reliable savings estimate can be attached."
         />
       </div>
 

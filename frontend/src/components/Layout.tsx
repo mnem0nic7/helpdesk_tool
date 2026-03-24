@@ -1,8 +1,9 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import CacheStatusBar from "./CacheStatusBar.tsx";
 import AzureStatusBar from "./AzureStatusBar.tsx";
+import AzureQuickJump from "./AzureQuickJump.tsx";
 import { api } from "../lib/api.ts";
 import { hasNewFrontendBuild } from "../lib/deployVersion.ts";
 import { logClientError } from "../lib/errorLogging.ts";
@@ -30,22 +31,88 @@ const helpdeskNavItems: NavItem[] = [
 ];
 
 const azureNavItems: NavItem[] = [
-  { to: "/", label: "Overview", icon: "\u25A3" },
-  { to: "/vms", label: "VMs", icon: "\u25A1" },
-  { to: "/virtual-desktops", label: "Desktops", icon: "\u25A9" },
-  { to: "/compute", label: "Compute", icon: "\u29C6" },
-  { to: "/resources", label: "Resources", icon: "\u25C8" },
-  { to: "/storage", label: "Storage", icon: "\u25A7" },
-  { to: "/identity", label: "Identity", icon: "\u25A6" },
-  { to: "/users", label: "Users", icon: "\u25C8" },
-  { to: "/cost", label: "Cost", icon: "\u25A4" },
-  { to: "/allocations", label: "Allocation", icon: "\u25A5" },
-  { to: "/ai-costs", label: "AI Cost", icon: "\u25C9" },
-  { to: "/savings", label: "Savings", icon: "\u25C7" },
-  { to: "/copilot", label: "Copilot", icon: "\u25C6" },
-  { to: "/alerts", label: "Alerts", icon: "\u25B2" },
-  { to: "/account-health", label: "Acct Health", icon: "\u25CE" },
+  { to: "/", label: "Overview", icon: "overview" },
+  { to: "/vms", label: "VMs", icon: "vms" },
+  { to: "/virtual-desktops", label: "Desktops", icon: "desktops" },
+  { to: "/compute", label: "Compute", icon: "compute" },
+  { to: "/resources", label: "Resources", icon: "resources" },
+  { to: "/storage", label: "Storage", icon: "storage" },
+  { to: "/identity", label: "Identity", icon: "identity" },
+  { to: "/users", label: "Users", icon: "users" },
+  { to: "/cost", label: "Cost", icon: "cost" },
+  { to: "/allocations", label: "Allocation", icon: "allocation" },
+  { to: "/ai-costs", label: "AI Cost", icon: "ai-costs" },
+  { to: "/savings", label: "Savings", icon: "savings" },
+  { to: "/copilot", label: "Copilot", icon: "copilot" },
+  { to: "/alerts", label: "Alerts", icon: "alerts" },
+  { to: "/account-health", label: "Account Health", icon: "account-health" },
 ];
+
+const azureBreadcrumbLabels: Record<string, string> = {
+  "": "Overview",
+  vms: "VMs",
+  "virtual-desktops": "Desktops",
+  compute: "Compute",
+  resources: "Resources",
+  storage: "Storage",
+  identity: "Identity",
+  users: "Users",
+  cost: "Cost",
+  allocations: "Allocation",
+  "ai-costs": "AI Cost",
+  savings: "Savings",
+  copilot: "Copilot",
+  alerts: "Alerts",
+  "account-health": "Account Health",
+};
+
+function AzureSidebarIcon({ icon }: { icon: string }) {
+  const common = {
+    width: 18,
+    height: 18,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.8,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+
+  switch (icon) {
+    case "overview":
+      return <svg aria-hidden="true" {...common}><rect x="3" y="4" width="7" height="7" rx="1.5" /><rect x="14" y="4" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="8" rx="1.5" /><rect x="3" y="14" width="7" height="6" rx="1.5" /></svg>;
+    case "vms":
+      return <svg aria-hidden="true" {...common}><rect x="3" y="5" width="18" height="11" rx="2" /><path d="M7 19h10" /><path d="M9 16v3" /><path d="M15 16v3" /></svg>;
+    case "desktops":
+      return <svg aria-hidden="true" {...common}><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8" /><path d="M12 16v4" /><path d="M7 9h10" /></svg>;
+    case "compute":
+      return <svg aria-hidden="true" {...common}><path d="M12 3l7 4v10l-7 4-7-4V7l7-4z" /><path d="M12 7v10" /><path d="M5 9l7 4 7-4" /></svg>;
+    case "resources":
+      return <svg aria-hidden="true" {...common}><path d="M12 4l8 4-8 4-8-4 8-4z" /><path d="M4 12l8 4 8-4" /><path d="M4 16l8 4 8-4" /></svg>;
+    case "storage":
+      return <svg aria-hidden="true" {...common}><ellipse cx="12" cy="6" rx="7.5" ry="3" /><path d="M4.5 6v8c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6" /><path d="M4.5 10c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3" /></svg>;
+    case "identity":
+      return <svg aria-hidden="true" {...common}><circle cx="9" cy="9" r="3" /><path d="M4 19c.9-2.7 3.2-4 5-4s4.1 1.3 5 4" /><path d="M17 8h4" /><path d="M19 6v4" /></svg>;
+    case "users":
+      return <svg aria-hidden="true" {...common}><circle cx="8" cy="8" r="3" /><circle cx="17" cy="9" r="2.5" /><path d="M3.5 19c.8-2.8 3.1-4.2 4.5-4.2 1.5 0 3.8 1.4 4.6 4.2" /><path d="M14 19c.5-1.8 1.9-3.1 3.5-3.1 1 0 2.2.5 3 1.7" /></svg>;
+    case "cost":
+      return <svg aria-hidden="true" {...common}><path d="M12 3v18" /><path d="M17 7.5c0-1.7-2.2-3-5-3s-5 1.3-5 3 1.4 2.5 5 3 5 1.3 5 3-2.2 3-5 3-5-1.3-5-3" /></svg>;
+    case "allocation":
+      return <svg aria-hidden="true" {...common}><path d="M12 4v16" /><path d="M5 9h14" /><path d="M5 15h8" /><circle cx="17" cy="15" r="2" /></svg>;
+    case "ai-costs":
+      return <svg aria-hidden="true" {...common}><path d="M8 8a4 4 0 1 1 8 0c0 1.6-.8 2.8-2 3.6V14a2 2 0 0 1-4 0v-2.4A4.4 4.4 0 0 1 8 8Z" /><path d="M9 20h6" /><path d="M10 17h4" /></svg>;
+    case "savings":
+      return <svg aria-hidden="true" {...common}><path d="M6 12l4 4 8-8" /><path d="M5 5h4v4" /><path d="M19 19h-4v-4" /></svg>;
+    case "copilot":
+      return <svg aria-hidden="true" {...common}><path d="M12 3 6.5 6.2v6.6L12 16l5.5-3.2V6.2L12 3Z" /><path d="M12 8.2 9.2 9.8v3.4L12 14.8l2.8-1.6V9.8L12 8.2Z" /></svg>;
+    case "alerts":
+      return <svg aria-hidden="true" {...common}><path d="M10 4h4l6 13H4L10 4Z" /><path d="M12 9v3" /><path d="M12 15h.01" /></svg>;
+    case "account-health":
+      return <svg aria-hidden="true" {...common}><path d="M12 20s-6.5-3.8-6.5-9.2V5.8L12 3l6.5 2.8v5c0 5.4-6.5 9.2-6.5 9.2Z" /><path d="m9.5 11.5 1.7 1.7 3.6-3.6" /></svg>;
+    default:
+      return <span className="text-base leading-none">{icon}</span>;
+  }
+}
 
 export default function Layout() {
   const branding = getSiteBranding();
@@ -95,6 +162,25 @@ export default function Layout() {
     return () => window.removeEventListener("focus", handleFocus);
   }, [location.key]);
 
+  const azureBreadcrumbs = useMemo(() => {
+    if (branding.scope !== "azure") return [];
+    const path = location.pathname.replace(/^\/+/, "");
+    const [segment] = path.split("/");
+    const currentLabel = azureBreadcrumbLabels[segment || ""] || "Azure";
+    const params = new URLSearchParams(location.search);
+    let detailLabel = "";
+    if (segment === "vms" && params.get("vmId")) detailLabel = "VM Detail";
+    if (segment === "virtual-desktops" && params.get("desktopId")) detailLabel = "Desktop Detail";
+    if (segment === "resources" && params.get("resourceId")) detailLabel = "Resource Detail";
+    if (segment === "users" && params.get("userId")) detailLabel = "User Detail";
+    if (segment === "identity" && params.get("objectId")) detailLabel = "Directory Detail";
+    return [
+      { label: "Azure", current: false },
+      { label: currentLabel, current: !detailLabel },
+      ...(detailLabel ? [{ label: detailLabel, current: true }] : []),
+    ];
+  }, [branding.scope, location.pathname, location.search]);
+
   // While checking auth, show nothing to avoid layout flash
   if (isLoading) {
     return (
@@ -126,22 +212,28 @@ export default function Layout() {
           {navItems
             .filter((item) => !item.primaryOnly || branding.scope === "primary")
             .map(({ to, label, icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === "/"}
-              className={({ isActive }) =>
-                [
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-slate-700 text-white"
-                    : "text-slate-300 hover:bg-slate-800 hover:text-white",
-                ].join(" ")
-              }
-            >
-              <span className="text-base leading-none">{icon}</span>
-              {label}
-            </NavLink>
+              <NavLink
+                key={to}
+                to={to}
+                end={to === "/"}
+                className={({ isActive }) =>
+                  [
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    isActive
+                      ? "bg-slate-700 text-white"
+                      : "text-slate-300 hover:bg-slate-800 hover:text-white",
+                  ].join(" ")
+                }
+              >
+                {branding.scope === "azure" ? (
+                  <span className="flex h-5 w-5 items-center justify-center text-current">
+                    <AzureSidebarIcon icon={icon} />
+                  </span>
+                ) : (
+                  <span className="text-base leading-none">{icon}</span>
+                )}
+                {label}
+              </NavLink>
             ))}
         </nav>
 
@@ -171,7 +263,20 @@ export default function Layout() {
       {/* Main content */}
       <main className="flex-1 overflow-y-auto bg-gray-50 p-6">
         {branding.scope === "azure" ? (
-          <AzureStatusBar isAdmin={!!user?.is_admin} />
+          <>
+            <AzureStatusBar isAdmin={!!user?.is_admin} />
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
+                {azureBreadcrumbs.map((item, index) => (
+                  <div key={`${item.label}-${index}`} className="flex items-center gap-2">
+                    {index > 0 ? <span className="text-slate-300">/</span> : null}
+                    <span className={item.current ? "font-semibold text-slate-900" : ""}>{item.label}</span>
+                  </div>
+                ))}
+              </div>
+              <AzureQuickJump />
+            </div>
+          </>
         ) : (
           <CacheStatusBar />
         )}

@@ -82,7 +82,10 @@ export default function AzureStatusBar({ isAdmin }: { isAdmin: boolean }) {
         {status.refreshing && (
           <>
             <span className="text-slate-300">|</span>
-            <span className="text-sky-700 font-medium">Refreshing Azure datasets...</span>
+            <span className="inline-flex items-center gap-2 font-medium text-sky-700">
+              <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-sky-600 border-t-transparent" />
+              Refreshing Azure datasets...
+            </span>
           </>
         )}
         <div className="flex-1" />

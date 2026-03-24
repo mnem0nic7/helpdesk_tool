@@ -179,7 +179,7 @@ describe("AzureVMsPage", () => {
     });
     await screen.findByText("vm-1");
 
-    fireEvent.click(screen.getByRole("button", { name: "Export VM Costs" }));
+    fireEvent.click(screen.getByRole("button", { name: "Export Filtered VM Costs" }));
     await screen.findByText(/Build a live Azure workbook/i);
 
     fireEvent.click(screen.getAllByRole("radio")[1]);

@@ -1,9 +1,10 @@
 import { useDeferredValue, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, type AzureManagedDisk, type AzureStorageAccount } from "../lib/api.ts";
+import { api, type AzureManagedDisk, type AzureSavingsOpportunity, type AzureStorageAccount } from "../lib/api.ts";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
+import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
@@ -12,6 +13,11 @@ type DiskSortKey = "name" | "sku_name" | "disk_size_gb" | "location" | "subscrip
 type SnapshotSortKey = "name" | "sku_name" | "disk_size_gb" | "location" | "subscription" | "resource_group" | "cost";
 
 type StorageTab = "accounts" | "disks" | "snapshots";
+
+type StorageDetailItem =
+  | { kind: "accounts"; item: AzureStorageAccount }
+  | { kind: "disks"; item: AzureManagedDisk }
+  | { kind: "snapshots"; item: AzureManagedDisk };
 
 function formatCurrency(value: number | null, currency = "USD"): string {
   if (value === null) return "—";
@@ -27,6 +33,171 @@ function formatCoverageWindow(start?: string | null, end?: string | null): strin
   if (!start || !end) return "";
   if (start === end) return start;
   return `${start} to ${end}`;
+}
+
+function buildAzurePortalUrl(resourceId: string): string {
+  return `https://portal.azure.com/#resource${resourceId}`;
+}
+
+function formatAgeDays(iso: string): string {
+  if (!iso) return "—";
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  const days = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 86_400_000));
+  return `${days.toLocaleString()}d`;
+}
+
+function StorageDetailDrawer({
+  detail,
+  onClose,
+}: {
+  detail: StorageDetailItem;
+  onClose: () => void;
+}) {
+  const { kind, item } = detail;
+  const tagEntries = Object.entries(item.tags ?? {});
+  const title = kind === "accounts" ? "Storage Account Detail" : kind === "disks" ? "Managed Disk Detail" : "Snapshot Detail";
+
+  const fields = [
+    ["Name", item.name || "—"],
+    ["Subscription", item.subscription_name || item.subscription_id || "—"],
+    ["Resource Group", item.resource_group || "—"],
+    ["Location", item.location || "—"],
+    ["Created", item.created_time || "—"],
+  ];
+
+  if (kind === "accounts") {
+    fields.push(
+      ["Kind", item.kind || "—"],
+      ["Tier / SKU", item.sku_name || "—"],
+      ["Access Tier", item.access_tier || "—"],
+      ["State", item.state || "—"],
+    );
+  } else {
+    fields.push(
+      ["SKU", item.sku_name || "—"],
+      ["Size", item.disk_size_gb !== null ? `${item.disk_size_gb.toLocaleString()} GB` : "—"],
+      ["State", item.disk_state || item.state || "—"],
+    );
+    if (kind === "disks") {
+      fields.push(["Managed By", item.managed_by || "Unattached"]);
+    }
+    if (kind === "snapshots") {
+      fields.push(["Source Disk", item.source_resource_id ? item.source_resource_id.split("/").pop() || item.source_resource_id : "—"]);
+      fields.push(["Snapshot Age", formatAgeDays(item.created_time)]);
+    }
+  }
+  fields.push(["Resource ID", item.id]);
+
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/35" onClick={onClose}>
+      <aside
+        className="flex h-full w-full max-w-3xl flex-col overflow-hidden bg-white shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="border-b border-slate-200 px-6 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p>
+              <h2 className="mt-1 truncate text-2xl font-bold text-slate-900">{item.name || item.id}</h2>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-500">
+                <span>{item.subscription_name || item.subscription_id || "No subscription"}</span>
+                <span>{item.resource_group || "No resource group"}</span>
+                <span>{item.location || "Unknown region"}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href={buildAzurePortalUrl(item.id)}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+              >
+                Open in Azure
+              </a>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            {fields.map(([label, value]) => (
+              <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+                <div className="mt-1 break-words text-sm text-slate-700">{value}</div>
+              </div>
+            ))}
+          </div>
+          {tagEntries.length > 0 ? (
+            <section className="mt-6 rounded-2xl border border-slate-200 p-5">
+              <h3 className="text-lg font-semibold text-slate-900">Tags</h3>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {tagEntries.map(([key, value]) => (
+                  <div key={key} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{key}</div>
+                    <div className="mt-1 break-words text-sm text-slate-700">{String(value)}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function CollapsibleEmptySavingsPanel({
+  title,
+  description,
+  emptyMessage,
+  opportunities,
+  open,
+  onToggle,
+}: {
+  title: string;
+  description: string;
+  emptyMessage: string;
+  opportunities: AzureSavingsOpportunity[];
+  open: boolean;
+  onToggle: () => void;
+}) {
+  if (opportunities.length > 0) {
+    return (
+      <AzureSavingsHighlightsSection
+        title={title}
+        description={description}
+        opportunities={opportunities}
+        emptyMessage={emptyMessage}
+        maxItems={6}
+      />
+    );
+  }
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+          <p className="mt-1 text-sm text-slate-500">{description}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50"
+        >
+          {open ? "Hide empty panel" : "Show empty panel"}
+        </button>
+      </div>
+      {open ? <p className="mt-5 text-sm text-slate-400">{emptyMessage}</p> : null}
+    </section>
+  );
 }
 
 function StatCard({
@@ -54,11 +225,15 @@ function AccountsTable({
   costAvailable,
   search,
   onSearchChange,
+  selectedId,
+  onSelect,
 }: {
   accounts: AzureStorageAccount[];
   costAvailable: boolean;
   search: string;
   onSearchChange: (value: string) => void;
+  selectedId?: string | null;
+  onSelect: (item: AzureStorageAccount) => void;
 }) {
   const { sortKey, sortDir, toggleSort } = useTableSort<AccountSortKey>("name");
   const sorted = sortRows(accounts, sortKey, sortDir, (a, key) => {
@@ -99,7 +274,15 @@ function AccountsTable({
           </thead>
           <tbody>
             {visible.map((item, idx) => (
-              <tr key={item.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
+              <tr
+                key={item.id}
+                className={[
+                  idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
+                  "cursor-pointer transition hover:bg-sky-50/60",
+                  selectedId === item.id ? "bg-sky-50" : "",
+                ].join(" ")}
+                onClick={() => onSelect(item)}
+              >
                 <td className="px-4 py-3 font-medium text-slate-900">{item.name}</td>
                 <td className="px-4 py-3 text-slate-600">{item.kind || "—"}</td>
                 <td className="px-4 py-3 text-slate-600">{item.sku_name || "—"}</td>
@@ -133,6 +316,8 @@ function DisksTable({
   onSearchChange,
   showUnattached,
   onToggleUnattached,
+  selectedId,
+  onSelect,
 }: {
   disks: AzureManagedDisk[];
   costAvailable: boolean;
@@ -140,6 +325,8 @@ function DisksTable({
   onSearchChange: (value: string) => void;
   showUnattached: boolean;
   onToggleUnattached: () => void;
+  selectedId?: string | null;
+  onSelect: (item: AzureManagedDisk) => void;
 }) {
   const { sortKey, sortDir, toggleSort } = useTableSort<DiskSortKey>("name");
   const sorted = sortRows(disks, sortKey, sortDir, (d, key) => {
@@ -202,7 +389,15 @@ function DisksTable({
               };
               const badgeClass = stateBadge[diskState] ?? "bg-slate-100 text-slate-600";
               return (
-                <tr key={item.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
+                <tr
+                  key={item.id}
+                  className={[
+                    idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
+                    "cursor-pointer transition hover:bg-sky-50/60",
+                    selectedId === item.id ? "bg-sky-50" : "",
+                  ].join(" ")}
+                  onClick={() => onSelect(item)}
+                >
                   <td className="px-4 py-3 font-medium text-slate-900">{item.name}</td>
                   <td className="px-4 py-3 text-slate-600">{item.sku_name || "—"}</td>
                   <td className="px-4 py-3 text-right text-slate-600">
@@ -248,11 +443,15 @@ function SnapshotsTable({
   costAvailable,
   search,
   onSearchChange,
+  selectedId,
+  onSelect,
 }: {
   snapshots: AzureManagedDisk[];
   costAvailable: boolean;
   search: string;
   onSearchChange: (value: string) => void;
+  selectedId?: string | null;
+  onSelect: (item: AzureManagedDisk) => void;
 }) {
   const { sortKey, sortDir, toggleSort } = useTableSort<SnapshotSortKey>("name");
   const sorted = sortRows(snapshots, sortKey, sortDir, (s, key) => {
@@ -284,6 +483,7 @@ function SnapshotsTable({
               <SortHeader col="name" label="Name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <SortHeader col="sku_name" label="SKU" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <SortHeader col="disk_size_gb" label="Size" right sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <th className="px-4 py-3 text-right">Age</th>
               <th className="px-4 py-3">Source Disk</th>
               <SortHeader col="location" label="Location" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <SortHeader col="subscription" label="Subscription" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -293,12 +493,21 @@ function SnapshotsTable({
           </thead>
           <tbody>
             {visible.map((item, idx) => (
-              <tr key={item.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
+              <tr
+                key={item.id}
+                className={[
+                  idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
+                  "cursor-pointer transition hover:bg-sky-50/60",
+                  selectedId === item.id ? "bg-sky-50" : "",
+                ].join(" ")}
+                onClick={() => onSelect(item)}
+              >
                 <td className="px-4 py-3 font-medium text-slate-900">{item.name}</td>
                 <td className="px-4 py-3 text-slate-600">{item.sku_name || "—"}</td>
                 <td className="px-4 py-3 text-right text-slate-600">
                   {item.disk_size_gb !== null ? item.disk_size_gb.toLocaleString() + " GB" : "—"}
                 </td>
+                <td className="px-4 py-3 text-right text-slate-600">{formatAgeDays(item.created_time)}</td>
                 <td className="px-4 py-3 text-slate-600">
                   {item.source_resource_id ? item.source_resource_id.split("/").pop() : "—"}
                 </td>
@@ -330,6 +539,9 @@ export default function AzureStoragePage() {
   const [diskSearch, setDiskSearch] = useState("");
   const [snapshotSearch, setSnapshotSearch] = useState("");
   const [showUnattachedOnly, setShowUnattachedOnly] = useState(false);
+  const [showEmptyUnattachedPanel, setShowEmptyUnattachedPanel] = useState(false);
+  const [showEmptySnapshotPanel, setShowEmptySnapshotPanel] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<StorageDetailItem | null>(null);
   const deferredAccountSearch = useDeferredValue(accountSearch.trim());
   const deferredDiskSearch = useDeferredValue(diskSearch.trim());
   const deferredSnapshotSearch = useDeferredValue(snapshotSearch.trim());
@@ -360,7 +572,7 @@ export default function AzureStoragePage() {
     refetchInterval: 60_000,
   });
 
-  if (isLoading) return <div className="text-sm text-slate-500">Loading Azure storage data…</div>;
+  if (isLoading) return <AzurePageSkeleton titleWidth="w-36" subtitleWidth="w-72" statCount={6} sectionCount={2} />;
 
   if (isError || !data) {
     return (
@@ -451,19 +663,21 @@ export default function AzureStoragePage() {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <AzureSavingsHighlightsSection
+        <CollapsibleEmptySavingsPanel
           title="Unattached Disk Savings"
           description="Disks with no current attachment, prioritized by monthly cost where direct cost rows are available."
           opportunities={unattachedDiskSavings}
           emptyMessage="No unattached managed disk savings opportunities are currently flagged."
-          maxItems={6}
+          open={showEmptyUnattachedPanel}
+          onToggle={() => setShowEmptyUnattachedPanel((value) => !value)}
         />
-        <AzureSavingsHighlightsSection
+        <CollapsibleEmptySavingsPanel
           title="Stale Snapshot Savings"
           description="Snapshots older than the current 60-day stale threshold, ready for retention review."
           opportunities={staleSnapshotSavings}
           emptyMessage="No stale snapshot savings opportunities are currently flagged."
-          maxItems={6}
+          open={showEmptySnapshotPanel}
+          onToggle={() => setShowEmptySnapshotPanel((value) => !value)}
         />
       </div>
 
@@ -544,6 +758,8 @@ export default function AzureStoragePage() {
           costAvailable={cost_available}
           search={accountSearch}
           onSearchChange={setAccountSearch}
+          selectedId={selectedItem?.item.id}
+          onSelect={(item) => setSelectedItem({ kind: "accounts", item })}
         />
       )}
       {activeTab === "disks" && (
@@ -554,6 +770,8 @@ export default function AzureStoragePage() {
           onSearchChange={setDiskSearch}
           showUnattached={showUnattachedOnly}
           onToggleUnattached={() => setShowUnattachedOnly((value) => !value)}
+          selectedId={selectedItem?.item.id}
+          onSelect={(item) => setSelectedItem({ kind: "disks", item })}
         />
       )}
       {activeTab === "snapshots" && (
@@ -562,8 +780,12 @@ export default function AzureStoragePage() {
           costAvailable={cost_available}
           search={snapshotSearch}
           onSearchChange={setSnapshotSearch}
+          selectedId={selectedItem?.item.id}
+          onSelect={(item) => setSelectedItem({ kind: "snapshots", item })}
         />
       )}
+
+      {selectedItem ? <StorageDetailDrawer detail={selectedItem} onClose={() => setSelectedItem(null)} /> : null}
     </div>
   );
 }

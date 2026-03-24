@@ -66,6 +66,11 @@ export default function AzureSavingsHighlightsSection({
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="font-medium text-slate-900">{item.title}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {[item.resource_name || item.resource_type || "", item.resource_group || "", item.subscription_name || item.subscription_id || ""]
+                      .filter(Boolean)
+                      .join(" / ") || "Tenant-wide opportunity"}
+                  </div>
                   <div className="mt-1 text-sm text-slate-600">{item.summary}</div>
                 </div>
                 <div className="text-right">
@@ -88,10 +93,20 @@ export default function AzureSavingsHighlightsSection({
               </div>
 
               <div className="mt-3 flex flex-wrap gap-3 text-xs font-medium">
-                <Link to={item.follow_up_route} className="text-sky-700 hover:text-sky-800">
-                  Open follow-up page
+                <Link
+                  to={item.follow_up_route}
+                  title="Open the in-app follow-up workspace for this recommendation."
+                  className="text-sky-700 hover:text-sky-800"
+                >
+                  Open MoveDocs follow-up
                 </Link>
-                <a href={item.portal_url} target="_blank" rel="noreferrer" className="text-slate-600 hover:text-slate-800">
+                <a
+                  href={item.portal_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Open the raw Azure resource or recommendation in the Azure portal."
+                  className="text-slate-600 hover:text-slate-800"
+                >
                   Open in Azure Portal
                 </a>
               </div>

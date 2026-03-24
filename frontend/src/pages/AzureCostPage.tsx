@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type AzureFinopsValidationCheck } from "../lib/api.ts";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
+import AzureExportSetupCard from "../components/AzureExportSetupCard.tsx";
+import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
@@ -105,7 +107,7 @@ export default function AzureCostPage() {
   const failure = [summary, trend, byService, bySubscription, byResourceGroup, advisor].find((query) => query.isError);
 
   if (loading) {
-    return <div className="text-sm text-slate-500">Loading Azure cost data...</div>;
+    return <AzurePageSkeleton titleWidth="w-40" subtitleWidth="w-[36rem]" statCount={4} sectionCount={4} />;
   }
 
   if (failure || !summary.data) {
@@ -122,6 +124,7 @@ export default function AzureCostPage() {
   const coverageWindow = formatCoverageWindow(summary.data.window_start, summary.data.window_end);
   const validationTone = getValidationTone(validation.data?.overall_state || "unavailable");
   const validationChecks = validation.data?.checks ?? [];
+  const exportBlocked = !summary.data.export_backed;
 
   return (
     <div className="space-y-6">
@@ -140,9 +143,13 @@ export default function AzureCostPage() {
             }
           />
           <AzureSourceBadge
-            label="Use governed reporting for finance"
-            description="Shared finance and showback reporting should come from the governed reporting handoff on Azure Overview."
-            tone="emerald"
+            label={exportBlocked ? "Governed reporting setup required" : "Use governed reporting for finance"}
+            description={
+              exportBlocked
+                ? "Finance-grade reporting stays disabled until Azure Cost Management exports are enabled and parsing cleanly."
+                : "Shared finance and showback reporting should come from the governed reporting handoff on Azure Overview."
+            }
+            tone={exportBlocked ? "amber" : "emerald"}
           />
         </div>
         {coverageWindow ? (
@@ -152,14 +159,31 @@ export default function AzureCostPage() {
         ) : null}
       </div>
 
+      {exportBlocked ? (
+        <AzureExportSetupCard title="Turn On Cost Exports for Finance-Grade Cost Reporting" />
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Actual Spend</div>
+          <div
+            className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+            title="Actual spend reflects the billed cost recorded for the period."
+          >
+            Actual Spend
+          </div>
           <div className="mt-2 text-3xl font-semibold text-slate-900">{formatCurrency(totalActual)}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Amortized Spend</div>
+          <div
+            className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+            title="Amortized spend spreads reservation and savings-plan commitment costs across the covered usage. It can match actual spend when no commitments shift the timing."
+          >
+            Amortized Spend
+          </div>
           <div className="mt-2 text-3xl font-semibold text-indigo-700">{formatCurrency(totalAmortized)}</div>
+          {Math.abs(totalActual - totalAmortized) < 0.01 ? (
+            <div className="mt-1 text-xs text-slate-400">Matches actual spend because there is no current commitment timing difference.</div>
+          ) : null}
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Top Service</div>

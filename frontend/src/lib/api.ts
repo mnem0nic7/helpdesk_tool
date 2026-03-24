@@ -1121,6 +1121,43 @@ export interface AzureVirtualMachineCostExportJobStatus {
   error: string | null;
 }
 
+export interface AzureDirectoryExtra {
+  user_type: string;
+  department: string;
+  job_title: string;
+  office_location: string;
+  company_name: string;
+  city: string;
+  country: string;
+  mobile_phone: string;
+  business_phones: string;
+  created_datetime: string;
+  on_prem_sync: string;
+  on_prem_domain: string;
+  on_prem_netbios: string;
+  on_prem_sam_account_name: string;
+  on_prem_distinguished_name: string;
+  last_password_change: string;
+  proxy_addresses: string;
+  is_licensed: string;
+  license_count: string;
+  sku_part_numbers: string;
+  last_interactive_utc: string;
+  last_interactive_local: string;
+  last_noninteractive_utc: string;
+  last_noninteractive_local: string;
+  last_successful_utc: string;
+  last_successful_local: string;
+  employee_type: string;
+  account_class: string;
+  priority_band: string;
+  priority_score: string;
+  priority_reason: string;
+  missing_profile_fields: string;
+  mailbox_type_hint: string;
+  [key: string]: string;
+}
+
 export interface AzureDirectoryObject {
   id: string;
   display_name: string;
@@ -1129,7 +1166,28 @@ export interface AzureDirectoryObject {
   mail: string;
   app_id: string;
   enabled: boolean | null;
-  extra: Record<string, string>;
+  extra: AzureDirectoryExtra;
+}
+
+export interface AzureQuickJumpResult {
+  id: string;
+  kind:
+    | "page"
+    | "vm"
+    | "desktop"
+    | "resource"
+    | "user"
+    | "group"
+    | "enterprise_app"
+    | "app_registration"
+    | "directory_role";
+  label: string;
+  subtitle: string;
+  route: string;
+}
+
+export interface AzureQuickJumpResponse {
+  results: AzureQuickJumpResult[];
 }
 
 export type UserAdminActionType =
@@ -1728,6 +1786,7 @@ export interface AzureStorageAccount {
   subscription_name: string;
   resource_group: string;
   state: string;
+  created_time: string;
   tags: Record<string, string>;
   cost: number | null;
   currency: string;
@@ -1746,6 +1805,7 @@ export interface AzureManagedDisk {
   subscription_name: string;
   resource_group: string;
   state: string;
+  created_time: string;
   managed_by: string;
   tags: Record<string, string>;
   cost: number | null;
@@ -2369,6 +2429,10 @@ export const api = {
 
   getAzureVMs(params: AzureVirtualMachineQueryParams = {}): Promise<AzureVirtualMachineListResponse> {
     return fetchJSON<AzureVirtualMachineListResponse>(`/api/azure/vms${buildQuery(params)}`);
+  },
+
+  getAzureQuickJump(search: string): Promise<AzureQuickJumpResponse> {
+    return fetchJSON<AzureQuickJumpResponse>(`/api/azure/search${buildQuery({ search })}`);
   },
 
   getAzureVirtualDesktopRemovalCandidates(

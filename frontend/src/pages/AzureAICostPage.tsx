@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type AzureAICostBreakdownItem } from "../lib/api.ts";
+import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 
 const LOOKBACK_OPTIONS = [7, 30, 90];
 
@@ -106,12 +107,17 @@ export default function AzureAICostPage() {
     queryFn: () => api.getAzureAICostBreakdown("team", lookbackDays),
     refetchInterval: 60_000,
   });
+  const models = useQuery({
+    queryKey: ["azure", "ai-models", "ai-cost-page"],
+    queryFn: () => api.getAzureAIModels(),
+    staleTime: 5 * 60 * 1000,
+  });
 
   const loading = [summary, trend, byProvider, byModel, byApp, byTeam].some((query) => query.isLoading);
   const failure = [summary, trend, byProvider, byModel, byApp, byTeam].find((query) => query.isError);
 
   if (loading) {
-    return <div className="text-sm text-slate-500">Loading Azure AI cost data...</div>;
+    return <AzurePageSkeleton titleWidth="w-40" subtitleWidth="w-[34rem]" statCount={5} sectionCount={3} />;
   }
 
   if (failure || !summary.data) {
@@ -127,6 +133,8 @@ export default function AzureAICostPage() {
   const providerRows = byProvider.data ?? [];
   const onlyOllamaProviders =
     providerRows.length === 0 || providerRows.every((item) => item.label.trim().toLowerCase() === "ollama");
+  const trendRows = trend.data ?? [];
+  const sparseTrend = trendRows.length < 3 || trendRows.every((item) => item.estimated_cost === trendRows[0]?.estimated_cost);
 
   return (
     <div className="space-y-6">
@@ -168,6 +176,15 @@ export default function AzureAICostPage() {
             ? "All recorded AI usage in the current window is attributed to Ollama-backed local models."
             : "A non-Ollama provider appeared in the AI usage breakdown. Since this deployment is meant to be Ollama-only, treat that as a regression."}
         </div>
+        {models.data?.length ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {models.data.map((model) => (
+              <span key={model.id} className="rounded-full bg-white/80 px-3 py-1 text-xs font-medium text-slate-700">
+                {model.name || model.id}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -196,17 +213,23 @@ export default function AzureAICostPage() {
       <div className="grid gap-4 xl:grid-cols-[1.3fr,1fr]">
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Estimated Cost Trend</h2>
-          <div className="mt-4 h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trend.data ?? []}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip formatter={(value: number | string | undefined) => formatCurrency(Number(value || 0), currency)} />
-                <Line type="monotone" dataKey="estimated_cost" stroke="#0f766e" strokeWidth={2.5} dot={false} name="Estimated cost" />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          {sparseTrend ? (
+            <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
+              Not enough trend history yet to show a meaningful cost chart for this lookback window.
+            </div>
+          ) : (
+            <div className="mt-4 h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={trendRows}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 12 }} />
+                  <Tooltip formatter={(value: number | string | undefined) => formatCurrency(Number(value || 0), currency)} />
+                  <Line type="monotone" dataKey="estimated_cost" stroke="#0f766e" strokeWidth={2.5} dot={false} name="Estimated cost" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

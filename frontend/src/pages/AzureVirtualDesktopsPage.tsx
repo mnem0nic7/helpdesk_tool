@@ -1,5 +1,6 @@
-import { useDeferredValue, useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useDeferredValue, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { api, type AzureVirtualDesktopRow } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
@@ -37,15 +38,44 @@ function StatCard({
   label,
   value,
   tone = "text-slate-900",
+  active = false,
+  helper,
+  onClick,
 }: {
   label: string;
   value: string;
   tone?: string;
+  active?: boolean;
+  helper?: string;
+  onClick?: () => void;
 }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+  const content = (
+    <>
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
       <div className={`mt-2 text-3xl font-semibold ${tone}`}>{value}</div>
+      {helper ? <div className="mt-2 text-xs text-slate-400">{helper}</div> : null}
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={active}
+        className={[
+          "rounded-2xl border bg-white p-5 text-left shadow-sm transition",
+          active ? "border-sky-400 ring-2 ring-sky-200" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50",
+        ].join(" ")}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      {content}
     </div>
   );
 }
@@ -148,6 +178,22 @@ function signalText(days: number | null, localText: string, emptyLabel: string):
   return `${days}d ago${localText ? ` · ${localText}` : ""}`;
 }
 
+function signalRelativeLabel(days: number | null): string {
+  if (days === null) return "";
+  if (days <= 0) return "Today";
+  return `${days}d ago`;
+}
+
+function signalDisplay(localText: string, days: number | null, emptyLabel: string): { primary: string; secondary: string } {
+  if (days === null && !localText) {
+    return { primary: emptyLabel, secondary: "" };
+  }
+  return {
+    primary: localText || emptyLabel,
+    secondary: signalRelativeLabel(days),
+  };
+}
+
 function reasonBadges(reasons: string[]) {
   if (reasons.length === 0) {
     return (
@@ -208,6 +254,23 @@ function interactiveSigninLabel(row: AzureVirtualDesktopRow): string {
     return "No interactive Entra sign-in recorded";
   }
   return row.assigned_user_last_successful_local || signalText(row.days_since_assigned_user_login, "", "Recorded interactive sign-in");
+}
+
+async function copyText(text: string) {
+  if (!text) return;
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.focus();
+  area.select();
+  document.execCommand("copy");
+  document.body.removeChild(area);
 }
 
 function AzureVirtualDesktopDetailDrawer({
@@ -499,9 +562,12 @@ function AzureVirtualDesktopDetailDrawer({
 }
 
 export default function AzureVirtualDesktopsPage() {
-  const [search, setSearch] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [search, setSearch] = useState(() => searchParams.get("search") || "");
   const [removalOnly, setRemovalOnly] = useState(false);
+  const [pendingPowerOnly, setPendingPowerOnly] = useState(false);
   const [selectedDesktop, setSelectedDesktop] = useState<AzureVirtualDesktopRow | null>(null);
+  const [selectedDesktopIds, setSelectedDesktopIds] = useState<string[]>([]);
   const deferredSearch = useDeferredValue(search.trim());
   const { sortKey, sortDir, toggleSort } = useTableSort<DesktopSortKey>("power_signal", "desc");
 
@@ -515,8 +581,12 @@ export default function AzureVirtualDesktopsPage() {
   });
 
   const rows = data?.desktops ?? [];
+  const filteredRows = useMemo(
+    () => (pendingPowerOnly ? rows.filter((row) => row.power_signal_pending) : rows),
+    [pendingPowerOnly, rows],
+  );
   const summary = data?.summary;
-  const sorted = sortRows(rows, sortKey, sortDir, (row, key) => {
+  const sorted = sortRows(filteredRows, sortKey, sortDir, (row, key) => {
     if (key === "assigned_user") return row.assigned_user_display_name || row.assigned_user_principal_name;
     if (key === "host_pool") return row.host_pool_name;
     if (key === "power_signal") return row.days_since_power_signal ?? -1;
@@ -524,9 +594,54 @@ export default function AzureVirtualDesktopsPage() {
     if (key === "subscription") return row.subscription_name || row.subscription_id;
     return (row as unknown as Record<string, string | number | null>)[key] ?? "";
   });
-  const scroll = useInfiniteScrollCount(sorted.length, 50, `${deferredSearch}|${removalOnly}|${sortKey}|${sortDir}`);
+  const scroll = useInfiniteScrollCount(sorted.length, 50, `${deferredSearch}|${removalOnly}|${pendingPowerOnly}|${sortKey}|${sortDir}`);
   const visible = sorted.slice(0, scroll.visibleCount);
   const activeDesktop = selectedDesktop ? sorted.find((row) => row.id === selectedDesktop.id) ?? selectedDesktop : null;
+  const selectedRows = useMemo(
+    () => sorted.filter((row) => selectedDesktopIds.includes(row.id)),
+    [selectedDesktopIds, sorted],
+  );
+
+  useEffect(() => {
+    const routeSearch = searchParams.get("search") || "";
+    setSearch((current) => (current === routeSearch ? current : routeSearch));
+  }, [searchParams]);
+
+  useEffect(() => {
+    const desktopId = searchParams.get("desktopId");
+    if (!desktopId) {
+      setSelectedDesktop((current) => (current ? null : current));
+      return;
+    }
+    const matched = sorted.find((row) => row.id === desktopId) || rows.find((row) => row.id === desktopId);
+    if (matched && selectedDesktop?.id !== matched.id) {
+      setSelectedDesktop(matched);
+    }
+  }, [rows, searchParams, selectedDesktop?.id, sorted]);
+
+  useEffect(() => {
+    setSelectedDesktopIds((current) => current.filter((id) => rows.some((row) => row.id === id)));
+  }, [rows]);
+
+  function updateRouteParams(next: { search?: string | null; desktopId?: string | null }) {
+    const params = new URLSearchParams(searchParams);
+    if (next.search !== undefined) {
+      const value = next.search?.trim();
+      if (value) params.set("search", value);
+      else params.delete("search");
+    }
+    if (next.desktopId !== undefined) {
+      if (next.desktopId) params.set("desktopId", next.desktopId);
+      else params.delete("desktopId");
+    }
+    setSearchParams(params, { replace: true });
+  }
+
+  function toggleDesktopSelected(desktopId: string) {
+    setSelectedDesktopIds((current) =>
+      current.includes(desktopId) ? current.filter((id) => id !== desktopId) : [...current, desktopId],
+    );
+  }
 
   if (isLoading) {
     return (
@@ -560,9 +675,9 @@ export default function AzureVirtualDesktopsPage() {
               Virtual Desktop assignment first, then falls back to the most recent successful AVD session user.
             </p>
           </div>
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
             <div className="font-semibold">Signal note</div>
-            <div className="mt-1 max-w-sm text-amber-800">
+            <div className="mt-1 max-w-sm text-sky-800">
               Power activity currently uses the last time this app observed the VM in a <span className="font-semibold">Running</span> state.
             </div>
           </div>
@@ -605,6 +720,9 @@ export default function AzureVirtualDesktopsPage() {
           label="Pending Power History"
           value={(summary?.power_signal_pending ?? 0).toLocaleString()}
           tone="text-sky-700"
+          helper="Click to focus on desktops still waiting for their first running observation"
+          active={pendingPowerOnly}
+          onClick={() => setPendingPowerOnly((current) => !current)}
         />
       </section>
 
@@ -616,6 +734,19 @@ export default function AzureVirtualDesktopsPage() {
               Threshold: {summary?.threshold_days ?? 14} days. Search by desktop, user, host pool, reason, or action.
             </p>
           </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <input
+            className="min-w-[18rem] flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm placeholder-slate-400 focus:border-blue-500 focus:outline-none"
+            placeholder="Search desktop, assigned user, host pool, or reason..."
+            value={search}
+            onChange={(event) => {
+              const value = event.target.value;
+              setSearch(value);
+              updateRouteParams({ search: value, desktopId: null });
+            }}
+          />
           <label className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
             <input
               type="checkbox"
@@ -625,14 +756,57 @@ export default function AzureVirtualDesktopsPage() {
             />
             Removal only
           </label>
+          <button
+            type="button"
+            onClick={() => setPendingPowerOnly((current) => !current)}
+            className={[
+              "rounded-full border px-3 py-2 text-sm font-medium transition",
+              pendingPowerOnly
+                ? "border-sky-300 bg-sky-50 text-sky-700"
+                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+            ].join(" ")}
+          >
+            Pending power history
+          </button>
         </div>
 
-        <input
-          className="mt-4 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm placeholder-slate-400 focus:border-blue-500 focus:outline-none"
-          placeholder="Search desktop, assigned user, host pool, or reason..."
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
+        {selectedRows.length > 0 ? (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+            <div className="font-medium">
+              {selectedRows.length.toLocaleString()} desktop{selectedRows.length === 1 ? "" : "s"} selected
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={async () => copyText(selectedRows.map((row) => row.name || row.id).join("\n"))}
+                className="rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+              >
+                Copy names
+              </button>
+              <button
+                type="button"
+                onClick={async () => copyText(selectedRows.map((row) => buildAzurePortalUrl(row.id)).join("\n"))}
+                className="rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+              >
+                Copy Azure links
+              </button>
+              <button
+                type="button"
+                onClick={() => selectedRows.forEach((row) => window.open(buildAzurePortalUrl(row.id), "_blank", "noopener,noreferrer"))}
+                className="rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+              >
+                Open selected in Azure
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedDesktopIds([])}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+              >
+                Clear selection
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {visible.length === 0 ? (
           <p className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-6 text-center text-sm font-medium text-emerald-700">
@@ -643,6 +817,20 @@ export default function AzureVirtualDesktopsPage() {
             <table className="min-w-full text-left text-sm">
               <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <tr>
+                  <th className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all visible desktops"
+                      checked={visible.length > 0 && visible.every((desktop) => selectedDesktopIds.includes(desktop.id))}
+                      onChange={(event) => {
+                        if (event.target.checked) {
+                          setSelectedDesktopIds((current) => Array.from(new Set([...current, ...visible.map((desktop) => desktop.id)])));
+                        } else {
+                          setSelectedDesktopIds((current) => current.filter((id) => !visible.some((desktop) => desktop.id === id)));
+                        }
+                      }}
+                    />
+                  </th>
                   <SortHeader col="name" label="Desktop" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortHeader
                     col="assigned_user"
@@ -696,14 +884,27 @@ export default function AzureVirtualDesktopsPage() {
                       "cursor-pointer transition hover:bg-sky-50 focus:bg-sky-50 focus:outline-none",
                       activeDesktop?.id === desktop.id ? "bg-sky-50" : "",
                     ].join(" ")}
-                    onClick={() => setSelectedDesktop(desktop)}
+                    onClick={() => {
+                      setSelectedDesktop(desktop);
+                      updateRouteParams({ desktopId: desktop.id });
+                    }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         setSelectedDesktop(desktop);
+                        updateRouteParams({ desktopId: desktop.id });
                       }
                     }}
                   >
+                    <td className="px-4 py-3 align-top">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${desktop.name || desktop.id}`}
+                        checked={selectedDesktopIds.includes(desktop.id)}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={() => toggleDesktopSelected(desktop.id)}
+                      />
+                    </td>
                     <td className="px-4 py-3 align-top">
                       <div className="font-medium text-slate-900">{desktop.name || desktop.id}</div>
                       <div className="mt-1 text-xs text-slate-500">{desktop.resource_group || "No resource group"}</div>
@@ -745,18 +946,21 @@ export default function AzureVirtualDesktopsPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 align-top text-slate-600">
-                      {desktop.days_since_assigned_user_login === null ? (
+                      {(() => {
+                        const display = signalDisplay(
+                          desktop.assigned_user_last_successful_local,
+                          desktop.days_since_assigned_user_login,
+                          "No interactive Entra sign-in recorded",
+                        );
+                        return desktop.days_since_assigned_user_login === null ? (
                         <span className="text-xs font-medium text-amber-700">No interactive Entra sign-in recorded</span>
-                      ) : (
+                        ) : (
                         <div>
-                          <div className="font-medium text-slate-900">
-                            {desktop.assigned_user_last_successful_local || "Recorded interactive sign-in"}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            {signalText(desktop.days_since_assigned_user_login, "", "No interactive Entra sign-in recorded")}
-                          </div>
+                          <div className="font-medium text-slate-900">{display.primary}</div>
+                          {display.secondary ? <div className="mt-1 text-xs text-slate-500">{display.secondary}</div> : null}
                         </div>
-                      )}
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-3 align-top">{reasonBadges(desktop.removal_reasons)}</td>
                     <td className="px-4 py-3 align-top">
@@ -787,7 +991,15 @@ export default function AzureVirtualDesktopsPage() {
         )}
       </section>
 
-      {activeDesktop ? <AzureVirtualDesktopDetailDrawer desktop={activeDesktop} onClose={() => setSelectedDesktop(null)} /> : null}
+      {activeDesktop ? (
+        <AzureVirtualDesktopDetailDrawer
+          desktop={activeDesktop}
+          onClose={() => {
+            setSelectedDesktop(null);
+            updateRouteParams({ desktopId: null });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

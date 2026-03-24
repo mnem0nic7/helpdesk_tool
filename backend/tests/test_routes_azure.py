@@ -234,6 +234,28 @@ def test_directory_users_preserve_license_and_sign_in_reporting_fields(test_clie
     assert payload["extra"]["last_successful_local"] == "2026-03-12 07:00 PT"
 
 
+def test_azure_quick_search_returns_cached_results(test_client, monkeypatch):
+    import routes_azure
+
+    mock_cache = MagicMock()
+    mock_cache.quick_search.return_value = [
+        {
+            "kind": "vm",
+            "id": "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-app-01",
+            "label": "vm-app-01",
+            "subtitle": "Prod / rg-app / running",
+            "route": "/vms?search=vm-app-01&vmId=/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-app-01",
+        }
+    ]
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get("/api/azure/search?search=vm-app-01", headers={"host": "azure.movedocs.com"})
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["label"] == "vm-app-01"
+    mock_cache.quick_search.assert_called_once_with("vm-app-01")
+
+
 def test_azure_cost_summary_prefers_export_backed_finops_data(test_client, monkeypatch):
     import routes_azure
 
