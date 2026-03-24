@@ -388,6 +388,32 @@ export interface ReportPreviewResponse {
   grouped: boolean;
 }
 
+export interface ReportTemplate {
+  id: string;
+  site_scope: string;
+  name: string;
+  description: string;
+  category: string;
+  notes: string;
+  readiness: "ready" | "proxy" | "gap" | "custom" | string;
+  is_seed: boolean;
+  created_at: string;
+  updated_at: string;
+  created_by_email: string;
+  created_by_name: string;
+  updated_by_email: string;
+  updated_by_name: string;
+  config: ReportConfig;
+}
+
+export interface ReportTemplateSaveRequest {
+  name: string;
+  description?: string;
+  category?: string;
+  notes?: string;
+  config: ReportConfig;
+}
+
 export interface OasisDevWorkloadReportRequest {
   assignee?: string;
   report_start?: string;
@@ -2231,6 +2257,22 @@ export const api = {
   /** Export a report as Excel — returns a Blob for download. */
   async exportReport(config: ReportConfig): Promise<void> {
     await downloadPost("/api/report/export", config, "OIT_Report.xlsx");
+  },
+
+  listReportTemplates(): Promise<ReportTemplate[]> {
+    return fetchJSON<ReportTemplate[]>("/api/report/templates");
+  },
+
+  createReportTemplate(body: ReportTemplateSaveRequest): Promise<ReportTemplate> {
+    return postJSON<ReportTemplate>("/api/report/templates", body);
+  },
+
+  updateReportTemplate(templateId: string, body: ReportTemplateSaveRequest): Promise<ReportTemplate> {
+    return putJSON<ReportTemplate>(`/api/report/templates/${encodeURIComponent(templateId)}`, body);
+  },
+
+  async deleteReportTemplate(templateId: string): Promise<void> {
+    await deleteJSON(`/api/report/templates/${encodeURIComponent(templateId)}`);
   },
 
   previewOasisDevWorkloadReport(

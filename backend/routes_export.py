@@ -10,7 +10,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from openpyxl import Workbook
@@ -19,7 +19,15 @@ from openpyxl.utils import get_column_letter
 
 from issue_cache import cache
 from metrics import issue_to_row, _extract_description, _all_comments_text
-from models import OasisDevWorkloadReportRequest, ReportConfig
+from auth import require_authenticated_user
+from models import (
+    OasisDevWorkloadReportRequest,
+    ReportConfig,
+    ReportTemplate,
+    ReportTemplateCreateRequest,
+    ReportTemplateUpdateRequest,
+)
+from report_template_store import report_template_store
 from routes_tickets import _match
 from site_context import get_current_site_scope, get_scoped_issues, get_site_profile
 
@@ -118,8 +126,26 @@ def _apply_config(config: ReportConfig) -> list[dict[str, Any]]:
             filters.pop(k, None)
     matched = [iss for iss in issues if _match(iss, **filters)]
 
+    requested_fields = set(config.columns or [])
+    if config.sort_field:
+        requested_fields.add(config.sort_field)
+    if config.group_by:
+        requested_fields.add(config.group_by)
+
+    include_comment_meta = bool(
+        requested_fields.intersection({"comment_count", "last_comment_date", "last_comment_author"})
+    )
+    include_description = "description" in requested_fields
+
     # Convert to flat rows
-    rows = [issue_to_row(iss) for iss in matched]
+    rows = [
+        issue_to_row(
+            iss,
+            include_comment_meta=include_comment_meta,
+            include_description=include_description,
+        )
+        for iss in matched
+    ]
 
     # Sort
     sort_field = config.sort_field or "created"
@@ -127,6 +153,8 @@ def _apply_config(config: ReportConfig) -> list[dict[str, Any]]:
 
     def sort_key(row: dict[str, Any]) -> Any:
         val = row.get(sort_field)
+        if isinstance(val, list):
+            return ", ".join(str(part) for part in val)
         if val is None:
             return "" if isinstance(row.get(sort_field, ""), str) else -1
         return val
@@ -659,6 +687,77 @@ async def report_export(config: ReportConfig) -> FileResponse:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         background=BackgroundTask(os.unlink, tmp_path),
     )
+
+
+@router.get("/report/templates", response_model=list[ReportTemplate])
+async def list_report_templates(
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[ReportTemplate]:
+    """Return saved report templates for the current site scope."""
+    return report_template_store.list_templates(get_current_site_scope())
+
+
+@router.post("/report/templates", response_model=ReportTemplate)
+async def create_report_template(
+    body: ReportTemplateCreateRequest,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> ReportTemplate:
+    """Create a saved report template for the current site scope."""
+    try:
+        return report_template_store.create_template(
+            site_scope=get_current_site_scope(),
+            name=body.name,
+            description=body.description,
+            category=body.category,
+            notes=body.notes,
+            config=body.config,
+            actor_email=str(session.get("email") or ""),
+            actor_name=str(session.get("name") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/report/templates/{template_id}", response_model=ReportTemplate)
+async def update_report_template(
+    template_id: str,
+    body: ReportTemplateUpdateRequest,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> ReportTemplate:
+    """Update a saved report template for the current site scope."""
+    try:
+        return report_template_store.update_template(
+            template_id=template_id,
+            site_scope=get_current_site_scope(),
+            name=body.name,
+            description=body.description,
+            category=body.category,
+            notes=body.notes,
+            config=body.config,
+            actor_email=str(session.get("email") or ""),
+            actor_name=str(session.get("name") or ""),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.delete("/report/templates/{template_id}")
+async def delete_report_template(
+    template_id: str,
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, bool]:
+    """Delete a saved custom report template."""
+    try:
+        report_template_store.delete_template(template_id, get_current_site_scope())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"deleted": True}
 
 
 @router.post("/report/oasisdev-workload")

@@ -750,6 +750,7 @@ Resources
     managedBy,
     skuName = tostring(sku.name),
     vmSize = tostring(properties.hardwareProfile.vmSize),
+    vmInstanceId = tostring(properties.vmId),
     virtualMachineId = tostring(properties.virtualMachine.id),
     networkInterfaces = properties.networkProfile.networkInterfaces,
     osDiskId = tostring(properties.storageProfile.osDisk.managedDisk.id),
@@ -812,6 +813,7 @@ Resources
                         "resource_group": item.get("resourceGroup") or "",
                         "sku_name": item.get("skuName") or "",
                         "vm_size": item.get("vmSize") or "",
+                        "vm_instance_id": str(item.get("vmInstanceId") or "").strip(),
                         "state": (
                             item.get("powerState")
                             or item.get("provisioningState")

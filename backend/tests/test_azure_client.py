@@ -44,6 +44,7 @@ def test_query_resources_captures_vm_size_and_sku(monkeypatch):
                     "resourceGroup": "rg-prod",
                     "skuName": "Standard_D4s_v5",
                     "vmSize": "Standard_D4s_v5",
+                    "vmInstanceId": "vm-guid-1",
                     "powerState": "PowerState/running",
                     "tags": {"env": "prod"},
                 }
@@ -71,6 +72,7 @@ def test_query_resources_captures_vm_size_and_sku(monkeypatch):
             "resource_group": "rg-prod",
             "sku_name": "Standard_D4s_v5",
             "vm_size": "Standard_D4s_v5",
+            "vm_instance_id": "vm-guid-1",
             "state": "PowerState/running",
             "created_time": "",
             "tags": {"env": "prod"},

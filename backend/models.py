@@ -154,6 +154,44 @@ class ReportConfig(BaseModel):
     include_excluded: bool = False
 
 
+class ReportTemplateBase(BaseModel):
+    """Shared report template payload fields."""
+
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+    category: str = Field(default="", max_length=80)
+    notes: str = Field(default="", max_length=1000)
+    config: ReportConfig = Field(default_factory=ReportConfig)
+
+
+class ReportTemplateCreateRequest(ReportTemplateBase):
+    """Create a new saved report template."""
+
+
+class ReportTemplateUpdateRequest(ReportTemplateBase):
+    """Replace an existing saved report template."""
+
+
+class ReportTemplate(BaseModel):
+    """Saved report template returned to the frontend."""
+
+    id: str
+    site_scope: str
+    name: str
+    description: str = ""
+    category: str = ""
+    notes: str = ""
+    readiness: str = "custom"
+    is_seed: bool = False
+    created_at: str
+    updated_at: str
+    created_by_email: str = ""
+    created_by_name: str = ""
+    updated_by_email: str = ""
+    updated_by_name: str = ""
+    config: ReportConfig
+
+
 class OasisDevWorkloadReportRequest(BaseModel):
     """Request body for the OasisDev workload summary report."""
 

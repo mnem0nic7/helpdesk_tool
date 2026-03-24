@@ -361,9 +361,12 @@ class AzureCache:
                 )
                 reservation_status = {"available": False, "error": str(exc)}
             vm_run_observations = self._build_vm_run_observations(resources)
-            avd_host_pools = self._snapshot("avd_host_pools") or []
-            avd_session_hosts = self._snapshot("avd_session_hosts") or []
-            avd_owner_history = self._snapshot("avd_owner_history") or []
+            previous_avd_host_pools = self._snapshot("avd_host_pools") or []
+            previous_avd_session_hosts = self._snapshot("avd_session_hosts") or []
+            previous_avd_owner_history = self._snapshot("avd_owner_history") or []
+            avd_host_pools = previous_avd_host_pools
+            avd_session_hosts = previous_avd_session_hosts
+            avd_owner_history = previous_avd_owner_history
             try:
                 avd_host_pools, avd_session_hosts, avd_owner_history = self._collect_avd_inventory(
                     list(sub_name_by_id),
@@ -373,6 +376,16 @@ class AzureCache:
                     "Azure AVD inventory unavailable for this principal; continuing inventory refresh with previous AVD snapshots: %s",
                     exc,
                 )
+            else:
+                has_virtual_desktop_signal = self._resources_show_virtual_desktop_signal(resources)
+                had_previous_avd_inventory = bool(previous_avd_host_pools or previous_avd_session_hosts)
+                if has_virtual_desktop_signal and had_previous_avd_inventory and not avd_session_hosts:
+                    logger.warning(
+                        "Azure AVD inventory refresh returned no personal session hosts despite existing AVD VM signals; continuing with previous AVD snapshots"
+                    )
+                    avd_host_pools = previous_avd_host_pools
+                    avd_session_hosts = previous_avd_session_hosts
+                    avd_owner_history = previous_avd_owner_history
             self._update_snapshots(
                 {
                     "subscriptions": subscriptions,
@@ -2019,16 +2032,37 @@ class AzureCache:
             }
         return assignment_by_vm_id
 
+    def _build_vm_instance_id_index(
+        self,
+        resources: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        instance_index: dict[str, str] = {}
+        for item in resources:
+            if not self._is_virtual_machine(item):
+                continue
+            normalized_vm_id = self._normalize_resource_id(item.get("id"))
+            if not normalized_vm_id:
+                continue
+            instance_id = self._normalize_user_lookup_key(item.get("vm_instance_id"))
+            if instance_id:
+                instance_index[instance_id] = normalized_vm_id
+        return instance_index
+
     def _build_avd_owner_history_index(
         self,
         owner_history_rows: list[dict[str, Any]],
         user_index: dict[str, dict[str, Any]],
+        vm_instance_id_index: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         owner_history_by_vm_id: dict[str, dict[str, Any]] = {}
+        instance_id_index = vm_instance_id_index or {}
         for item in owner_history_rows:
             if not isinstance(item, dict):
                 continue
-            vm_resource_id = self._normalize_resource_id(item.get("vm_resource_id"))
+            raw_vm_identifier = item.get("vm_resource_id")
+            vm_resource_id = self._normalize_resource_id(raw_vm_identifier)
+            if vm_resource_id and "/subscriptions/" not in f"/{vm_resource_id}":
+                vm_resource_id = instance_id_index.get(self._normalize_user_lookup_key(raw_vm_identifier), vm_resource_id)
             if not vm_resource_id:
                 continue
             assigned_user = str(item.get("assigned_user") or "").strip()
@@ -2045,6 +2079,25 @@ class AzureCache:
                 "workspace_name": str(item.get("workspace_name") or ""),
             }
         return owner_history_by_vm_id
+
+    def _resources_show_virtual_desktop_signal(self, resources: list[dict[str, Any]]) -> bool:
+        for item in resources:
+            if not self._is_virtual_machine(item):
+                continue
+            name = str(item.get("name") or "").lower()
+            if "wvd" in name or "avd" in name:
+                return True
+            normalized_avd_resource_id = self._normalize_resource_id(item.get("avd_resource_id"))
+            if normalized_avd_resource_id:
+                return True
+            tags = item.get("tags") if isinstance(item.get("tags"), dict) else {}
+            for key, value in tags.items():
+                normalized_key = self._normalize_user_lookup_key(key).replace(" ", "")
+                if normalized_key in _VIRTUAL_DESKTOP_HOST_POOL_TAG_KEYS:
+                    return True
+                if "desktopvirtualization/hostpools/" in str(value or "").lower():
+                    return True
+        return False
 
     def _is_virtual_desktop_candidate_vm(
         self,
@@ -2342,9 +2395,14 @@ class AzureCache:
         session_host_rows = avd_session_hosts if isinstance(avd_session_hosts, list) else []
         owner_history_rows = avd_owner_history if isinstance(avd_owner_history, list) else []
         user_index = self._build_virtual_desktop_user_index(user_rows)
+        vm_instance_id_index = self._build_vm_instance_id_index(resource_rows)
         host_pool_by_id = self._build_avd_host_pool_index(host_pool_rows)
         assignment_by_vm_id = self._build_virtual_desktop_assignment_index(session_host_rows, user_index)
-        owner_history_by_vm_id = self._build_avd_owner_history_index(owner_history_rows, user_index)
+        owner_history_by_vm_id = self._build_avd_owner_history_index(
+            owner_history_rows,
+            user_index,
+            vm_instance_id_index,
+        )
 
         all_rows: list[dict[str, Any]] = []
         for item in resource_rows:

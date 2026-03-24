@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import { logClientError } from "../lib/errorLogging.ts";
 import type {
@@ -8,6 +8,8 @@ import type {
   OasisDevWorkloadReportResponse,
   ReportConfig,
   ReportPreviewResponse,
+  ReportTemplate,
+  ReportTemplateSaveRequest,
 } from "../lib/api.ts";
 import TicketFilters, {
   emptyFilters,
@@ -28,23 +30,31 @@ interface FieldInfo {
 const FIELD_META: Record<string, FieldInfo> = {
   key:                       { label: "Key",               description: "Jira issue key",                     category: "identity" },
   summary:                   { label: "Summary",           description: "Issue title",                        category: "identity" },
+  description:               { label: "Description",       description: "Issue description text",             category: "identity" },
   issue_type:                { label: "Type",              description: "Issue type",                         category: "identity" },
   labels:                    { label: "Labels",            description: "Issue labels",                       category: "identity" },
+  components:                { label: "Components",        description: "Issue components",                   category: "identity" },
+  organizations:             { label: "Organizations",     description: "Customer organizations",             category: "identity" },
   request_type:              { label: "Request Type",      description: "JSM request type",                   category: "identity" },
   status:                    { label: "Status",            description: "Current status",                     category: "workflow" },
   status_category:           { label: "Status Category",   description: "To Do / In Progress / Done",         category: "workflow" },
   priority:                  { label: "Priority",          description: "Priority level",                     category: "workflow" },
   resolution:                { label: "Resolution",        description: "Resolution type",                    category: "workflow" },
+  work_category:             { label: "Work Category",     description: "Operational categorization",         category: "workflow" },
   excluded:                  { label: "Excluded",          description: "Excluded from metrics",              category: "workflow" },
   assignee:                  { label: "Assignee",          description: "Assigned team member",               category: "people" },
   assignee_account_id:       { label: "Assignee ID",       description: "Atlassian account ID",               category: "people" },
   reporter:                  { label: "Reporter",          description: "Ticket creator",                     category: "people" },
+  last_comment_author:       { label: "Last Commenter",    description: "Author of the latest comment",       category: "people" },
   created:                   { label: "Created",           description: "Creation date",                      category: "dates" },
   updated:                   { label: "Updated",           description: "Last update date",                   category: "dates" },
   resolved:                  { label: "Resolved",          description: "Resolution date",                    category: "dates" },
+  last_comment_date:         { label: "Last Comment",      description: "Latest comment timestamp",           category: "dates" },
   calendar_ttr_hours:        { label: "TTR (h)",           description: "Time-to-resolution in hours",        category: "metrics" },
   age_days:                  { label: "Age (d)",           description: "Age of open tickets in days",        category: "metrics" },
   days_since_update:         { label: "Days Since Update", description: "Days since last update",             category: "metrics" },
+  comment_count:             { label: "Comments",          description: "Number of comments",                 category: "metrics" },
+  attachment_count:          { label: "Attachments",       description: "Number of attachments",              category: "metrics" },
   sla_first_response_status: { label: "SLA Response",      description: "First-response SLA status",          category: "sla" },
   sla_resolution_status:     { label: "SLA Resolution",    description: "Resolution SLA status",              category: "sla" },
 };
@@ -65,11 +75,11 @@ const DEFAULT_COLUMNS = [
   "assignee", "created", "resolved", "calendar_ttr_hours",
 ];
 
-const SORTABLE_FIELDS = ALL_FIELDS.filter((f) => f !== "labels");
+const SORTABLE_FIELDS = ALL_FIELDS.filter((f) => !["labels", "components", "organizations"].includes(f));
 
 const GROUPABLE_FIELDS = [
   "status", "status_category", "priority", "assignee", "reporter",
-  "issue_type", "resolution", "request_type", "excluded",
+  "issue_type", "resolution", "request_type", "work_category", "excluded",
   "sla_first_response_status", "sla_resolution_status",
 ];
 
@@ -507,6 +517,47 @@ const ACCENT_CLASSES: Record<string, { bg: string; border: string; text: string;
   orange: { bg: "bg-orange-50/60", border: "border-orange-200/60", text: "text-orange-700", icon: "text-orange-500", activeBg: "bg-orange-600", activeBorder: "border-orange-600", activeText: "text-white" },
 };
 
+const READINESS_STYLES: Record<string, string> = {
+  ready: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  proxy: "bg-amber-50 text-amber-700 ring-amber-200",
+  gap: "bg-rose-50 text-rose-700 ring-rose-200",
+  custom: "bg-slate-50 text-slate-700 ring-slate-200",
+};
+
+function applyReportTemplateConfig(
+  template: ReportTemplate,
+  setters: {
+    setFilters: (value: TicketFilterValues) => void;
+    setColumns: (value: string[]) => void;
+    setSortField: (value: string) => void;
+    setSortDir: (value: "asc" | "desc") => void;
+    setGroupBy: (value: string | null) => void;
+    setIncludeExcluded: (value: boolean) => void;
+  },
+) {
+  const templateFilters = template.config.filters ?? {};
+  setters.setFilters({
+    ...emptyFilters,
+    search: templateFilters.search ?? "",
+    status: templateFilters.status ?? "",
+    priority: templateFilters.priority ?? "",
+    issue_type: templateFilters.issue_type ?? "",
+    label: templateFilters.label ?? "",
+    open_only: Boolean(templateFilters.open_only),
+    stale_only: Boolean(templateFilters.stale_only),
+    created_after: templateFilters.created_after ?? "",
+    created_before: templateFilters.created_before ?? "",
+    assignee: templateFilters.assignee ?? "",
+  });
+  setters.setColumns(
+    (template.config.columns?.length ? template.config.columns : DEFAULT_COLUMNS).filter((field) => field in FIELD_META),
+  );
+  setters.setSortField(template.config.sort_field || "created");
+  setters.setSortDir(template.config.sort_dir === "asc" ? "asc" : "desc");
+  setters.setGroupBy(template.config.group_by || null);
+  setters.setIncludeExcluded(Boolean(template.config.include_excluded));
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -514,6 +565,7 @@ const ACCENT_CLASSES: Record<string, { bg: string; border: string; text: string;
 export default function ReportsPage() {
   const site = getSiteBranding();
   const isOasisDev = site.scope === "oasisdev";
+  const queryClient = useQueryClient();
   const todayInput = useMemo(() => toDateInputValue(new Date()), []);
   const startOfYearInput = useMemo(() => {
     const today = new Date();
@@ -529,6 +581,12 @@ export default function ReportsPage() {
   const [includeExcluded, setIncludeExcluded] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [templateName, setTemplateName] = useState("");
+  const [templateDescription, setTemplateDescription] = useState("");
+  const [templateCategory, setTemplateCategory] = useState("Custom");
+  const [templateNotes, setTemplateNotes] = useState("");
+  const [templateMessage, setTemplateMessage] = useState<{ tone: "success" | "error" | "info"; text: string } | null>(null);
   const [workloadAssignee, setWorkloadAssignee] = useState("");
   const [workloadReportStart, setWorkloadReportStart] = useState(startOfYearInput);
   const [workloadReportEnd, setWorkloadReportEnd] = useState(todayInput);
@@ -562,6 +620,19 @@ export default function ReportsPage() {
     queryKey: ["report-preview", debouncedConfig],
     queryFn: () => api.previewReport(debouncedConfig),
   });
+
+  const {
+    data: templates = [],
+    isLoading: isTemplatesLoading,
+  } = useQuery<ReportTemplate[]>({
+    queryKey: ["report-templates", site.scope],
+    queryFn: () => api.listReportTemplates(),
+  });
+
+  const selectedTemplate = useMemo(
+    () => templates.find((template) => template.id === selectedTemplateId) ?? null,
+    [selectedTemplateId, templates],
+  );
 
   const workloadRequest: OasisDevWorkloadReportRequest = useMemo(
     () => ({
@@ -600,7 +671,67 @@ export default function ReportsPage() {
     setGroupBy(preset.group_by);
     setIncludeExcluded(preset.include_excluded);
     setActivePreset(preset.name);
+    setSelectedTemplateId(null);
   }, []);
+
+  const syncTemplateEditor = useCallback((template: ReportTemplate | null) => {
+    setTemplateName(template?.name ?? "");
+    setTemplateDescription(template?.description ?? "");
+    setTemplateCategory(template?.category || "Custom");
+    setTemplateNotes(template?.notes ?? "");
+  }, []);
+
+  const createTemplateMutation = useMutation({
+    mutationFn: (body: ReportTemplateSaveRequest) => api.createReportTemplate(body),
+    onSuccess: (template) => {
+      queryClient.invalidateQueries({ queryKey: ["report-templates", site.scope] }).catch(() => undefined);
+      setSelectedTemplateId(template.id);
+      syncTemplateEditor(template);
+      setTemplateMessage({ tone: "success", text: `Saved template "${template.name}".` });
+    },
+    onError: (error) => {
+      logClientError("Failed to create report template", error, { kind: "report-template-create" });
+      setTemplateMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Failed to save report template.",
+      });
+    },
+  });
+
+  const updateTemplateMutation = useMutation({
+    mutationFn: ({ templateId, body }: { templateId: string; body: ReportTemplateSaveRequest }) =>
+      api.updateReportTemplate(templateId, body),
+    onSuccess: (template) => {
+      queryClient.invalidateQueries({ queryKey: ["report-templates", site.scope] }).catch(() => undefined);
+      setSelectedTemplateId(template.id);
+      syncTemplateEditor(template);
+      setTemplateMessage({ tone: "success", text: `Updated template "${template.name}".` });
+    },
+    onError: (error) => {
+      logClientError("Failed to update report template", error, { kind: "report-template-update" });
+      setTemplateMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Failed to update report template.",
+      });
+    },
+  });
+
+  const deleteTemplateMutation = useMutation({
+    mutationFn: (templateId: string) => api.deleteReportTemplate(templateId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["report-templates", site.scope] }).catch(() => undefined);
+      setSelectedTemplateId(null);
+      syncTemplateEditor(null);
+      setTemplateMessage({ tone: "success", text: "Deleted saved report template." });
+    },
+    onError: (error) => {
+      logClientError("Failed to delete report template", error, { kind: "report-template-delete" });
+      setTemplateMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Failed to delete report template.",
+      });
+    },
+  });
 
   // Column toggle
   function toggleColumn(field: string) {
@@ -645,6 +776,57 @@ export default function ReportsPage() {
     }
   }
 
+  function handleLoadTemplate(template: ReportTemplate) {
+    applyReportTemplateConfig(template, {
+      setFilters,
+      setColumns,
+      setSortField,
+      setSortDir,
+      setGroupBy,
+      setIncludeExcluded,
+    });
+    setActivePreset(null);
+    setSelectedTemplateId(template.id);
+    syncTemplateEditor(template);
+    setTemplateMessage({ tone: "info", text: `Loaded template "${template.name}".` });
+  }
+
+  function handleNewTemplate() {
+    setSelectedTemplateId(null);
+    syncTemplateEditor(null);
+    setTemplateMessage(null);
+  }
+
+  function handleSaveTemplate() {
+    const trimmedName = templateName.trim();
+    if (!trimmedName) {
+      setTemplateMessage({ tone: "error", text: "Template name is required." });
+      return;
+    }
+    const body: ReportTemplateSaveRequest = {
+      name: trimmedName,
+      description: templateDescription.trim(),
+      category: templateCategory.trim() || "Custom",
+      notes: templateNotes.trim(),
+      config,
+    };
+    if (selectedTemplate && !selectedTemplate.is_seed) {
+      updateTemplateMutation.mutate({ templateId: selectedTemplate.id, body });
+      return;
+    }
+    createTemplateMutation.mutate(body);
+  }
+
+  function handleDeleteTemplate() {
+    if (!selectedTemplate || selectedTemplate.is_seed) {
+      return;
+    }
+    if (!window.confirm(`Delete the saved template "${selectedTemplate.name}"?`)) {
+      return;
+    }
+    deleteTemplateMutation.mutate(selectedTemplate.id);
+  }
+
   // Determine preview columns and headers
   const previewColumns = groupBy
     ? ["group", "count", "open", "avg_ttr_hours"]
@@ -656,8 +838,13 @@ export default function ReportsPage() {
   // Numeric fields for right-alignment
   const numericFields = new Set([
     "calendar_ttr_hours", "age_days", "days_since_update",
-    "count", "open", "avg_ttr_hours",
+    "comment_count", "attachment_count", "count", "open", "avg_ttr_hours",
   ]);
+
+  const templateBusy =
+    createTemplateMutation.isPending ||
+    updateTemplateMutation.isPending ||
+    deleteTemplateMutation.isPending;
 
   return (
     <div className="space-y-5">
@@ -1007,6 +1194,221 @@ export default function ReportsPage() {
           </div>
         </Section>
       )}
+
+      <Section
+        title="Saved Templates"
+        badge={isTemplatesLoading ? "Loading..." : `${templates.length} templates`}
+        defaultOpen={true}
+        actions={
+          <button
+            type="button"
+            onClick={handleNewTemplate}
+            className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+          >
+            New Template
+          </button>
+        }
+      >
+        <div className="space-y-4">
+          {templateMessage && (
+            <div
+              className={[
+                "rounded-md border px-3 py-2 text-sm",
+                templateMessage.tone === "error"
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : templateMessage.tone === "success"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-blue-200 bg-blue-50 text-blue-700",
+              ].join(" ")}
+            >
+              {templateMessage.text}
+            </div>
+          )}
+
+          {isTemplatesLoading ? (
+            <div className="rounded-lg border border-gray-200 bg-gray-50/60 px-4 py-10 text-center text-sm text-gray-500">
+              Loading saved templates...
+            </div>
+          ) : templates.length ? (
+            <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+              {templates.map((template) => {
+                const readinessClass = READINESS_STYLES[template.readiness] ?? READINESS_STYLES.custom;
+                const active = selectedTemplateId === template.id;
+                return (
+                  <div
+                    key={template.id}
+                    className={[
+                      "rounded-lg border p-4 transition-colors",
+                      active ? "border-slate-400 bg-slate-50/70" : "border-gray-200 bg-white",
+                    ].join(" ")}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900">{template.name}</div>
+                        <div className="mt-1 text-xs text-gray-500">{template.description || "Saved report template"}</div>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${readinessClass}`}>
+                          {template.readiness === "gap" ? "Needs data" : template.readiness === "proxy" ? "Proxy" : template.readiness === "ready" ? "Ready" : "Custom"}
+                        </span>
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600 ring-1 ring-gray-200">
+                          {template.is_seed ? "Seeded" : "Saved"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
+                      <span className="rounded-full bg-gray-50 px-2 py-0.5 ring-1 ring-gray-200">
+                        {template.category || "Uncategorized"}
+                      </span>
+                      <span>
+                        {template.config.group_by ? `Grouped by ${FIELD_META[template.config.group_by]?.label ?? template.config.group_by}` : "Detail view"}
+                      </span>
+                    </div>
+                    {template.notes && (
+                      <div className="mt-3 rounded-md bg-gray-50 px-3 py-2 text-xs leading-5 text-gray-600">
+                        {template.notes}
+                      </div>
+                    )}
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <div className="text-[11px] text-gray-400">
+                        {template.created_by_name ? `Saved by ${template.created_by_name}` : "System template"}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleLoadTemplate(template)}
+                        className="rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                      >
+                        Load
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/60 px-4 py-10 text-center text-sm text-gray-500">
+              No saved report templates yet.
+            </div>
+          )}
+
+          <div className="grid gap-4 rounded-lg border border-gray-200 bg-gray-50/50 p-4 xl:grid-cols-[1.1fr_1.4fr]">
+            <div className="space-y-3">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Template Details
+                </div>
+                <div className="mt-1 text-xs text-gray-500">
+                  Save the current builder configuration as a reusable report template for this site.
+                </div>
+              </div>
+              <label className="block space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Name</span>
+                <input
+                  type="text"
+                  value={templateName}
+                  onChange={(e) => setTemplateName(e.target.value)}
+                  placeholder="Executive SLA Summary"
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Category</span>
+                <input
+                  type="text"
+                  value={templateCategory}
+                  onChange={(e) => setTemplateCategory(e.target.value)}
+                  placeholder="Operational"
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Description</span>
+                <textarea
+                  value={templateDescription}
+                  onChange={(e) => setTemplateDescription(e.target.value)}
+                  rows={3}
+                  placeholder="Short explanation of what this report is for."
+                  className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Notes</span>
+                <textarea
+                  value={templateNotes}
+                  onChange={(e) => setTemplateNotes(e.target.value)}
+                  rows={4}
+                  placeholder="Add operator guidance, caveats, or how this metric should be interpreted."
+                  className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                />
+              </label>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Current Builder Snapshot
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <div className="rounded-md border border-gray-200 bg-white px-3 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">Filters</div>
+                    <div className="mt-1 text-lg font-semibold text-gray-900">
+                      {Object.entries(config.filters).filter(([, value]) => Boolean(value)).length}
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-gray-200 bg-white px-3 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">Columns</div>
+                    <div className="mt-1 text-lg font-semibold text-gray-900">{columns.length}</div>
+                  </div>
+                  <div className="rounded-md border border-gray-200 bg-white px-3 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">View</div>
+                    <div className="mt-1 text-sm font-semibold text-gray-900">
+                      {groupBy ? `Grouped by ${FIELD_META[groupBy]?.label ?? groupBy}` : "Detail rows"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-gray-200 bg-white px-4 py-3 text-xs leading-5 text-gray-600">
+                {selectedTemplate ? (
+                  <>
+                    Editing{" "}
+                    <span className="font-semibold text-gray-800">{selectedTemplate.name}</span>
+                    {selectedTemplate.is_seed ? " (seed templates are read-only, so saving will create a new copy)." : "."}
+                  </>
+                ) : (
+                  "Saving now will create a new reusable template from the current builder state."
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveTemplate}
+                  disabled={templateBusy}
+                  className="rounded-md bg-slate-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {templateBusy ? "Saving..." : selectedTemplate && !selectedTemplate.is_seed ? "Update Template" : "Save Template"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleNewTemplate}
+                  className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                >
+                  Clear Selection
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteTemplate}
+                  disabled={!selectedTemplate || selectedTemplate.is_seed || templateBusy}
+                  className="rounded-md border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Delete Template
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Section>
 
       {/* Presets */}
       <div className="grid grid-cols-5 gap-3">

@@ -114,6 +114,62 @@ class TestReportPreview:
         })
         assert resp.status_code == 200
 
+    def test_preview_includes_comment_metadata_when_requested(self, test_client, mock_cache):
+        issue = {
+            "key": "OIT-777",
+            "fields": {
+                "summary": "Comment-heavy ticket",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex-agent"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": {"name": "Done"},
+                "created": "2026-03-01T10:00:00+00:00",
+                "updated": "2026-03-02T12:00:00+00:00",
+                "resolutiondate": "2026-03-02T12:00:00+00:00",
+                "labels": [],
+                "components": [],
+                "customfield_10010": None,
+                "customfield_11239": "Service requests",
+                "customfield_11266": None,
+                "customfield_11264": None,
+                "customfield_10700": [],
+                "attachment": [],
+                "comment": {
+                    "total": 2,
+                    "comments": [
+                        {
+                            "created": "2026-03-01T11:00:00+00:00",
+                            "updated": "2026-03-01T11:00:00+00:00",
+                            "author": {"displayName": "Jordan Commenter"},
+                        },
+                        {
+                            "created": "2026-03-02T12:00:00+00:00",
+                            "updated": "2026-03-02T12:00:00+00:00",
+                            "author": {"displayName": "Taylor Resolver"},
+                        },
+                    ],
+                },
+            },
+        }
+        mock_cache.get_all_issues.return_value = [issue]
+        mock_cache.get_filtered_issues.return_value = [issue]
+
+        resp = test_client.post("/api/report/preview", json={
+            "filters": {},
+            "columns": ["key", "comment_count", "last_comment_author", "last_comment_date"],
+            "sort_field": "comment_count",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": False,
+        })
+        assert resp.status_code == 200
+        row = resp.json()["rows"][0]
+        assert row["comment_count"] == 2
+        assert row["last_comment_author"] == "Taylor Resolver"
+        assert row["last_comment_date"] == "2026-03-02T12:00:00+00:00"
+
 
 class TestReportExport:
     """POST /api/report/export"""
@@ -129,6 +185,97 @@ class TestReportExport:
         })
         assert resp.status_code == 200
         assert "spreadsheetml" in resp.headers.get("content-type", "")
+
+
+class TestReportTemplates:
+    def test_list_includes_seeded_primary_templates(self, test_client):
+        resp = test_client.get("/api/report/templates")
+        assert resp.status_code == 200
+        names = {row["name"] for row in resp.json()}
+        assert "First Response Time" in names
+        assert "Customer Satisfaction (CSAT)" in names
+
+    def test_create_update_and_delete_custom_template(self, test_client):
+        create_resp = test_client.post(
+            "/api/report/templates",
+            json={
+                "name": "Leadership Weekly Snapshot",
+                "description": "Weekly leadership report.",
+                "category": "Executive",
+                "notes": "Use in Monday leadership sync.",
+                "config": {
+                    "filters": {"open_only": True},
+                    "columns": ["key", "summary", "priority", "status"],
+                    "sort_field": "created",
+                    "sort_dir": "desc",
+                    "group_by": "priority",
+                    "include_excluded": False,
+                },
+            },
+        )
+        assert create_resp.status_code == 200
+        created = create_resp.json()
+        assert created["name"] == "Leadership Weekly Snapshot"
+        assert created["is_seed"] is False
+        assert created["created_by_email"] == "test@example.com"
+
+        update_resp = test_client.put(
+            f"/api/report/templates/{created['id']}",
+            json={
+                "name": "Leadership Weekly Snapshot",
+                "description": "Updated description.",
+                "category": "Executive",
+                "notes": "Updated notes.",
+                "config": {
+                    "filters": {"open_only": True, "stale_only": True},
+                    "columns": ["key", "summary", "priority", "age_days"],
+                    "sort_field": "age_days",
+                    "sort_dir": "desc",
+                    "group_by": "status",
+                    "include_excluded": False,
+                },
+            },
+        )
+        assert update_resp.status_code == 200
+        updated = update_resp.json()
+        assert updated["description"] == "Updated description."
+        assert updated["config"]["sort_field"] == "age_days"
+        assert updated["config"]["filters"]["stale_only"] is True
+
+        delete_resp = test_client.delete(f"/api/report/templates/{created['id']}")
+        assert delete_resp.status_code == 200
+        assert delete_resp.json() == {"deleted": True}
+
+        list_resp = test_client.get("/api/report/templates")
+        assert list_resp.status_code == 200
+        assert all(row["id"] != created["id"] for row in list_resp.json())
+
+    def test_seed_templates_are_read_only(self, test_client):
+        list_resp = test_client.get("/api/report/templates")
+        assert list_resp.status_code == 200
+        seed_id = next(row["id"] for row in list_resp.json() if row["is_seed"])
+
+        update_resp = test_client.put(
+            f"/api/report/templates/{seed_id}",
+            json={
+                "name": "Cannot Update",
+                "description": "",
+                "category": "",
+                "notes": "",
+                "config": {
+                    "filters": {},
+                    "columns": ["key"],
+                    "sort_field": "created",
+                    "sort_dir": "desc",
+                    "group_by": None,
+                    "include_excluded": False,
+                },
+            },
+        )
+        assert update_resp.status_code == 403
+
+        delete_resp = test_client.delete(f"/api/report/templates/{seed_id}")
+        assert delete_resp.status_code == 403
 
 
 class TestLegacyExport:

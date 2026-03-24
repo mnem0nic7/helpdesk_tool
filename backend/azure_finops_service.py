@@ -2423,7 +2423,15 @@ class AzureFinOpsService:
             return {"available": self.has_cost_data(), "delivery_count": 0, "imported_count": 0, "skipped_count": 0}
 
         try:
-            deliveries = [dict(row) for row in (lister(parse_status="parsed") or []) if isinstance(row, Mapping)]
+            try:
+                raw_deliveries = lister(parse_status="parsed") or []
+            except TypeError:
+                raw_deliveries = lister() or []
+            deliveries = [
+                dict(row)
+                for row in raw_deliveries
+                if isinstance(row, Mapping) and _text(row.get("parse_status")).lower() in {"", "parsed"}
+            ]
         except Exception:
             logger.exception("Failed to list parsed Azure export deliveries for local FinOps sync")
             return {"available": self.has_cost_data(), "delivery_count": 0, "imported_count": 0, "skipped_count": 0}
@@ -2431,6 +2439,13 @@ class AzureFinOpsService:
         imported_count = 0
         skipped_count = 0
         imported_by_family: dict[str, int] = {}
+        if not deliveries:
+            return {
+                "available": False,
+                "delivery_count": 0,
+                "imported_count": 0,
+                "skipped_count": 0,
+            }
 
         with self._lock:
             conn = self._connect()
