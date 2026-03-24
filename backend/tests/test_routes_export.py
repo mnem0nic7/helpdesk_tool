@@ -277,6 +277,37 @@ class TestReportTemplates:
         delete_resp = test_client.delete(f"/api/report/templates/{seed_id}")
         assert delete_resp.status_code == 403
 
+    def test_master_workbook_export_includes_index_and_seeded_reports(self, test_client):
+        resp = test_client.get("/api/report/templates/master.xlsx")
+        assert resp.status_code == 200
+        assert "spreadsheetml" in resp.headers.get("content-type", "")
+
+        workbook = load_workbook(BytesIO(resp.content))
+        assert "Report Index" in workbook.sheetnames
+        assert "First Response Time" in workbook.sheetnames
+        assert "Backlog Size & Aging" in workbook.sheetnames
+
+        index_ws = workbook["Report Index"]
+        headers = [index_ws.cell(row=1, column=idx).value for idx in range(1, 9)]
+        assert headers == [
+            "Report",
+            "Sheet",
+            "Category",
+            "Readiness",
+            "View",
+            "Rows",
+            "Description",
+            "Notes",
+        ]
+        report_names = [index_ws.cell(row=row_idx, column=1).value for row_idx in range(2, index_ws.max_row + 1)]
+        assert "First Response Time" in report_names
+
+        frt_ws = workbook["First Response Time"]
+        assert frt_ws["A1"].value == "Report"
+        assert frt_ws["B1"].value == "First Response Time"
+        assert frt_ws["A3"].value == "Readiness"
+        assert frt_ws["B3"].value == "ready"
+
 
 class TestLegacyExport:
     """GET /api/export/excel"""

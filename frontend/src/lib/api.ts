@@ -2259,6 +2259,10 @@ export const api = {
     await downloadPost("/api/report/export", config, "OIT_Report.xlsx");
   },
 
+  exportMasterReportWorkbook(): string {
+    return "/api/report/templates/master.xlsx";
+  },
+
   listReportTemplates(): Promise<ReportTemplate[]> {
     return fetchJSON<ReportTemplate[]>("/api/report/templates");
   },

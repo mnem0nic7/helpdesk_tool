@@ -861,6 +861,17 @@ export default function ReportsPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {site.scope === "primary" && templates.length > 0 && (
+            <a
+              href={api.exportMasterReportWorkbook()}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 shadow-sm transition-colors hover:bg-emerald-100 hover:text-emerald-800"
+            >
+              <DownloadIcon className="h-3.5 w-3.5" />
+              Master Workbook
+            </a>
+          )}
           <a
             href={api.exportAll()}
             target="_blank"

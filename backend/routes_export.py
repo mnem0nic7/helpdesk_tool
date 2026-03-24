@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import statistics
 import tempfile
 from collections import Counter, defaultdict
@@ -80,6 +81,39 @@ DEFAULT_COLUMNS: list[str] = [
     "key", "summary", "issue_type", "status", "priority",
     "assignee", "created", "resolved", "calendar_ttr_hours",
 ]
+
+_DETAIL_WIDTH_DEFAULTS: dict[str, int] = {
+    "key": 12,
+    "summary": 50,
+    "description": 60,
+    "issue_type": 18,
+    "status": 22,
+    "status_category": 18,
+    "priority": 12,
+    "resolution": 18,
+    "assignee": 25,
+    "assignee_account_id": 20,
+    "reporter": 25,
+    "created": 22,
+    "updated": 22,
+    "resolved": 22,
+    "request_type": 25,
+    "work_category": 20,
+    "calendar_ttr_hours": 12,
+    "age_days": 10,
+    "days_since_update": 14,
+    "comment_count": 10,
+    "last_comment_date": 22,
+    "last_comment_author": 25,
+    "excluded": 10,
+    "sla_first_response_status": 15,
+    "sla_resolution_status": 15,
+    "labels": 30,
+    "components": 25,
+    "organizations": 30,
+    "attachment_count": 12,
+    "comments_text": 60,
+}
 
 # ---------------------------------------------------------------------------
 # Legacy column definitions for the old /export/excel endpoint
@@ -221,6 +255,168 @@ def _cell_value(value: Any) -> Any:
     if isinstance(value, str):
         return _sanitize_for_excel(value)
     return value
+
+
+def _sanitize_sheet_name(name: str) -> str:
+    """Return an Excel-safe worksheet title."""
+    cleaned = re.sub(r"[\[\]\*:/\\?]", " ", str(name or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:31] or "Report"
+
+
+def _unique_sheet_name(name: str, used_names: set[str]) -> str:
+    """Generate a unique Excel-safe worksheet title."""
+    base = _sanitize_sheet_name(name)
+    candidate = base
+    suffix = 2
+    while candidate in used_names:
+        suffix_text = f" ({suffix})"
+        candidate = f"{base[: max(1, 31 - len(suffix_text))]}{suffix_text}"
+        suffix += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def _write_detail_sheet(ws, *, title: str, columns: list[str], rows: list[dict[str, Any]], metadata: list[tuple[str, Any]] | None = None) -> None:
+    """Render a flat detail report worksheet."""
+    ws.title = title
+    start_row = 1
+    if metadata:
+        for row_idx, (label, value) in enumerate(metadata, 1):
+            ws.cell(row=row_idx, column=1, value=label).font = Font(bold=True)
+            ws.cell(row=row_idx, column=2, value=_cell_value(value))
+        start_row = len(metadata) + 2
+        ws.column_dimensions["A"].width = max(ws.column_dimensions["A"].width or 0, 18)
+        ws.column_dimensions["B"].width = max(ws.column_dimensions["B"].width or 0, 48)
+
+    headers = [FIELD_META.get(c, {}).get("label", c) for c in columns]
+    _write_header_row(ws, start_row, headers)
+    for row_idx, row in enumerate(rows, start_row + 1):
+        for col_idx, col_key in enumerate(columns, 1):
+            ws.cell(row=row_idx, column=col_idx, value=_cell_value(row.get(col_key)))
+
+    if columns:
+        last_col = get_column_letter(len(columns))
+        ws.auto_filter.ref = f"A{start_row}:{last_col}{len(rows) + start_row}"
+    ws.freeze_panes = f"A{start_row + 1}"
+    for col_idx, col_key in enumerate(columns, 1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = _DETAIL_WIDTH_DEFAULTS.get(col_key, 15)
+
+
+def _write_grouped_sheet(
+    ws,
+    *,
+    title: str,
+    group_by: str,
+    rows: list[dict[str, Any]],
+    metadata: list[tuple[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Render an aggregated report worksheet and return the grouped rows."""
+    ws.title = title
+    start_row = 1
+    if metadata:
+        for row_idx, (label, value) in enumerate(metadata, 1):
+            ws.cell(row=row_idx, column=1, value=label).font = Font(bold=True)
+            ws.cell(row=row_idx, column=2, value=_cell_value(value))
+        start_row = len(metadata) + 2
+        ws.column_dimensions["A"].width = max(ws.column_dimensions["A"].width or 0, 18)
+        ws.column_dimensions["B"].width = max(ws.column_dimensions["B"].width or 0, 48)
+
+    grouped_rows = _aggregate(rows, group_by)
+    headers = [
+        FIELD_META.get(group_by, {}).get("label", group_by),
+        "Count",
+        "Open",
+        "Avg TTR (h)",
+    ]
+    _write_header_row(ws, start_row, headers)
+    for row_idx, agg_row in enumerate(grouped_rows, start_row + 1):
+        ws.cell(row=row_idx, column=1, value=_cell_value(agg_row["group"]))
+        ws.cell(row=row_idx, column=2, value=agg_row["count"])
+        ws.cell(row=row_idx, column=3, value=agg_row["open"])
+        ws.cell(row=row_idx, column=4, value=agg_row["avg_ttr_hours"] or "")
+
+    ws.auto_filter.ref = f"A{start_row}:D{len(grouped_rows) + start_row}"
+    ws.freeze_panes = f"A{start_row + 1}"
+    _autofit_columns(ws, {1: 30, 2: 12, 3: 12, 4: 14})
+    return grouped_rows
+
+
+def _build_master_report_workbook(templates: list[ReportTemplate]) -> Workbook:
+    """Build a single workbook containing every saved report template for the current site."""
+    now = datetime.now(timezone.utc)
+    wb = Workbook()
+    index_ws = wb.active
+    index_ws.title = "Report Index"
+    index_headers = [
+        "Report",
+        "Sheet",
+        "Category",
+        "Readiness",
+        "View",
+        "Rows",
+        "Description",
+        "Notes",
+    ]
+    _write_header_row(index_ws, 1, index_headers)
+    used_names = {"Report Index"}
+    index_row = 2
+
+    if not templates:
+        index_ws.cell(row=2, column=1, value="No saved report templates found for this site.")
+        _autofit_columns(index_ws, {1: 44})
+        return wb
+
+    for template in templates:
+        config = template.config if isinstance(template.config, ReportConfig) else ReportConfig()
+        rows = _apply_config(config)
+        sheet_name = _unique_sheet_name(template.name, used_names)
+        view_type = "Grouped" if config.group_by else "Detail"
+        metadata = [
+            ("Report", template.name),
+            ("Category", template.category or "Uncategorized"),
+            ("Readiness", template.readiness or "custom"),
+            ("View", view_type),
+            ("Description", template.description or ""),
+            ("Notes", template.notes or ""),
+            ("Generated", now.isoformat()),
+        ]
+
+        sheet = wb.create_sheet(sheet_name)
+        if config.group_by:
+            rendered_rows = _write_grouped_sheet(
+                sheet,
+                title=sheet_name,
+                group_by=config.group_by,
+                rows=rows,
+                metadata=metadata,
+            )
+            exported_row_count = len(rendered_rows)
+        else:
+            columns = config.columns or DEFAULT_COLUMNS
+            _write_detail_sheet(
+                sheet,
+                title=sheet_name,
+                columns=columns,
+                rows=rows,
+                metadata=metadata,
+            )
+            exported_row_count = len(rows)
+
+        index_ws.cell(row=index_row, column=1, value=template.name)
+        index_ws.cell(row=index_row, column=2, value=sheet_name)
+        index_ws.cell(row=index_row, column=3, value=template.category or "")
+        index_ws.cell(row=index_row, column=4, value=template.readiness or "custom")
+        index_ws.cell(row=index_row, column=5, value=view_type)
+        index_ws.cell(row=index_row, column=6, value=exported_row_count)
+        index_ws.cell(row=index_row, column=7, value=template.description or "")
+        index_ws.cell(row=index_row, column=8, value=template.notes or "")
+        index_row += 1
+
+    index_ws.freeze_panes = "A2"
+    index_ws.auto_filter.ref = f"A1:H{index_row - 1}"
+    _autofit_columns(index_ws, {1: 30, 2: 24, 3: 18, 4: 12, 5: 12, 6: 10, 7: 48, 8: 60})
+    return wb
 
 
 def _ensure_oasisdev_site() -> None:
@@ -619,58 +815,19 @@ async def report_export(config: ReportConfig) -> FileResponse:
     ws = wb.active
 
     if config.group_by:
-        # Grouped summary sheet
-        ws.title = f"By {FIELD_META.get(config.group_by, {}).get('label', config.group_by)}"
-        agg = _aggregate(rows, config.group_by)
-        headers = [
-            FIELD_META.get(config.group_by, {}).get("label", config.group_by),
-            "Count", "Open", "Avg TTR (h)",
-        ]
-        for col_idx, h in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col_idx, value=h)
-            cell.font = _HEADER_FONT
-            cell.fill = _HEADER_FILL
-            cell.alignment = _HEADER_ALIGNMENT
-        for row_idx, agg_row in enumerate(agg, 2):
-            ws.cell(row=row_idx, column=1, value=_cell_value(agg_row["group"]))
-            ws.cell(row=row_idx, column=2, value=agg_row["count"])
-            ws.cell(row=row_idx, column=3, value=agg_row["open"])
-            ws.cell(row=row_idx, column=4, value=agg_row["avg_ttr_hours"] or "")
-        # Column widths
-        ws.column_dimensions["A"].width = 30
-        ws.column_dimensions["B"].width = 10
-        ws.column_dimensions["C"].width = 10
-        ws.column_dimensions["D"].width = 14
+        _write_grouped_sheet(
+            ws,
+            title=f"By {FIELD_META.get(config.group_by, {}).get('label', config.group_by)}",
+            group_by=config.group_by,
+            rows=rows,
+        )
     else:
-        # Flat detail sheet
-        ws.title = f"{report_prefix} Report"
-        headers = [FIELD_META.get(c, {}).get("label", c) for c in columns]
-        for col_idx, h in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col_idx, value=h)
-            cell.font = _HEADER_FONT
-            cell.fill = _HEADER_FILL
-            cell.alignment = _HEADER_ALIGNMENT
-        for row_idx, row in enumerate(rows, 2):
-            for col_idx, col_key in enumerate(columns, 1):
-                ws.cell(row=row_idx, column=col_idx, value=_cell_value(row.get(col_key)))
-
-        # Auto-filter & freeze
-        if columns:
-            last_col = get_column_letter(len(columns))
-            ws.auto_filter.ref = f"A1:{last_col}{len(rows) + 1}"
-        ws.freeze_panes = "A2"
-
-        # Column widths
-        _WIDTH_DEFAULTS: dict[str, int] = {
-            "key": 12, "summary": 50, "issue_type": 18, "status": 22,
-            "priority": 12, "assignee": 25, "reporter": 25, "created": 22,
-            "updated": 22, "resolved": 22, "calendar_ttr_hours": 12,
-            "age_days": 10, "sla_first_response_status": 15,
-            "sla_resolution_status": 15, "excluded": 10, "labels": 30,
-        }
-        for col_idx, col_key in enumerate(columns, 1):
-            col_letter = get_column_letter(col_idx)
-            ws.column_dimensions[col_letter].width = _WIDTH_DEFAULTS.get(col_key, 15)
+        _write_detail_sheet(
+            ws,
+            title=f"{report_prefix} Report",
+            columns=columns,
+            rows=rows,
+        )
 
     # Save to temp file
     now = datetime.now(timezone.utc)
@@ -695,6 +852,29 @@ async def list_report_templates(
 ) -> list[ReportTemplate]:
     """Return saved report templates for the current site scope."""
     return report_template_store.list_templates(get_current_site_scope())
+
+
+@router.get("/report/templates/master.xlsx")
+async def export_master_report_workbook(
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> FileResponse:
+    """Export all saved report templates for the current site in a single workbook."""
+    templates = report_template_store.list_templates(get_current_site_scope())
+    workbook = _build_master_report_workbook(templates)
+    report_prefix = get_site_profile()["report_prefix"]
+    now = datetime.now(timezone.utc)
+    filename = f"{report_prefix}_Master_Report_{now.strftime('%Y%m%d_%H%M')}.xlsx"
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    workbook.save(tmp_path)
+    logger.info("Master report workbook saved to %s (%d templates)", tmp_path, len(templates))
+    return FileResponse(
+        path=tmp_path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        background=BackgroundTask(os.unlink, tmp_path),
+    )
 
 
 @router.post("/report/templates", response_model=ReportTemplate)
