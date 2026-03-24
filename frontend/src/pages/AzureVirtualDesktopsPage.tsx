@@ -319,7 +319,7 @@ export default function AzureVirtualDesktopsPage() {
                   />
                   <SortHeader
                     col="user_login"
-                    label="Last Successful User Sign-In"
+                    label="Last Interactive User Sign-In"
                     sortKey={sortKey}
                     sortDir={sortDir}
                     onSort={toggleSort}
@@ -380,14 +380,14 @@ export default function AzureVirtualDesktopsPage() {
                     </td>
                     <td className="px-4 py-3 align-top text-slate-600">
                       {desktop.days_since_assigned_user_login === null ? (
-                        <span className="text-xs font-medium text-amber-700">No successful Entra sign-in recorded</span>
+                        <span className="text-xs font-medium text-amber-700">No interactive Entra sign-in recorded</span>
                       ) : (
                         <div>
                           <div className="font-medium text-slate-900">
-                            {desktop.assigned_user_last_successful_local || "Recorded sign-in"}
+                            {desktop.assigned_user_last_successful_local || "Recorded interactive sign-in"}
                           </div>
                           <div className="mt-1 text-xs text-slate-500">
-                            {signalText(desktop.days_since_assigned_user_login, "", "No successful Entra sign-in recorded")}
+                            {signalText(desktop.days_since_assigned_user_login, "", "No interactive Entra sign-in recorded")}
                           </div>
                         </div>
                       )}

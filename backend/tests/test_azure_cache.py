@@ -1543,6 +1543,8 @@ def test_list_virtual_desktop_removal_candidates_prefers_explicit_avd_assignment
                     "app_id": "",
                     "extra": {
                         "is_licensed": "true",
+                        "last_interactive_utc": stale_login,
+                        "last_interactive_local": "stale interactive",
                         "last_successful_utc": stale_login,
                         "last_successful_local": "stale",
                         "on_prem_sam_account_name": "ada",
@@ -1558,6 +1560,8 @@ def test_list_virtual_desktop_removal_candidates_prefers_explicit_avd_assignment
                     "app_id": "",
                     "extra": {
                         "is_licensed": "true",
+                        "last_interactive_utc": (now - timedelta(days=1)).isoformat(),
+                        "last_interactive_local": "recent interactive",
                         "last_successful_utc": (now - timedelta(days=1)).isoformat(),
                         "last_successful_local": "recent",
                         "on_prem_sam_account_name": "linus",
@@ -1657,6 +1661,8 @@ def test_list_virtual_desktop_removal_candidates_falls_back_to_last_avd_session_
                     "app_id": "",
                     "extra": {
                         "is_licensed": "true",
+                        "last_interactive_utc": recent_login,
+                        "last_interactive_local": "recent interactive login",
                         "last_successful_utc": recent_login,
                         "last_successful_local": "recent login",
                         "on_prem_sam_account_name": "linus",
@@ -1719,6 +1725,89 @@ def test_list_virtual_desktop_removal_candidates_falls_back_to_last_avd_session_
     assert row["mark_for_removal"] is False
 
 
+def test_list_virtual_desktop_removal_candidates_uses_interactive_signin_only(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    now = datetime.now(timezone.utc)
+    recent_power = (now - timedelta(days=1)).isoformat()
+    stale_interactive = (now - timedelta(days=30)).isoformat()
+    recent_successful = (now - timedelta(hours=6)).isoformat()
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-interactive-only",
+                    "name": "avd-vm-interactive-only",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-avd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {},
+                }
+            ],
+            "users": [
+                {
+                    "id": "user-interactive-only",
+                    "display_name": "Interactive Example",
+                    "object_type": "user",
+                    "principal_name": "interactive@example.com",
+                    "mail": "interactive@example.com",
+                    "enabled": True,
+                    "app_id": "",
+                    "extra": {
+                        "is_licensed": "true",
+                        "last_interactive_utc": stale_interactive,
+                        "last_interactive_local": "stale interactive login",
+                        "last_successful_utc": recent_successful,
+                        "last_successful_local": "recent successful login",
+                        "on_prem_sam_account_name": "interactive",
+                    },
+                }
+            ],
+            "vm_run_observations": {
+                "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-interactive-only": recent_power,
+            },
+            "avd_host_pools": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-interactive",
+                    "name": "hostpool-interactive",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Direct",
+                    "owner_history_status": "available",
+                }
+            ],
+            "avd_session_hosts": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-interactive/sessionHosts/avd-vm-interactive-only.contoso.local",
+                    "name": "hostpool-interactive/avd-vm-interactive-only.contoso.local",
+                    "session_host_name": "avd-vm-interactive-only.contoso.local",
+                    "host_pool_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-interactive",
+                    "host_pool_name": "hostpool-interactive",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Direct",
+                    "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-interactive-only",
+                    "assigned_user": "interactive@example.com",
+                }
+            ],
+            "avd_owner_history": [],
+        }
+    )
+
+    payload = cache.list_virtual_desktop_removal_candidates()
+
+    row = payload["desktops"][0]
+    assert row["assigned_user_last_successful_utc"] == stale_interactive
+    assert row["assigned_user_last_successful_local"] == "stale interactive login"
+    assert row["user_signin_stale"] is True
+    assert "Assigned user has no interactive Entra sign-in in 14+ days" in row["removal_reasons"]
+    assert row["mark_for_removal"] is True
+
+
 def test_list_virtual_desktop_removal_candidates_keeps_unknown_license_state_unknown(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     now = datetime.now(timezone.utc)
@@ -1754,6 +1843,8 @@ def test_list_virtual_desktop_removal_candidates_keeps_unknown_license_state_unk
                     "app_id": "",
                     "extra": {
                         "is_licensed": "",
+                        "last_interactive_utc": recent_login,
+                        "last_interactive_local": "recent interactive login",
                         "last_successful_utc": recent_login,
                         "last_successful_local": "recent login",
                         "on_prem_sam_account_name": "pat",
@@ -1835,6 +1926,8 @@ def test_list_virtual_desktop_removal_candidates_maps_owner_history_vm_instance_
                     "app_id": "",
                     "extra": {
                         "is_licensed": "true",
+                        "last_interactive_utc": recent_login,
+                        "last_interactive_local": "recent interactive login",
                         "last_successful_utc": recent_login,
                         "last_successful_local": "recent login",
                         "on_prem_sam_account_name": "grace",

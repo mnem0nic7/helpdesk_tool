@@ -106,6 +106,7 @@ describe("AzureVirtualDesktopsPage", () => {
     await screen.findByText("avd-vm-1");
     expect(screen.getByText("Assigned User")).toBeInTheDocument();
     expect(screen.getByText("User Status")).toBeInTheDocument();
+    expect(screen.getByText("Last Interactive User Sign-In")).toBeInTheDocument();
     expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
     expect(screen.getByText("Disabled")).toBeInTheDocument();
     expect(screen.getByText("Licensed")).toBeInTheDocument();
@@ -247,5 +248,6 @@ describe("AzureVirtualDesktopsPage", () => {
     expect(screen.getByText("Last AVD session user")).toBeInTheDocument();
     expect(screen.getByText("Observed 2026-03-22 09:00 PM PDT")).toBeInTheDocument();
     expect(screen.getByText("AVD connection diagnostics are not configured for fallback owner history")).toBeInTheDocument();
+    expect(screen.getByText("No interactive Entra sign-in recorded")).toBeInTheDocument();
   });
 });

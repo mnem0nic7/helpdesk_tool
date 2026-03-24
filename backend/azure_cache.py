@@ -2475,12 +2475,12 @@ class AzureCache:
                 elif assigned_user_license_state == "false":
                     assigned_user_licensed = False
 
-            last_successful_utc = str(assigned_user_extra.get("last_successful_utc") or "")
-            last_successful_local = str(assigned_user_extra.get("last_successful_local") or "")
-            last_successful_dt = self._parse_datetime(last_successful_utc)
-            days_since_user_login = (now - last_successful_dt).days if last_successful_dt else None
+            last_interactive_utc = str(assigned_user_extra.get("last_interactive_utc") or "")
+            last_interactive_local = str(assigned_user_extra.get("last_interactive_local") or "")
+            last_interactive_dt = self._parse_datetime(last_interactive_utc)
+            days_since_user_login = (now - last_interactive_dt).days if last_interactive_dt else None
             user_signin_stale = bool(
-                assigned_user_record and (last_successful_dt is None or last_successful_dt < cutoff)
+                assigned_user_record and (last_interactive_dt is None or last_interactive_dt < cutoff)
             )
             user_disabled = bool(assigned_user_record and assigned_user_enabled is False)
             user_unlicensed = bool(assigned_user_record and assigned_user_licensed is False)
@@ -2514,7 +2514,7 @@ class AzureCache:
             if user_unlicensed:
                 removal_reasons.append("Assigned user is unlicensed")
             if user_signin_stale:
-                removal_reasons.append(f"Assigned user has no successful Entra sign-in in {threshold_days}+ days")
+                removal_reasons.append(f"Assigned user has no interactive Entra sign-in in {threshold_days}+ days")
 
             account_action = ""
             if user_disabled and user_unlicensed:
@@ -2533,8 +2533,8 @@ class AzureCache:
             row["assigned_user_principal_name"] = assigned_user_principal
             row["assigned_user_enabled"] = assigned_user_enabled
             row["assigned_user_licensed"] = assigned_user_licensed
-            row["assigned_user_last_successful_utc"] = last_successful_utc
-            row["assigned_user_last_successful_local"] = last_successful_local
+            row["assigned_user_last_successful_utc"] = last_interactive_utc
+            row["assigned_user_last_successful_local"] = last_interactive_local
             row["assignment_source"] = str(assignment.get("assignment_source") or "")
             row["assignment_status"] = assignment_status
             row["assigned_user_source"] = str(assignment.get("assigned_user_source") or "unassigned")
