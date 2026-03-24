@@ -99,6 +99,29 @@ async function downloadPost(url: string, body: unknown, fallbackFilename: string
   URL.revokeObjectURL(urlObject);
 }
 
+async function downloadGet(url: string, fallbackFilename: string): Promise<void> {
+  const res = await fetch(url);
+  if (res.status === 401) {
+    window.location.href = "/api/auth/login";
+    throw new Error("Not authenticated");
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Export failed (${res.status}): ${text}`);
+  }
+  const blob = await res.blob();
+  const urlObject = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = urlObject;
+  const contentDisposition = res.headers.get("content-disposition");
+  const match = contentDisposition?.match(/filename=\"?([^\"]+)\"?/);
+  a.download = match?.[1] ?? fallbackFilename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(urlObject);
+}
+
 // ---------------------------------------------------------------------------
 // TypeScript interfaces – mirror the backend Pydantic models
 // ---------------------------------------------------------------------------
@@ -2340,8 +2363,8 @@ export const api = {
     await downloadPost(`/api/report/export${buildQuery({ template_id: templateId || undefined })}`, config, "OIT_Report_Windows.xlsx");
   },
 
-  exportMasterReportWorkbook(): string {
-    return "/api/report/templates/master.xlsx";
+  async exportMasterReportWorkbook(): Promise<void> {
+    await downloadGet("/api/report/templates/master.xlsx", "OIT_Master_Report.xlsx");
   },
 
   listReportTemplates(): Promise<ReportTemplate[]> {

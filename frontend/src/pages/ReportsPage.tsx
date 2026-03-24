@@ -654,6 +654,7 @@ export default function ReportsPage() {
   const [includeExcluded, setIncludeExcluded] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [masterExporting, setMasterExporting] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState("");
   const [templateDescription, setTemplateDescription] = useState("");
@@ -880,6 +881,22 @@ export default function ReportsPage() {
     }
   }
 
+  async function handleMasterExport() {
+    setMasterExporting(true);
+    setTemplateMessage(null);
+    try {
+      await api.exportMasterReportWorkbook();
+    } catch (err) {
+      logClientError("Master workbook export failed", err, { kind: "report-master" });
+      setTemplateMessage({
+        tone: "error",
+        text: err instanceof Error ? err.message : "Failed to export the master workbook.",
+      });
+    } finally {
+      setMasterExporting(false);
+    }
+  }
+
   async function handleWorkloadExport() {
     setWorkloadExporting(true);
     try {
@@ -993,15 +1010,27 @@ export default function ReportsPage() {
         <div className="flex items-center gap-3">
           {site.scope === "primary" && templates.length > 0 && (
             exportIncludedCount > 0 ? (
-              <a
-                href={api.exportMasterReportWorkbook()}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                onClick={handleMasterExport}
+                disabled={masterExporting}
                 className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 shadow-sm transition-colors hover:bg-emerald-100 hover:text-emerald-800"
               >
-                <DownloadIcon className="h-3.5 w-3.5" />
-                {`Master Workbook 7d/30d (${exportIncludedCount})`}
-              </a>
+                {masterExporting ? (
+                  <>
+                    <svg className="h-3.5 w-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Preparing master workbook...
+                  </>
+                ) : (
+                  <>
+                    <DownloadIcon className="h-3.5 w-3.5" />
+                    {`Master Workbook 7d/30d (${exportIncludedCount})`}
+                  </>
+                )}
+              </button>
             ) : (
               <span className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-500 shadow-sm">
                 <DownloadIcon className="h-3.5 w-3.5" />
