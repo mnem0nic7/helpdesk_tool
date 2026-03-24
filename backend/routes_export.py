@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -39,6 +40,47 @@ from site_context import get_current_site_scope, get_scoped_issues, get_site_pro
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
+
+def _write_single_report_workbook_file(
+    *,
+    path: str,
+    config: ReportConfig,
+    report_name: str,
+    report_description: str,
+    template: ReportTemplate | None,
+    site_scope: str,
+    all_issues: list[dict[str, Any]],
+    today: date,
+) -> None:
+    builder = ReportWorkbookBuilder(
+        all_issues=all_issues,
+        site_scope=site_scope,
+        today=today,
+    )
+    builder.build_single_report(
+        path=path,
+        config=config,
+        report_name=report_name,
+        report_description=report_description,
+        template=template,
+    )
+
+
+def _write_master_report_workbook_file(
+    *,
+    path: str,
+    templates: list[ReportTemplate],
+    site_scope: str,
+    all_issues: list[dict[str, Any]],
+    today: date,
+) -> None:
+    builder = ReportWorkbookBuilder(
+        all_issues=all_issues,
+        site_scope=site_scope,
+        today=today,
+    )
+    builder.build_master_report(path=path, templates=templates)
+
 
 # ---------------------------------------------------------------------------
 # Column metadata — maps TicketRow field keys to human-readable labels
@@ -1033,17 +1075,18 @@ async def report_export(config: ReportConfig, template_id: str | None = None) ->
     tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
     tmp_path = tmp.name
     tmp.close()
-    builder = ReportWorkbookBuilder(
-        all_issues=get_scoped_issues(include_excluded_on_primary=True),
-        site_scope=site_scope,
-        today=_today_utc(),
-    )
-    builder.build_single_report(
+    all_issues = get_scoped_issues(include_excluded_on_primary=True)
+    today = _today_utc()
+    await asyncio.to_thread(
+        _write_single_report_workbook_file,
         path=tmp_path,
         config=config,
         report_name=report_name,
         report_description=report_description,
         template=template,
+        site_scope=site_scope,
+        all_issues=all_issues,
+        today=today,
     )
     logger.info("Executive report export saved to %s for %s", tmp_path, report_name)
 
@@ -1095,12 +1138,17 @@ async def export_master_report_workbook(
     tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
     tmp_path = tmp.name
     tmp.close()
-    builder = ReportWorkbookBuilder(
-        all_issues=get_scoped_issues(include_excluded_on_primary=True),
-        site_scope=get_current_site_scope(),
-        today=_today_utc(),
+    site_scope = get_current_site_scope()
+    all_issues = get_scoped_issues(include_excluded_on_primary=True)
+    today = _today_utc()
+    await asyncio.to_thread(
+        _write_master_report_workbook_file,
+        path=tmp_path,
+        templates=templates,
+        site_scope=site_scope,
+        all_issues=all_issues,
+        today=today,
     )
-    builder.build_master_report(path=tmp_path, templates=templates)
     logger.info("Master report workbook saved to %s (%d templates included)", tmp_path, included_count)
     return FileResponse(
         path=tmp_path,

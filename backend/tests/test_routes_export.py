@@ -176,6 +176,26 @@ class TestReportPreview:
 class TestReportExport:
     """POST /api/report/export"""
 
+    def test_report_export_build_runs_via_asyncio_to_thread(self, test_client, monkeypatch):
+        calls: list[str] = []
+
+        async def fake_to_thread(func, /, *args, **kwargs):
+            calls.append(getattr(func, "__name__", ""))
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr("routes_export.asyncio.to_thread", fake_to_thread)
+
+        resp = test_client.post("/api/report/export", json={
+            "filters": {},
+            "columns": ["key", "summary"],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": False,
+        })
+        assert resp.status_code == 200
+        assert "_write_single_report_workbook_file" in calls
+
     def test_returns_excel(self, test_client):
         resp = test_client.post("/api/report/export", json={
             "filters": {},
@@ -514,6 +534,19 @@ class TestReportTemplates:
         assert frt_ws["B3"].value == "Created"
         assert frt_ws["A7"].value == "Readiness"
         assert frt_ws["B7"].value == "ready"
+
+    def test_master_workbook_build_runs_via_asyncio_to_thread(self, test_client, monkeypatch):
+        calls: list[str] = []
+
+        async def fake_to_thread(func, /, *args, **kwargs):
+            calls.append(getattr(func, "__name__", ""))
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr("routes_export.asyncio.to_thread", fake_to_thread)
+
+        resp = test_client.get("/api/report/templates/master.xlsx")
+        assert resp.status_code == 200
+        assert "_write_master_report_workbook_file" in calls
 
     def test_master_workbook_only_includes_templates_marked_for_export(self, test_client):
         templates_resp = test_client.get("/api/report/templates")
