@@ -115,7 +115,10 @@ class AIWorkScheduler:
         if bool(getattr(self._cache, "warming", False)):
             return "deferred"
 
-        triage_plan = self._next_auto_triage_plan()
+        triage_plan = await asyncio.get_running_loop().run_in_executor(
+            None,
+            self._next_auto_triage_plan,
+        )
         if triage_plan["action"] == "deferred":
             return "deferred"
         if triage_plan["action"] == "process":
@@ -166,7 +169,10 @@ class AIWorkScheduler:
 
         for scope in _MANAGED_SCOPES:
             try:
-                preview = self._technician_scoring_manager.preview_scope_run(scope, limit=1)
+                preview = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda scope=scope: self._technician_scoring_manager.preview_scope_run(scope, limit=1),
+                )
             except RuntimeError as exc:
                 message = str(exc)
                 if "Processing new tickets takes priority" in message or "warming" in message.lower():
