@@ -397,6 +397,7 @@ export interface ReportTemplate {
   notes: string;
   readiness: "ready" | "proxy" | "gap" | "custom" | string;
   is_seed: boolean;
+  include_in_master_export: boolean;
   created_at: string;
   updated_at: string;
   created_by_email: string;
@@ -406,11 +407,28 @@ export interface ReportTemplate {
   config: ReportConfig;
 }
 
+export interface ReportTemplateInsightPoint {
+  date: string;
+  count: number;
+}
+
+export interface ReportTemplateInsight {
+  template_id: string;
+  template_name: string;
+  window_field: string;
+  window_field_label: string;
+  count_7d: number;
+  count_30d: number;
+  p95_daily_count_30d: number;
+  trend_30d: ReportTemplateInsightPoint[];
+}
+
 export interface ReportTemplateSaveRequest {
   name: string;
   description?: string;
   category?: string;
   notes?: string;
+  include_in_master_export?: boolean;
   config: ReportConfig;
 }
 
@@ -2267,6 +2285,10 @@ export const api = {
     return fetchJSON<ReportTemplate[]>("/api/report/templates");
   },
 
+  listReportTemplateInsights(): Promise<ReportTemplateInsight[]> {
+    return fetchJSON<ReportTemplateInsight[]>("/api/report/templates/insights");
+  },
+
   createReportTemplate(body: ReportTemplateSaveRequest): Promise<ReportTemplate> {
     return postJSON<ReportTemplate>("/api/report/templates", body);
   },
@@ -2277,6 +2299,13 @@ export const api = {
 
   async deleteReportTemplate(templateId: string): Promise<void> {
     await deleteJSON(`/api/report/templates/${encodeURIComponent(templateId)}`);
+  },
+
+  updateReportTemplateExportSelection(templateId: string, includeInMasterExport: boolean): Promise<ReportTemplate> {
+    return postJSON<ReportTemplate>(
+      `/api/report/templates/${encodeURIComponent(templateId)}/export-selection`,
+      { include_in_master_export: includeInMasterExport },
+    );
   },
 
   previewOasisDevWorkloadReport(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from datetime import date, timedelta
 
 import pytest
 from openpyxl import load_workbook
@@ -203,6 +204,7 @@ class TestReportTemplates:
                 "description": "Weekly leadership report.",
                 "category": "Executive",
                 "notes": "Use in Monday leadership sync.",
+                "include_in_master_export": False,
                 "config": {
                     "filters": {"open_only": True},
                     "columns": ["key", "summary", "priority", "status"],
@@ -217,6 +219,7 @@ class TestReportTemplates:
         created = create_resp.json()
         assert created["name"] == "Leadership Weekly Snapshot"
         assert created["is_seed"] is False
+        assert created["include_in_master_export"] is False
         assert created["created_by_email"] == "test@example.com"
 
         update_resp = test_client.put(
@@ -226,6 +229,7 @@ class TestReportTemplates:
                 "description": "Updated description.",
                 "category": "Executive",
                 "notes": "Updated notes.",
+                "include_in_master_export": True,
                 "config": {
                     "filters": {"open_only": True, "stale_only": True},
                     "columns": ["key", "summary", "priority", "age_days"],
@@ -239,6 +243,7 @@ class TestReportTemplates:
         assert update_resp.status_code == 200
         updated = update_resp.json()
         assert updated["description"] == "Updated description."
+        assert updated["include_in_master_export"] is True
         assert updated["config"]["sort_field"] == "age_days"
         assert updated["config"]["filters"]["stale_only"] is True
 
@@ -307,6 +312,102 @@ class TestReportTemplates:
         assert frt_ws["B1"].value == "First Response Time"
         assert frt_ws["A3"].value == "Readiness"
         assert frt_ws["B3"].value == "ready"
+
+    def test_master_workbook_only_includes_templates_marked_for_export(self, test_client):
+        templates_resp = test_client.get("/api/report/templates")
+        assert templates_resp.status_code == 200
+        first_response_template = next(
+            template for template in templates_resp.json() if template["name"] == "First Response Time"
+        )
+
+        toggle_resp = test_client.post(
+            f"/api/report/templates/{first_response_template['id']}/export-selection",
+            json={"include_in_master_export": False},
+        )
+        assert toggle_resp.status_code == 200
+        assert toggle_resp.json()["include_in_master_export"] is False
+
+        workbook_resp = test_client.get("/api/report/templates/master.xlsx")
+        assert workbook_resp.status_code == 200
+        workbook = load_workbook(BytesIO(workbook_resp.content))
+        assert "Report Index" in workbook.sheetnames
+        assert "First Response Time" not in workbook.sheetnames
+
+        index_ws = workbook["Report Index"]
+        report_names = [index_ws.cell(row=row_idx, column=1).value for row_idx in range(2, index_ws.max_row + 1)]
+        assert "First Response Time" not in report_names
+
+    def test_seed_template_export_selection_can_be_toggled_without_full_edit(self, test_client):
+        templates_resp = test_client.get("/api/report/templates")
+        assert templates_resp.status_code == 200
+        seed_template = next(template for template in templates_resp.json() if template["is_seed"])
+
+        toggle_resp = test_client.post(
+            f"/api/report/templates/{seed_template['id']}/export-selection",
+            json={"include_in_master_export": False},
+        )
+        assert toggle_resp.status_code == 200
+        payload = toggle_resp.json()
+        assert payload["id"] == seed_template["id"]
+        assert payload["is_seed"] is True
+        assert payload["include_in_master_export"] is False
+
+    def test_template_insights_return_7d_30d_p95_and_window_field(self, test_client, mock_cache, monkeypatch):
+        monkeypatch.setattr("routes_export._today_utc", lambda: date(2026, 3, 4))
+
+        issues = []
+        for offset in range(10):
+            created_day = date(2026, 3, 4) - timedelta(days=offset)
+            created_iso = f"{created_day.isoformat()}T10:00:00+00:00"
+            for count_idx in range(2):
+                issues.append(
+                    _make_workload_issue(
+                        key=f"OIT-OPEN-{offset}-{count_idx}",
+                        summary=f"Open report issue {offset}-{count_idx}",
+                        status="Open",
+                        status_category="To Do",
+                        assignee="Taylor Ops",
+                        created=created_iso,
+                        updated=created_iso,
+                        oasisdev=False,
+                    )
+                )
+
+        for offset in range(5):
+            resolved_day = date(2026, 3, 4) - timedelta(days=offset)
+            issues.append(
+                _make_workload_issue(
+                    key=f"OIT-RES-{offset}",
+                    summary=f"Resolved issue {offset}",
+                    status="Resolved",
+                    status_category="Done",
+                    assignee="Taylor Ops",
+                    created="2026-01-10T10:00:00+00:00",
+                    updated=f"{resolved_day.isoformat()}T13:00:00+00:00",
+                    resolved=f"{resolved_day.isoformat()}T13:00:00+00:00",
+                    oasisdev=False,
+                )
+            )
+
+        mock_cache.get_all_issues.return_value = issues
+
+        resp = test_client.get("/api/report/templates/insights")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        frt = next(item for item in data if item["template_name"] == "First Response Time")
+        assert frt["window_field"] == "created"
+        assert frt["window_field_label"] == "Created"
+        assert frt["count_7d"] == 14
+        assert frt["count_30d"] == 20
+        assert frt["p95_daily_count_30d"] == 2.0
+        assert len(frt["trend_30d"]) == 30
+
+        mttr = next(item for item in data if item["template_name"] == "Mean Time to Resolution")
+        assert mttr["window_field"] == "resolved"
+        assert mttr["window_field_label"] == "Resolved"
+        assert mttr["count_7d"] == 5
+        assert mttr["count_30d"] == 5
 
 
 class TestLegacyExport:

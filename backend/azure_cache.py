@@ -451,15 +451,20 @@ class AzureCache:
         return names
 
     @classmethod
-    def _normalize_user(item: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_user(cls, item: dict[str, Any]) -> dict[str, Any]:
+        assigned_licenses_raw = item.get("assignedLicenses")
+        license_data_available = isinstance(assigned_licenses_raw, list)
         assigned_license_names = cls._normalize_assigned_license_names(
-            item.get("assignedLicenses") if isinstance(item.get("assignedLicenses"), list) else [],
+            assigned_licenses_raw if license_data_available else [],
             item.get("_sku_map") if isinstance(item.get("_sku_map"), dict) else {},
         )
         sign_in = item.get("signInActivity") if isinstance(item.get("signInActivity"), dict) else {}
         last_interactive = str(sign_in.get("lastSignInDateTime") or "")
         last_noninteractive = str(sign_in.get("lastNonInteractiveSignInDateTime") or "")
         last_successful = str(sign_in.get("lastSuccessfulSignInDateTime") or "")
+        license_status = ""
+        if license_data_available:
+            license_status = "true" if assigned_license_names else "false"
         return {
             "id": item.get("id") or "",
             "display_name": item.get("displayName") or "",
@@ -486,8 +491,8 @@ class AzureCache:
                 "on_prem_distinguished_name": item.get("onPremisesDistinguishedName") or "",
                 "last_password_change": item.get("lastPasswordChangeDateTime") or "",
                 "proxy_addresses": ", ".join(item.get("proxyAddresses") or []),
-                "is_licensed": "true" if assigned_license_names else "",
-                "license_count": str(len(assigned_license_names)),
+                "is_licensed": license_status,
+                "license_count": str(len(assigned_license_names)) if license_data_available else "",
                 "sku_part_numbers": ", ".join(assigned_license_names),
                 "last_interactive_utc": last_interactive,
                 "last_interactive_local": cls._format_local_datetime_text(last_interactive),
@@ -2464,7 +2469,11 @@ class AzureCache:
             )
             assigned_user_licensed = None
             if assigned_user_record:
-                assigned_user_licensed = assigned_user_extra.get("is_licensed") == "true"
+                assigned_user_license_state = str(assigned_user_extra.get("is_licensed") or "").strip().lower()
+                if assigned_user_license_state == "true":
+                    assigned_user_licensed = True
+                elif assigned_user_license_state == "false":
+                    assigned_user_licensed = False
 
             last_successful_utc = str(assigned_user_extra.get("last_successful_utc") or "")
             last_successful_local = str(assigned_user_extra.get("last_successful_local") or "")

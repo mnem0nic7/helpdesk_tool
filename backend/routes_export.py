@@ -8,7 +8,7 @@ import re
 import statistics
 import tempfile
 from collections import Counter, defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,11 +20,14 @@ from openpyxl.utils import get_column_letter
 
 from issue_cache import cache
 from metrics import issue_to_row, _extract_description, _all_comments_text
+from metrics import percentile
 from auth import require_authenticated_user
 from models import (
     OasisDevWorkloadReportRequest,
     ReportConfig,
     ReportTemplate,
+    ReportTemplateExportSelectionRequest,
+    ReportTemplateInsight,
     ReportTemplateCreateRequest,
     ReportTemplateUpdateRequest,
 )
@@ -81,6 +84,12 @@ DEFAULT_COLUMNS: list[str] = [
     "key", "summary", "issue_type", "status", "priority",
     "assignee", "created", "resolved", "calendar_ttr_hours",
 ]
+
+_REPORT_WINDOW_LABELS: dict[str, str] = {
+    "created": "Created",
+    "updated": "Updated",
+    "resolved": "Resolved",
+}
 
 _DETAIL_WIDTH_DEFAULTS: dict[str, int] = {
     "key": 12,
@@ -362,12 +371,14 @@ def _build_master_report_workbook(templates: list[ReportTemplate]) -> Workbook:
     used_names = {"Report Index"}
     index_row = 2
 
-    if not templates:
-        index_ws.cell(row=2, column=1, value="No saved report templates found for this site.")
+    included_templates = [template for template in templates if template.include_in_master_export]
+
+    if not included_templates:
+        index_ws.cell(row=2, column=1, value="No report templates are currently included in the master export.")
         _autofit_columns(index_ws, {1: 44})
         return wb
 
-    for template in templates:
+    for template in included_templates:
         config = template.config if isinstance(template.config, ReportConfig) else ReportConfig()
         rows = _apply_config(config)
         sheet_name = _unique_sheet_name(template.name, used_names)
@@ -435,6 +446,11 @@ def _parse_iso_date(raw: str | None, *, field_name: str, default: date) -> date:
         raise HTTPException(status_code=400, detail=f"Invalid {field_name}: {raw}") from exc
 
 
+def _today_utc() -> date:
+    """Return today's UTC date."""
+    return datetime.now(timezone.utc).date()
+
+
 def _parse_issue_date(issue: dict[str, Any], field_name: str) -> date | None:
     """Return the Jira field as a date, ignoring malformed values."""
     raw = ((issue.get("fields") or {}).get(field_name) or "").strip()
@@ -444,6 +460,80 @@ def _parse_issue_date(issue: dict[str, Any], field_name: str) -> date | None:
         return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
     except ValueError:
         return None
+
+
+def _date_field_for_report_window(template: ReportTemplate) -> str:
+    """Choose the most useful date field for rolling report windows."""
+    sort_field = str(template.config.sort_field or "").strip().lower()
+    if sort_field in _REPORT_WINDOW_LABELS:
+        return sort_field
+
+    name = str(template.name or "").strip().lower()
+    if any(token in name for token in ("resolution", "mttr", "reopen", "csat")):
+        return "resolved"
+    if any(token in name for token in ("escalation", "utilization")):
+        return "updated"
+    return "created"
+
+
+def _issue_date_for_window(issue: dict[str, Any], window_field: str) -> date | None:
+    """Return the issue date used for rolling report windows."""
+    jira_field = {
+        "created": "created",
+        "updated": "updated",
+        "resolved": "resolutiondate",
+    }.get(window_field, "created")
+    return _parse_issue_date(issue, jira_field)
+
+
+def _report_filters_dict(config: ReportConfig) -> dict[str, Any]:
+    """Normalize report filters for matching helpers."""
+    filters = config.filters.model_dump(exclude_none=True)
+    for key in ("open_only", "stale_only"):
+        if not filters.get(key):
+            filters.pop(key, None)
+    return filters
+
+
+def _build_template_insight(template: ReportTemplate, issues: list[dict[str, Any]], *, today: date | None = None) -> ReportTemplateInsight:
+    """Compute 7-day / 30-day counts and a 30-day sparkline for a saved template."""
+    effective_today = today or _today_utc()
+    window_field = _date_field_for_report_window(template)
+    window_start_30 = effective_today - timedelta(days=29)
+    window_start_7 = effective_today - timedelta(days=6)
+    days = [window_start_30 + timedelta(days=offset) for offset in range(30)]
+    daily_counts = {day.isoformat(): 0 for day in days}
+    filters = _report_filters_dict(template.config)
+
+    count_7d = 0
+    count_30d = 0
+    for issue in issues:
+        if not _match(issue, **filters):
+            continue
+        issue_day = _issue_date_for_window(issue, window_field)
+        if not issue_day or issue_day < window_start_30 or issue_day > effective_today:
+            continue
+        issue_key = issue_day.isoformat()
+        daily_counts[issue_key] += 1
+        count_30d += 1
+        if issue_day >= window_start_7:
+            count_7d += 1
+
+    ordered_counts = [daily_counts[day.isoformat()] for day in days]
+    trend = [
+        {"date": day.isoformat(), "count": daily_counts[day.isoformat()]}
+        for day in days
+    ]
+    return ReportTemplateInsight(
+        template_id=template.id,
+        template_name=template.name,
+        window_field=window_field,
+        window_field_label=_REPORT_WINDOW_LABELS.get(window_field, "Created"),
+        count_7d=count_7d,
+        count_30d=count_30d,
+        p95_daily_count_30d=round(float(percentile([float(value) for value in ordered_counts], 95) or 0.0), 1),
+        trend_30d=trend,
+    )
 
 
 def _month_key(value: date) -> str:
@@ -854,12 +944,32 @@ async def list_report_templates(
     return report_template_store.list_templates(get_current_site_scope())
 
 
+@router.get("/report/templates/insights", response_model=list[ReportTemplateInsight])
+async def list_report_template_insights(
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[ReportTemplateInsight]:
+    """Return rolling operational summaries for saved report templates."""
+    templates = report_template_store.list_templates(get_current_site_scope())
+    if not templates:
+        return []
+    today = _today_utc()
+    return [
+        _build_template_insight(
+            template,
+            get_scoped_issues(include_excluded_on_primary=template.config.include_excluded),
+            today=today,
+        )
+        for template in templates
+    ]
+
+
 @router.get("/report/templates/master.xlsx")
 async def export_master_report_workbook(
     _session: dict[str, Any] = Depends(require_authenticated_user),
 ) -> FileResponse:
     """Export all saved report templates for the current site in a single workbook."""
     templates = report_template_store.list_templates(get_current_site_scope())
+    included_count = sum(1 for template in templates if template.include_in_master_export)
     workbook = _build_master_report_workbook(templates)
     report_prefix = get_site_profile()["report_prefix"]
     now = datetime.now(timezone.utc)
@@ -868,7 +978,7 @@ async def export_master_report_workbook(
     tmp_path = tmp.name
     tmp.close()
     workbook.save(tmp_path)
-    logger.info("Master report workbook saved to %s (%d templates)", tmp_path, len(templates))
+    logger.info("Master report workbook saved to %s (%d templates included)", tmp_path, included_count)
     return FileResponse(
         path=tmp_path,
         filename=filename,
@@ -890,6 +1000,7 @@ async def create_report_template(
             description=body.description,
             category=body.category,
             notes=body.notes,
+            include_in_master_export=body.include_in_master_export,
             config=body.config,
             actor_email=str(session.get("email") or ""),
             actor_name=str(session.get("name") or ""),
@@ -913,6 +1024,7 @@ async def update_report_template(
             description=body.description,
             category=body.category,
             notes=body.notes,
+            include_in_master_export=body.include_in_master_export,
             config=body.config,
             actor_email=str(session.get("email") or ""),
             actor_name=str(session.get("name") or ""),
@@ -938,6 +1050,25 @@ async def delete_report_template(
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return {"deleted": True}
+
+
+@router.post("/report/templates/{template_id}/export-selection", response_model=ReportTemplate)
+async def update_report_template_export_selection(
+    template_id: str,
+    body: ReportTemplateExportSelectionRequest,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> ReportTemplate:
+    """Update whether a template is included in the master workbook export."""
+    try:
+        return report_template_store.set_master_export_inclusion(
+            template_id=template_id,
+            site_scope=get_current_site_scope(),
+            include_in_master_export=body.include_in_master_export,
+            actor_email=str(session.get("email") or ""),
+            actor_name=str(session.get("name") or ""),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/report/oasisdev-workload")

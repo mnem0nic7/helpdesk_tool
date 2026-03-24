@@ -9,6 +9,8 @@ import type {
   ReportConfig,
   ReportPreviewResponse,
   ReportTemplate,
+  ReportTemplateInsight,
+  ReportTemplateInsightPoint,
   ReportTemplateSaveRequest,
 } from "../lib/api.ts";
 import TicketFilters, {
@@ -223,6 +225,19 @@ function formatPlainDate(value: string): string {
     day: "numeric",
     year: "numeric",
   });
+}
+
+function formatCompactMetric(value: number): string {
+  if (Math.abs(value) >= 1000) {
+    return new Intl.NumberFormat("en-US", {
+      notation: "compact",
+      maximumFractionDigits: 1,
+    }).format(value);
+  }
+  if (Math.abs(value % 1) > 0) {
+    return value.toFixed(1);
+  }
+  return String(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -505,6 +520,64 @@ function WorkloadStatCard({
   );
 }
 
+function ReportInsightStat({
+  label,
+  value,
+  tone = "slate",
+}: {
+  label: string;
+  value: string;
+  tone?: "blue" | "emerald" | "amber" | "slate";
+}) {
+  const toneClass =
+    tone === "emerald"
+      ? "text-emerald-700"
+      : tone === "amber"
+        ? "text-amber-700"
+        : tone === "blue"
+          ? "text-blue-700"
+          : "text-slate-700";
+  return (
+    <div className="rounded-md border border-gray-200 bg-gray-50/70 px-3 py-2">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">{label}</div>
+      <div className={`mt-1 text-lg font-semibold tabular-nums ${toneClass}`}>{value}</div>
+    </div>
+  );
+}
+
+function TemplateTrendSparkline({ points }: { points: ReportTemplateInsightPoint[] }) {
+  if (!points.length) {
+    return <div className="h-16 rounded-md border border-dashed border-gray-200 bg-gray-50/60" />;
+  }
+
+  const width = 320;
+  const height = 64;
+  const maxCount = Math.max(...points.map((point) => point.count), 1);
+  const barWidth = width / points.length;
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="h-16 w-full overflow-visible rounded-md bg-gradient-to-b from-emerald-50/70 to-white">
+      {points.map((point, index) => {
+        const barHeight = point.count <= 0 ? 2 : Math.max(4, (point.count / maxCount) * (height - 10));
+        const x = index * barWidth + 1;
+        const y = height - barHeight - 2;
+        return (
+          <rect
+            key={`${point.date}-${index}`}
+            x={x}
+            y={y}
+            width={Math.max(2, barWidth - 2)}
+            height={barHeight}
+            rx={1.5}
+            fill={index >= points.length - 7 ? "#0f766e" : "#9bd5c7"}
+            opacity={point.count <= 0 ? 0.45 : 1}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Accent color map for presets
 // ---------------------------------------------------------------------------
@@ -586,6 +659,7 @@ export default function ReportsPage() {
   const [templateDescription, setTemplateDescription] = useState("");
   const [templateCategory, setTemplateCategory] = useState("Custom");
   const [templateNotes, setTemplateNotes] = useState("");
+  const [templateIncludeInMasterExport, setTemplateIncludeInMasterExport] = useState(true);
   const [templateMessage, setTemplateMessage] = useState<{ tone: "success" | "error" | "info"; text: string } | null>(null);
   const [workloadAssignee, setWorkloadAssignee] = useState("");
   const [workloadReportStart, setWorkloadReportStart] = useState(startOfYearInput);
@@ -628,6 +702,19 @@ export default function ReportsPage() {
     queryKey: ["report-templates", site.scope],
     queryFn: () => api.listReportTemplates(),
   });
+
+  const {
+    data: templateInsights = [],
+    isLoading: isTemplateInsightsLoading,
+  } = useQuery<ReportTemplateInsight[]>({
+    queryKey: ["report-template-insights", site.scope],
+    queryFn: () => api.listReportTemplateInsights(),
+  });
+
+  const templateInsightsById = useMemo(
+    () => Object.fromEntries(templateInsights.map((insight) => [insight.template_id, insight])),
+    [templateInsights],
+  );
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === selectedTemplateId) ?? null,
@@ -679,12 +766,14 @@ export default function ReportsPage() {
     setTemplateDescription(template?.description ?? "");
     setTemplateCategory(template?.category || "Custom");
     setTemplateNotes(template?.notes ?? "");
+    setTemplateIncludeInMasterExport(template?.include_in_master_export ?? true);
   }, []);
 
   const createTemplateMutation = useMutation({
     mutationFn: (body: ReportTemplateSaveRequest) => api.createReportTemplate(body),
     onSuccess: (template) => {
       queryClient.invalidateQueries({ queryKey: ["report-templates", site.scope] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["report-template-insights", site.scope] }).catch(() => undefined);
       setSelectedTemplateId(template.id);
       syncTemplateEditor(template);
       setTemplateMessage({ tone: "success", text: `Saved template "${template.name}".` });
@@ -703,6 +792,7 @@ export default function ReportsPage() {
       api.updateReportTemplate(templateId, body),
     onSuccess: (template) => {
       queryClient.invalidateQueries({ queryKey: ["report-templates", site.scope] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["report-template-insights", site.scope] }).catch(() => undefined);
       setSelectedTemplateId(template.id);
       syncTemplateEditor(template);
       setTemplateMessage({ tone: "success", text: `Updated template "${template.name}".` });
@@ -720,6 +810,7 @@ export default function ReportsPage() {
     mutationFn: (templateId: string) => api.deleteReportTemplate(templateId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["report-templates", site.scope] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["report-template-insights", site.scope] }).catch(() => undefined);
       setSelectedTemplateId(null);
       syncTemplateEditor(null);
       setTemplateMessage({ tone: "success", text: "Deleted saved report template." });
@@ -729,6 +820,30 @@ export default function ReportsPage() {
       setTemplateMessage({
         tone: "error",
         text: error instanceof Error ? error.message : "Failed to delete report template.",
+      });
+    },
+  });
+
+  const exportSelectionMutation = useMutation({
+    mutationFn: ({ templateId, includeInMasterExport }: { templateId: string; includeInMasterExport: boolean }) =>
+      api.updateReportTemplateExportSelection(templateId, includeInMasterExport),
+    onSuccess: (template) => {
+      queryClient.invalidateQueries({ queryKey: ["report-templates", site.scope] }).catch(() => undefined);
+      if (selectedTemplateId === template.id) {
+        syncTemplateEditor(template);
+      }
+      setTemplateMessage({
+        tone: "success",
+        text: template.include_in_master_export
+          ? `Included "${template.name}" in the master export.`
+          : `Removed "${template.name}" from the master export.`,
+      });
+    },
+    onError: (error) => {
+      logClientError("Failed to update report template export selection", error, { kind: "report-template-export-selection" });
+      setTemplateMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Failed to update master export selection.",
       });
     },
   });
@@ -808,6 +923,7 @@ export default function ReportsPage() {
       description: templateDescription.trim(),
       category: templateCategory.trim() || "Custom",
       notes: templateNotes.trim(),
+      include_in_master_export: templateIncludeInMasterExport,
       config,
     };
     if (selectedTemplate && !selectedTemplate.is_seed) {
@@ -817,14 +933,22 @@ export default function ReportsPage() {
     createTemplateMutation.mutate(body);
   }
 
-  function handleDeleteTemplate() {
-    if (!selectedTemplate || selectedTemplate.is_seed) {
+  function handleDeleteTemplate(templateOverride?: ReportTemplate | null) {
+    const templateToDelete = templateOverride ?? selectedTemplate;
+    if (!templateToDelete || templateToDelete.is_seed) {
       return;
     }
-    if (!window.confirm(`Delete the saved template "${selectedTemplate.name}"?`)) {
+    if (!window.confirm(`Delete the saved template "${templateToDelete.name}"?`)) {
       return;
     }
-    deleteTemplateMutation.mutate(selectedTemplate.id);
+    deleteTemplateMutation.mutate(templateToDelete.id);
+  }
+
+  function handleToggleTemplateExport(template: ReportTemplate, includeInMasterExport: boolean) {
+    exportSelectionMutation.mutate({
+      templateId: template.id,
+      includeInMasterExport,
+    });
   }
 
   // Determine preview columns and headers
@@ -844,7 +968,13 @@ export default function ReportsPage() {
   const templateBusy =
     createTemplateMutation.isPending ||
     updateTemplateMutation.isPending ||
-    deleteTemplateMutation.isPending;
+    deleteTemplateMutation.isPending ||
+    exportSelectionMutation.isPending;
+
+  const exportIncludedCount = useMemo(
+    () => templates.filter((template) => template.include_in_master_export).length,
+    [templates],
+  );
 
   return (
     <div className="space-y-5">
@@ -862,15 +992,22 @@ export default function ReportsPage() {
         </div>
         <div className="flex items-center gap-3">
           {site.scope === "primary" && templates.length > 0 && (
-            <a
-              href={api.exportMasterReportWorkbook()}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 shadow-sm transition-colors hover:bg-emerald-100 hover:text-emerald-800"
-            >
-              <DownloadIcon className="h-3.5 w-3.5" />
-              Master Workbook
-            </a>
+            exportIncludedCount > 0 ? (
+              <a
+                href={api.exportMasterReportWorkbook()}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 shadow-sm transition-colors hover:bg-emerald-100 hover:text-emerald-800"
+              >
+                <DownloadIcon className="h-3.5 w-3.5" />
+                {`Master Workbook (${exportIncludedCount})`}
+              </a>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-500 shadow-sm">
+                <DownloadIcon className="h-3.5 w-3.5" />
+                No templates selected for master export
+              </span>
+            )
           )}
           <a
             href={api.exportAll()}
@@ -1245,6 +1382,7 @@ export default function ReportsPage() {
               {templates.map((template) => {
                 const readinessClass = READINESS_STYLES[template.readiness] ?? READINESS_STYLES.custom;
                 const active = selectedTemplateId === template.id;
+                const insight = templateInsightsById[template.id] ?? null;
                 return (
                   <div
                     key={template.id}
@@ -1262,8 +1400,18 @@ export default function ReportsPage() {
                         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${readinessClass}`}>
                           {template.readiness === "gap" ? "Needs data" : template.readiness === "proxy" ? "Proxy" : template.readiness === "ready" ? "Ready" : "Custom"}
                         </span>
-                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600 ring-1 ring-gray-200">
+                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600 ring-1 ring-gray-200">
                           {template.is_seed ? "Seeded" : "Saved"}
+                        </span>
+                        <span
+                          className={[
+                            "rounded-full px-2 py-0.5 text-[10px] font-medium ring-1",
+                            template.include_in_master_export
+                              ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                              : "bg-gray-50 text-gray-500 ring-gray-200",
+                          ].join(" ")}
+                        >
+                          {template.include_in_master_export ? "In master export" : "Excluded from export"}
                         </span>
                       </div>
                     </div>
@@ -1280,17 +1428,72 @@ export default function ReportsPage() {
                         {template.notes}
                       </div>
                     )}
-                    <div className="mt-3 flex items-center justify-between gap-3">
-                      <div className="text-[11px] text-gray-400">
-                        {template.created_by_name ? `Saved by ${template.created_by_name}` : "System template"}
+                    <div className="mt-3">
+                      {isTemplateInsightsLoading && !insight ? (
+                        <div className="rounded-md border border-gray-200 bg-gray-50/60 px-3 py-4 text-xs text-gray-500">
+                          Loading 7-day and 30-day metrics...
+                        </div>
+                      ) : insight ? (
+                        <>
+                          <div className="grid grid-cols-3 gap-2">
+                            <ReportInsightStat label="7d" value={formatCompactMetric(insight.count_7d)} tone="blue" />
+                            <ReportInsightStat label="30d" value={formatCompactMetric(insight.count_30d)} tone="emerald" />
+                            <ReportInsightStat label="P95 / Day" value={formatCompactMetric(insight.p95_daily_count_30d)} tone="amber" />
+                          </div>
+                          <div className="mt-3 rounded-md border border-emerald-100 bg-emerald-50/40 p-2.5">
+                            <div className="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                              <span>30-Day Trend</span>
+                              <span>{insight.window_field_label} Window</span>
+                            </div>
+                            <div className="mt-2">
+                              <TemplateTrendSparkline points={insight.trend_30d} />
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="rounded-md border border-dashed border-gray-200 bg-gray-50/60 px-3 py-4 text-xs text-gray-500">
+                          Rolling metrics are unavailable for this template.
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-3 flex items-end justify-between gap-3">
+                      <div className="space-y-2">
+                        <label className="flex items-center gap-2 text-[11px] font-medium text-gray-600">
+                          <input
+                            type="checkbox"
+                            checked={template.include_in_master_export}
+                            disabled={exportSelectionMutation.isPending}
+                            onChange={(e) => handleToggleTemplateExport(template, e.target.checked)}
+                            className="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                          />
+                          Include in master export
+                        </label>
+                        <div className="text-[11px] text-gray-400">
+                        {template.created_by_name
+                          ? `Saved by ${template.created_by_name}`
+                          : insight
+                            ? `Windowed by ${insight.window_field_label.toLowerCase()} date`
+                            : "System template"}
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleLoadTemplate(template)}
-                        className="rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
-                      >
-                        Load
-                      </button>
+                      <div className="flex items-center gap-2">
+                        {!template.is_seed && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTemplate(template)}
+                            className="rounded-md border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50"
+                          >
+                            Delete
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleLoadTemplate(template)}
+                          className="rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                        >
+                          Load
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -1351,6 +1554,15 @@ export default function ReportsPage() {
                   placeholder="Add operator guidance, caveats, or how this metric should be interpreted."
                   className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
                 />
+              </label>
+              <label className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm">
+                <input
+                  type="checkbox"
+                  checked={templateIncludeInMasterExport}
+                  onChange={(e) => setTemplateIncludeInMasterExport(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>Include this template in the master workbook export</span>
               </label>
             </div>
 

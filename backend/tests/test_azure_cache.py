@@ -6,6 +6,40 @@ from azure_cache import AzureCache
 from azure_client import AzureApiError
 
 
+def test_normalize_user_preserves_unknown_and_explicit_license_states():
+    unknown_user = AzureCache._normalize_user(
+        {
+            "id": "user-unknown",
+            "displayName": "Unknown License",
+            "userPrincipalName": "unknown@example.com",
+        }
+    )
+    unlicensed_user = AzureCache._normalize_user(
+        {
+            "id": "user-unlicensed",
+            "displayName": "No License",
+            "userPrincipalName": "nolicense@example.com",
+            "assignedLicenses": [],
+        }
+    )
+    licensed_user = AzureCache._normalize_user(
+        {
+            "id": "user-licensed",
+            "displayName": "Has License",
+            "userPrincipalName": "licensed@example.com",
+            "assignedLicenses": [{"skuId": "sku-1"}],
+            "_sku_map": {"sku-1": "M365_E3"},
+        }
+    )
+
+    assert unknown_user["extra"]["is_licensed"] == ""
+    assert unknown_user["extra"]["license_count"] == ""
+    assert unlicensed_user["extra"]["is_licensed"] == "false"
+    assert unlicensed_user["extra"]["license_count"] == "0"
+    assert licensed_user["extra"]["is_licensed"] == "true"
+    assert licensed_user["extra"]["license_count"] == "1"
+
+
 def test_get_vm_inventory_summary_groups_virtual_machines_by_size(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     cache._update_snapshots(
@@ -1682,6 +1716,85 @@ def test_list_virtual_desktop_removal_candidates_falls_back_to_last_avd_session_
     assert row["assigned_user_observed_local"] == "2026-03-23 04:00 AM PDT"
     assert row["owner_history_status"] == "available"
     assert row["assignment_status"] == "resolved"
+    assert row["mark_for_removal"] is False
+
+
+def test_list_virtual_desktop_removal_candidates_keeps_unknown_license_state_unknown(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    now = datetime.now(timezone.utc)
+    recent_power = (now - timedelta(days=1)).isoformat()
+    recent_login = (now - timedelta(hours=4)).isoformat()
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-unknown-license",
+                    "name": "avd-vm-unknown-license",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-avd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {},
+                }
+            ],
+            "users": [
+                {
+                    "id": "user-unknown",
+                    "display_name": "Pat Example",
+                    "object_type": "user",
+                    "principal_name": "pat@example.com",
+                    "mail": "pat@example.com",
+                    "enabled": True,
+                    "app_id": "",
+                    "extra": {
+                        "is_licensed": "",
+                        "last_successful_utc": recent_login,
+                        "last_successful_local": "recent login",
+                        "on_prem_sam_account_name": "pat",
+                    },
+                }
+            ],
+            "vm_run_observations": {
+                "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-unknown-license": recent_power,
+            },
+            "avd_host_pools": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-unknown",
+                    "name": "hostpool-unknown",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Direct",
+                    "owner_history_status": "available",
+                }
+            ],
+            "avd_session_hosts": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-unknown/sessionHosts/avd-vm-unknown-license.contoso.local",
+                    "name": "hostpool-unknown/avd-vm-unknown-license.contoso.local",
+                    "session_host_name": "avd-vm-unknown-license.contoso.local",
+                    "host_pool_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-unknown",
+                    "host_pool_name": "hostpool-unknown",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Direct",
+                    "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-unknown-license",
+                    "assigned_user": "pat@example.com",
+                }
+            ],
+            "avd_owner_history": [],
+        }
+    )
+
+    payload = cache.list_virtual_desktop_removal_candidates()
+
+    row = payload["desktops"][0]
+    assert row["assigned_user_licensed"] is None
+    assert "Assigned user is unlicensed" not in row["removal_reasons"]
+    assert row["account_action"] == ""
     assert row["mark_for_removal"] is False
 
 

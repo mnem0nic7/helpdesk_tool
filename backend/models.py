@@ -161,6 +161,7 @@ class ReportTemplateBase(BaseModel):
     description: str = Field(default="", max_length=500)
     category: str = Field(default="", max_length=80)
     notes: str = Field(default="", max_length=1000)
+    include_in_master_export: bool = True
     config: ReportConfig = Field(default_factory=ReportConfig)
 
 
@@ -183,6 +184,7 @@ class ReportTemplate(BaseModel):
     notes: str = ""
     readiness: str = "custom"
     is_seed: bool = False
+    include_in_master_export: bool = True
     created_at: str
     updated_at: str
     created_by_email: str = ""
@@ -190,6 +192,32 @@ class ReportTemplate(BaseModel):
     updated_by_email: str = ""
     updated_by_name: str = ""
     config: ReportConfig
+
+
+class ReportTemplateInsightPoint(BaseModel):
+    """Single daily point for a saved report template insight sparkline."""
+
+    date: str
+    count: int
+
+
+class ReportTemplateInsight(BaseModel):
+    """Operational summary for a saved report template."""
+
+    template_id: str
+    template_name: str
+    window_field: str
+    window_field_label: str
+    count_7d: int
+    count_30d: int
+    p95_daily_count_30d: float
+    trend_30d: list[ReportTemplateInsightPoint] = Field(default_factory=list)
+
+
+class ReportTemplateExportSelectionRequest(BaseModel):
+    """Update whether a template is included in the master workbook export."""
+
+    include_in_master_export: bool = True
 
 
 class OasisDevWorkloadReportRequest(BaseModel):

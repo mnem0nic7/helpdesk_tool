@@ -17,6 +17,11 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(str(row[1]) == column_name for row in rows)
+
+
 _SEED_TEMPLATES: list[dict[str, Any]] = [
     {
         "seed_key": "primary-first-response-time",
@@ -309,6 +314,7 @@ class ReportTemplateStore:
                     notes TEXT NOT NULL DEFAULT '',
                     readiness TEXT NOT NULL DEFAULT 'custom',
                     is_seed INTEGER NOT NULL DEFAULT 0,
+                    include_in_master_export INTEGER NOT NULL DEFAULT 1,
                     config_json TEXT NOT NULL,
                     created_by_email TEXT NOT NULL DEFAULT '',
                     created_by_name TEXT NOT NULL DEFAULT '',
@@ -326,10 +332,18 @@ class ReportTemplateStore:
                 ON report_templates(site_scope, category, name)
                 """
             )
+            if not _column_exists(conn, "report_templates", "include_in_master_export"):
+                conn.execute(
+                    """
+                    ALTER TABLE report_templates
+                    ADD COLUMN include_in_master_export INTEGER NOT NULL DEFAULT 1
+                    """
+                )
 
     def _row_to_template(self, row: sqlite3.Row) -> ReportTemplate:
         payload = dict(row)
         payload["is_seed"] = bool(payload.get("is_seed"))
+        payload["include_in_master_export"] = bool(payload.get("include_in_master_export", 1))
         payload["config"] = ReportConfig(**json.loads(str(payload.get("config_json") or "{}")))
         payload.pop("config_json", None)
         payload.pop("seed_key", None)
@@ -350,9 +364,9 @@ class ReportTemplateStore:
                     """
                     INSERT INTO report_templates (
                         id, seed_key, site_scope, name, description, category, notes,
-                        readiness, is_seed, config_json, created_by_email, created_by_name,
+                        readiness, is_seed, include_in_master_export, config_json, created_by_email, created_by_name,
                         updated_by_email, updated_by_name, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, '', 'System', '', 'System', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, '', 'System', '', 'System', ?, ?)
                     ON CONFLICT(seed_key) DO UPDATE SET
                         site_scope = excluded.site_scope,
                         name = excluded.name,
@@ -411,6 +425,7 @@ class ReportTemplateStore:
         description: str,
         category: str,
         notes: str,
+        include_in_master_export: bool,
         config: ReportConfig,
         actor_email: str,
         actor_name: str,
@@ -426,9 +441,9 @@ class ReportTemplateStore:
                     """
                     INSERT INTO report_templates (
                         id, seed_key, site_scope, name, description, category, notes,
-                        readiness, is_seed, config_json, created_by_email, created_by_name,
+                        readiness, is_seed, include_in_master_export, config_json, created_by_email, created_by_name,
                         updated_by_email, updated_by_name, created_at, updated_at
-                    ) VALUES (?, NULL, ?, ?, ?, ?, ?, 'custom', 0, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, NULL, ?, ?, ?, ?, ?, 'custom', 0, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         template_id,
@@ -437,6 +452,7 @@ class ReportTemplateStore:
                         description.strip(),
                         category.strip(),
                         notes.strip(),
+                        1 if include_in_master_export else 0,
                         config.model_dump_json(),
                         actor_email.strip(),
                         actor_name.strip(),
@@ -462,6 +478,7 @@ class ReportTemplateStore:
         description: str,
         category: str,
         notes: str,
+        include_in_master_export: bool,
         config: ReportConfig,
         actor_email: str,
         actor_name: str,
@@ -483,6 +500,7 @@ class ReportTemplateStore:
                         description = ?,
                         category = ?,
                         notes = ?,
+                        include_in_master_export = ?,
                         config_json = ?,
                         updated_by_email = ?,
                         updated_by_name = ?,
@@ -494,6 +512,7 @@ class ReportTemplateStore:
                         description.strip(),
                         category.strip(),
                         notes.strip(),
+                        1 if include_in_master_export else 0,
                         config.model_dump_json(),
                         actor_email.strip(),
                         actor_name.strip(),
@@ -520,6 +539,42 @@ class ReportTemplateStore:
                 "DELETE FROM report_templates WHERE id = ? AND site_scope = ?",
                 (template_id, site_scope),
             )
+
+    def set_master_export_inclusion(
+        self,
+        *,
+        template_id: str,
+        site_scope: str,
+        include_in_master_export: bool,
+        actor_email: str,
+        actor_name: str,
+    ) -> ReportTemplate:
+        existing = self.get_template(template_id, site_scope)
+        if existing is None:
+            raise KeyError("Template not found")
+        with self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE report_templates
+                SET include_in_master_export = ?,
+                    updated_by_email = ?,
+                    updated_by_name = ?,
+                    updated_at = ?
+                WHERE id = ? AND site_scope = ?
+                """,
+                (
+                    1 if include_in_master_export else 0,
+                    actor_email.strip(),
+                    actor_name.strip(),
+                    _utcnow(),
+                    template_id,
+                    site_scope,
+                ),
+            )
+        updated = self.get_template(template_id, site_scope)
+        if updated is None:
+            raise RuntimeError("Failed to load updated report template")
+        return updated
 
 
 report_template_store = ReportTemplateStore()
