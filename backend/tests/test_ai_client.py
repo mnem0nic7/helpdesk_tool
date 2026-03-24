@@ -156,7 +156,7 @@ def test_get_available_models_includes_ollama_when_enabled(monkeypatch):
     assert [model.id for model in models] == ["qwen2.5:7b", "qwen2.5:3b"]
 
 
-def test_list_ollama_models_uses_shared_session(monkeypatch):
+def test_list_ollama_models_uses_thread_local_session_helper(monkeypatch):
     captured: dict[str, object] = {}
 
     class _Response:
@@ -177,7 +177,7 @@ def test_list_ollama_models_uses_shared_session(monkeypatch):
             captured["timeout"] = timeout
             return _Response()
 
-    monkeypatch.setattr(ai_client, "_OLLAMA_SESSION", _Session())
+    monkeypatch.setattr(ai_client, "_get_ollama_session", lambda: _Session())
     monkeypatch.setattr(ai_client, "OLLAMA_BASE_URL", "http://ollama.local:11434")
     monkeypatch.setattr(ai_client, "OLLAMA_REQUEST_TIMEOUT_SECONDS", 42.0)
 
@@ -268,7 +268,7 @@ def test_invoke_ollama_includes_keep_alive_json_format_and_output_cap(monkeypatc
             captured["timeout"] = timeout
             return _Response()
 
-    monkeypatch.setattr(ai_client, "_OLLAMA_SESSION", _Session())
+    monkeypatch.setattr(ai_client, "_get_ollama_session", lambda: _Session())
     monkeypatch.setattr(ai_client, "OLLAMA_BASE_URL", "http://ollama.local:11434")
     monkeypatch.setattr(ai_client, "OLLAMA_KEEP_ALIVE", "15m")
     monkeypatch.setattr(ai_client, "OLLAMA_REQUEST_TIMEOUT_SECONDS", 30.0)

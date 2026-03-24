@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -116,7 +117,15 @@ def _build_ollama_session() -> requests.Session:
     return session
 
 
-_OLLAMA_SESSION = _build_ollama_session()
+_OLLAMA_THREAD_LOCAL = threading.local()
+
+
+def _get_ollama_session() -> requests.Session:
+    session = getattr(_OLLAMA_THREAD_LOCAL, "session", None)
+    if session is None:
+        session = _build_ollama_session()
+        _OLLAMA_THREAD_LOCAL.session = session
+    return session
 
 
 def _int(value: Any) -> int:
@@ -259,7 +268,7 @@ def _get_curated_models(provider: str) -> list[AIModel]:
 
 
 def _list_ollama_models_from_api() -> list[AIModel]:
-    response = _OLLAMA_SESSION.get(
+    response = _get_ollama_session().get(
         f"{OLLAMA_BASE_URL}/api/tags",
         timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
     )
@@ -1015,7 +1024,7 @@ def _invoke_ollama(
     if options:
         payload["options"] = options
 
-    response = _OLLAMA_SESSION.post(
+    response = _get_ollama_session().post(
         f"{OLLAMA_BASE_URL}/api/chat",
         json=payload,
         timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,

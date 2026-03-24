@@ -857,11 +857,16 @@ class IssueCache:
         from triage_store import store
         from jira_client import JiraClient
 
-        model_id = select_available_ollama_model(
-            get_available_models(),
-            preferred_model_id=AUTO_TRIAGE_MODEL,
-            fallback_model_id=OLLAMA_MODEL,
-        )
+        loop = asyncio.get_running_loop()
+
+        def _resolve_model_id() -> str | None:
+            return select_available_ollama_model(
+                get_available_models(),
+                preferred_model_id=AUTO_TRIAGE_MODEL,
+                fallback_model_id=OLLAMA_MODEL,
+            )
+
+        model_id = await loop.run_in_executor(None, _resolve_model_id)
         if not model_id:
             logger.warning(
                 "Auto-triage: neither preferred model %s nor fallback model %s is available from the active AI provider, skipping",
@@ -878,7 +883,6 @@ class IssueCache:
 
         logger.info("Auto-triage: processing %d new tickets", len(keys_to_process))
         client = JiraClient()
-        loop = asyncio.get_running_loop()
         with self._lock:
             self._auto_triage_running = True
             self._auto_triage_current_key = None
