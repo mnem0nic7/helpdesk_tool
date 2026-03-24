@@ -93,6 +93,15 @@ class AzureApiError(RuntimeError):
         return None
 
 
+def _arm_resource_url(resource_path: str) -> str:
+    normalized = str(resource_path or "").strip()
+    if not normalized:
+        return _ARM_BASE
+    if not normalized.startswith("/"):
+        normalized = f"/{normalized}"
+    return f"{_ARM_BASE}{normalized}"
+
+
 class AzureCostQueryCoordinator:
     """Serialize Azure Cost Management queries and prioritize export work."""
 
@@ -610,7 +619,7 @@ class AzureClient:
             return []
 
         rows = self._paged_get(
-            f"{_ARM_BASE}{normalized_host_pool_id}/sessionHosts",
+            f"{_arm_resource_url(normalized_host_pool_id)}/sessionHosts",
             scope=_ARM_SCOPE,
             params={"api-version": "2024-04-03"},
         )
@@ -651,7 +660,7 @@ class AzureClient:
             return []
 
         rows = self._paged_get(
-            f"{_ARM_BASE}{normalized_resource_id}/providers/Microsoft.Insights/diagnosticSettings",
+            f"{_arm_resource_url(normalized_resource_id)}/providers/Microsoft.Insights/diagnosticSettings",
             scope=_ARM_SCOPE,
             params={"api-version": "2021-05-01-preview"},
         )
@@ -686,7 +695,7 @@ class AzureClient:
 
         payload = self._request(
             "GET",
-            f"{_ARM_BASE}{normalized_workspace_id}",
+            _arm_resource_url(normalized_workspace_id),
             scope=_ARM_SCOPE,
             params={"api-version": "2023-09-01"},
         )
@@ -998,7 +1007,7 @@ Resources
             }
         payload = self._cost_management_request(
             "POST",
-            f"{_ARM_BASE}{scope_path}/providers/Microsoft.CostManagement/query",
+            f"{_arm_resource_url(scope_path)}/providers/Microsoft.CostManagement/query",
             params={"api-version": "2025-03-01"},
             json_body={
                 "type": cost_type,

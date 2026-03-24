@@ -218,11 +218,15 @@ def test_list_avd_host_pools_normalizes_personal_assignment_fields(monkeypatch):
 
 def test_list_resource_diagnostic_settings_normalizes_workspace_logs(monkeypatch):
     client = AzureClient()
+    captured: dict[str, object] = {}
 
     monkeypatch.setattr(
         client,
         "_paged_get",
-        lambda url, *, scope, params=None, headers=None: [
+        lambda url, *, scope, params=None, headers=None: captured.update(
+            {"url": url, "scope": scope, "params": params}
+        )
+        or [
             {
                 "id": "diag-1",
                 "name": "send-to-la",
@@ -238,9 +242,13 @@ def test_list_resource_diagnostic_settings_normalizes_workspace_logs(monkeypatch
     )
 
     rows = client.list_resource_diagnostic_settings(
-        "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/personal-hp"
+        "subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/personal-hp"
     )
 
+    assert (
+        captured["url"]
+        == "https://management.azure.com/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/personal-hp/providers/Microsoft.Insights/diagnosticSettings"
+    )
     assert rows == [
         {
             "id": "diag-1",
@@ -252,6 +260,45 @@ def test_list_resource_diagnostic_settings_normalizes_workspace_logs(monkeypatch
             ],
         }
     ]
+
+
+def test_get_log_analytics_workspace_accepts_normalized_resource_id(monkeypatch):
+    client = AzureClient()
+    captured: dict[str, object] = {}
+
+    def fake_request(method, url, *, scope, params=None, json_body=None, headers=None):
+        captured["method"] = method
+        captured["url"] = url
+        captured["scope"] = scope
+        captured["params"] = params
+        return {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-ops/providers/Microsoft.OperationalInsights/workspaces/la-prod",
+            "name": "la-prod",
+            "location": "eastus",
+            "properties": {"customerId": "workspace-guid"},
+        }
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    row = client.get_log_analytics_workspace(
+        "subscriptions/sub-1/resourceGroups/rg-ops/providers/Microsoft.OperationalInsights/workspaces/la-prod"
+    )
+
+    assert captured["method"] == "GET"
+    assert (
+        captured["url"]
+        == "https://management.azure.com/subscriptions/sub-1/resourceGroups/rg-ops/providers/Microsoft.OperationalInsights/workspaces/la-prod"
+    )
+    assert captured["scope"] == "https://management.azure.com/.default"
+    assert captured["params"] == {"api-version": "2023-09-01"}
+    assert row == {
+        "id": "/subscriptions/sub-1/resourceGroups/rg-ops/providers/Microsoft.OperationalInsights/workspaces/la-prod",
+        "name": "la-prod",
+        "subscription_id": "sub-1",
+        "resource_group": "rg-ops",
+        "location": "eastus",
+        "customer_id": "workspace-guid",
+    }
 
 
 def test_query_log_analytics_workspace_returns_table_rows(monkeypatch):
