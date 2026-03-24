@@ -10,7 +10,6 @@ import {
   type AzureRecommendationCreateTicketResponse,
   type AzureRecommendationRunSafeScriptResponse,
   type AzureRecommendationSendAlertResponse,
-  type AzureSavingsOpportunity,
 } from "../lib/api.ts";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzureSavingsHighlightsSection, { formatAzureCurrency } from "../components/AzureSavingsHighlightsSection.tsx";
