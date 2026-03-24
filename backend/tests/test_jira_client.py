@@ -86,3 +86,32 @@ def test_create_issue_posts_expected_payload():
     assert payload["fields"]["summary"] == "Follow up on Azure recommendation"
     assert payload["fields"]["labels"] == ["azure-finops", "compute"]
     assert payload["fields"]["description"]["type"] == "doc"
+
+
+def test_get_issue_changelog_all_paginates(monkeypatch):
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+
+    calls: list[int] = []
+
+    def fake_page(key: str, *, start_at: int = 0, max_results: int = 100):
+        calls.append(start_at)
+        if start_at == 0:
+            return {
+                "values": [{"id": "1"}, {"id": "2"}],
+                "startAt": 0,
+                "maxResults": 2,
+                "total": 3,
+            }
+        return {
+            "values": [{"id": "3"}],
+            "startAt": 2,
+            "maxResults": 2,
+            "total": 3,
+        }
+
+    monkeypatch.setattr(client, "get_issue_changelog_page", fake_page)
+
+    histories = client.get_issue_changelog_all("OIT-123")
+
+    assert [item["id"] for item in histories] == ["1", "2", "3"]
+    assert calls == [0, 2]

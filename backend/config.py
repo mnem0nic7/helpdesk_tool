@@ -34,10 +34,6 @@ AZURE_APP_HOST: str = os.getenv("AZURE_APP_HOST", "azure.movedocs.com")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
-# Auto-triage model (runs automatically on new tickets during cache refresh)
-AUTO_TRIAGE_MODEL: str = os.getenv("AUTO_TRIAGE_MODEL", os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
-TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES: int = int(os.getenv("TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES", "60"))
-
 # Microsoft Entra ID (Azure AD) authentication
 ENTRA_TENANT_ID: str = os.getenv("ENTRA_TENANT_ID", "")
 ENTRA_CLIENT_ID: str = os.getenv("ENTRA_CLIENT_ID", "")
@@ -72,7 +68,15 @@ def _env_json_object(name: str) -> dict[str, object]:
 OLLAMA_ENABLED: bool = _env_bool("OLLAMA_ENABLED", "0")
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:7b").strip() or "qwen2.5:7b"
+OLLAMA_FAST_MODEL: str = os.getenv("OLLAMA_FAST_MODEL", "qwen2.5:3b").strip() or "qwen2.5:3b"
 OLLAMA_REQUEST_TIMEOUT_SECONDS: float = float(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "300"))
+OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "15m").strip() or "15m"
+
+# Auto-triage and fast structured AI defaults
+AUTO_TRIAGE_MODEL: str = os.getenv("AUTO_TRIAGE_MODEL", OLLAMA_FAST_MODEL).strip() or OLLAMA_FAST_MODEL
+TECHNICIAN_SCORE_MODEL: str = os.getenv("TECHNICIAN_SCORE_MODEL", OLLAMA_FAST_MODEL).strip() or OLLAMA_FAST_MODEL
+AZURE_ALERT_RULE_MODEL: str = os.getenv("AZURE_ALERT_RULE_MODEL", OLLAMA_FAST_MODEL).strip() or OLLAMA_FAST_MODEL
+TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES: int = int(os.getenv("TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES", "60"))
 
 
 def _load_app_secret_key() -> str:

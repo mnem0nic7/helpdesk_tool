@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from azure_finops import azure_finops_service
 from config import (
@@ -17,6 +18,7 @@ from config import (
     AZURE_FINOPS_AI_TEAM_MAPPINGS,
     OLLAMA_BASE_URL,
     OLLAMA_ENABLED,
+    OLLAMA_KEEP_ALIVE,
     OLLAMA_MODEL,
     OLLAMA_REQUEST_TIMEOUT_SECONDS,
     OPENAI_API_KEY,
@@ -78,6 +80,43 @@ _DEFAULT_COPILOT_MODEL_ORDER = (
     "claude-haiku-4-5-20251001",
 )
 _DEFAULT_COPILOT_MODEL_RANK = {model_id: index for index, model_id in enumerate(_DEFAULT_COPILOT_MODEL_ORDER)}
+_OLLAMA_HTTP_POOL_CONNECTIONS = 8
+_OLLAMA_HTTP_POOL_MAXSIZE = 16
+
+_AUTO_TRIAGE_MAX_OUTPUT_TOKENS = 450
+_TECHNICIAN_QA_MAX_OUTPUT_TOKENS = 250
+_AZURE_ALERT_RULE_MAX_OUTPUT_TOKENS = 220
+_AZURE_COST_COPILOT_MAX_OUTPUT_TOKENS = 900
+_KB_TICKET_DRAFT_MAX_OUTPUT_TOKENS = 2200
+_KB_SOP_DRAFT_MAX_OUTPUT_TOKENS = 2200
+_KB_REFORMAT_MAX_OUTPUT_TOKENS = 2200
+
+_TICKET_DESCRIPTION_CHAR_LIMIT = 1800
+_TICKET_STEPS_CHAR_LIMIT = 600
+_TICKET_COMMENT_CHAR_LIMIT = 350
+_TICKET_COMMENT_TOTAL_CHAR_LIMIT = 1800
+_TICKET_COMMENT_MAX_COUNT = 6
+_TICKET_KB_MATCH_MAX_COUNT = 2
+_TICKET_KB_EXCERPT_CHAR_LIMIT = 400
+
+_QA_COMMENT_MAX_COUNT = 6
+_QA_COMMENT_CHAR_LIMIT = 400
+_KB_EXISTING_ARTICLE_CHAR_LIMIT = 3000
+
+
+def _build_ollama_session() -> requests.Session:
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=_OLLAMA_HTTP_POOL_CONNECTIONS,
+        pool_maxsize=_OLLAMA_HTTP_POOL_MAXSIZE,
+        max_retries=0,
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+_OLLAMA_SESSION = _build_ollama_session()
 
 
 def _int(value: Any) -> int:
@@ -92,6 +131,62 @@ def _estimate_token_count(*parts: Any) -> int:
     if not combined:
         return 0
     return max(1, len(combined) // 4)
+
+
+def _truncate_text(value: Any, max_chars: int) -> str:
+    text = str(value or "").strip()
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return text[: max_chars - 3].rstrip() + "..."
+
+
+def _latest_limited_lines(lines: list[str], *, max_items: int, max_chars: int | None = None) -> str:
+    recent = [line for line in lines if str(line or "").strip()][-max_items:]
+    if not recent:
+        return ""
+    if max_chars is None:
+        return "\n".join(recent)
+
+    kept_reversed: list[str] = []
+    used = 0
+    for line in reversed(recent):
+        normalized = str(line or "").strip()
+        if not normalized:
+            continue
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        candidate = normalized if len(normalized) <= remaining else _truncate_text(normalized, remaining)
+        addition = len(candidate) + (1 if kept_reversed else 0)
+        if kept_reversed and addition > remaining:
+            break
+        kept_reversed.append(candidate)
+        used += addition
+        if len(candidate) < len(normalized):
+            break
+
+    return "\n".join(reversed(kept_reversed))
+
+
+def select_available_ollama_model(
+    available: list[AIModel],
+    *,
+    preferred_model_id: str = "",
+    fallback_model_id: str = "",
+) -> str | None:
+    if not available:
+        return None
+    available_ids = {model.id for model in available if model.provider == "ollama"}
+    for candidate in (preferred_model_id, fallback_model_id, OLLAMA_MODEL):
+        normalized = str(candidate or "").strip()
+        if normalized and normalized in available_ids:
+            return normalized
+    for model in available:
+        if model.provider == "ollama":
+            return model.id
+    return None
 
 
 _DEFAULT_AI_TEAMS_BY_FEATURE: dict[str, str] = {
@@ -164,7 +259,7 @@ def _get_curated_models(provider: str) -> list[AIModel]:
 
 
 def _list_ollama_models_from_api() -> list[AIModel]:
-    response = requests.get(
+    response = _OLLAMA_SESSION.get(
         f"{OLLAMA_BASE_URL}/api/tags",
         timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
     )
@@ -546,7 +641,7 @@ def _build_ticket_context(
     # Basic info
     key = issue.get("key", "")
     summary = fields.get("summary", "")
-    description = extract_adf_text(fields.get("description"))
+    description = _truncate_text(extract_adf_text(fields.get("description")), _TICKET_DESCRIPTION_CHAR_LIMIT)
 
     # Status
     status_obj = fields.get("status") or {}
@@ -607,12 +702,12 @@ def _build_ticket_context(
     for c in comments:
         author = (c.get("author") or {}).get("displayName", "Unknown")
         date = (c.get("created") or "")[:19].replace("T", " ")
-        body = extract_adf_text(c.get("body"))
+        body = _truncate_text(extract_adf_text(c.get("body")), _TICKET_COMMENT_CHAR_LIMIT)
         if body:
             comment_texts.append(f"  [{author} | {date}]: {body}")
 
     # Steps to re-create (customfield_11121)
-    steps = extract_adf_text(fields.get("customfield_11121"))
+    steps = _truncate_text(extract_adf_text(fields.get("customfield_11121")), _TICKET_STEPS_CHAR_LIMIT)
 
     # Work category
     work_category = fields.get("customfield_11239") or ""
@@ -640,11 +735,16 @@ def _build_ticket_context(
     if steps:
         lines.append(f"Steps to Re-Create:\n{steps}")
     if comment_texts:
-        lines.append(f"Comments ({len(comments)} total):\n" + "\n".join(comment_texts))
+        comment_block = _latest_limited_lines(
+            comment_texts,
+            max_items=_TICKET_COMMENT_MAX_COUNT,
+            max_chars=_TICKET_COMMENT_TOTAL_CHAR_LIMIT,
+        )
+        lines.append(f"Comments ({min(len(comment_texts), _TICKET_COMMENT_MAX_COUNT)} shown of {len(comment_texts)} non-empty):\n{comment_block}")
     if kb_matches:
         kb_lines = []
-        for article in kb_matches:
-            excerpt = article.content[:1200].strip()
+        for article in kb_matches[:_TICKET_KB_MATCH_MAX_COUNT]:
+            excerpt = _truncate_text(article.content, _TICKET_KB_EXCERPT_CHAR_LIMIT)
             kb_lines.append(
                 f"- {article.title} ({article.request_type or 'General'}): {article.summary or 'No summary'}\n"
                 f"{excerpt}"
@@ -690,7 +790,7 @@ def _build_technician_score_context(
     for comment in request_comments:
         author = ((comment.get("author") or {}).get("displayName") or "Unknown")
         created = str(comment.get("created") or "")[:19].replace("T", " ")
-        body = _extract_comment_body(comment)
+        body = _truncate_text(_extract_comment_body(comment), _QA_COMMENT_CHAR_LIMIT)
         if not body:
             continue
         line = f"[{author} | {created}]: {body}"
@@ -698,16 +798,6 @@ def _build_technician_score_context(
             public_comments.append(line)
         else:
             internal_comments.append(line)
-
-    raw_comments = []
-    comment_obj = fields.get("comment") or {}
-    if isinstance(comment_obj, dict):
-        for comment in comment_obj.get("comments", []) or []:
-            author = ((comment.get("author") or {}).get("displayName") or "Unknown")
-            created = str(comment.get("created") or "")[:19].replace("T", " ")
-            body = _extract_comment_body(comment)
-            if body:
-                raw_comments.append(f"[{author} | {created}]: {body}")
 
     lines = [
         f"Ticket: {key}",
@@ -724,14 +814,12 @@ def _build_technician_score_context(
         lines.append(f"Steps to Re-Create:\n{steps}")
     lines.append(
         "Customer-Facing Comments:\n"
-        + ("\n".join(public_comments) if public_comments else "None")
+        + (_latest_limited_lines(public_comments, max_items=_QA_COMMENT_MAX_COUNT) if public_comments else "None")
     )
     lines.append(
         "Internal Notes:\n"
-        + ("\n".join(internal_comments) if internal_comments else "None")
+        + (_latest_limited_lines(internal_comments, max_items=_QA_COMMENT_MAX_COUNT) if internal_comments else "None")
     )
-    if raw_comments:
-        lines.append("All Jira Comments:\n" + "\n".join(raw_comments))
     return "\n".join(lines)
 
 
@@ -750,7 +838,7 @@ def _build_kb_draft_context(
         + f"Title: {existing_article.title}\n"
         + f"Request Type: {existing_article.request_type or 'Not set'}\n"
         + f"Summary: {existing_article.summary or 'None'}\n"
-        + f"Content:\n{existing_article.content}"
+        + f"Content:\n{_truncate_text(existing_article.content, _KB_EXISTING_ARTICLE_CHAR_LIMIT)}"
     )
 
 
@@ -904,6 +992,7 @@ def _invoke_ollama(
     *,
     temperature: float | None = None,
     max_output_tokens: int | None = None,
+    json_output: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Call a local Ollama model and return response text plus usage."""
     payload: dict[str, Any] = {
@@ -914,6 +1003,10 @@ def _invoke_ollama(
         ],
         "stream": False,
     }
+    if OLLAMA_KEEP_ALIVE:
+        payload["keep_alive"] = OLLAMA_KEEP_ALIVE
+    if json_output:
+        payload["format"] = "json"
     options: dict[str, Any] = {}
     if temperature is not None:
         options["temperature"] = temperature
@@ -922,7 +1015,7 @@ def _invoke_ollama(
     if options:
         payload["options"] = options
 
-    response = requests.post(
+    response = _OLLAMA_SESSION.post(
         f"{OLLAMA_BASE_URL}/api/chat",
         json=payload,
         timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
@@ -947,6 +1040,7 @@ def _call_ollama(
     *,
     temperature: float | None = None,
     max_output_tokens: int | None = None,
+    json_output: bool = False,
 ) -> str:
     return _invoke_ollama(
         model_id,
@@ -954,6 +1048,7 @@ def _call_ollama(
         user_msg,
         temperature=temperature,
         max_output_tokens=max_output_tokens,
+        json_output=json_output,
     )[0]
 
 
@@ -969,6 +1064,7 @@ def invoke_model_text(
     team: str = "",
     temperature: float | None = None,
     max_output_tokens: int | None = None,
+    json_output: bool = False,
     openai_api_mode: str = "responses",
     metadata: dict[str, Any] | None = None,
 ) -> str:
@@ -1006,6 +1102,7 @@ def invoke_model_text(
                 user_msg,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
+                json_output=json_output,
             )
         else:
             raise ValueError(f"Unsupported provider: {provider}")
@@ -1270,6 +1367,8 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
         app_surface="tickets",
         actor_type="system",
         actor_id="auto-triage",
+        max_output_tokens=_AUTO_TRIAGE_MAX_OUTPUT_TOKENS,
+        json_output=True,
         metadata={"ticket_key": issue.get("key", "")},
     )
 
@@ -1381,6 +1480,8 @@ def score_closed_ticket(
         app_surface="tickets",
         actor_type="system",
         actor_id="technician-qa",
+        max_output_tokens=_TECHNICIAN_QA_MAX_OUTPUT_TOKENS,
+        json_output=True,
         metadata={"ticket_key": issue.get("key", "")},
     )
 
@@ -1408,6 +1509,8 @@ def draft_kb_article(
         app_surface="knowledge_base",
         actor_type="system",
         actor_id="kb-draft",
+        max_output_tokens=_KB_TICKET_DRAFT_MAX_OUTPUT_TOKENS,
+        json_output=True,
         metadata={"ticket_key": issue.get("key", ""), "existing_article_id": existing_article.id if existing_article else ""},
     )
 
@@ -1438,7 +1541,8 @@ def draft_kb_from_sop(text: str, filename: str, model_id: str) -> KnowledgeBaseD
         actor_type="system",
         actor_id="kb-sop-draft",
         temperature=0.2,
-        max_output_tokens=3000,
+        max_output_tokens=_KB_SOP_DRAFT_MAX_OUTPUT_TOKENS,
+        json_output=True,
         openai_api_mode="chat_completions",
         metadata={"filename": filename},
     )
@@ -1493,10 +1597,38 @@ def reformat_kb_article_content(article: KnowledgeBaseArticle, model_id: str) ->
         actor_type="system",
         actor_id="kb-reformat",
         temperature=0.2,
-        max_output_tokens=3000,
+        max_output_tokens=_KB_REFORMAT_MAX_OUTPUT_TOKENS,
         openai_api_mode="chat_completions",
         metadata={"article_id": article.id},
     ).strip()
+
+
+def _compact_azure_cost_context(context: dict[str, Any]) -> dict[str, Any]:
+    finops_status = context.get("finops_status") or {}
+    return {
+        "cost_summary": context.get("export_cost_summary") or context.get("cost_summary") or {},
+        "cost_trend_summary": context.get("cost_trend_summary") or {},
+        "cost_trend": list((context.get("export_cost_trend") or context.get("cost_trend") or [])[:30]),
+        "cost_by_service": list((context.get("export_cost_by_service") or context.get("cost_by_service") or [])[:10]),
+        "top_resources_by_cost": list((context.get("top_resources_by_cost") or [])[:10]),
+        "vm_inventory_summary": {
+            "total_vm_count": int((context.get("vm_inventory_summary") or {}).get("total_vm_count") or 0),
+            "by_sku": list(((context.get("vm_inventory_summary") or {}).get("by_sku") or [])[:10]),
+        },
+        "vm_power_state_summary": context.get("vm_power_state_summary") or {},
+        "advisor": list((context.get("advisor") or [])[:10]),
+        "savings_summary": context.get("savings_summary") or {},
+        "savings_opportunities": list((context.get("savings_opportunities") or [])[:10]),
+        "data_freshness": context.get("data_freshness") or {},
+        "finops_status": {
+            "available": bool(finops_status.get("available")),
+            "record_count": int(finops_status.get("record_count") or 0),
+            "coverage_start": finops_status.get("coverage_start"),
+            "coverage_end": finops_status.get("coverage_end"),
+            "field_coverage": finops_status.get("field_coverage") or {},
+            "ai_usage": finops_status.get("ai_usage") or {},
+        },
+    }
 
 
 def answer_azure_cost_question(
@@ -1513,10 +1645,11 @@ def answer_azure_cost_question(
     if not provider:
         raise ValueError(f"Unknown model: {model_id}")
 
+    compact_context = _compact_azure_cost_context(context)
     user_msg = (
         f"Question:\n{question.strip()}\n\n"
         "Grounding data:\n"
-        f"{json.dumps(context, indent=2)}"
+        f"{json.dumps(compact_context, separators=(',', ':'))}"
     )
 
     logger.info("Answering Azure cost question with %s (%s)", model_id, provider)
@@ -1529,6 +1662,7 @@ def answer_azure_cost_question(
         actor_type=actor_type,
         actor_id=actor_id,
         team=team,
+        max_output_tokens=_AZURE_COST_COPILOT_MAX_OUTPUT_TOKENS,
         metadata={"question_length": len(question.strip())},
     )
 
@@ -1536,17 +1670,17 @@ def answer_azure_cost_question(
         AzureCitation(
             source_type="summary",
             label="Cost summary",
-            detail=f"Lookback {context.get('cost_summary', {}).get('lookback_days', '')} days",
+            detail=f"Lookback {compact_context.get('cost_summary', {}).get('lookback_days', '')} days",
         ),
         AzureCitation(
             source_type="trend",
             label="Daily trend",
-            detail=f"{len(context.get('cost_trend') or [])} daily points",
+            detail=f"{len(compact_context.get('cost_trend') or [])} daily points",
         ),
         AzureCitation(
             source_type="breakdown",
             label="Top services",
-            detail=f"{len(context.get('cost_by_service') or [])} grouped rows",
+            detail=f"{len(compact_context.get('cost_by_service') or [])} grouped rows",
         ),
         AzureCitation(
             source_type="inventory",
@@ -1559,12 +1693,12 @@ def answer_azure_cost_question(
         AzureCitation(
             source_type="advisor",
             label="Advisor recommendations",
-            detail=f"{len(context.get('advisor') or [])} recommendations",
+            detail=f"{len(compact_context.get('advisor') or [])} recommendations",
         ),
         AzureCitation(
             source_type="savings",
             label="Savings opportunities",
-            detail=f"{len(context.get('savings_opportunities') or [])} ranked items",
+            detail=f"{len(compact_context.get('savings_opportunities') or [])} ranked items",
         ),
     ]
     export_summary = context.get("export_cost_summary") or {}

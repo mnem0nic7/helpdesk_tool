@@ -266,6 +266,39 @@ class JiraClient:
             if progress_callback:
                 progress_callback("backfilling", idx + 1, len(truncated))
 
+    def get_issue_changelog_page(
+        self,
+        key: str,
+        *,
+        start_at: int = 0,
+        max_results: int = 100,
+    ) -> dict[str, Any]:
+        """Fetch one page of Jira changelog history for an issue."""
+        validate_jira_key(key)
+        url = f"{self.base_url}/rest/api/3/issue/{key}/changelog"
+        resp = self.session.get(
+            url,
+            params={"startAt": start_at, "maxResults": max_results},
+            timeout=self._TIMEOUT,
+        )
+        self._raise_for_status(resp)
+        return resp.json()
+
+    def get_issue_changelog_all(self, key: str) -> list[dict[str, Any]]:
+        """Fetch all changelog histories for an issue."""
+        histories: list[dict[str, Any]] = []
+        start_at = 0
+        while True:
+            data = self.get_issue_changelog_page(key, start_at=start_at, max_results=100)
+            page_histories = data.get("values") or data.get("histories") or []
+            histories.extend(page_histories)
+            page_size = int(data.get("maxResults") or 100)
+            total = int(data.get("total") or len(page_histories))
+            start_at += page_size
+            if start_at >= total or not page_histories:
+                break
+        return histories
+
     def get_request_comments(self, key: str) -> list[dict[str, Any]]:
         """GET all JSM request comments, preserving public/internal visibility."""
         validate_jira_key(key)

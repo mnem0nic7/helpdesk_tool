@@ -32,6 +32,7 @@ from models import (
     ReportTemplateUpdateRequest,
 )
 from report_template_store import report_template_store
+from report_workbook_builder import ReportWorkbookBuilder
 from routes_tickets import _match
 from site_context import get_current_site_scope, get_scoped_issues, get_site_profile
 
@@ -288,6 +289,13 @@ def _sanitize_sheet_name(name: str) -> str:
     cleaned = re.sub(r"[\[\]\*:/\\?]", " ", str(name or "").strip())
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned[:31] or "Report"
+
+
+def _sanitize_report_filename(name: str) -> str:
+    """Return a filesystem-safe report filename segment."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name or "").strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._")
+    return cleaned[:80] or "Report"
 
 
 def _unique_sheet_name(name: str, used_names: set[str]) -> str:
@@ -1020,56 +1028,24 @@ async def report_export(config: ReportConfig, template_id: str | None = None) ->
 
     report_name = template.name if template else f"{report_prefix} Report"
     report_description = template.description if template else "Ad hoc report export from the current builder configuration."
-    view_type = _report_view_type(config)
-    window_field = _date_field_for_report_window_config(config, report_name=template.name if template else "")
-    window_field_label = _REPORT_WINDOW_LABELS.get(window_field, "Created")
-    base_issues = get_scoped_issues(include_excluded_on_primary=config.include_excluded)
-
-    wb = Workbook()
-    for index, (window_label, window_days) in enumerate(_WINDOW_EXPORT_SPECS):
-        ws = wb.active if index == 0 else wb.create_sheet()
-        rows, window_start, window_end = _windowed_rows_for_report(
-            config,
-            window_field=window_field,
-            window_days=window_days,
-            issues=base_issues,
-        )
-        metadata = [
-            ("Report", report_name),
-            ("Window", window_label),
-            ("Window Field", window_field_label),
-            ("Window Start", window_start.isoformat()),
-            ("Window End", window_end.isoformat()),
-            ("View", view_type),
-            ("Description", report_description),
-        ]
-
-        if config.group_by:
-            _write_grouped_sheet(
-                ws,
-                title=window_label,
-                group_by=config.group_by,
-                rows=rows,
-                metadata=metadata,
-            )
-        else:
-            columns = config.columns or DEFAULT_COLUMNS
-            _write_detail_sheet(
-                ws,
-                title=window_label,
-                columns=columns,
-                rows=rows,
-                metadata=metadata,
-            )
-
-    # Save to temp file
     now = datetime.now(timezone.utc)
-    filename = f"{report_prefix}_Report_Windows_{now.strftime('%Y%m%d_%H%M')}.xlsx"
+    filename = f"{report_prefix}_{_sanitize_report_filename(report_name)}_{now.strftime('%Y%m%d_%H%M')}.xlsx"
     tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
     tmp_path = tmp.name
     tmp.close()
-    wb.save(tmp_path)
-    logger.info("Windowed report export saved to %s (%d sheets)", tmp_path, len(_WINDOW_EXPORT_SPECS))
+    builder = ReportWorkbookBuilder(
+        all_issues=get_scoped_issues(include_excluded_on_primary=True),
+        site_scope=site_scope,
+        today=_today_utc(),
+    )
+    builder.build_single_report(
+        path=tmp_path,
+        config=config,
+        report_name=report_name,
+        report_description=report_description,
+        template=template,
+    )
+    logger.info("Executive report export saved to %s for %s", tmp_path, report_name)
 
     return FileResponse(
         path=tmp_path,
@@ -1113,14 +1089,18 @@ async def export_master_report_workbook(
     """Export all saved report templates for the current site in a single workbook."""
     templates = report_template_store.list_templates(get_current_site_scope())
     included_count = sum(1 for template in templates if template.include_in_master_export)
-    workbook = _build_master_report_workbook(templates, today=_today_utc())
     report_prefix = get_site_profile()["report_prefix"]
     now = datetime.now(timezone.utc)
     filename = f"{report_prefix}_Master_Report_{now.strftime('%Y%m%d_%H%M')}.xlsx"
     tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
     tmp_path = tmp.name
     tmp.close()
-    workbook.save(tmp_path)
+    builder = ReportWorkbookBuilder(
+        all_issues=get_scoped_issues(include_excluded_on_primary=True),
+        site_scope=get_current_site_scope(),
+        today=_today_utc(),
+    )
+    builder.build_master_report(path=tmp_path, templates=templates)
     logger.info("Master report workbook saved to %s (%d templates included)", tmp_path, included_count)
     return FileResponse(
         path=tmp_path,

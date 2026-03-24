@@ -183,17 +183,35 @@ verify_backend_ollama() {
     echo ">>> Verifying backend container can reach Ollama..."
     if ! docker compose exec -T backend python3 - <<'PY'
 import json
-import os
 import sys
 import urllib.request
 
-base = os.environ.get("OLLAMA_BASE_URL", "").rstrip("/")
-model = os.environ.get("OLLAMA_MODEL", "").strip()
+from config import (
+    AUTO_TRIAGE_MODEL,
+    AZURE_ALERT_RULE_MODEL,
+    OLLAMA_BASE_URL,
+    OLLAMA_FAST_MODEL,
+    OLLAMA_MODEL,
+    TECHNICIAN_SCORE_MODEL,
+)
+
+base = OLLAMA_BASE_URL.rstrip("/")
+models_to_check = {
+    candidate.strip()
+    for candidate in (
+        OLLAMA_MODEL,
+        OLLAMA_FAST_MODEL,
+        AUTO_TRIAGE_MODEL,
+        TECHNICIAN_SCORE_MODEL,
+        AZURE_ALERT_RULE_MODEL,
+    )
+    if candidate and candidate.strip()
+}
 if not base:
     print("OLLAMA_BASE_URL is not set in the backend container.")
     sys.exit(1)
-if not model:
-    print("OLLAMA_MODEL is not set in the backend container.")
+if not models_to_check:
+    print("No Ollama models are configured in the backend container.")
     sys.exit(1)
 
 url = f"{base}/api/tags"
@@ -210,8 +228,9 @@ except Exception as exc:
 print(f"Ollama reachable from backend container at {url}")
 models = {entry.get("model") or entry.get("name") for entry in payload.get("models") or []}
 print(f"Available Ollama models: {sorted(m for m in models if m)}")
-if model not in models:
-    print(f"Configured Ollama model '{model}' is not pulled on the host.")
+missing = sorted(model for model in models_to_check if model not in models)
+if missing:
+    print(f"Configured Ollama model(s) missing on the host: {missing}")
     sys.exit(1)
 PY
     then

@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 
-from ai_client import analyze_ticket, get_available_models, validate_suggestions
+from ai_client import analyze_ticket, get_available_models, select_available_ollama_model, validate_suggestions
 from auth import get_session
 from config import TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES
 from issue_cache import cache
@@ -130,7 +130,7 @@ async def cancel_triage_run() -> dict[str, Any]:
 @router.post("/run-all")
 async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any] | None = None) -> dict[str, Any]:
     """Run auto-triage on ALL existing cached tickets as a background task."""
-    from config import AUTO_TRIAGE_MODEL
+    from config import AUTO_TRIAGE_MODEL, OLLAMA_MODEL
 
     site_scope = get_current_site_scope()
     progress = _run_progress[site_scope]
@@ -139,11 +139,16 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     if progress["running"]:
         return {"started": False, "total_tickets": progress["total"], "message": "Triage run already in progress"}
 
-    model = (body or {}).get("model") or AUTO_TRIAGE_MODEL
+    requested_model = str((body or {}).get("model") or "").strip()
+    available_models = get_available_models()
+    model = requested_model or select_available_ollama_model(
+        available_models,
+        preferred_model_id=AUTO_TRIAGE_MODEL,
+        fallback_model_id=OLLAMA_MODEL,
+    )
 
-    # Validate model
-    available_ids = {m.id for m in get_available_models()}
-    if model not in available_ids:
+    available_ids = {m.id for m in available_models}
+    if not model or model not in available_ids:
         raise HTTPException(
             status_code=400,
             detail=f"Model '{model}' is not available from the active Ollama provider.",

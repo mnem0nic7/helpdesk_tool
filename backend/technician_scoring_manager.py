@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ai_background_worker import background_ai_worker
-from ai_client import get_available_models, score_closed_ticket
-from config import AUTO_TRIAGE_MODEL
+from ai_client import get_available_models, score_closed_ticket, select_available_ollama_model
+from config import OLLAMA_MODEL, TECHNICIAN_SCORE_MODEL
 from issue_cache import cache
 from jira_client import JiraClient
 from metrics import _is_open
@@ -342,13 +342,11 @@ class TechnicianScoringManager:
 
     @staticmethod
     def _select_model_id() -> str | None:
-        available = get_available_models()
-        if not available:
-            return None
-        available_ids = {model.id for model in available}
-        if AUTO_TRIAGE_MODEL in available_ids:
-            return AUTO_TRIAGE_MODEL
-        return available[0].id
+        return select_available_ollama_model(
+            get_available_models(),
+            preferred_model_id=TECHNICIAN_SCORE_MODEL,
+            fallback_model_id=OLLAMA_MODEL,
+        )
 
     def _build_scope_work(
         self,

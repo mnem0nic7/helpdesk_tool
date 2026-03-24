@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import zipfile
 from datetime import date, timedelta
 
 import pytest
@@ -187,7 +188,13 @@ class TestReportExport:
         assert resp.status_code == 200
         assert "spreadsheetml" in resp.headers.get("content-type", "")
         workbook = load_workbook(BytesIO(resp.content))
-        assert workbook.sheetnames == ["7 Day", "30 Day"]
+        assert workbook.sheetnames[0] == "Summary"
+        assert "Trends" in workbook.sheetnames
+        assert workbook.sheetnames[-2:] == ["7 Day", "30 Day"]
+        assert "Data Gaps" in workbook.sheetnames
+
+        workbook_zip = zipfile.ZipFile(BytesIO(resp.content))
+        assert any(name.startswith("xl/charts/chart") for name in workbook_zip.namelist())
 
     def test_detail_export_uses_7d_and_30d_created_windows(self, test_client, mock_cache, monkeypatch):
         monkeypatch.setattr("routes_export._today_utc", lambda: date(2026, 3, 10))
@@ -222,10 +229,13 @@ class TestReportExport:
         seven_day = workbook["7 Day"]
         thirty_day = workbook["30 Day"]
 
+        assert seven_day["A1"].value == "Report"
+        assert seven_day.row_dimensions[1].hidden is True
         assert seven_day["A2"].value == "Window"
         assert seven_day["B2"].value == "7 Day"
         assert seven_day["A3"].value == "Window Field"
         assert seven_day["B3"].value == "Created"
+        assert seven_day["A13"].value == "Key"
         assert thirty_day["B2"].value == "30 Day"
 
         seven_day_keys = [cell.value for cell in seven_day["A"] if isinstance(cell.value, str) and cell.value.startswith("OIT-WIN-")]
@@ -282,19 +292,89 @@ class TestReportExport:
         thirty_day = workbook["30 Day"]
         assert seven_day["B1"].value == "Mean Time to Resolution"
         assert seven_day["B3"].value == "Created"
+        assert seven_day["H13"].value == "Δ vs Prior Period"
+        assert seven_day["D13"].value == "Avg TTR (h)"
+        assert seven_day["E13"].value == "Median TTR (h)"
+        assert seven_day["F13"].value == "P95 TTR (h)"
+        assert seven_day["G13"].value == "P99 TTR (h)"
 
         seven_day_counts = {
             row[0].value: row[1].value
-            for row in seven_day.iter_rows(min_row=9, max_col=2)
+            for row in seven_day.iter_rows(min_row=14, max_col=2)
             if row[0].value in {"High", "Medium"}
         }
         thirty_day_counts = {
             row[0].value: row[1].value
-            for row in thirty_day.iter_rows(min_row=9, max_col=2)
+            for row in thirty_day.iter_rows(min_row=14, max_col=2)
             if row[0].value in {"High", "Medium"}
         }
         assert seven_day_counts == {}
         assert thirty_day_counts == {}
+
+    def test_grouped_export_includes_raw_percentiles(self, test_client, mock_cache, monkeypatch):
+        monkeypatch.setattr("routes_export._today_utc", lambda: date(2026, 3, 10))
+
+        issues = [
+            _make_workload_issue(
+                key="OIT-P95-1",
+                summary="Resolved in 1 hour",
+                status="Resolved",
+                status_category="Done",
+                priority="High",
+                assignee="Taylor Ops",
+                created="2026-03-09T00:00:00+00:00",
+                updated="2026-03-09T01:00:00+00:00",
+                resolved="2026-03-09T01:00:00+00:00",
+                oasisdev=False,
+            ),
+            _make_workload_issue(
+                key="OIT-P95-2",
+                summary="Resolved in 2 hours",
+                status="Resolved",
+                status_category="Done",
+                priority="High",
+                assignee="Taylor Ops",
+                created="2026-03-08T00:00:00+00:00",
+                updated="2026-03-08T02:00:00+00:00",
+                resolved="2026-03-08T02:00:00+00:00",
+                oasisdev=False,
+            ),
+            _make_workload_issue(
+                key="OIT-P95-3",
+                summary="Resolved in 100 hours",
+                status="Resolved",
+                status_category="Done",
+                priority="High",
+                assignee="Taylor Ops",
+                created="2026-03-06T00:00:00+00:00",
+                updated="2026-03-10T04:00:00+00:00",
+                resolved="2026-03-10T04:00:00+00:00",
+                oasisdev=False,
+            ),
+        ]
+        mock_cache.get_all_issues.return_value = issues
+        mock_cache.get_filtered_issues.return_value = issues
+
+        resp = test_client.post("/api/report/export", json={
+            "filters": {},
+            "columns": ["key", "summary", "priority", "resolved", "calendar_ttr_hours"],
+            "sort_field": "resolved",
+            "sort_dir": "desc",
+            "group_by": "priority",
+            "include_excluded": False,
+        })
+        assert resp.status_code == 200
+        workbook = load_workbook(BytesIO(resp.content), data_only=True)
+        sheet = workbook["30 Day"]
+        high_row = next(
+            row for row in sheet.iter_rows(min_row=14, max_col=8)
+            if row[0].value == "High"
+        )
+        assert high_row[1].value == 3
+        assert round(float(high_row[3].value), 1) == 34.3
+        assert round(float(high_row[4].value), 1) == 2.0
+        assert round(float(high_row[5].value), 1) >= 90.0
+        assert round(float(high_row[6].value), 1) >= 98.0
 
 
 class TestReportTemplates:
@@ -398,6 +478,9 @@ class TestReportTemplates:
 
         workbook = load_workbook(BytesIO(resp.content))
         assert "Report Index" in workbook.sheetnames
+        assert "Executive Dashboard" in workbook.sheetnames
+        assert "Trends" in workbook.sheetnames
+        assert "Data Gaps" in workbook.sheetnames
         assert "First Response Time 7d" in workbook.sheetnames
         assert "First Response Time 30d" in workbook.sheetnames
         assert "Backlog Size & Aging 30d" in workbook.sheetnames
@@ -420,6 +503,7 @@ class TestReportTemplates:
         ]
         report_names = [index_ws.cell(row=row_idx, column=1).value for row_idx in range(2, index_ws.max_row + 1)]
         assert "First Response Time" in report_names
+        assert index_ws["B2"].hyperlink is not None
 
         frt_ws = workbook["First Response Time 7d"]
         assert frt_ws["A1"].value == "Report"
@@ -449,6 +533,7 @@ class TestReportTemplates:
         assert workbook_resp.status_code == 200
         workbook = load_workbook(BytesIO(workbook_resp.content))
         assert "Report Index" in workbook.sheetnames
+        assert "Executive Dashboard" in workbook.sheetnames
         assert "First Response Time 7d" not in workbook.sheetnames
         assert "First Response Time 30d" not in workbook.sheetnames
 
@@ -527,6 +612,16 @@ class TestReportTemplates:
         assert mttr["window_field_label"] == "Resolved"
         assert mttr["count_7d"] == 5
         assert mttr["count_30d"] == 5
+
+    def test_master_workbook_contains_dashboard_and_detail_charts(self, test_client):
+        resp = test_client.get("/api/report/templates/master.xlsx")
+        assert resp.status_code == 200
+
+        workbook_zip = zipfile.ZipFile(BytesIO(resp.content))
+        chart_parts = [name for name in workbook_zip.namelist() if name.startswith("xl/charts/chart")]
+        drawing_parts = [name for name in workbook_zip.namelist() if name.startswith("xl/drawings/drawing")]
+        assert len(chart_parts) >= 5
+        assert drawing_parts
 
 
 class TestLegacyExport:

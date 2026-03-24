@@ -1,3 +1,5 @@
+import json
+
 import ai_client
 from ai_client import (
     analyze_ticket,
@@ -154,6 +156,38 @@ def test_get_available_models_includes_ollama_when_enabled(monkeypatch):
     assert [model.id for model in models] == ["qwen2.5:7b", "qwen2.5:3b"]
 
 
+def test_list_ollama_models_uses_shared_session(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "models": [
+                    {"model": "qwen2.5:7b", "name": "qwen2.5:7b"},
+                    {"name": "qwen2.5:3b"},
+                ]
+            }
+
+    class _Session:
+        def get(self, url: str, *, timeout: float):
+            captured["url"] = url
+            captured["timeout"] = timeout
+            return _Response()
+
+    monkeypatch.setattr(ai_client, "_OLLAMA_SESSION", _Session())
+    monkeypatch.setattr(ai_client, "OLLAMA_BASE_URL", "http://ollama.local:11434")
+    monkeypatch.setattr(ai_client, "OLLAMA_REQUEST_TIMEOUT_SECONDS", 42.0)
+
+    models = ai_client._list_ollama_models_from_api()
+
+    assert captured["url"] == "http://ollama.local:11434/api/tags"
+    assert captured["timeout"] == 42.0
+    assert [model.id for model in models] == ["qwen2.5:7b", "qwen2.5:3b"]
+
+
 def test_get_available_models_ignores_cloud_keys_and_uses_ollama_only(monkeypatch):
     monkeypatch.setattr(ai_client, "OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(ai_client, "ANTHROPIC_API_KEY", "test-key")
@@ -168,6 +202,30 @@ def test_get_available_models_ignores_cloud_keys_and_uses_ollama_only(monkeypatc
     models = get_available_models()
 
     assert [model.provider for model in models] == ["ollama"]
+
+
+def test_select_available_ollama_model_prefers_fast_model_then_fallback():
+    available = [
+        AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
+        AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
+    ]
+
+    assert (
+        ai_client.select_available_ollama_model(
+            available,
+            preferred_model_id="qwen2.5:3b",
+            fallback_model_id="qwen2.5:7b",
+        )
+        == "qwen2.5:3b"
+    )
+    assert (
+        ai_client.select_available_ollama_model(
+            available,
+            preferred_model_id="missing-model",
+            fallback_model_id="qwen2.5:7b",
+        )
+        == "qwen2.5:7b"
+    )
 
 
 def test_invoke_model_text_rejects_non_ollama_models(monkeypatch):
@@ -187,6 +245,50 @@ def test_invoke_model_text_rejects_non_ollama_models(monkeypatch):
         assert "Unknown model" in str(exc)
     else:
         raise AssertionError("Expected invoke_model_text to reject non-Ollama models")
+
+
+def test_invoke_ollama_includes_keep_alive_json_format_and_output_cap(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "message": {"content": '{"ok":true}'},
+                "prompt_eval_count": 12,
+                "eval_count": 8,
+            }
+
+    class _Session:
+        def post(self, url: str, *, json: dict[str, object], timeout: float):
+            captured["url"] = url
+            captured["json"] = json
+            captured["timeout"] = timeout
+            return _Response()
+
+    monkeypatch.setattr(ai_client, "_OLLAMA_SESSION", _Session())
+    monkeypatch.setattr(ai_client, "OLLAMA_BASE_URL", "http://ollama.local:11434")
+    monkeypatch.setattr(ai_client, "OLLAMA_KEEP_ALIVE", "15m")
+    monkeypatch.setattr(ai_client, "OLLAMA_REQUEST_TIMEOUT_SECONDS", 30.0)
+
+    text, usage = ai_client._invoke_ollama(
+        "qwen2.5:3b",
+        "system",
+        "user",
+        max_output_tokens=123,
+        json_output=True,
+    )
+
+    assert text == '{"ok":true}'
+    assert usage["total_tokens"] == 20
+    payload = captured["json"]
+    assert captured["url"] == "http://ollama.local:11434/api/chat"
+    assert captured["timeout"] == 30.0
+    assert payload["keep_alive"] == "15m"
+    assert payload["format"] == "json"
+    assert payload["options"]["num_predict"] == 123
 
 
 def test_get_default_copilot_model_id_prefers_supported_default():
@@ -275,6 +377,44 @@ def test_analyze_ticket_uses_ollama_provider(monkeypatch):
     assert result.suggestions[0].suggested_value == "VPN"
 
 
+def test_analyze_ticket_uses_fast_path_output_cap_and_json_mode(monkeypatch):
+    captured: dict[str, object] = {}
+    issue = {
+        "key": "OIT-315",
+        "fields": {
+            "summary": "Password reset",
+            "priority": {"name": "Medium"},
+            "status": {"name": "Open"},
+            "description": {"type": "doc", "content": [{"type": "text", "text": "Locked out."}]},
+            "comment": {"comments": []},
+        },
+    }
+
+    def fake_invoke(model_id, system, user_msg, **kwargs):
+        captured.update(kwargs)
+        return """{
+          "suggestions": [
+            {
+              "field": "request_type",
+              "suggested_value": "Password MFA Authentication",
+              "reasoning": "Login issue.",
+              "confidence": 0.96
+            }
+          ]
+        }"""
+
+    monkeypatch.setattr(ai_client, "get_request_type_names", lambda: ["Password MFA Authentication", "Get IT help"])
+    monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke)
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
+    import knowledge_base
+    monkeypatch.setattr(knowledge_base.kb_store, "find_relevant_articles", lambda **kwargs: [])
+
+    analyze_ticket(issue, "qwen2.5:3b")
+
+    assert captured["max_output_tokens"] == 450
+    assert captured["json_output"] is True
+
+
 def test_score_closed_ticket_clamps_invalid_scores(monkeypatch):
     issue = {
         "key": "OIT-77",
@@ -302,6 +442,36 @@ def test_score_closed_ticket_clamps_invalid_scores(monkeypatch):
 
     assert score.communication_score == 5
     assert score.documentation_score == 1
+
+
+def test_score_closed_ticket_uses_fast_path_output_cap_and_json_mode(monkeypatch):
+    captured: dict[str, object] = {}
+    issue = {
+        "key": "OIT-78",
+        "fields": {
+            "summary": "Closed ticket",
+            "status": {"name": "Closed", "statusCategory": {"name": "Done"}},
+            "comment": {"comments": []},
+        },
+    }
+
+    def fake_invoke(model_id, system, user_msg, **kwargs):
+        captured.update(kwargs)
+        return """{
+          "communication_score": 4,
+          "communication_notes": "Clear.",
+          "documentation_score": 4,
+          "documentation_notes": "Clear.",
+          "score_summary": "Solid."
+        }"""
+
+    monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke)
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
+
+    score_closed_ticket(issue, [], "qwen2.5:3b")
+
+    assert captured["max_output_tokens"] == 250
+    assert captured["json_output"] is True
 
 
 def test_analyze_ticket_includes_relevant_kb_context(monkeypatch):
@@ -368,6 +538,122 @@ def test_analyze_ticket_includes_relevant_kb_context(monkeypatch):
     assert "Restart Outlook and verify Exchange connectivity." in captured["user_msg"]
 
 
+def test_build_ticket_context_trims_comments_and_kb_matches():
+    def _adf(text: str) -> dict:
+        return {"type": "doc", "content": [{"type": "text", "text": text}]}
+
+    issue = {
+        "key": "OIT-500",
+        "fields": {
+            "summary": "Very long ticket",
+            "priority": {"name": "Medium"},
+            "status": {"name": "Open"},
+            "description": _adf("DESC-" * 500),
+            "customfield_11121": _adf("STEP-" * 200),
+            "comment": {
+                "comments": [
+                    {"author": {"displayName": f"User {index}"}, "created": "2026-03-20T00:00:00Z", "body": _adf(f"comment-{index}-" + ("x" * 500))}
+                    for index in range(8)
+                ]
+            },
+        },
+    }
+    kb_matches = [
+        KnowledgeBaseArticle(
+            id=index,
+            slug=f"article-{index}",
+            code=f"KB-{index}",
+            title=f"Article {index}",
+            request_type="Get IT help",
+            summary="Summary",
+            content=f"CONTENT-{index}-" + ("y" * 1000),
+            source_filename=f"article-{index}.docx",
+            source_ticket_key="",
+            imported_from_seed=True,
+            ai_generated=False,
+            created_at="2026-03-10T00:00:00Z",
+            updated_at="2026-03-10T00:00:00Z",
+        )
+        for index in range(3)
+    ]
+
+    context = ai_client._build_ticket_context(issue, kb_matches)
+
+    assert "comment-0-" not in context
+    assert "comment-1-" not in context
+    assert "comment-7-" in context
+    assert "Article 2" not in context
+    assert ("DESC-" * 450) not in context
+    assert ("STEP-" * 180) not in context
+
+
+def test_build_technician_score_context_trims_to_latest_comments_and_drops_duplicate_jira_section():
+    issue = {
+        "key": "OIT-900",
+        "fields": {
+            "summary": "Closed ticket",
+            "status": {"name": "Resolved"},
+            "comment": {"comments": []},
+        },
+    }
+    comments = []
+    for index in range(8):
+        comments.append(
+            {
+                "author": {"displayName": "Ada"},
+                "created": "2026-03-20T00:00:00Z",
+                "body": f"public-{index}-" + ("a" * 600),
+                "public": True,
+            }
+        )
+        comments.append(
+            {
+                "author": {"displayName": "Ada"},
+                "created": "2026-03-20T00:00:00Z",
+                "body": f"internal-{index}-" + ("b" * 600),
+                "public": False,
+            }
+        )
+
+    context = ai_client._build_technician_score_context(issue, comments)
+
+    assert "public-0-" not in context
+    assert "internal-0-" not in context
+    assert "public-7-" in context
+    assert "internal-7-" in context
+    assert "All Jira Comments" not in context
+
+
+def test_build_kb_draft_context_trims_existing_article_content():
+    issue = {
+        "key": "OIT-901",
+        "fields": {
+            "summary": "Closed ticket",
+            "status": {"name": "Resolved"},
+            "comment": {"comments": []},
+        },
+    }
+    article = KnowledgeBaseArticle(
+        id=8,
+        slug="huge-article",
+        code="KB-HUGE",
+        title="Huge Article",
+        request_type="Get IT help",
+        summary="Large article",
+        content="Z" * 4000,
+        source_filename="huge.docx",
+        source_ticket_key="",
+        imported_from_seed=True,
+        ai_generated=False,
+        created_at="2026-03-10T00:00:00Z",
+        updated_at="2026-03-10T00:00:00Z",
+    )
+
+    context = ai_client._build_kb_draft_context(issue, [], article)
+
+    assert "Z" * 3500 not in context
+
+
 def test_draft_kb_article_parses_model_response(monkeypatch):
     issue = {
         "key": "OIT-42",
@@ -416,6 +702,37 @@ def test_draft_kb_article_parses_model_response(monkeypatch):
     assert "Restart Outlook." in draft.content
 
 
+def test_draft_kb_article_uses_json_mode_and_output_cap(monkeypatch):
+    captured: dict[str, object] = {}
+    issue = {
+        "key": "OIT-43",
+        "fields": {
+            "summary": "Closed Outlook issue",
+            "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+            "comment": {"comments": []},
+        },
+    }
+
+    def fake_invoke(model_id, system, user_msg, **kwargs):
+        captured.update(kwargs)
+        return """{
+          "title": "Email or Outlook",
+          "request_type": "Email or Outlook",
+          "summary": "Adds sync repair guidance.",
+          "content": "Overview",
+          "recommended_action": "create_new",
+          "change_summary": "Adds guidance."
+        }"""
+
+    monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke)
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
+
+    draft_kb_article(issue, [], "qwen2.5:7b", None)
+
+    assert captured["max_output_tokens"] == 2200
+    assert captured["json_output"] is True
+
+
 def test_draft_kb_from_sop_supports_ollama(monkeypatch):
     monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
     monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen2.5:7b")
@@ -436,6 +753,46 @@ def test_draft_kb_from_sop_supports_ollama(monkeypatch):
     assert draft.title == "VPN Access"
     assert draft.model_used == "qwen2.5:7b"
     assert draft.request_type == "VPN"
+
+
+def test_answer_azure_cost_question_uses_compact_context_and_output_cap(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_invoke(model_id, system, user_msg, **kwargs):
+        captured["user_msg"] = user_msg
+        captured.update(kwargs)
+        return "All good."
+
+    context = {
+        "cost_summary": {"lookback_days": 30, "total_cost": 100.0},
+        "cost_trend_summary": {"wow_change_pct": 5.0},
+        "cost_trend": [{"date": f"2026-03-{index:02d}", "cost": float(index)} for index in range(1, 41)],
+        "cost_by_service": [{"label": f"service-{index}", "amount": index} for index in range(15)],
+        "top_resources_by_cost": [{"resource_id": f"res-{index}", "cost": index} for index in range(12)],
+        "vm_inventory_summary": {"total_vm_count": 5, "by_sku": [{"sku": f"sku-{index}", "count": index} for index in range(12)]},
+        "vm_power_state_summary": {"by_state": {"running": 4, "deallocated": 1}},
+        "advisor": [{"title": f"advisor-{index}"} for index in range(11)],
+        "savings_summary": {"quantified_monthly_savings": 12.5},
+        "savings_opportunities": [{"title": f"save-{index}"} for index in range(12)],
+        "data_freshness": {"cost": "2026-03-24T00:00:00Z"},
+        "finops_status": {"available": True, "record_count": 123, "field_coverage": {"resource_id_pct": 1.0}},
+        "unused_blob": {"should": "not be included"},
+    }
+
+    monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke)
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
+
+    response = ai_client.answer_azure_cost_question("Where can we save?", context, "qwen2.5:7b")
+
+    compact_payload = json.loads(str(captured["user_msg"]).split("Grounding data:\n", 1)[1])
+    assert response.answer == "All good."
+    assert captured["max_output_tokens"] == 900
+    assert captured.get("json_output", False) is False
+    assert len(compact_payload["cost_trend"]) == 30
+    assert len(compact_payload["cost_by_service"]) == 10
+    assert len(compact_payload["advisor"]) == 10
+    assert len(compact_payload["savings_opportunities"]) == 10
+    assert "unused_blob" not in compact_payload
 
 
 def test_invoke_model_text_records_ai_usage(monkeypatch):

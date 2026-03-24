@@ -85,16 +85,25 @@ def test_ollama_config_defaults_and_overrides(monkeypatch):
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("OLLAMA_ENABLED", "true")
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/")
-    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+    monkeypatch.setenv("OLLAMA_MODEL", "")
+    monkeypatch.setenv("OLLAMA_FAST_MODEL", "")
     monkeypatch.delenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("OLLAMA_KEEP_ALIVE", "")
+    monkeypatch.setenv("AUTO_TRIAGE_MODEL", "")
+    monkeypatch.setenv("TECHNICIAN_SCORE_MODEL", "")
+    monkeypatch.setenv("AZURE_ALERT_RULE_MODEL", "")
 
     config = _reload_config()
 
     assert config.OLLAMA_ENABLED is True
     assert config.OLLAMA_BASE_URL == "http://localhost:11434"
     assert config.OLLAMA_MODEL == "qwen2.5:7b"
+    assert config.OLLAMA_FAST_MODEL == "qwen2.5:3b"
     assert config.OLLAMA_REQUEST_TIMEOUT_SECONDS == 300
-    assert config.AUTO_TRIAGE_MODEL == "qwen2.5:7b"
+    assert config.OLLAMA_KEEP_ALIVE == "15m"
+    assert config.AUTO_TRIAGE_MODEL == "qwen2.5:3b"
+    assert config.TECHNICIAN_SCORE_MODEL == "qwen2.5:3b"
+    assert config.AZURE_ALERT_RULE_MODEL == "qwen2.5:3b"
 
 
 def test_ai_pricing_config_parses_json(monkeypatch):

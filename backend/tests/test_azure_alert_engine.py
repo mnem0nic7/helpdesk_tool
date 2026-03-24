@@ -251,22 +251,34 @@ def test_resource_untagged_empty_required_tags():
 def test_parse_azure_alert_rule_uses_shared_ai_invocation(monkeypatch):
     import ai_client
     import azure_alert_engine as engine
+    import config
 
-    class _Model:
+    class _FastModel:
+        id = "qwen2.5:3b"
+        provider = "ollama"
+
+    class _QualityModel:
         id = "qwen2.5:7b"
         provider = "ollama"
 
-    monkeypatch.setattr(ai_client, "get_available_models", lambda: [_Model()])
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(ai_client, "get_available_models", lambda: [_FastModel(), _QualityModel()])
+    monkeypatch.setattr(config, "AZURE_ALERT_RULE_MODEL", "qwen2.5:3b")
+    monkeypatch.setattr(config, "OLLAMA_MODEL", "qwen2.5:7b")
     monkeypatch.setattr(
         ai_client,
         "invoke_model_text",
-        lambda model_id, system, user_msg, **kwargs: '{"parsed": true, "name": "Monthly cost", "domain": "cost", "trigger_type": "cost_threshold", "trigger_config": {"period": "monthly", "threshold_usd": 1000}, "frequency": "daily", "schedule_time": "09:00", "schedule_days": "0,1,2,3,4", "recipients": "", "teams_webhook_url": "", "summary": "Daily threshold"}',
+        lambda model_id, system, user_msg, **kwargs: captured.update({"model_id": model_id, **kwargs}) or '{"parsed": true, "name": "Monthly cost", "domain": "cost", "trigger_type": "cost_threshold", "trigger_config": {"period": "monthly", "threshold_usd": 1000}, "frequency": "daily", "schedule_time": "09:00", "schedule_days": "0,1,2,3,4", "recipients": "", "teams_webhook_url": "", "summary": "Daily threshold"}',
     )
 
     result = engine.parse_azure_alert_rule("alert me when cost crosses 1000 this month")
 
     assert result["parsed"] is True
     assert result["trigger_type"] == "cost_threshold"
+    assert captured["model_id"] == "qwen2.5:3b"
+    assert captured["max_output_tokens"] == 220
+    assert captured["json_output"] is True
 
 
 def test_build_recommendation_teams_card_includes_recommendation_details():

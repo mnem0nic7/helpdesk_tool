@@ -89,6 +89,29 @@ def test_preview_scope_run_raises_while_auto_triage_has_priority(monkeypatch):
         manager.preview_scope_run("primary")
 
 
+def test_select_model_id_prefers_technician_score_model_and_falls_back(monkeypatch):
+    monkeypatch.setattr(
+        manager_module,
+        "get_available_models",
+        lambda: [
+            SimpleNamespace(id="qwen2.5:3b", provider="ollama"),
+            SimpleNamespace(id="qwen2.5:7b", provider="ollama"),
+        ],
+    )
+    monkeypatch.setattr(manager_module, "TECHNICIAN_SCORE_MODEL", "qwen2.5:3b")
+    monkeypatch.setattr(manager_module, "OLLAMA_MODEL", "qwen2.5:7b")
+
+    assert TechnicianScoringManager._select_model_id() == "qwen2.5:3b"
+
+    monkeypatch.setattr(
+        manager_module,
+        "get_available_models",
+        lambda: [SimpleNamespace(id="qwen2.5:7b", provider="ollama")],
+    )
+
+    assert TechnicianScoringManager._select_model_id() == "qwen2.5:7b"
+
+
 @pytest.mark.asyncio
 async def test_run_scope_once_skips_scheduled_scoring_while_cache_is_warming(monkeypatch):
     progress = {

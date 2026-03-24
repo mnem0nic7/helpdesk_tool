@@ -835,22 +835,31 @@ Do not include any text outside the JSON object.
 
 def parse_azure_alert_rule(message: str) -> dict[str, Any]:
     """Call AI to parse a natural-language alert description. Returns raw dict."""
-    from ai_client import get_available_models, invoke_model_text  # noqa: PLC0415
+    from ai_client import get_available_models, invoke_model_text, select_available_ollama_model  # noqa: PLC0415
+    from config import AZURE_ALERT_RULE_MODEL, OLLAMA_MODEL  # noqa: PLC0415
 
     models = get_available_models()
     if not models:
         return {"parsed": False, "error": "No AI models configured"}
 
-    model = models[0]
+    model_id = select_available_ollama_model(
+        models,
+        preferred_model_id=AZURE_ALERT_RULE_MODEL,
+        fallback_model_id=OLLAMA_MODEL,
+    )
+    if not model_id:
+        return {"parsed": False, "error": "No AI models configured"}
     try:
         raw = invoke_model_text(
-            model.id,
+            model_id,
             _CHAT_SYSTEM_PROMPT,
             message,
             feature_surface="azure_alert_rule_parse",
             app_surface="azure_alerts",
             actor_type="system",
             actor_id="azure-alerts",
+            max_output_tokens=220,
+            json_output=True,
         )
         return json.loads(raw.strip())
     except (json.JSONDecodeError, Exception) as exc:

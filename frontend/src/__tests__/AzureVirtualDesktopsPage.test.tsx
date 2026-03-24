@@ -29,6 +29,11 @@ beforeAll(() => {
 describe("AzureVirtualDesktopsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 1400,
+    });
     mockApi.getAzureVirtualDesktopRemovalCandidates.mockResolvedValue({
       desktops: [
         {
@@ -97,6 +102,41 @@ describe("AzureVirtualDesktopsPage", () => {
         owner_history_unavailable: 0,
       },
       generated_at: "2026-03-23T00:00:00+00:00",
+    });
+  });
+
+  it("opens a resizable detail drawer when a cleanup row is clicked", async () => {
+    render(<AzureVirtualDesktopsPage />);
+
+    const row = (await screen.findByText("avd-vm-1")).closest("tr");
+    expect(row).not.toBeNull();
+    fireEvent.click(row!);
+
+    const drawer = await screen.findByTestId("avd-cleanup-detail-drawer");
+    const resizer = await screen.findByTestId("avd-cleanup-detail-resizer");
+    expect(drawer).toHaveStyle({ width: "960px" });
+    expect(screen.getByText("Desktop Detail")).toBeInTheDocument();
+    expect(screen.getByText("Signals & Cleanup Evaluation")).toBeInTheDocument();
+    expect(screen.getByText("Resource ID")).toBeInTheDocument();
+
+    fireEvent.pointerDown(resizer, { clientX: 440 });
+    fireEvent.mouseMove(window, { clientX: 280 });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      expect(drawer).toHaveStyle({ width: "1120px" });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+
+    await waitFor(() => {
+      expect(drawer).toHaveStyle({ width: "1368px" });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("avd-cleanup-detail-drawer")).not.toBeInTheDocument();
     });
   });
 

@@ -852,15 +852,22 @@ class IssueCache:
 
     async def _auto_triage_new_tickets(self, new_keys: list[str], progress: dict | None = None) -> None:
         """Run AI triage on genuinely new tickets and apply high-confidence priority changes."""
-        from config import AUTO_TRIAGE_MODEL
-        from ai_client import analyze_ticket, get_available_models, validate_suggestions
+        from config import AUTO_TRIAGE_MODEL, OLLAMA_MODEL
+        from ai_client import analyze_ticket, get_available_models, select_available_ollama_model, validate_suggestions
         from triage_store import store
         from jira_client import JiraClient
 
-        # Check model is available
-        available_ids = {m.id for m in get_available_models()}
-        if AUTO_TRIAGE_MODEL not in available_ids:
-            logger.warning("Auto-triage: model %s not available from the active AI provider, skipping", AUTO_TRIAGE_MODEL)
+        model_id = select_available_ollama_model(
+            get_available_models(),
+            preferred_model_id=AUTO_TRIAGE_MODEL,
+            fallback_model_id=OLLAMA_MODEL,
+        )
+        if not model_id:
+            logger.warning(
+                "Auto-triage: neither preferred model %s nor fallback model %s is available from the active AI provider, skipping",
+                AUTO_TRIAGE_MODEL,
+                OLLAMA_MODEL,
+            )
             return
 
         self.ensure_auto_triage_processed_backfill()
@@ -898,7 +905,7 @@ class IssueCache:
 
                     async def _run_ai_triage() -> Any:
                         return await loop.run_in_executor(
-                            None, analyze_ticket, issue, AUTO_TRIAGE_MODEL
+                            None, analyze_ticket, issue, model_id
                         )
 
                     result = await background_ai_worker.run_item(
@@ -922,7 +929,7 @@ class IssueCache:
                                 )
                                 store.log_change(
                                     key, "priority", s.current_value, s.suggested_value,
-                                    s.confidence, AUTO_TRIAGE_MODEL,
+                                    s.confidence, model_id,
                                 )
                                 # Update local cache
                                 self.update_cached_field(key, "priority", s.suggested_value)
@@ -941,7 +948,7 @@ class IssueCache:
                                     )
                                     store.log_change(
                                         key, "request_type", s.current_value, s.suggested_value,
-                                        s.confidence, AUTO_TRIAGE_MODEL,
+                                        s.confidence, model_id,
                                     )
                                     # Update local cache
                                     self.update_cached_field(key, "request_type", s.suggested_value)
@@ -959,7 +966,7 @@ class IssueCache:
                                     )
                                     store.log_change(
                                         key, "reporter", s.current_value, s.suggested_value,
-                                        s.confidence, AUTO_TRIAGE_MODEL,
+                                        s.confidence, model_id,
                                     )
                                     self.update_cached_field(
                                         key,
