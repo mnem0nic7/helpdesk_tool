@@ -40,6 +40,7 @@ def test_cost_export_config_defaults_and_bool_parsing(monkeypatch):
     monkeypatch.setenv("AZURE_COST_EXPORTS_ENABLED", "true")
     monkeypatch.delenv("AZURE_COST_EXPORT_ROOT", raising=False)
     monkeypatch.delenv("AZURE_COST_EXPORT_MANIFEST_DB_PATH", raising=False)
+    monkeypatch.delenv("AZURE_FINOPS_DUCKDB_PATH", raising=False)
     monkeypatch.delenv("AZURE_COST_EXPORT_STAGING_DIR", raising=False)
     monkeypatch.delenv("AZURE_COST_EXPORT_QUARANTINE_DIR", raising=False)
 
@@ -48,6 +49,7 @@ def test_cost_export_config_defaults_and_bool_parsing(monkeypatch):
     assert config.AZURE_COST_EXPORTS_ENABLED is True
     assert config.AZURE_COST_EXPORT_ROOT == "/tmp/azure-data/azure_cost_exports"
     assert config.AZURE_COST_EXPORT_MANIFEST_DB_PATH == "/tmp/azure-data/azure_export_deliveries.db"
+    assert config.AZURE_FINOPS_DUCKDB_PATH == "/tmp/azure-data/azure_finops.duckdb"
     assert config.AZURE_COST_EXPORT_STAGING_DIR == "/tmp/azure-data/azure_cost_exports/_staged"
     assert config.AZURE_COST_EXPORT_QUARANTINE_DIR == "/tmp/azure-data/azure_cost_exports/_quarantine"
 
@@ -55,9 +57,14 @@ def test_cost_export_config_defaults_and_bool_parsing(monkeypatch):
 def test_reporting_handoff_config_defaults_and_overrides(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "")
     monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("JIRA_PROJECT", "OIT")
     monkeypatch.setenv("AZURE_REPORTING_POWER_BI_URL", "https://app.powerbi.com/groups/example")
     monkeypatch.setenv("AZURE_REPORTING_COST_ANALYSIS_URL", "https://portal.azure.com/#blade/Microsoft_Azure_CostManagement/Menu/costanalysis")
     monkeypatch.setenv("AZURE_REPORTING_POWER_BI_LABEL", "FinOps Workspace")
+    monkeypatch.setenv("AZURE_FINOPS_RECOMMENDATION_JIRA_PROJECT", "FINOPS")
+    monkeypatch.setenv("AZURE_FINOPS_RECOMMENDATION_JIRA_ISSUE_TYPE", "Story")
+    monkeypatch.setenv("AZURE_FINOPS_RECOMMENDATION_TEAMS_WEBHOOK_URL", "https://hooks.example.test/finops")
+    monkeypatch.setenv("AZURE_FINOPS_RECOMMENDATION_TEAMS_CHANNEL_LABEL", "FinOps Watch")
     monkeypatch.delenv("AZURE_REPORTING_COST_ANALYSIS_LABEL", raising=False)
 
     config = _reload_config()
@@ -67,6 +74,10 @@ def test_reporting_handoff_config_defaults_and_overrides(monkeypatch):
     assert config.AZURE_REPORTING_POWER_BI_LABEL == "FinOps Workspace"
     assert config.AZURE_REPORTING_COST_ANALYSIS_LABEL == "Azure Cost Analysis"
     assert config.AZURE_AVD_SESSION_HISTORY_LOOKBACK_DAYS == 90
+    assert config.AZURE_FINOPS_RECOMMENDATION_JIRA_PROJECT == "FINOPS"
+    assert config.AZURE_FINOPS_RECOMMENDATION_JIRA_ISSUE_TYPE == "Story"
+    assert config.AZURE_FINOPS_RECOMMENDATION_TEAMS_WEBHOOK_URL == "https://hooks.example.test/finops"
+    assert config.AZURE_FINOPS_RECOMMENDATION_TEAMS_CHANNEL_LABEL == "FinOps Watch"
 
 
 def test_ollama_config_defaults_and_overrides(monkeypatch):
@@ -84,3 +95,51 @@ def test_ollama_config_defaults_and_overrides(monkeypatch):
     assert config.OLLAMA_MODEL == "qwen2.5:7b"
     assert config.OLLAMA_REQUEST_TIMEOUT_SECONDS == 300
     assert config.AUTO_TRIAGE_MODEL == "qwen2.5:7b"
+
+
+def test_ai_pricing_config_parses_json(monkeypatch):
+    monkeypatch.setenv("APP_SECRET_KEY", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv(
+        "AZURE_FINOPS_AI_PRICING_JSON",
+        '{"providers":{"ollama":{"input_per_1k_tokens":0,"output_per_1k_tokens":0,"currency":"USD"}}}',
+    )
+
+    config = _reload_config()
+
+    assert config.AZURE_FINOPS_AI_PRICING["providers"]["ollama"]["currency"] == "USD"
+
+
+def test_ai_team_mapping_config_parses_json(monkeypatch):
+    monkeypatch.setenv("APP_SECRET_KEY", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv(
+        "AZURE_FINOPS_AI_TEAM_MAPPINGS_JSON",
+        (
+            '{"feature_surfaces":{"ticket_auto_triage":"Service Desk"},'
+            '"app_surfaces":{"azure_portal":"FinOps"},'
+            '"actor_ids":{"azure-alerts":"FinOps"}}'
+        ),
+    )
+
+    config = _reload_config()
+
+    assert config.AZURE_FINOPS_AI_TEAM_MAPPINGS["feature_surfaces"]["ticket_auto_triage"] == "Service Desk"
+    assert config.AZURE_FINOPS_AI_TEAM_MAPPINGS["app_surfaces"]["azure_portal"] == "FinOps"
+    assert config.AZURE_FINOPS_AI_TEAM_MAPPINGS["actor_ids"]["azure-alerts"] == "FinOps"
+
+
+def test_safe_script_hook_config_parses_json(monkeypatch):
+    monkeypatch.setenv("APP_SECRET_KEY", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv(
+        "AZURE_FINOPS_SAFE_SCRIPT_HOOKS_JSON",
+        (
+            '{"vm_echo":{"label":"VM Echo","command":["python3","/app/backend/scripts/azure_finops_safe_hook_echo.py"],'
+            '"allowed_categories":["compute"],"allowed_opportunity_types":["rightsizing"],"default_dry_run":true}}'
+        ),
+    )
+
+    config = _reload_config()
+
+    assert config.AZURE_FINOPS_SAFE_SCRIPT_HOOKS["vm_echo"]["label"] == "VM Echo"

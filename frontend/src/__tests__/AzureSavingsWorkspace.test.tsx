@@ -154,6 +154,19 @@ const { mockApi } = vi.hoisted(() => ({
     getAzureSavingsOpportunities: vi.fn(),
     exportAzureSavingsCsv: vi.fn((params?: Record<string, unknown>) => `/api/azure/savings/export.csv?${new URLSearchParams(Object.entries(params ?? {}).map(([k, v]) => [k, String(v)])).toString()}`),
     exportAzureSavingsExcel: vi.fn((params?: Record<string, unknown>) => `/api/azure/savings/export.xlsx?${new URLSearchParams(Object.entries(params ?? {}).map(([k, v]) => [k, String(v)])).toString()}`),
+    getAzureRecommendationsSummary: vi.fn(),
+    getAzureRecommendations: vi.fn(),
+    getAzureRecommendation: vi.fn(),
+    getAzureRecommendationActionContract: vi.fn(),
+    getAzureRecommendationHistory: vi.fn(),
+    dismissAzureRecommendation: vi.fn(),
+    reopenAzureRecommendation: vi.fn(),
+    updateAzureRecommendationActionState: vi.fn(),
+    createAzureRecommendationTicket: vi.fn(),
+    sendAzureRecommendationAlert: vi.fn(),
+    runAzureRecommendationSafeScript: vi.fn(),
+    exportAzureRecommendationsCsv: vi.fn((params?: Record<string, unknown>) => `/api/azure/recommendations/export.csv?${new URLSearchParams(Object.entries(params ?? {}).map(([k, v]) => [k, String(v)])).toString()}`),
+    exportAzureRecommendationsExcel: vi.fn((params?: Record<string, unknown>) => `/api/azure/recommendations/export.xlsx?${new URLSearchParams(Object.entries(params ?? {}).map(([k, v]) => [k, String(v)])).toString()}`),
     getAzureCostSummary: vi.fn(),
     getAzureCostTrend: vi.fn(),
     getAzureCostBreakdown: vi.fn(),
@@ -251,6 +264,170 @@ beforeEach(() => {
     top_resource_groups: [{ label: "Prod / rg-prod", count: 4, estimated_monthly_savings: 41 }],
   });
   mockApi.getAzureSavingsOpportunities.mockImplementation(async (params?: Record<string, unknown>) => filterOpportunities(params));
+  mockApi.getAzureRecommendationsSummary.mockResolvedValue({
+    currency: "USD",
+    total_opportunities: 5,
+    quantified_opportunities: 4,
+    quantified_monthly_savings: 41,
+    quick_win_count: 3,
+    quick_win_monthly_savings: 17,
+    unquantified_opportunity_count: 1,
+    by_category: [
+      { label: "compute", count: 1, estimated_monthly_savings: 20 },
+      { label: "storage", count: 2, estimated_monthly_savings: 16 },
+      { label: "network", count: 1, estimated_monthly_savings: 5 },
+      { label: "commitment", count: 1, estimated_monthly_savings: 0 },
+    ],
+    by_opportunity_type: [],
+    by_effort: [{ label: "low", count: 4 }],
+    by_risk: [{ label: "low", count: 2 }, { label: "medium", count: 3 }],
+    by_confidence: [{ label: "high", count: 4 }, { label: "medium", count: 1 }],
+    top_subscriptions: [{ label: "Prod", count: 4, estimated_monthly_savings: 41 }],
+    top_resource_groups: [{ label: "Prod / rg-prod", count: 4, estimated_monthly_savings: 41 }],
+  });
+  mockApi.getAzureRecommendations.mockImplementation(async (params?: Record<string, unknown>) => filterOpportunities(params));
+  mockApi.getAzureRecommendation.mockImplementation(async (recommendationId: string) => {
+    const match = baseOpportunities.find((item) => item.id === recommendationId);
+    if (!match) throw new Error("Not found");
+    return { ...match, lifecycle_status: "open", action_state: "none", dismissed_reason: "" };
+  });
+  mockApi.getAzureRecommendationActionContract.mockImplementation(async (recommendationId: string) => ({
+    recommendation_id: recommendationId,
+    lifecycle_status: "open",
+    current_action_state: "none",
+    generated_at: "2026-03-23T12:00:00+00:00",
+    actions: [
+      {
+        action_type: "create_ticket",
+        label: "Create Jira ticket",
+        description: "Create a Jira follow-up for the recommendation and persist the linked workflow state.",
+        category: "jira",
+        status: "available",
+        can_execute: true,
+        requires_admin: true,
+        repeatable: false,
+        pending_action_state: "ticket_pending",
+        completed_action_state: "ticket_created",
+        current_action_state: "none",
+        blocked_reason: "",
+        note_placeholder: "Add an operator note for the Jira follow-up.",
+        metadata_fields: [],
+        latest_event: {},
+      },
+      {
+        action_type: "send_alert",
+        label: "Send Teams alert",
+        description: "Send a Teams or operator-facing alert using the existing alert plumbing and persist the alert workflow state.",
+        category: "teams",
+        status: "available",
+        can_execute: true,
+        requires_admin: true,
+        repeatable: true,
+        pending_action_state: "alert_pending",
+        completed_action_state: "alert_sent",
+        current_action_state: "none",
+        blocked_reason: "",
+        note_placeholder: "Add an operator note for the Teams alert.",
+        metadata_fields: [],
+        options: [],
+        latest_event: {},
+      },
+      {
+        action_type: "run_safe_script",
+        label: "Run safe script",
+        description: "Run an allowlisted safe remediation hook with explicit guardrails.",
+        category: "script",
+        status: "available",
+        can_execute: true,
+        requires_admin: true,
+        repeatable: true,
+        pending_action_state: "script_pending",
+        completed_action_state: "script_executed",
+        current_action_state: "none",
+        blocked_reason: "",
+        note_placeholder: "Add an operator note for the safe remediation hook run.",
+        metadata_fields: [],
+        options: [
+          {
+            key: "vm_echo",
+            label: "VM Echo",
+            description: "Preview the VM remediation path.",
+            default_dry_run: true,
+            allow_apply: false,
+            repeatable: true,
+          },
+        ],
+        latest_event: {},
+      },
+    ],
+  }));
+  mockApi.getAzureRecommendationHistory.mockResolvedValue([
+    {
+      event_id: "evt-1",
+      recommendation_id: "opp-disk",
+      action_type: "state_change",
+      action_status: "completed",
+      actor_type: "user",
+      actor_id: "user@example.com",
+      note: "Reviewed by FinOps.",
+      metadata: {},
+      created_at: "2026-03-23T12:00:00+00:00",
+    },
+  ]);
+  mockApi.dismissAzureRecommendation.mockImplementation(async (recommendationId: string, reason = "") => {
+    const match = baseOpportunities.find((item) => item.id === recommendationId);
+    if (!match) throw new Error("Not found");
+    return { ...match, lifecycle_status: "dismissed", action_state: "none", dismissed_reason: reason };
+  });
+  mockApi.reopenAzureRecommendation.mockImplementation(async (recommendationId: string) => {
+    const match = baseOpportunities.find((item) => item.id === recommendationId);
+    if (!match) throw new Error("Not found");
+    return { ...match, lifecycle_status: "open", action_state: "none", dismissed_reason: "" };
+  });
+  mockApi.updateAzureRecommendationActionState.mockImplementation(async (recommendationId: string, body: Record<string, unknown>) => {
+    const match = baseOpportunities.find((item) => item.id === recommendationId);
+    if (!match) throw new Error("Not found");
+    return { ...match, lifecycle_status: "open", action_state: String(body.action_state ?? "none"), dismissed_reason: "" };
+  });
+  mockApi.createAzureRecommendationTicket.mockImplementation(async (recommendationId: string, body: Record<string, unknown>) => {
+    const match = baseOpportunities.find((item) => item.id === recommendationId);
+    if (!match) throw new Error("Not found");
+    return {
+      recommendation: { ...match, lifecycle_status: "open", action_state: "ticket_created", dismissed_reason: "" },
+      ticket_key: "OIT-123",
+      ticket_url: "https://example.atlassian.net/browse/OIT-123",
+      jira_issue_id: "10001",
+      project_key: String(body.project_key ?? "OIT"),
+      issue_type: String(body.issue_type ?? "Task"),
+      summary: String(body.summary ?? `[FinOps] ${match.title}`),
+    };
+  });
+  mockApi.sendAzureRecommendationAlert.mockImplementation(async (recommendationId: string, body: Record<string, unknown>) => {
+    const match = baseOpportunities.find((item) => item.id === recommendationId);
+    if (!match) throw new Error("Not found");
+    return {
+      recommendation: { ...match, lifecycle_status: "open", action_state: "alert_sent", dismissed_reason: "" },
+      alert_status: "sent",
+      delivery_channel: String(body.channel ?? "FinOps"),
+      sent_at: "2026-03-23T12:30:00+00:00",
+    };
+  });
+  mockApi.runAzureRecommendationSafeScript.mockImplementation(async (recommendationId: string, body: Record<string, unknown>) => {
+    const match = baseOpportunities.find((item) => item.id === recommendationId);
+    if (!match) throw new Error("Not found");
+    return {
+      recommendation: { ...match, lifecycle_status: "open", action_state: "none", dismissed_reason: "" },
+      hook_key: String(body.hook_key ?? "vm_echo"),
+      hook_label: "VM Echo",
+      action_status: body.dry_run === false ? "completed" : "dry_run",
+      dry_run: body.dry_run !== false,
+      started_at: "2026-03-23T12:30:00+00:00",
+      completed_at: "2026-03-23T12:30:02+00:00",
+      duration_ms: 2000,
+      exit_code: 0,
+      output_excerpt: "VM Echo completed in dry run mode for disk-1.",
+    };
+  });
   mockApi.getAzureCostSummary.mockResolvedValue({
     lookback_days: 30,
     total_cost: 500,
@@ -324,10 +501,10 @@ beforeEach(() => {
     matched_count: 1,
     total_count: 1,
   });
-  mockApi.getAzureAIModels.mockResolvedValue([{ id: "gpt-5.4-mini", name: "gpt-5.4-mini", provider: "openai" }]);
+  mockApi.getAzureAIModels.mockResolvedValue([{ id: "qwen2.5:7b", name: "qwen2.5:7b", provider: "ollama" }]);
   mockApi.askAzureCostCopilot.mockResolvedValue({
     answer: "Start with unattached disks and idle VM cleanup.",
-    model_used: "gpt-5.4-mini",
+    model_used: "qwen2.5:7b",
     generated_at: "2026-03-19T00:00:00Z",
     citations: [{ source_type: "savings", label: "Savings opportunities", detail: "5 ranked items" }],
   });
@@ -338,7 +515,7 @@ describe("Azure savings workspace", () => {
     render(<AzureSavingsPage />);
 
     await screen.findByText("Quantified Savings");
-    expect(screen.getByText("Heuristic operational guidance")).toBeInTheDocument();
+    expect(screen.getByText("Persisted recommendation workspace")).toBeInTheDocument();
     expect(screen.getByText("Actionable Savings Opportunities")).toBeInTheDocument();
     expect(screen.getByText("Clean up attached costs for idle VM vm-1")).toBeInTheDocument();
 
@@ -347,16 +524,65 @@ describe("Azure savings workspace", () => {
     });
 
     await waitFor(() => {
-      expect(mockApi.getAzureSavingsOpportunities).toHaveBeenLastCalledWith(expect.objectContaining({ category: "storage" }));
+      expect(mockApi.getAzureRecommendations).toHaveBeenLastCalledWith(expect.objectContaining({ category: "storage" }));
     });
 
     fireEvent.click(await screen.findByText("Review unattached managed disk disk-1"));
     expect(await screen.findByText("Estimate basis")).toBeInTheDocument();
     expect(screen.getByText("Confirm the disk is no longer needed.")).toBeInTheDocument();
+    expect(await screen.findByText("Action History")).toBeInTheDocument();
 
     const csvLink = screen.getByRole("link", { name: "Export CSV" });
-    expect(csvLink.getAttribute("href")).toContain("/api/azure/savings/export.csv");
+    expect(csvLink.getAttribute("href")).toContain("/api/azure/recommendations/export.csv");
     expect(csvLink.getAttribute("href")).toContain("category=storage");
+  });
+
+  it("creates a linked Jira ticket from the recommendation drawer", async () => {
+    render(<AzureSavingsPage />);
+
+    fireEvent.click(await screen.findByText("Review unattached managed disk disk-1"));
+    await screen.findByText("Create Jira Follow-Up");
+
+    fireEvent.change(screen.getByPlaceholderText("Project key (optional)"), { target: { value: "FINOPS" } });
+    fireEvent.change(screen.getByPlaceholderText("Issue type (optional)"), { target: { value: "Task" } });
+    fireEvent.change(screen.getByPlaceholderText("Ticket summary"), { target: { value: "[FinOps] Disk cleanup follow-up" } });
+    fireEvent.change(screen.getByPlaceholderText("Add an operator note for the Jira follow-up."), {
+      target: { value: "Please route this to the storage owner." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Jira Ticket" }));
+
+    await waitFor(() => {
+      expect(mockApi.createAzureRecommendationTicket).toHaveBeenCalledWith("opp-disk", {
+        project_key: "FINOPS",
+        issue_type: "Task",
+        summary: "[FinOps] Disk cleanup follow-up",
+        note: "Please route this to the storage owner.",
+      });
+    });
+  });
+
+  it("sends a Teams alert from the recommendation drawer", async () => {
+    render(<AzureSavingsPage />);
+
+    fireEvent.click(await screen.findByText("Review unattached managed disk disk-1"));
+    await screen.findByText("Send Teams Alert");
+
+    fireEvent.change(screen.getByPlaceholderText("Channel label (optional)"), { target: { value: "FinOps Watch" } });
+    fireEvent.change(screen.getByPlaceholderText("Teams webhook override (optional)"), {
+      target: { value: "https://hooks.example.test/abc" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Add an operator note for the Teams alert."), {
+      target: { value: "Escalate this cleanup in the daily standup." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send Teams Alert" }));
+
+    await waitFor(() => {
+      expect(mockApi.sendAzureRecommendationAlert).toHaveBeenCalledWith("opp-disk", {
+        channel: "FinOps Watch",
+        teams_webhook_url: "https://hooks.example.test/abc",
+        note: "Escalate this cleanup in the daily standup.",
+      });
+    });
   });
 
   it("renders the savings sections across the Azure pages", async () => {

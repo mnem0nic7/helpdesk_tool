@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from azure_finops import azure_finops_service
 from azure_export_pipeline import AzureExportPipeline
 
 logger = logging.getLogger(__name__)
@@ -353,12 +354,22 @@ class AzureCostExportService:
 
             finished_at = _utcnow()
             health = self._load_health_summary()
+            finops_sync = None
+            store = getattr(self._pipeline, "store", None)
+            if store is not None:
+                try:
+                    finops_sync = azure_finops_service.sync_from_export_store(store)
+                except Exception:
+                    logger.exception("Azure FinOps local analytics sync failed after export ingestion")
             self._set_state(
                 _refreshing=False,
                 _last_sync_finished_at=finished_at,
                 _last_success_at=finished_at,
                 _last_error=None,
-                _last_result=self._sync_result_summary(result),
+                _last_result={
+                    **self._sync_result_summary(result),
+                    **({"finops_sync": finops_sync} if finops_sync is not None else {}),
+                },
                 _last_health_summary=health or self._last_health_summary,
             )
             return self.status()

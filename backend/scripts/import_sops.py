@@ -5,7 +5,7 @@ Usage:
     python backend/scripts/import_sops.py <directory> [--ai] [--dry-run]
 
 Options:
-    --ai        Use AI to convert each SOP to structured markdown (slower, costs API credits)
+    --ai        Use Ollama to convert each SOP to structured markdown (slower, uses local AI runtime)
     --dry-run   List files that would be imported without writing anything
 
 Without --ai, raw text is extracted and stored as-is. Use "Reformat with AI"
@@ -88,7 +88,7 @@ def main() -> None:
         from ai_client import get_available_models, draft_kb_from_sop
         models = get_available_models()
         if not models:
-            print("Error: --ai requires an AI API key (OPENAI_API_KEY or ANTHROPIC_API_KEY)", file=sys.stderr)
+            print("Error: --ai requires Ollama to be running with at least one available local model", file=sys.stderr)
             sys.exit(1)
         ai_model_id = models[0].id
         print(f"AI mode: using {ai_model_id}")

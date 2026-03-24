@@ -11,8 +11,10 @@ from typing import Any
 
 import requests
 
+from azure_finops import azure_finops_service
 from config import (
     ANTHROPIC_API_KEY,
+    AZURE_FINOPS_AI_TEAM_MAPPINGS,
     OLLAMA_BASE_URL,
     OLLAMA_ENABLED,
     OLLAMA_MODEL,
@@ -78,6 +80,85 @@ _DEFAULT_COPILOT_MODEL_ORDER = (
 _DEFAULT_COPILOT_MODEL_RANK = {model_id: index for index, model_id in enumerate(_DEFAULT_COPILOT_MODEL_ORDER)}
 
 
+def _int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _estimate_token_count(*parts: Any) -> int:
+    combined = " ".join(str(part or "") for part in parts if str(part or "").strip())
+    if not combined:
+        return 0
+    return max(1, len(combined) // 4)
+
+
+_DEFAULT_AI_TEAMS_BY_FEATURE: dict[str, str] = {
+    "ticket_auto_triage": "Service Desk",
+    "technician_qa": "Service Desk",
+    "kb_ticket_draft": "Service Desk",
+    "kb_sop_draft": "Service Desk",
+    "kb_reformat": "Service Desk",
+    "azure_cost_copilot": "FinOps",
+    "azure_alert_rule_parse": "FinOps",
+}
+
+_DEFAULT_AI_TEAMS_BY_APP: dict[str, str] = {
+    "tickets": "Service Desk",
+    "knowledge_base": "Service Desk",
+    "azure_portal": "FinOps",
+    "azure_alerts": "FinOps",
+}
+
+
+def _normalize_ai_team_map(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, value in raw.items():
+        normalized_key = str(key or "").strip().lower()
+        normalized_value = str(value or "").strip()
+        if normalized_key and normalized_value:
+            normalized[normalized_key] = normalized_value
+    return normalized
+
+
+def _resolve_ai_usage_team(
+    *,
+    feature_surface: str,
+    app_surface: str,
+    actor_id: str,
+    explicit_team: str = "",
+) -> tuple[str, str, str]:
+    explicit = str(explicit_team or "").strip()
+    if explicit:
+        return explicit, "explicit", ""
+
+    mappings = AZURE_FINOPS_AI_TEAM_MAPPINGS if isinstance(AZURE_FINOPS_AI_TEAM_MAPPINGS, dict) else {}
+    actor_map = _normalize_ai_team_map(mappings.get("actor_ids"))
+    feature_map = _normalize_ai_team_map(mappings.get("feature_surfaces"))
+    app_map = _normalize_ai_team_map(mappings.get("app_surfaces"))
+
+    normalized_actor_id = str(actor_id or "").strip().lower()
+    if normalized_actor_id and normalized_actor_id in actor_map:
+        return actor_map[normalized_actor_id], "actor_id", normalized_actor_id
+
+    normalized_feature = str(feature_surface or "").strip().lower()
+    if normalized_feature and normalized_feature in feature_map:
+        return feature_map[normalized_feature], "feature_surface", normalized_feature
+    if normalized_feature and normalized_feature in _DEFAULT_AI_TEAMS_BY_FEATURE:
+        return _DEFAULT_AI_TEAMS_BY_FEATURE[normalized_feature], "default_feature_surface", normalized_feature
+
+    normalized_app = str(app_surface or "").strip().lower()
+    if normalized_app and normalized_app in app_map:
+        return app_map[normalized_app], "app_surface", normalized_app
+    if normalized_app and normalized_app in _DEFAULT_AI_TEAMS_BY_APP:
+        return _DEFAULT_AI_TEAMS_BY_APP[normalized_app], "default_app_surface", normalized_app
+
+    return "", "unmapped", ""
+
+
 def _get_curated_models(provider: str) -> list[AIModel]:
     return [AIModel(**model) for model in _CURATED_MODELS if model["provider"] == provider]
 
@@ -127,16 +208,10 @@ def _get_available_ollama_models() -> list[AIModel]:
 
 
 def get_available_models() -> list[AIModel]:
-    """Return models filtered by which providers are configured and reachable."""
-    if OLLAMA_ENABLED:
-        return _get_available_ollama_models()
-
-    available: list[AIModel] = []
-    if OPENAI_API_KEY:
-        available.extend(_get_curated_models("openai"))
-    if ANTHROPIC_API_KEY:
-        available.extend(_get_curated_models("anthropic"))
-    return available
+    """Return models from the active Ollama runtime."""
+    if not OLLAMA_ENABLED:
+        return []
+    return _get_available_ollama_models()
 
 
 def _is_openai_text_model(model_id: str) -> bool:
@@ -171,35 +246,8 @@ def _list_openai_copilot_models_from_api() -> list[AIModel]:
 
 
 def get_available_copilot_models() -> list[AIModel]:
-    """Return Azure Copilot models, including the live OpenAI catalog when available."""
-    global _OPENAI_COPILOT_MODEL_CACHE
-
-    if OLLAMA_ENABLED:
-        return _get_available_ollama_models()
-
-    available: list[AIModel] = []
-
-    if OPENAI_API_KEY:
-        now = time.time()
-        cached = _OPENAI_COPILOT_MODEL_CACHE
-        if cached and now - cached[0] < _OPENAI_COPILOT_MODEL_CACHE_TTL_SECONDS:
-            openai_models = list(cached[1])
-        else:
-            try:
-                openai_models = _list_openai_copilot_models_from_api()
-                _OPENAI_COPILOT_MODEL_CACHE = (now, list(openai_models))
-            except Exception:
-                logger.exception("Failed to fetch live OpenAI models for Azure Copilot; falling back to curated defaults")
-                openai_models = _get_curated_models("openai")
-        available.extend(openai_models)
-
-    if ANTHROPIC_API_KEY:
-        available.extend(_get_curated_models("anthropic"))
-
-    available.extend(_get_available_ollama_models())
-
-    unique = {model.id: model for model in available}
-    return sorted(unique.values(), key=_copilot_model_sort_key)
+    """Return Azure Copilot models from the active Ollama runtime."""
+    return get_available_models()
 
 
 def get_default_copilot_model_id(available: list[AIModel]) -> str | None:
@@ -215,15 +263,10 @@ def get_default_copilot_model_id(available: list[AIModel]) -> str | None:
 
 
 def _get_model_provider(model_id: str) -> str | None:
-    for m in _CURATED_MODELS:
-        if m["id"] == model_id:
-            return m["provider"]
     if OLLAMA_ENABLED and model_id == OLLAMA_MODEL:
         return "ollama"
     if OLLAMA_ENABLED and any(model.id == model_id for model in _get_available_ollama_models()):
         return "ollama"
-    if OPENAI_API_KEY and _is_openai_text_model(model_id):
-        return "openai"
     return None
 
 
@@ -716,17 +759,7 @@ def _build_kb_draft_context(
 # ---------------------------------------------------------------------------
 
 
-def _call_openai(model_id: str, system: str, user_msg: str) -> str:
-    """Call OpenAI API and return the response text."""
-    from openai import OpenAI
-
-    client = OpenAI(api_key=OPENAI_API_KEY)
-    resp = client.responses.create(
-        model=model_id,
-        instructions=system,
-        input=user_msg,
-        max_output_tokens=2000,
-    )
+def _extract_openai_response_text(resp: Any, model_id: str) -> str:
     text = (getattr(resp, "output_text", "") or "").strip()
     if text:
         return text
@@ -760,12 +793,88 @@ def _call_openai(model_id: str, system: str, user_msg: str) -> str:
         incomplete_reason = incomplete_details.get("reason")
     raise RuntimeError(
         f"OpenAI model '{model_id}' returned no text output"
-        + (f" (status={getattr(resp, 'status', 'unknown')}, reason={incomplete_reason or 'unknown'})" if incomplete_reason or getattr(resp, "status", None) else "")
+        + (
+            f" (status={getattr(resp, 'status', 'unknown')}, reason={incomplete_reason or 'unknown'})"
+            if incomplete_reason or getattr(resp, "status", None)
+            else ""
+        )
     )
 
 
-def _call_anthropic(model_id: str, system: str, user_msg: str) -> str:
-    """Call Anthropic API and return the response text."""
+def _extract_openai_usage(resp: Any) -> dict[str, int]:
+    usage = getattr(resp, "usage", None)
+    if usage is None and isinstance(resp, dict):
+        usage = resp.get("usage")
+    if usage is None:
+        return {}
+    if not isinstance(usage, dict):
+        usage = {
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None),
+        }
+    return {
+        "input_tokens": _int(usage.get("input_tokens") or usage.get("prompt_tokens")),
+        "output_tokens": _int(usage.get("output_tokens") or usage.get("completion_tokens")),
+        "total_tokens": _int(usage.get("total_tokens")),
+    }
+
+
+def _invoke_openai(
+    model_id: str,
+    system: str,
+    user_msg: str,
+    *,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
+    api_mode: str = "responses",
+) -> tuple[str, dict[str, Any]]:
+    """Call OpenAI API and return response text plus usage."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    if api_mode == "chat_completions":
+        kwargs: dict[str, Any] = {
+            "model": model_id,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ],
+            "max_tokens": max_output_tokens or 2000,
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        resp = client.chat.completions.create(**kwargs)
+        text = str((resp.choices[0].message.content or "")).strip()
+        if not text:
+            raise RuntimeError(f"OpenAI model '{model_id}' returned no text output")
+        return text, _extract_openai_usage(resp)
+
+    kwargs = {
+        "model": model_id,
+        "instructions": system,
+        "input": user_msg,
+        "max_output_tokens": max_output_tokens or 2000,
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    resp = client.responses.create(**kwargs)
+    return _extract_openai_response_text(resp, model_id), _extract_openai_usage(resp)
+
+
+def _call_openai(model_id: str, system: str, user_msg: str) -> str:
+    return _invoke_openai(model_id, system, user_msg)[0]
+
+
+def _invoke_anthropic(
+    model_id: str,
+    system: str,
+    user_msg: str,
+    *,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Call Anthropic API and return response text plus usage."""
     import anthropic
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -773,21 +882,30 @@ def _call_anthropic(model_id: str, system: str, user_msg: str) -> str:
         model=model_id,
         system=system,
         messages=[{"role": "user", "content": user_msg}],
-        temperature=0.3,
-        max_tokens=1000,
+        temperature=0.3 if temperature is None else temperature,
+        max_tokens=max_output_tokens or 1000,
     )
-    return resp.content[0].text
+    usage = getattr(resp, "usage", None)
+    return resp.content[0].text, {
+        "input_tokens": _int(getattr(usage, "input_tokens", None)),
+        "output_tokens": _int(getattr(usage, "output_tokens", None)),
+        "total_tokens": _int(getattr(usage, "input_tokens", None)) + _int(getattr(usage, "output_tokens", None)),
+    }
 
 
-def _call_ollama(
+def _call_anthropic(model_id: str, system: str, user_msg: str) -> str:
+    return _invoke_anthropic(model_id, system, user_msg)[0]
+
+
+def _invoke_ollama(
     model_id: str,
     system: str,
     user_msg: str,
     *,
     temperature: float | None = None,
     max_output_tokens: int | None = None,
-) -> str:
-    """Call a local Ollama model and return the response text."""
+) -> tuple[str, dict[str, Any]]:
+    """Call a local Ollama model and return response text plus usage."""
     payload: dict[str, Any] = {
         "model": model_id,
         "messages": [
@@ -814,8 +932,128 @@ def _call_ollama(
     message = data.get("message") or {}
     text = str(message.get("content") or "").strip()
     if text:
-        return text
+        return text, {
+            "input_tokens": _int(data.get("prompt_eval_count")),
+            "output_tokens": _int(data.get("eval_count")),
+            "total_tokens": _int(data.get("prompt_eval_count")) + _int(data.get("eval_count")),
+        }
     raise RuntimeError(f"Ollama model '{model_id}' returned no text output")
+
+
+def _call_ollama(
+    model_id: str,
+    system: str,
+    user_msg: str,
+    *,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
+) -> str:
+    return _invoke_ollama(
+        model_id,
+        system,
+        user_msg,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+    )[0]
+
+
+def invoke_model_text(
+    model_id: str,
+    system: str,
+    user_msg: str,
+    *,
+    feature_surface: str,
+    app_surface: str,
+    actor_type: str = "",
+    actor_id: str = "",
+    team: str = "",
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
+    openai_api_mode: str = "responses",
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    provider = _get_model_provider(model_id)
+    if not provider:
+        raise ValueError(f"Unknown model: {model_id}")
+
+    started = time.perf_counter()
+    response_text = ""
+    usage: dict[str, Any] = {}
+    error_text = ""
+    status = "succeeded"
+    try:
+        if provider == "openai":
+            response_text, usage = _invoke_openai(
+                model_id,
+                system,
+                user_msg,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+                api_mode=openai_api_mode,
+            )
+        elif provider == "anthropic":
+            response_text, usage = _invoke_anthropic(
+                model_id,
+                system,
+                user_msg,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+        elif provider == "ollama":
+            response_text, usage = _invoke_ollama(
+                model_id,
+                system,
+                user_msg,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+        else:
+            raise ValueError(f"Unsupported provider: {provider}")
+        return response_text
+    except Exception as exc:
+        status = "failed"
+        error_text = str(exc)
+        raise
+    finally:
+        input_tokens = _int(usage.get("input_tokens"))
+        output_tokens = _int(usage.get("output_tokens"))
+        estimated_total = _int(usage.get("total_tokens"))
+        if input_tokens <= 0:
+            input_tokens = _estimate_token_count(system, user_msg)
+        if output_tokens <= 0 and response_text:
+            output_tokens = _estimate_token_count(response_text)
+        if estimated_total <= 0:
+            estimated_total = input_tokens + output_tokens
+        resolved_team, team_source, team_source_key = _resolve_ai_usage_team(
+            feature_surface=feature_surface,
+            app_surface=app_surface,
+            actor_id=actor_id,
+            explicit_team=team,
+        )
+        usage_metadata = dict(metadata or {})
+        usage_metadata.setdefault("team_source", team_source)
+        if team_source_key:
+            usage_metadata.setdefault("team_source_key", team_source_key)
+        try:
+            azure_finops_service.record_ai_usage(
+                provider=provider,
+                model_id=model_id,
+                feature_surface=feature_surface,
+                app_surface=app_surface,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                team=resolved_team,
+                request_count=1,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                estimated_tokens=estimated_total,
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+                status=status,
+                error_text=error_text,
+                metadata=usage_metadata,
+            )
+        except Exception:
+            logger.exception("Failed to persist AI usage record for %s (%s)", feature_surface, model_id)
 
 
 def _parse_suggestions(raw: str, issue: dict[str, Any]) -> list[TriageSuggestion]:
@@ -1024,15 +1262,16 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
     user_msg = _build_ticket_context(issue, kb_matches=kb_matches)
 
     logger.info("Analyzing %s with %s (%s)", issue.get("key"), model_id, provider)
-
-    if provider == "openai":
-        raw = _call_openai(model_id, system, user_msg)
-    elif provider == "anthropic":
-        raw = _call_anthropic(model_id, system, user_msg)
-    elif provider == "ollama":
-        raw = _call_ollama(model_id, system, user_msg)
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
+    raw = invoke_model_text(
+        model_id,
+        system,
+        user_msg,
+        feature_surface="ticket_auto_triage",
+        app_surface="tickets",
+        actor_type="system",
+        actor_id="auto-triage",
+        metadata={"ticket_key": issue.get("key", "")},
+    )
 
     suggestions = _enforce_reporter_hint(
         issue,
@@ -1134,15 +1373,16 @@ def score_closed_ticket(
 
     user_msg = _build_technician_score_context(issue, request_comments)
     logger.info("Scoring technician QA for %s with %s (%s)", issue.get("key"), model_id, provider)
-
-    if provider == "openai":
-        raw = _call_openai(model_id, TECHNICIAN_SCORE_PROMPT, user_msg)
-    elif provider == "anthropic":
-        raw = _call_anthropic(model_id, TECHNICIAN_SCORE_PROMPT, user_msg)
-    elif provider == "ollama":
-        raw = _call_ollama(model_id, TECHNICIAN_SCORE_PROMPT, user_msg)
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
+    raw = invoke_model_text(
+        model_id,
+        TECHNICIAN_SCORE_PROMPT,
+        user_msg,
+        feature_surface="technician_qa",
+        app_surface="tickets",
+        actor_type="system",
+        actor_id="technician-qa",
+        metadata={"ticket_key": issue.get("key", "")},
+    )
 
     return _parse_technician_score(raw, issue.get("key", ""), model_id)
 
@@ -1160,15 +1400,16 @@ def draft_kb_article(
 
     user_msg = _build_kb_draft_context(issue, request_comments, existing_article)
     logger.info("Drafting KB article for %s with %s (%s)", issue.get("key"), model_id, provider)
-
-    if provider == "openai":
-        raw = _call_openai(model_id, KB_DRAFT_PROMPT, user_msg)
-    elif provider == "anthropic":
-        raw = _call_anthropic(model_id, KB_DRAFT_PROMPT, user_msg)
-    elif provider == "ollama":
-        raw = _call_ollama(model_id, KB_DRAFT_PROMPT, user_msg)
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
+    raw = invoke_model_text(
+        model_id,
+        KB_DRAFT_PROMPT,
+        user_msg,
+        feature_surface="kb_ticket_draft",
+        app_surface="knowledge_base",
+        actor_type="system",
+        actor_id="kb-draft",
+        metadata={"ticket_key": issue.get("key", ""), "existing_article_id": existing_article.id if existing_article else ""},
+    )
 
     return _parse_kb_draft(
         raw,
@@ -1188,39 +1429,19 @@ def draft_kb_from_sop(text: str, filename: str, model_id: str) -> KnowledgeBaseD
     # Truncate to avoid token overrun on very long SOPs
     user_msg = f"Source file: {filename}\n\nSOP content:\n{text[:8000]}"
     logger.info("Drafting KB article from SOP '%s' with %s (%s)", filename, model_id, provider)
-
-    if provider == "openai":
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        resp = client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": KB_SOP_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-            temperature=0.2,
-            max_tokens=3000,
-        )
-        raw = resp.choices[0].message.content or "{}"
-    elif provider == "ollama":
-        raw = _call_ollama(
-            model_id,
-            KB_SOP_PROMPT,
-            user_msg,
-            temperature=0.2,
-            max_output_tokens=3000,
-        )
-    else:
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        resp = client.messages.create(
-            model=model_id,
-            system=KB_SOP_PROMPT,
-            messages=[{"role": "user", "content": user_msg}],
-            temperature=0.2,
-            max_tokens=3000,
-        )
-        raw = resp.content[0].text
+    raw = invoke_model_text(
+        model_id,
+        KB_SOP_PROMPT,
+        user_msg,
+        feature_surface="kb_sop_draft",
+        app_surface="knowledge_base",
+        actor_type="system",
+        actor_id="kb-sop-draft",
+        temperature=0.2,
+        max_output_tokens=3000,
+        openai_api_mode="chat_completions",
+        metadata={"filename": filename},
+    )
 
     return _parse_sop_draft(raw, filename, model_id)
 
@@ -1263,45 +1484,29 @@ def reformat_kb_article_content(article: KnowledgeBaseArticle, model_id: str) ->
         f"Current content:\n{article.content}"
     )
     logger.info("Reformatting KB article %s with %s (%s)", article.id, model_id, provider)
-
-    if provider == "openai":
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        resp = client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": KB_REFORMAT_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-            temperature=0.2,
-            max_tokens=3000,
-        )
-        return (resp.choices[0].message.content or "").strip()
-    if provider == "ollama":
-        return _call_ollama(
-            model_id,
-            KB_REFORMAT_PROMPT,
-            user_msg,
-            temperature=0.2,
-            max_output_tokens=3000,
-        ).strip()
-
-    import anthropic
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    resp = client.messages.create(
-        model=model_id,
-        system=KB_REFORMAT_PROMPT,
-        messages=[{"role": "user", "content": user_msg}],
+    return invoke_model_text(
+        model_id,
+        KB_REFORMAT_PROMPT,
+        user_msg,
+        feature_surface="kb_reformat",
+        app_surface="knowledge_base",
+        actor_type="system",
+        actor_id="kb-reformat",
         temperature=0.2,
-        max_tokens=3000,
-    )
-    return resp.content[0].text.strip()
+        max_output_tokens=3000,
+        openai_api_mode="chat_completions",
+        metadata={"article_id": article.id},
+    ).strip()
 
 
 def answer_azure_cost_question(
     question: str,
     context: dict[str, Any],
     model_id: str,
+    *,
+    actor_type: str = "",
+    actor_id: str = "",
+    team: str = "",
 ) -> AzureCostChatResponse:
     """Answer an Azure cost-management question from grounded cached data."""
     provider = _get_model_provider(model_id)
@@ -1315,14 +1520,17 @@ def answer_azure_cost_question(
     )
 
     logger.info("Answering Azure cost question with %s (%s)", model_id, provider)
-    if provider == "openai":
-        raw = _call_openai(model_id, AZURE_COST_COPILOT_PROMPT, user_msg)
-    elif provider == "anthropic":
-        raw = _call_anthropic(model_id, AZURE_COST_COPILOT_PROMPT, user_msg)
-    elif provider == "ollama":
-        raw = _call_ollama(model_id, AZURE_COST_COPILOT_PROMPT, user_msg)
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
+    raw = invoke_model_text(
+        model_id,
+        AZURE_COST_COPILOT_PROMPT,
+        user_msg,
+        feature_surface="azure_cost_copilot",
+        app_surface="azure_portal",
+        actor_type=actor_type,
+        actor_id=actor_id,
+        team=team,
+        metadata={"question_length": len(question.strip())},
+    )
 
     citations = [
         AzureCitation(
@@ -1359,6 +1567,18 @@ def answer_azure_cost_question(
             detail=f"{len(context.get('savings_opportunities') or [])} ranked items",
         ),
     ]
+    export_summary = context.get("export_cost_summary") or {}
+    if export_summary:
+        citations.append(
+            AzureCitation(
+                source_type="exports",
+                label="Export-backed cost summary",
+                detail=(
+                    f"{export_summary.get('record_count', 0)} rows from "
+                    f"{export_summary.get('window_start', '')} to {export_summary.get('window_end', '')}"
+                ),
+            )
+        )
     return AzureCostChatResponse(
         answer=raw.strip(),
         model_used=model_id,

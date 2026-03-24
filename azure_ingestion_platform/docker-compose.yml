@@ -1,0 +1,72 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: azure_ingestion
+      POSTGRES_USER: azure_ingestion
+      POSTGRES_PASSWORD: azure_ingestion
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U azure_ingestion -d azure_ingestion"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - azure_ingestion_postgres:/var/lib/postgresql/data
+    ports:
+      - "54329:5432"
+
+  migrate:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://azure_ingestion:azure_ingestion@db:5432/azure_ingestion
+      PLATFORM_ENCRYPTION_KEY: local-dev-encryption-key
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  web:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg://azure_ingestion:azure_ingestion@db:5432/azure_ingestion
+      PLATFORM_ENCRYPTION_KEY: local-dev-encryption-key
+      PLATFORM_ENTRA_CLIENT_ID: change-me
+      PLATFORM_ENTRA_CLIENT_SECRET: change-me
+      PLATFORM_ENTRA_REDIRECT_URI: http://localhost:8081/api/v1/onboarding/callback
+    ports:
+      - "8081:8080"
+    command: ["uvicorn", "azure_ingestion_platform.main:app", "--host", "0.0.0.0", "--port", "8080"]
+
+  scheduler:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg://azure_ingestion:azure_ingestion@db:5432/azure_ingestion
+      PLATFORM_ENCRYPTION_KEY: local-dev-encryption-key
+      PLATFORM_ENTRA_CLIENT_ID: change-me
+      PLATFORM_ENTRA_CLIENT_SECRET: change-me
+      PLATFORM_ENTRA_REDIRECT_URI: http://localhost:8081/api/v1/onboarding/callback
+    command: ["python", "-m", "azure_ingestion_platform.cli_scheduler"]
+
+  worker:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg://azure_ingestion:azure_ingestion@db:5432/azure_ingestion
+      PLATFORM_ENCRYPTION_KEY: local-dev-encryption-key
+      PLATFORM_ENTRA_CLIENT_ID: change-me
+      PLATFORM_ENTRA_CLIENT_SECRET: change-me
+      PLATFORM_ENTRA_REDIRECT_URI: http://localhost:8081/api/v1/onboarding/callback
+    command: ["python", "-m", "azure_ingestion_platform.cli_worker"]
+
+volumes:
+  azure_ingestion_postgres:

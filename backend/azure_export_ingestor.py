@@ -1,4 +1,4 @@
-"""FOCUS export ingestion scaffolding.
+"""Azure export ingestion scaffolding.
 
 The future export contract/store modules are intentionally treated as duck-typed
 dependencies here so this layer can stay isolated from app startup wiring.
@@ -10,6 +10,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping
 
+from azure_auxiliary_staging import (
+    AuxiliaryParseError,
+    dataset_descriptor,
+    describe_auxiliary_schema,
+    stage_auxiliary_delivery,
+)
 from azure_focus_staging import (
     FOCUS_PARSER_VERSION,
     FocusDeliveryRef,
@@ -32,7 +38,7 @@ class FocusIngestionResult:
 
 
 class FocusExportIngestor:
-    """Idempotent ingestion helper for FOCUS deliveries."""
+    """Idempotent ingestion helper for Azure export deliveries."""
 
     def __init__(self, store: Any) -> None:
         self._store = store
@@ -58,6 +64,7 @@ class FocusExportIngestor:
         content: str | bytes,
     ) -> FocusIngestionResult:
         normalized = normalize_focus_delivery(delivery)
+        descriptor = dataset_descriptor(normalized.dataset)
         existing = self._get_manifest(normalized.delivery_key)
         if existing and str(existing.get("parse_status") or "") not in _RETRYABLE_STATUSES:
             manifest = existing or self._manifest_for_delivery(
@@ -68,15 +75,30 @@ class FocusExportIngestor:
             )
             return FocusIngestionResult(manifest=manifest, staged_model=None, was_duplicate=True)
 
-        schema = describe_focus_schema(content)
+        if descriptor.dataset_family == "focus":
+            schema = describe_focus_schema(content)
+            parser_version = FOCUS_PARSER_VERSION
+        else:
+            schema = describe_auxiliary_schema(content, normalized.dataset)
+            parser_version = descriptor.parser_version or "unknown"
+
         try:
-            staged_model = stage_focus_delivery(
-                content,
-                source_path=normalized.path,
-                delivery_time=normalized.delivery_time,
-                delivery_key=normalized.delivery_key,
-            )
-            staged_model["parser_version"] = FOCUS_PARSER_VERSION
+            if descriptor.dataset_family == "focus":
+                staged_model = stage_focus_delivery(
+                    content,
+                    source_path=normalized.path,
+                    delivery_time=normalized.delivery_time,
+                    delivery_key=normalized.delivery_key,
+                )
+            else:
+                staged_model = stage_auxiliary_delivery(
+                    normalized.dataset,
+                    content,
+                    source_path=normalized.path,
+                    delivery_time=normalized.delivery_time,
+                    delivery_key=normalized.delivery_key,
+                )
+            staged_model["parser_version"] = parser_version
             staged_model["schema_signature"] = schema["schema_signature"]
             staged_model["schema_compatible"] = bool(schema["schema_compatible"])
             manifest = self._manifest_for_delivery(
@@ -85,20 +107,20 @@ class FocusExportIngestor:
                 row_count=len(staged_model["rows"]),
                 error_details="",
                 summary=staged_model["summary"],
-                parser_version=FOCUS_PARSER_VERSION,
+                parser_version=parser_version,
                 schema_signature=str(schema["schema_signature"] or ""),
                 schema_compatible=bool(schema["schema_compatible"]),
             )
             self._store_manifest(manifest)
             self._store_stage_model(normalized.delivery_key, staged_model)
             return FocusIngestionResult(manifest=manifest, staged_model=staged_model)
-        except FocusParseError as exc:
+        except (FocusParseError, AuxiliaryParseError) as exc:
             manifest = self._manifest_for_delivery(
                 normalized,
                 parse_status="quarantined",
                 row_count=0,
                 error_details=str(exc),
-                parser_version=FOCUS_PARSER_VERSION,
+                parser_version=parser_version,
                 schema_signature=str(schema["schema_signature"] or ""),
                 schema_compatible=bool(schema["schema_compatible"]),
             )

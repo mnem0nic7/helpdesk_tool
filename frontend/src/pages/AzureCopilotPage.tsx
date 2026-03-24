@@ -27,7 +27,7 @@ export default function AzureCopilotPage() {
       <div>
         <h1 className="text-3xl font-bold text-slate-900">Azure Copilot</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Ask grounded cost and governance questions against the cached Azure dataset, including the new ranked savings workspace.
+          Ask grounded cost and governance questions against the cached Azure dataset, using Ollama-backed local models and the ranked savings workspace.
         </p>
       </div>
 
@@ -44,7 +44,7 @@ export default function AzureCopilotPage() {
             onChange={(event) => setModel(event.target.value)}
             className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
           >
-            <option value="">Default model</option>
+            <option value="">Default Ollama model</option>
             {models.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name === item.id ? item.id : `${item.name} (${item.id})`}
@@ -75,7 +75,7 @@ export default function AzureCopilotPage() {
         </div>
 
         <div className="mt-3 text-xs text-slate-500">
-          {models.length} model{models.length === 1 ? "" : "s"} available
+          {models.length} local model{models.length === 1 ? "" : "s"} available through Ollama
         </div>
       </section>
 

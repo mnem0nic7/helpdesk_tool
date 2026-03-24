@@ -8,6 +8,7 @@ from azure_export_ingestor import FocusExportIngestor
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "azure_focus"
+AUX_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "azure_auxiliary"
 
 
 class _FakeFocusStore:
@@ -172,3 +173,47 @@ def test_ingest_delivery_returns_existing_manifest_for_duplicate_delivery():
     assert second.was_duplicate is True
     assert second.manifest["parse_status"] == "parsed"
     assert len(store.manifests) == 1
+
+
+def test_ingest_delivery_supports_price_sheet_dataset():
+    store = _FakeFocusStore()
+    ingestor = FocusExportIngestor(store)
+    content = (AUX_FIXTURE_DIR / "price_sheet_sample.csv").read_text(encoding="utf-8")
+
+    result = ingestor.ingest_delivery(
+        {
+            "dataset": "price-sheet",
+            "scope": "subscription",
+            "path": "exports/2026-03-20/price_sheet.csv",
+            "delivery_time": "2026-03-20T08:00:00+00:00",
+        },
+        content,
+    )
+
+    assert result.manifest["parse_status"] == "parsed"
+    assert result.manifest["parser_version"] == "price-sheet-csv-v1"
+    assert result.staged_model is not None
+    assert result.staged_model["dataset_family"] == "price_sheet"
+    assert result.staged_model["summary"]["row_count"] == 2
+
+
+def test_ingest_delivery_supports_reservation_recommendations_dataset():
+    store = _FakeFocusStore()
+    ingestor = FocusExportIngestor(store)
+    content = (AUX_FIXTURE_DIR / "reservation_recommendations_sample.csv").read_text(encoding="utf-8")
+
+    result = ingestor.ingest_delivery(
+        {
+            "dataset": "reservation-recommendations",
+            "scope": "subscription",
+            "path": "exports/2026-03-20/reservation_recommendations.csv",
+            "delivery_time": "2026-03-20T08:00:00+00:00",
+        },
+        content,
+    )
+
+    assert result.manifest["parse_status"] == "parsed"
+    assert result.manifest["parser_version"] == "reservation-recommendations-csv-v1"
+    assert result.staged_model is not None
+    assert result.staged_model["dataset_family"] == "reservation_recommendations"
+    assert result.staged_model["summary"]["row_count"] == 2

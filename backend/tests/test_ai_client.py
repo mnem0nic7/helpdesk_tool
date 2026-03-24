@@ -125,28 +125,13 @@ def test_enforce_reporter_hint_adds_reporter_suggestion():
     assert reporter.confidence >= 0.99
 
 
-def test_get_available_copilot_models_uses_live_openai_catalog(monkeypatch):
+def test_get_available_copilot_models_requires_ollama_runtime(monkeypatch):
     monkeypatch.setattr(ai_client, "OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(ai_client, "ANTHROPIC_API_KEY", "")
     monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", False)
-    monkeypatch.setattr(ai_client, "_OPENAI_COPILOT_MODEL_CACHE", None)
-    monkeypatch.setattr(
-        ai_client,
-        "_list_openai_copilot_models_from_api",
-        lambda: [
-            AIModel(id="gpt-4o-mini", name="gpt-4o-mini", provider="openai"),
-            AIModel(id="gpt-5.4-mini", name="gpt-5.4-mini", provider="openai"),
-            AIModel(id="gpt-5.4-mini-2026-03-17", name="gpt-5.4-mini-2026-03-17", provider="openai"),
-        ],
-    )
 
     models = get_available_copilot_models()
 
-    assert [model.id for model in models[:3]] == [
-        "gpt-5.4-mini",
-        "gpt-4o-mini",
-        "gpt-5.4-mini-2026-03-17",
-    ]
+    assert models == []
 
 
 def test_get_available_models_includes_ollama_when_enabled(monkeypatch):
@@ -169,7 +154,7 @@ def test_get_available_models_includes_ollama_when_enabled(monkeypatch):
     assert [model.id for model in models] == ["qwen2.5:7b", "qwen2.5:3b"]
 
 
-def test_get_available_models_prefers_ollama_over_cloud_when_enabled(monkeypatch):
+def test_get_available_models_ignores_cloud_keys_and_uses_ollama_only(monkeypatch):
     monkeypatch.setattr(ai_client, "OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(ai_client, "ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
@@ -183,6 +168,25 @@ def test_get_available_models_prefers_ollama_over_cloud_when_enabled(monkeypatch
     models = get_available_models()
 
     assert [model.provider for model in models] == ["ollama"]
+
+
+def test_invoke_model_text_rejects_non_ollama_models(monkeypatch):
+    monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
+    monkeypatch.setattr(ai_client, "_OLLAMA_MODEL_CACHE", None)
+    monkeypatch.setattr(ai_client, "_list_ollama_models_from_api", lambda: [AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama")])
+
+    try:
+        ai_client.invoke_model_text(
+            "gpt-4o",
+            "system prompt",
+            "user prompt",
+            feature_surface="ticket_auto_triage",
+            app_surface="tickets",
+        )
+    except ValueError as exc:
+        assert "Unknown model" in str(exc)
+    else:
+        raise AssertionError("Expected invoke_model_text to reject non-Ollama models")
 
 
 def test_get_default_copilot_model_id_prefers_supported_default():
@@ -209,8 +213,8 @@ def test_score_closed_ticket_parses_scores(monkeypatch):
 
     monkeypatch.setattr(
         ai_client,
-        "_call_openai",
-        lambda model_id, system, user_msg: """{
+        "invoke_model_text",
+        lambda model_id, system, user_msg, **kwargs: """{
           "communication_score": 4,
           "communication_notes": "Clear public updates.",
           "documentation_score": 3,
@@ -218,8 +222,9 @@ def test_score_closed_ticket_parses_scores(monkeypatch):
           "score_summary": "Good communication, average documentation."
         }""",
     )
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
 
-    score = score_closed_ticket(issue, [{"author": {"displayName": "Ada"}, "body": "Resolved and confirmed.", "public": True}], "gpt-4o-mini")
+    score = score_closed_ticket(issue, [{"author": {"displayName": "Ada"}, "body": "Resolved and confirmed.", "public": True}], "qwen2.5:7b")
 
     assert score.key == "OIT-42"
     assert score.communication_score == 4
@@ -247,8 +252,8 @@ def test_analyze_ticket_uses_ollama_provider(monkeypatch):
     monkeypatch.setattr(ai_client, "get_request_type_names", lambda: ["VPN", "Get IT help"])
     monkeypatch.setattr(
         ai_client,
-        "_call_ollama",
-        lambda model_id, system, user_msg: """{
+        "invoke_model_text",
+        lambda model_id, system, user_msg, **kwargs: """{
           "suggestions": [
             {
               "field": "request_type",
@@ -282,8 +287,8 @@ def test_score_closed_ticket_clamps_invalid_scores(monkeypatch):
 
     monkeypatch.setattr(
         ai_client,
-        "_call_openai",
-        lambda model_id, system, user_msg: """{
+        "invoke_model_text",
+        lambda model_id, system, user_msg, **kwargs: """{
           "communication_score": 9,
           "communication_notes": "Too generous.",
           "documentation_score": 0,
@@ -291,8 +296,9 @@ def test_score_closed_ticket_clamps_invalid_scores(monkeypatch):
           "score_summary": "Needs clamping."
         }""",
     )
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
 
-    score = score_closed_ticket(issue, [], "gpt-4o-mini")
+    score = score_closed_ticket(issue, [], "qwen2.5:7b")
 
     assert score.communication_score == 5
     assert score.documentation_score == 1
@@ -301,7 +307,7 @@ def test_score_closed_ticket_clamps_invalid_scores(monkeypatch):
 def test_analyze_ticket_includes_relevant_kb_context(monkeypatch):
     captured: dict[str, str] = {}
 
-    def fake_call_openai(model_id, system, user_msg):
+    def fake_invoke_model_text(model_id, system, user_msg, **kwargs):
         captured["user_msg"] = user_msg
         return """{
           "suggestions": [
@@ -330,7 +336,8 @@ def test_analyze_ticket_includes_relevant_kb_context(monkeypatch):
     }
 
     monkeypatch.setattr(ai_client, "get_request_type_names", lambda: ["Email or Outlook", "Get IT help"])
-    monkeypatch.setattr(ai_client, "_call_openai", fake_call_openai)
+    monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke_model_text)
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
     import knowledge_base
     monkeypatch.setattr(
         knowledge_base.kb_store,
@@ -354,7 +361,7 @@ def test_analyze_ticket_includes_relevant_kb_context(monkeypatch):
         ],
     )
 
-    result = ai_client.analyze_ticket(issue, "gpt-4o-mini")
+    result = ai_client.analyze_ticket(issue, "qwen2.5:7b")
 
     assert result.suggestions[0].suggested_value == "Email or Outlook"
     assert "Relevant Knowledge Base Articles" in captured["user_msg"]
@@ -389,8 +396,8 @@ def test_draft_kb_article_parses_model_response(monkeypatch):
 
     monkeypatch.setattr(
         ai_client,
-        "_call_openai",
-        lambda model_id, system, user_msg: """{
+        "invoke_model_text",
+        lambda model_id, system, user_msg, **kwargs: """{
           "title": "Email or Outlook",
           "request_type": "Email or Outlook",
           "summary": "Adds sync repair guidance.",
@@ -399,8 +406,9 @@ def test_draft_kb_article_parses_model_response(monkeypatch):
           "change_summary": "Adds Outlook restart guidance."
         }""",
     )
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
 
-    draft = draft_kb_article(issue, [], "gpt-4o-mini", existing_article)
+    draft = draft_kb_article(issue, [], "qwen2.5:7b", existing_article)
 
     assert draft.title == "Email or Outlook"
     assert draft.recommended_action == "update_existing"
@@ -413,7 +421,7 @@ def test_draft_kb_from_sop_supports_ollama(monkeypatch):
     monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen2.5:7b")
     monkeypatch.setattr(
         ai_client,
-        "_call_ollama",
+        "invoke_model_text",
         lambda model_id, system, user_msg, **kwargs: """{
           "title": "VPN Access",
           "request_type": "VPN",
@@ -428,3 +436,111 @@ def test_draft_kb_from_sop_supports_ollama(monkeypatch):
     assert draft.title == "VPN Access"
     assert draft.model_used == "qwen2.5:7b"
     assert draft.request_type == "VPN"
+
+
+def test_invoke_model_text_records_ai_usage(monkeypatch):
+    recorded: dict[str, object] = {}
+
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
+    monkeypatch.setattr(ai_client, "AZURE_FINOPS_AI_TEAM_MAPPINGS", {})
+    monkeypatch.setattr(
+        ai_client,
+        "_invoke_ollama",
+        lambda model_id, system, user_msg, **kwargs: ("structured output", {"input_tokens": 12, "output_tokens": 8, "total_tokens": 20}),
+    )
+    monkeypatch.setattr(
+        ai_client.azure_finops_service,
+        "record_ai_usage",
+        lambda **kwargs: recorded.update(kwargs) or {"usage_id": "usage-1"},
+    )
+
+    result = ai_client.invoke_model_text(
+        "qwen2.5:7b",
+        "system prompt",
+        "user prompt",
+        feature_surface="azure_cost_copilot",
+        app_surface="azure_portal",
+        actor_type="user",
+        actor_id="tester@example.com",
+    )
+
+    assert result == "structured output"
+    assert recorded["feature_surface"] == "azure_cost_copilot"
+    assert recorded["app_surface"] == "azure_portal"
+    assert recorded["provider"] == "ollama"
+    assert recorded["input_tokens"] == 12
+    assert recorded["output_tokens"] == 8
+    assert recorded["team"] == "FinOps"
+    assert recorded["metadata"]["team_source"] == "default_feature_surface"
+    assert recorded["metadata"]["team_source_key"] == "azure_cost_copilot"
+
+
+def test_invoke_model_text_prefers_explicit_team_over_mappings(monkeypatch):
+    recorded: dict[str, object] = {}
+
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
+    monkeypatch.setattr(
+        ai_client,
+        "AZURE_FINOPS_AI_TEAM_MAPPINGS",
+        {"feature_surfaces": {"azure_cost_copilot": "FinOps"}},
+    )
+    monkeypatch.setattr(
+        ai_client,
+        "_invoke_ollama",
+        lambda model_id, system, user_msg, **kwargs: ("structured output", {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}),
+    )
+    monkeypatch.setattr(
+        ai_client.azure_finops_service,
+        "record_ai_usage",
+        lambda **kwargs: recorded.update(kwargs) or {"usage_id": "usage-2"},
+    )
+
+    ai_client.invoke_model_text(
+        "qwen2.5:7b",
+        "system prompt",
+        "user prompt",
+        feature_surface="azure_cost_copilot",
+        app_surface="azure_portal",
+        actor_type="user",
+        actor_id="owner@example.com",
+        team="Cloud Operations",
+    )
+
+    assert recorded["team"] == "Cloud Operations"
+    assert recorded["metadata"]["team_source"] == "explicit"
+    assert "team_source_key" not in recorded["metadata"]
+
+
+def test_invoke_model_text_uses_actor_mapping_before_defaults(monkeypatch):
+    recorded: dict[str, object] = {}
+
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
+    monkeypatch.setattr(
+        ai_client,
+        "AZURE_FINOPS_AI_TEAM_MAPPINGS",
+        {"actor_ids": {"tester@example.com": "Executive IT"}},
+    )
+    monkeypatch.setattr(
+        ai_client,
+        "_invoke_ollama",
+        lambda model_id, system, user_msg, **kwargs: ("structured output", {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}),
+    )
+    monkeypatch.setattr(
+        ai_client.azure_finops_service,
+        "record_ai_usage",
+        lambda **kwargs: recorded.update(kwargs) or {"usage_id": "usage-3"},
+    )
+
+    ai_client.invoke_model_text(
+        "qwen2.5:7b",
+        "system prompt",
+        "user prompt",
+        feature_surface="ticket_auto_triage",
+        app_surface="tickets",
+        actor_type="user",
+        actor_id="tester@example.com",
+    )
+
+    assert recorded["team"] == "Executive IT"
+    assert recorded["metadata"]["team_source"] == "actor_id"
+    assert recorded["metadata"]["team_source_key"] == "tester@example.com"

@@ -1,0 +1,3 @@
+MeterId,MeterName,MeterCategory,MeterSubCategory,MeterRegion,ProductName,ProductId,SkuId,SkuName,ServiceFamily,PriceType,Term,UnitOfMeasure,UnitPrice,MarketPrice,BasePrice,CurrencyCode,EffectiveStartDate,EffectiveEndDate
+meter-001,Standard D2s v5 Hours,Virtual Machines,General Purpose,eastus,Virtual Machines,prod-001,sku-001,Standard_D2s_v5,Compute,consumption,,1 Hour,0.20,0.25,0.20,USD,2026-03-01,2026-03-31
+meter-002,Standard SSD Managed Disk,Storage,Disks,eastus2,Storage Accounts,prod-002,sku-002,P10 Disks,Storage,consumption,,1 Month,10.00,12.00,10.00,USD,2026-03-01,2026-03-31

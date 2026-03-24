@@ -1,5 +1,6 @@
 """Configuration loader for the OIT Helpdesk Dashboard backend."""
 
+import json
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -12,6 +13,18 @@ JIRA_EMAIL: str = os.getenv("JIRA_EMAIL", "")
 JIRA_API_TOKEN: str = os.getenv("JIRA_API_TOKEN", "")
 JIRA_BASE_URL: str = os.getenv("JIRA_BASE_URL", "").rstrip("/")
 JIRA_PROJECT: str = os.getenv("JIRA_PROJECT", "OIT")
+AZURE_FINOPS_RECOMMENDATION_JIRA_PROJECT: str = (
+    os.getenv("AZURE_FINOPS_RECOMMENDATION_JIRA_PROJECT", JIRA_PROJECT).strip() or JIRA_PROJECT
+)
+AZURE_FINOPS_RECOMMENDATION_JIRA_ISSUE_TYPE: str = (
+    os.getenv("AZURE_FINOPS_RECOMMENDATION_JIRA_ISSUE_TYPE", "Task").strip() or "Task"
+)
+AZURE_FINOPS_RECOMMENDATION_TEAMS_WEBHOOK_URL: str = (
+    os.getenv("AZURE_FINOPS_RECOMMENDATION_TEAMS_WEBHOOK_URL", "").strip()
+)
+AZURE_FINOPS_RECOMMENDATION_TEAMS_CHANNEL_LABEL: str = (
+    os.getenv("AZURE_FINOPS_RECOMMENDATION_TEAMS_CHANNEL_LABEL", "FinOps").strip() or "FinOps"
+)
 DATA_DIR: str = os.getenv("DATA_DIR", "/app/data")
 PRIMARY_APP_HOST: str = os.getenv("PRIMARY_APP_HOST", "it-app.movedocs.com")
 OASISDEV_APP_HOST: str = os.getenv("OASISDEV_APP_HOST", "oasisdev.movedocs.com")
@@ -40,6 +53,19 @@ def _is_test_runtime() -> bool:
 
 def _env_bool(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_json_object(name: str) -> dict[str, object]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{name} must contain valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{name} must decode to a JSON object")
+    return payload
 
 
 # Local AI provider (Ollama)
@@ -89,6 +115,13 @@ AZURE_COST_EXPORT_MANIFEST_DB_PATH: str = os.getenv(
     "AZURE_COST_EXPORT_MANIFEST_DB_PATH",
     os.path.join(DATA_DIR, "azure_export_deliveries.db"),
 )
+AZURE_FINOPS_DUCKDB_PATH: str = os.getenv(
+    "AZURE_FINOPS_DUCKDB_PATH",
+    os.path.join(DATA_DIR, "azure_finops.duckdb"),
+)
+AZURE_FINOPS_AI_PRICING: dict[str, object] = _env_json_object("AZURE_FINOPS_AI_PRICING_JSON")
+AZURE_FINOPS_AI_TEAM_MAPPINGS: dict[str, object] = _env_json_object("AZURE_FINOPS_AI_TEAM_MAPPINGS_JSON")
+AZURE_FINOPS_SAFE_SCRIPT_HOOKS: dict[str, object] = _env_json_object("AZURE_FINOPS_SAFE_SCRIPT_HOOKS_JSON")
 AZURE_COST_EXPORT_STAGING_DIR: str = os.getenv(
     "AZURE_COST_EXPORT_STAGING_DIR",
     os.path.join(DATA_DIR, "azure_cost_exports", "_staged"),

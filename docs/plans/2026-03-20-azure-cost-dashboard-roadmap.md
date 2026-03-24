@@ -1,5 +1,7 @@
 # Azure Cost Dashboard Roadmap
 
+> Note: This document remains the broader Azure Cost Management + ADLS + Power BI track. For the repo-local execution track that keeps the existing backend and app shell, see [2026-03-23-azure-finops-local-parity-plan.md](/workspace/altlassian/docs/plans/2026-03-23-azure-finops-local-parity-plan.md).
+
 ## Goal
 
 Move the current Azure cost experience from a custom, cache-backed operations portal to a two-layer model:
@@ -7,15 +9,24 @@ Move the current Azure cost experience from a custom, cache-backed operations po
 1. Azure Cost Management for native analysis, budgets, anomaly detection, and governance controls.
 2. Cost Management exports to lake storage as the reporting source for Power BI and later FinOps-scale analytics.
 
+## Update
+
+As of `2026-03-23`, the repo has also started a separate local execution track that keeps the existing backend and adds a DuckDB-backed export analytics layer under the current Azure cost routes.
+
+Use [2026-03-23-azure-finops-local-parity-plan.md](/workspace/altlassian/docs/plans/2026-03-23-azure-finops-local-parity-plan.md) for the repo-local parity plan.
+
+Keep this document as the Azure-native, ADLS, and BI operating-model roadmap.
+
 ## Current State
 
 The repo already has a strong Azure operations portal, but it is not yet structured like a Cost Management export and BI platform.
 
-- Cost data is pulled directly from the Azure Cost Management query API at request-refresh time, not from exported datasets.
+- The repo now has a mixed cost model: the current Azure cost routes can prefer local export-backed DuckDB analytics when parsed FOCUS deliveries exist, but the broader platform is still not yet the external ADLS + BI architecture described by this roadmap.
 - The backend builds its own cached snapshots for cost trend, cost breakdowns, advisor recommendations, and synthesized savings opportunities.
 - The frontend exposes this data through an Azure-specific portal with pages for overview, cost, savings, compute, storage, alerts, and account health.
 - The repo has export features today, but they are app-generated CSV/XLSX outputs for VM coverage, RI excess, savings opportunities, and VM cost workbooks rather than Cost Management exports to ADLS Gen2.
-- There is no repo evidence of Power BI datasets, Fabric assets, ADLS export orchestration, FOCUS ingestion, price sheet ingestion, reservation recommendation ingestion, budgets, anomaly workflows, tag inheritance automation, or cost allocation workflows.
+- There is still no repo evidence of Power BI datasets, Fabric assets, ADLS export orchestration, Price Sheet ingestion, Reservation Recommendation ingestion, budgets, anomaly workflows, tag inheritance automation, or cost allocation workflows.
+- Repo-local FOCUS ingestion and export-backed local cost reads now exist, but they are not yet the external ADLS + BI architecture described by this roadmap.
 
 ## Keep / Change
 
@@ -45,7 +56,7 @@ Impact:
 
 ### 2. The data pipeline is query-driven, not export-driven
 
-Current cost ingestion is built around direct Cost Management query API calls and cached snapshot refreshes.
+Current Azure cost operation still relies heavily on direct Cost Management query API calls and cached snapshot refreshes, even though the repo now has an initial local export-backed analytics layer.
 
 Impact:
 

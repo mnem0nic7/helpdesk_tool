@@ -68,6 +68,13 @@ def _fallback_csv_rows() -> str:
     )
 
 
+def _price_sheet_csv() -> str:
+    return (
+        "MeterId,MeterName,MeterCategory,MeterSubCategory,MeterRegion,ProductName,ProductId,SkuId,SkuName,ServiceFamily,PriceType,Term,UnitOfMeasure,UnitPrice,MarketPrice,BasePrice,CurrencyCode,EffectiveStartDate,EffectiveEndDate\n"
+        "meter-001,Standard D2s v5 Hours,Virtual Machines,General Purpose,eastus,Virtual Machines,prod-001,sku-001,Standard_D2s_v5,Compute,consumption,,1 Hour,0.20,0.25,0.20,USD,2026-03-01,2026-03-31\n"
+    )
+
+
 def test_pipeline_discovers_ingests_and_persists_artifacts(tmp_path):
     landing_root = tmp_path / "landing-zone"
     staging_root = tmp_path / "staging"
@@ -236,3 +243,35 @@ def test_pipeline_sync_is_idempotent_for_already_ingested_deliveries(tmp_path):
     assert len(first_results) == 1
     assert len(second_results) == 0
     assert pipeline.health_summary()["delivery_count"] == 1
+
+
+def test_pipeline_ingests_non_focus_auxiliary_dataset(tmp_path):
+    landing_root = tmp_path / "landing-zone"
+    staging_root = tmp_path / "staging"
+    quarantine_root = tmp_path / "quarantine"
+    store = AzureExportStore(db_path=tmp_path / "azure_export_deliveries.db")
+
+    _write_delivery(
+        landing_root,
+        dataset="price-sheet",
+        scope_key="subscription__sub-123",
+        delivery_date="2026-03-20",
+        run_id="run-001",
+        csv_name="price_sheet.csv",
+        content=_price_sheet_csv(),
+    )
+
+    pipeline = AzureExportPipeline(
+        landing_root,
+        store=store,
+        staging_root=staging_root,
+        quarantine_root=quarantine_root,
+    )
+
+    results = pipeline.sync()
+
+    assert len(results) == 1
+    assert results[0].manifest["parse_status"] == "parsed"
+    assert results[0].manifest["parser_version"] == "price-sheet-csv-v1"
+    staged_file = staging_root / "price-sheet" / "subscription__sub-123" / "delivery_date=2026-03-20" / "run=run-001" / "staged.json"
+    assert staged_file.exists()

@@ -698,6 +698,11 @@ class AzureSavingsSummary(BaseModel):
     by_confidence: list[AzureCountByLabel] = Field(default_factory=list)
     top_subscriptions: list[AzureSavingsAggregateRow] = Field(default_factory=list)
     top_resource_groups: list[AzureSavingsAggregateRow] = Field(default_factory=list)
+    source: str = "cache"
+    source_label: str = "Cached heuristic workspace"
+    source_description: str = ""
+    last_refreshed_at: Optional[str] = None
+    cost_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class AzureOverviewResponse(BaseModel):
@@ -722,6 +727,161 @@ class AzureCostChatRequest(BaseModel):
 
     question: str
     model: Optional[str] = None
+
+
+class AzureRecommendationDismissRequest(BaseModel):
+    """Dismiss a persisted recommendation with an optional operator note."""
+
+    reason: str = ""
+
+
+class AzureRecommendationReopenRequest(BaseModel):
+    """Reopen a previously dismissed recommendation."""
+
+    note: str = ""
+
+
+class AzureRecommendationActionStateRequest(BaseModel):
+    """Update the operator workflow state for a persisted recommendation."""
+
+    action_state: str
+    action_type: str = ""
+    note: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AzureRecommendationActionField(BaseModel):
+    """One metadata field supported by a recommendation action type."""
+
+    key: str
+    label: str
+    description: str = ""
+    required: bool = False
+
+
+class AzureRecommendationActionOption(BaseModel):
+    """One allowlisted option exposed by an action contract item."""
+
+    key: str
+    label: str
+    description: str = ""
+    default_dry_run: bool = True
+    allow_apply: bool = False
+    repeatable: bool = True
+
+
+class AzureRecommendationActionContractItem(BaseModel):
+    """Normalized action contract for one recommendation action."""
+
+    action_type: Literal["create_ticket", "send_alert", "export", "run_safe_script"]
+    label: str
+    description: str
+    category: Literal["jira", "teams", "export", "script"]
+    status: Literal["available", "pending", "completed", "blocked", "future"]
+    can_execute: bool
+    requires_admin: bool = True
+    repeatable: bool = False
+    pending_action_state: str = ""
+    completed_action_state: str = ""
+    current_action_state: str = ""
+    blocked_reason: str = ""
+    note_placeholder: str = ""
+    metadata_fields: list[AzureRecommendationActionField] = Field(default_factory=list)
+    options: list[AzureRecommendationActionOption] = Field(default_factory=list)
+    latest_event: dict[str, Any] = Field(default_factory=dict)
+
+
+class AzureRecommendationActionContractResponse(BaseModel):
+    """Action contract payload for one persisted recommendation."""
+
+    recommendation_id: str
+    lifecycle_status: str
+    current_action_state: str
+    generated_at: str
+    actions: list[AzureRecommendationActionContractItem] = Field(default_factory=list)
+
+
+class AzureRecommendationCreateTicketRequest(BaseModel):
+    """Create a Jira follow-up for a persisted recommendation."""
+
+    project_key: str = ""
+    issue_type: str = ""
+    summary: str = ""
+    note: str = ""
+
+
+class AzureRecommendationCreateTicketResponse(BaseModel):
+    """Stored Jira linkage for a recommendation follow-up ticket."""
+
+    recommendation: dict[str, Any] = Field(default_factory=dict)
+    ticket_key: str = ""
+    ticket_url: str = ""
+    jira_issue_id: str = ""
+    project_key: str = ""
+    issue_type: str = ""
+    summary: str = ""
+
+
+class AzureRecommendationSendAlertRequest(BaseModel):
+    """Send a Teams alert for a persisted recommendation."""
+
+    channel: str = ""
+    teams_webhook_url: str = ""
+    note: str = ""
+
+
+class AzureRecommendationSendAlertResponse(BaseModel):
+    """Stored Teams delivery outcome for a recommendation alert."""
+
+    recommendation: dict[str, Any] = Field(default_factory=dict)
+    alert_status: str = ""
+    delivery_channel: str = ""
+    sent_at: str = ""
+
+
+class AzureRecommendationRunSafeScriptRequest(BaseModel):
+    """Execute an allowlisted safe remediation hook for a recommendation."""
+
+    hook_key: str = ""
+    dry_run: bool = True
+    note: str = ""
+
+
+class AzureRecommendationRunSafeScriptResponse(BaseModel):
+    """Stored outcome for a safe remediation hook execution."""
+
+    recommendation: dict[str, Any] = Field(default_factory=dict)
+    hook_key: str = ""
+    hook_label: str = ""
+    action_status: str = ""
+    dry_run: bool = True
+    started_at: str = ""
+    completed_at: str = ""
+    duration_ms: int = 0
+    exit_code: int | None = None
+    output_excerpt: str = ""
+
+
+class AzureAllocationRuleRequest(BaseModel):
+    """Create or version an allocation rule in the local FinOps store."""
+
+    rule_id: str = ""
+    name: str
+    description: str = ""
+    rule_type: Literal["tag", "regex", "percentage", "shared"]
+    target_dimension: Literal["team", "application", "product"]
+    priority: int = 100
+    enabled: bool = True
+    condition: dict[str, Any] = Field(default_factory=dict)
+    allocation: dict[str, Any] = Field(default_factory=dict)
+
+
+class AzureAllocationRunRequest(BaseModel):
+    """Trigger a non-destructive allocation run for one or more dimensions."""
+
+    target_dimensions: list[Literal["team", "application", "product"]] = Field(default_factory=list)
+    run_label: str = ""
+    note: str = ""
 
 
 class AzureCitation(BaseModel):

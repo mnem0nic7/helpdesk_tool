@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Mapping
 
 import httpx
 
@@ -538,6 +538,121 @@ async def _post_teams(webhook_url: str, card: dict[str, Any]) -> bool:
     return True
 
 
+def build_recommendation_teams_card(
+    recommendation: Mapping[str, Any],
+    *,
+    site_origin: str,
+    channel_label: str = "",
+    operator_note: str = "",
+) -> dict[str, Any]:
+    title = str(recommendation.get("title") or "Azure FinOps recommendation").strip()
+    category = str(recommendation.get("category") or "other").strip()
+    opportunity_type = str(recommendation.get("opportunity_type") or "").strip()
+    resource_name = str(recommendation.get("resource_name") or recommendation.get("resource_type") or "Tenant-wide").strip()
+    subscription_name = str(recommendation.get("subscription_name") or recommendation.get("subscription_id") or "Unscoped").strip()
+    currency = str(recommendation.get("currency") or "USD").strip() or "USD"
+    portal_url = str(recommendation.get("portal_url") or "https://portal.azure.com").strip() or "https://portal.azure.com"
+    follow_up_route = str(recommendation.get("follow_up_route") or "/savings").strip() or "/savings"
+    recommendation_id = str(recommendation.get("id") or "").strip()
+    savings_value = recommendation.get("estimated_monthly_savings")
+    try:
+        savings_label = f"{currency} {float(savings_value):,.2f} monthly"
+    except (TypeError, ValueError):
+        savings_label = "Savings estimate unavailable"
+
+    body: list[dict[str, Any]] = [
+        {
+            "type": "TextBlock",
+            "text": f"Azure FinOps Recommendation{f' · {channel_label}' if channel_label else ''}",
+            "weight": "Bolder",
+            "size": "Medium",
+        },
+        {
+            "type": "TextBlock",
+            "text": title,
+            "wrap": True,
+            "spacing": "Small",
+        },
+        {
+            "type": "TextBlock",
+            "text": f"{category} · {opportunity_type or 'recommendation'} · {savings_label}",
+            "isSubtle": True,
+            "spacing": "None",
+            "wrap": True,
+        },
+        {
+            "type": "FactSet",
+            "facts": [
+                {"title": "Resource", "value": resource_name},
+                {"title": "Subscription", "value": subscription_name},
+                {"title": "Recommendation ID", "value": recommendation_id or "Unavailable"},
+            ],
+        },
+    ]
+
+    summary = str(recommendation.get("summary") or "").strip()
+    if summary:
+        body.append({"type": "TextBlock", "text": summary, "wrap": True, "spacing": "Small"})
+    if operator_note.strip():
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": f"Operator note: {operator_note.strip()}",
+                "wrap": True,
+                "spacing": "Small",
+            }
+        )
+
+    return {
+        "type": "message",
+        "attachments": [
+            {
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": body,
+                    "actions": [
+                        {
+                            "type": "Action.OpenUrl",
+                            "title": "Open in Dashboard",
+                            "url": f"{site_origin}/savings",
+                        },
+                        {
+                            "type": "Action.OpenUrl",
+                            "title": "Open Azure Portal",
+                            "url": portal_url,
+                        },
+                        {
+                            "type": "Action.OpenUrl",
+                            "title": "Open Follow-Up Page",
+                            "url": f"{site_origin}{follow_up_route}",
+                        },
+                    ],
+                },
+            }
+        ],
+    }
+
+
+async def send_recommendation_teams_alert(
+    webhook_url: str,
+    recommendation: Mapping[str, Any],
+    *,
+    site_origin: str,
+    channel_label: str = "",
+    operator_note: str = "",
+) -> bool:
+    card = build_recommendation_teams_card(
+        recommendation,
+        site_origin=site_origin,
+        channel_label=channel_label,
+        operator_note=operator_note,
+    )
+    return await _post_teams(webhook_url, card)
+
+
 async def _deliver(rule: dict[str, Any], items: list[dict[str, Any]]) -> tuple[str, str | None]:
     """Send email and/or Teams. Returns (status, error_str | None)."""
     try:
@@ -720,7 +835,7 @@ Do not include any text outside the JSON object.
 
 def parse_azure_alert_rule(message: str) -> dict[str, Any]:
     """Call AI to parse a natural-language alert description. Returns raw dict."""
-    from ai_client import _call_anthropic, _call_ollama, _call_openai, get_available_models  # noqa: PLC0415
+    from ai_client import get_available_models, invoke_model_text  # noqa: PLC0415
 
     models = get_available_models()
     if not models:
@@ -728,12 +843,15 @@ def parse_azure_alert_rule(message: str) -> dict[str, Any]:
 
     model = models[0]
     try:
-        if model.provider == "openai":
-            raw = _call_openai(model.id, _CHAT_SYSTEM_PROMPT, message)
-        elif model.provider == "ollama":
-            raw = _call_ollama(model.id, _CHAT_SYSTEM_PROMPT, message)
-        else:
-            raw = _call_anthropic(model.id, _CHAT_SYSTEM_PROMPT, message)
+        raw = invoke_model_text(
+            model.id,
+            _CHAT_SYSTEM_PROMPT,
+            message,
+            feature_surface="azure_alert_rule_parse",
+            app_surface="azure_alerts",
+            actor_type="system",
+            actor_id="azure-alerts",
+        )
         return json.loads(raw.strip())
     except (json.JSONDecodeError, Exception) as exc:
         return {"parsed": False, "error": str(exc)}

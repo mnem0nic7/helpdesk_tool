@@ -484,6 +484,38 @@ class JiraClient:
         """Update the issue description from plain text."""
         self.update_issue_fields(key, {"description": self._plain_text_to_adf(description)})
 
+    def create_issue(
+        self,
+        *,
+        project_key: str,
+        summary: str,
+        issue_type: str = "Task",
+        description: str = "",
+        labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """POST /rest/api/3/issue to create a Jira issue."""
+        project = project_key.strip().upper()
+        if not project:
+            raise ValueError("project_key is required")
+        summary_text = summary.strip()
+        if not summary_text:
+            raise ValueError("summary is required")
+        issue_type_text = issue_type.strip() or "Task"
+        payload_fields: dict[str, Any] = {
+            "project": {"key": project},
+            "summary": summary_text,
+            "issuetype": {"name": issue_type_text},
+        }
+        if description.strip():
+            payload_fields["description"] = self._plain_text_to_adf(description)
+        if labels:
+            payload_fields["labels"] = [label.strip() for label in labels if label and label.strip()]
+
+        url = f"{self.base_url}/rest/api/3/issue"
+        resp = self.session.post(url, json={"fields": payload_fields}, timeout=self._TIMEOUT)
+        self._raise_for_status(resp)
+        return resp.json()
+
     def add_comment(self, key: str, body_text: str) -> dict[str, Any]:
         """POST /rest/api/3/issue/{key}/comment using ADF format."""
         validate_jira_key(key)

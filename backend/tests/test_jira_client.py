@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from jira_client import JiraClient
 
 
@@ -58,3 +60,29 @@ def test_find_user_account_id_does_not_match_extra_first_or_last_names(monkeypat
     )
 
     assert client.find_user_account_id("Raza Abidi") is None
+
+
+def test_create_issue_posts_expected_payload():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.json.return_value = {"id": "10001", "key": "OIT-999"}
+    response.ok = True
+    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    created = client.create_issue(
+        project_key="oit",
+        summary="Follow up on Azure recommendation",
+        issue_type="Task",
+        description="Line one\n\nLine two",
+        labels=["azure-finops", "compute"],
+    )
+
+    assert created["key"] == "OIT-999"
+    url = client.session.post.call_args.args[0]
+    payload = client.session.post.call_args.kwargs["json"]
+    assert url == "https://example.atlassian.net/rest/api/3/issue"
+    assert payload["fields"]["project"]["key"] == "OIT"
+    assert payload["fields"]["issuetype"]["name"] == "Task"
+    assert payload["fields"]["summary"] == "Follow up on Azure recommendation"
+    assert payload["fields"]["labels"] == ["azure-finops", "compute"]
+    assert payload["fields"]["description"]["type"] == "doc"

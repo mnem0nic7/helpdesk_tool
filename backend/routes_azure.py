@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import logging
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -23,15 +24,36 @@ from ai_client import (
 from auth import is_admin_user, require_admin, require_authenticated_user
 from azure_cache import azure_cache
 from azure_cost_exports import azure_cost_export_service
+from azure_finops import azure_finops_service
 from azure_vm_export_jobs import azure_vm_export_jobs
+from azure_alert_engine import send_recommendation_teams_alert
 from config import (
+    AZURE_APP_HOST,
+    AZURE_FINOPS_RECOMMENDATION_JIRA_ISSUE_TYPE,
+    AZURE_FINOPS_RECOMMENDATION_JIRA_PROJECT,
+    AZURE_FINOPS_RECOMMENDATION_TEAMS_CHANNEL_LABEL,
+    AZURE_FINOPS_RECOMMENDATION_TEAMS_WEBHOOK_URL,
     AZURE_REPORTING_COST_ANALYSIS_LABEL,
     AZURE_REPORTING_COST_ANALYSIS_URL,
     AZURE_REPORTING_POWER_BI_LABEL,
     AZURE_REPORTING_POWER_BI_URL,
+    JIRA_BASE_URL,
 )
+from jira_client import JiraClient
 from models import (
+    AzureAllocationRuleRequest,
+    AzureAllocationRunRequest,
     AzureCostChatRequest,
+    AzureRecommendationActionContractResponse,
+    AzureRecommendationActionStateRequest,
+    AzureRecommendationCreateTicketRequest,
+    AzureRecommendationCreateTicketResponse,
+    AzureRecommendationRunSafeScriptRequest,
+    AzureRecommendationRunSafeScriptResponse,
+    AzureRecommendationSendAlertRequest,
+    AzureRecommendationSendAlertResponse,
+    AzureRecommendationDismissRequest,
+    AzureRecommendationReopenRequest,
     AzureSavingsOpportunity,
     AzureSavingsSummary,
     AzureVirtualMachineCostExportJobCreateRequest,
@@ -41,6 +63,8 @@ from models import (
 from site_context import get_current_site_scope
 
 router = APIRouter(prefix="/api/azure")
+logger = logging.getLogger(__name__)
+_jira_client = JiraClient()
 
 _HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
 _HEADER_FILL = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
@@ -65,6 +89,80 @@ def _safe_export_text(value: Any) -> str:
     if text and text[0] in ("=", "+", "-", "@"):
         return "\t" + text
     return text
+
+
+def _format_finops_currency(value: Any, currency: str = "USD") -> str:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return "Unavailable"
+    return f"{currency or 'USD'} {amount:,.2f}"
+
+
+def _default_recommendation_ticket_summary(recommendation: dict[str, Any]) -> str:
+    title = str(recommendation.get("title") or "Azure FinOps recommendation").strip()
+    if title.lower().startswith("[finops]"):
+        return title
+    return f"[FinOps] {title}"
+
+
+def _build_recommendation_ticket_description(
+    recommendation: dict[str, Any],
+    *,
+    operator_note: str = "",
+) -> str:
+    currency = str(recommendation.get("currency") or "USD")
+    lines = [
+        "Azure FinOps recommendation follow-up",
+        "",
+        f"Title: {str(recommendation.get('title') or '').strip()}",
+        f"Summary: {str(recommendation.get('summary') or '').strip()}",
+        f"Category: {str(recommendation.get('category') or '').strip()}",
+        f"Opportunity type: {str(recommendation.get('opportunity_type') or '').strip()}",
+        f"Estimated monthly savings: {_format_finops_currency(recommendation.get('estimated_monthly_savings'), currency)}",
+        f"Current monthly cost: {_format_finops_currency(recommendation.get('current_monthly_cost'), currency)}",
+        f"Subscription: {str(recommendation.get('subscription_name') or recommendation.get('subscription_id') or 'Unavailable').strip()}",
+        f"Resource group: {str(recommendation.get('resource_group') or 'Unavailable').strip()}",
+        f"Resource name: {str(recommendation.get('resource_name') or 'Unavailable').strip()}",
+        f"Resource ID: {str(recommendation.get('resource_id') or 'Unavailable').strip()}",
+        f"Azure Portal: {str(recommendation.get('portal_url') or '').strip() or 'Unavailable'}",
+    ]
+
+    follow_up_route = str(recommendation.get("follow_up_route") or "").strip()
+    if follow_up_route:
+        lines.append(f"Dashboard follow-up: https://{AZURE_APP_HOST}{follow_up_route}")
+
+    recommended_steps = recommendation.get("recommended_steps") or []
+    if isinstance(recommended_steps, list) and recommended_steps:
+        lines.extend(["", "Recommended steps:"])
+        for index, step in enumerate(recommended_steps, start=1):
+            step_text = str(step or "").strip()
+            if step_text:
+                lines.append(f"{index}. {step_text}")
+
+    evidence_rows = recommendation.get("evidence") or []
+    if isinstance(evidence_rows, list) and evidence_rows:
+        lines.extend(["", "Evidence:"])
+        for row in evidence_rows:
+            if not isinstance(row, dict):
+                continue
+            label = str(row.get("label") or "").strip()
+            value = str(row.get("value") or "").strip()
+            if label or value:
+                lines.append(f"- {label or 'Detail'}: {value or 'Unavailable'}")
+
+    note_text = operator_note.strip()
+    if note_text:
+        lines.extend(["", "Operator note:", note_text])
+
+    lines.extend(
+        [
+            "",
+            "Created from the Azure FinOps recommendations workspace.",
+            f"Generated at: {datetime.now(timezone.utc).isoformat()}",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _coverage_label(delta: Any) -> str:
@@ -187,7 +285,75 @@ def _list_filtered_savings_opportunities(
     confidence: str = "",
     quantified_only: bool = False,
 ) -> list[dict[str, Any]]:
+    _refresh_finops_recommendations_from_cache()
+    finops_rows = azure_finops_service.list_recommendations(
+        search=search,
+        category=category,
+        opportunity_type=opportunity_type,
+        subscription_id=subscription_id,
+        resource_group=resource_group,
+        effort=effort,
+        risk=risk,
+        confidence=confidence,
+        quantified_only=quantified_only,
+    )
+    if finops_rows:
+        return finops_rows
     return azure_cache.list_savings_opportunities(
+        search=search,
+        category=category,
+        opportunity_type=opportunity_type,
+        subscription_id=subscription_id,
+        resource_group=resource_group,
+        effort=effort,
+        risk=risk,
+        confidence=confidence,
+        quantified_only=quantified_only,
+    )
+
+
+def _refresh_finops_recommendations_from_cache() -> dict[str, Any] | None:
+    cache_rows = azure_cache.list_savings_opportunities()
+    cache_resources = azure_cache._snapshot("resources") or []
+    cache_status = azure_cache.status()
+    cache_source_refreshed_at = str(cache_status.get("last_refresh") or "")
+    cache_source_version = cache_source_refreshed_at or f"rows:{len(cache_rows)}"
+    inventory_source_version = cache_source_refreshed_at or f"resources:{len(cache_resources)}"
+    try:
+        return azure_finops_service.refresh_recommendations_snapshot(
+            cache_rows,
+            cache_source_version=cache_source_version,
+            cache_source_refreshed_at=cache_source_refreshed_at,
+            cache_resources=cache_resources,
+            inventory_source_version=inventory_source_version,
+        )
+    except Exception:
+        logger.exception("Failed to refresh local FinOps recommendation snapshot from Azure cache")
+        return None
+
+
+def _get_savings_summary_payload() -> dict[str, Any]:
+    _refresh_finops_recommendations_from_cache()
+    finops_summary = azure_finops_service.get_recommendation_summary()
+    if finops_summary:
+        return _savings_summary_with_context(finops_summary, source="recommendations")
+    return _savings_summary_with_context(azure_cache.get_savings_summary(), source="cache")
+
+
+def _list_filtered_recommendations(
+    *,
+    search: str = "",
+    category: str = "",
+    opportunity_type: str = "",
+    subscription_id: str = "",
+    resource_group: str = "",
+    effort: str = "",
+    risk: str = "",
+    confidence: str = "",
+    quantified_only: bool = False,
+) -> list[dict[str, Any]]:
+    _refresh_finops_recommendations_from_cache()
+    return azure_finops_service.list_recommendations(
         search=search,
         category=category,
         opportunity_type=opportunity_type,
@@ -221,6 +387,10 @@ def _ensure_export_job_access(job_id: str, session: dict[str, Any]) -> dict[str,
 def _azure_status_with_exports(payload: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(payload)
     enriched["cost_exports"] = azure_cost_export_service.status()
+    finops_status = azure_finops_service.get_status()
+    cost_context = _get_cost_context_payload()
+    if "cost" in enriched:
+        enriched["cost"] = _get_cost_summary_payload()
     enriched["reporting"] = {
         "power_bi": {
             "label": AZURE_REPORTING_POWER_BI_LABEL,
@@ -236,12 +406,16 @@ def _azure_status_with_exports(payload: dict[str, Any]) -> dict[str, Any]:
         },
         "sources": {
             "overview": {
-                "label": "Cached app data",
-                "description": "Overview metrics come from the app's cached Azure snapshots and cost queries.",
+                "label": "Cached inventory + export-backed cost" if cost_context.get("export_backed") else "Cached app data",
+                "description": (
+                    "Overview inventory and identity metrics come from cached Azure snapshots, while cost metrics prefer local export-backed analytics."
+                    if cost_context.get("export_backed")
+                    else "Overview metrics come from the app's cached Azure snapshots and cost queries."
+                ),
             },
             "cost": {
-                "label": "Cached app data",
-                "description": "Cost charts and tables use cached Azure Cost Management query results for operator workflows.",
+                "label": "Export-backed local analytics",
+                "description": "Cost charts and tables prefer local FinOps analytics hydrated from Cost Management exports, with cache fallback when exports are unavailable.",
             },
             "savings": {
                 "label": "Heuristic operational guidance",
@@ -253,7 +427,184 @@ def _azure_status_with_exports(payload: dict[str, Any]) -> dict[str, Any]:
             },
         },
     }
+    enriched["finops"] = {
+        "available": bool(finops_status.get("available")),
+        "record_count": int(finops_status.get("record_count") or 0),
+        "coverage_start": finops_status.get("coverage_start"),
+        "coverage_end": finops_status.get("coverage_end"),
+        "field_coverage": finops_status.get("field_coverage") or {},
+        "ai_usage": finops_status.get("ai_usage") or {},
+        "cost_context": cost_context,
+    }
     return enriched
+
+
+def _get_finops_validation_payload() -> dict[str, Any]:
+    return azure_finops_service.get_validation_report(
+        azure_cache.get_cost_summary(),
+        azure_cost_export_service.status(),
+    )
+
+
+def _get_cost_copilot_context() -> dict[str, Any]:
+    context = dict(azure_cache.get_grounding_context())
+    export_summary = azure_finops_service.get_cost_summary()
+    if export_summary:
+        context["export_cost_summary"] = export_summary
+        context["export_cost_trend"] = azure_finops_service.get_cost_trend()
+        context["export_cost_by_service"] = azure_finops_service.get_cost_breakdown("service")
+    finops_status = azure_finops_service.get_status()
+    context["finops_status"] = {
+        "available": bool(finops_status.get("available")),
+        "record_count": int(finops_status.get("record_count") or 0),
+        "coverage_start": finops_status.get("coverage_start"),
+        "coverage_end": finops_status.get("coverage_end"),
+        "field_coverage": finops_status.get("field_coverage") or {},
+        "ai_usage": finops_status.get("ai_usage") or {},
+    }
+    return context
+
+
+def _cost_summary_with_source(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
+    total_cost = float(payload.get("total_cost") or 0.0)
+    enriched = dict(payload)
+    enriched.setdefault("total_actual_cost", total_cost)
+    enriched.setdefault("total_amortized_cost", total_cost)
+    enriched.setdefault("record_count", 0)
+    enriched.setdefault("window_start", None)
+    enriched.setdefault("window_end", None)
+    enriched["source"] = source
+    enriched["source_label"] = "Export-backed local analytics" if source == "exports" else "Cached app data"
+    enriched["export_backed"] = source == "exports"
+    return enriched
+
+
+def _cost_trend_with_source(rows: list[dict[str, Any]], *, source: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        cost = float(row.get("cost") or 0.0)
+        enriched = dict(row)
+        enriched.setdefault("actual_cost", cost)
+        enriched.setdefault("amortized_cost", cost)
+        enriched.setdefault("currency", str(row.get("currency") or "USD"))
+        enriched["source"] = source
+        result.append(enriched)
+    return result
+
+
+def _cost_breakdown_with_source(rows: list[dict[str, Any]], *, source: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        amount = float(row.get("amount") or 0.0)
+        enriched = dict(row)
+        enriched.setdefault("actual_cost", amount)
+        enriched.setdefault("amortized_cost", amount)
+        enriched.setdefault("currency", str(row.get("currency") or "USD"))
+        enriched["source"] = source
+        result.append(enriched)
+    return result
+
+
+def _get_cost_context_payload() -> dict[str, Any]:
+    export_summary = azure_finops_service.get_cost_summary()
+    if export_summary:
+        return {
+            "available": True,
+            "source": "exports",
+            "source_label": "Export-backed local analytics",
+            "source_description": (
+                "Cost context comes from parsed Azure Cost Management exports in the local FinOps analytics store."
+            ),
+            "window_start": export_summary.get("window_start"),
+            "window_end": export_summary.get("window_end"),
+            "record_count": int(export_summary.get("record_count") or 0),
+            "currency": str(export_summary.get("currency") or "USD"),
+            "total_actual_cost": float(export_summary.get("total_actual_cost") or export_summary.get("total_cost") or 0.0),
+            "total_amortized_cost": float(
+                export_summary.get("total_amortized_cost") or export_summary.get("total_cost") or 0.0
+            ),
+            "export_backed": True,
+        }
+
+    cache_summary = azure_cache.get_cost_summary()
+    total_cost = float(cache_summary.get("total_cost") or 0.0)
+    return {
+        "available": bool(cache_summary),
+        "source": "cache",
+        "source_label": "Cached app data",
+        "source_description": (
+            "Cost context is currently coming from cached Azure Cost Management query results because export-backed facts are unavailable."
+        ),
+        "window_start": None,
+        "window_end": None,
+        "record_count": 0,
+        "currency": str(cache_summary.get("currency") or "USD"),
+        "total_actual_cost": total_cost,
+        "total_amortized_cost": total_cost,
+        "export_backed": False,
+    }
+
+
+def _get_recommendation_workspace_context(*, source: str) -> dict[str, Any]:
+    finops_status = azure_finops_service.get_status()
+    recommendation_status = finops_status.get("recommendations") or {}
+    last_refreshed_at = recommendation_status.get("last_refreshed_at")
+    if last_refreshed_at is not None:
+        last_refreshed_at = str(last_refreshed_at or "").strip() or None
+    if source == "recommendations":
+        return {
+            "available": True,
+            "source": "recommendations",
+            "source_label": "Persisted recommendation workspace",
+            "source_description": (
+                "Recommendation lists and workflow state come from the local FinOps recommendation store, hydrated from cache heuristics, auxiliary export datasets, and the export-backed resource-cost bridge used for AKS visibility."
+            ),
+            "last_refreshed_at": last_refreshed_at,
+        }
+    return {
+        "available": False,
+        "source": "cache",
+        "source_label": "Cached heuristic workspace",
+        "source_description": (
+            "Recommendation detail is currently coming directly from cache-backed heuristics because the persisted workspace is unavailable."
+        ),
+        "last_refreshed_at": last_refreshed_at,
+    }
+
+
+def _savings_summary_with_context(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
+    enriched = dict(payload)
+    workspace = _get_recommendation_workspace_context(source=source)
+    enriched["source"] = workspace["source"]
+    enriched["source_label"] = workspace["source_label"]
+    enriched["source_description"] = workspace["source_description"]
+    enriched["last_refreshed_at"] = workspace["last_refreshed_at"]
+    enriched["cost_context"] = _get_cost_context_payload()
+    return enriched
+
+
+def _get_cost_summary_payload() -> dict[str, Any]:
+    export_summary = azure_finops_service.get_cost_summary()
+    if export_summary:
+        cached_summary = azure_cache.get_cost_summary()
+        export_summary["recommendation_count"] = int(cached_summary.get("recommendation_count") or 0)
+        export_summary["potential_monthly_savings"] = float(cached_summary.get("potential_monthly_savings") or 0.0)
+        return _cost_summary_with_source(export_summary, source="exports")
+    return _cost_summary_with_source(azure_cache.get_cost_summary(), source="cache")
+
+
+def _get_cost_trend_payload() -> list[dict[str, Any]]:
+    export_rows = azure_finops_service.get_cost_trend()
+    if export_rows:
+        return _cost_trend_with_source(export_rows, source="exports")
+    return _cost_trend_with_source(azure_cache.get_cost_trend(), source="cache")
+
+
+def _get_cost_breakdown_payload(group_by: str) -> list[dict[str, Any]]:
+    export_rows = azure_finops_service.get_cost_breakdown(group_by)
+    if export_rows:
+        return _cost_breakdown_with_source(export_rows, source="exports")
+    return _cost_breakdown_with_source(azure_cache.get_cost_breakdown(group_by), source="cache")
 
 
 @router.get("/status")
@@ -594,19 +945,171 @@ async def get_directory_roles(search: str = Query(default="")) -> list[dict[str,
 @router.get("/cost/summary")
 async def get_cost_summary() -> dict[str, Any]:
     _ensure_azure_site()
-    return azure_cache.get_cost_summary()
+    return _get_cost_summary_payload()
 
 
 @router.get("/cost/trend")
 async def get_cost_trend() -> list[dict[str, Any]]:
     _ensure_azure_site()
-    return azure_cache.get_cost_trend()
+    return _get_cost_trend_payload()
 
 
 @router.get("/cost/breakdown")
 async def get_cost_breakdown(group_by: str = Query(default="service")) -> list[dict[str, Any]]:
     _ensure_azure_site()
-    return azure_cache.get_cost_breakdown(group_by)
+    return _get_cost_breakdown_payload(group_by)
+
+
+@router.get("/finops/status")
+async def get_finops_status(_session: dict[str, Any] = Depends(require_authenticated_user)) -> dict[str, Any]:
+    _ensure_azure_site()
+    return azure_finops_service.get_status()
+
+
+@router.get("/finops/reconciliation")
+async def get_finops_reconciliation(_session: dict[str, Any] = Depends(require_authenticated_user)) -> dict[str, Any]:
+    _ensure_azure_site()
+    return azure_finops_service.get_cost_reconciliation(azure_cache.get_cost_summary())
+
+
+@router.get("/finops/validation")
+async def get_finops_validation(_session: dict[str, Any] = Depends(require_authenticated_user)) -> dict[str, Any]:
+    _ensure_azure_site()
+    return _get_finops_validation_payload()
+
+
+@router.get("/allocations/policy")
+async def get_allocation_policy(_session: dict[str, Any] = Depends(require_authenticated_user)) -> dict[str, Any]:
+    _ensure_azure_site()
+    return azure_finops_service.get_allocation_policy()
+
+
+@router.get("/allocations/status")
+async def get_allocation_status(_session: dict[str, Any] = Depends(require_authenticated_user)) -> dict[str, Any]:
+    _ensure_azure_site()
+    return azure_finops_service.get_allocation_status()
+
+
+@router.get("/allocations/rules")
+async def get_allocation_rules(
+    include_inactive: bool = Query(default=False),
+    include_all_versions: bool = Query(default=False),
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[dict[str, Any]]:
+    _ensure_azure_site()
+    return azure_finops_service.list_allocation_rules(
+        include_inactive=include_inactive,
+        include_all_versions=include_all_versions,
+    )
+
+
+@router.post("/allocations/rules")
+async def create_or_update_allocation_rule(
+    body: AzureAllocationRuleRequest,
+    session: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    try:
+        return azure_finops_service.upsert_allocation_rule(
+            rule_id=body.rule_id,
+            name=body.name,
+            description=body.description,
+            rule_type=body.rule_type,
+            target_dimension=body.target_dimension,
+            priority=body.priority,
+            enabled=body.enabled,
+            condition=body.condition,
+            allocation=body.allocation,
+            actor_id=str(session.get("email") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/allocations/rules/{rule_id}/deactivate")
+async def deactivate_allocation_rule(
+    rule_id: str,
+    session: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    payload = azure_finops_service.deactivate_allocation_rule(rule_id, actor_id=str(session.get("email") or ""))
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Allocation rule was not found")
+    return payload
+
+
+@router.get("/allocations/runs")
+async def get_allocation_runs(
+    limit: int = Query(default=20, ge=1, le=100),
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[dict[str, Any]]:
+    _ensure_azure_site()
+    return azure_finops_service.list_allocation_runs(limit=limit)
+
+
+@router.post("/allocations/runs")
+async def create_allocation_run(
+    body: AzureAllocationRunRequest,
+    session: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    try:
+        return azure_finops_service.run_allocation(
+            actor_id=str(session.get("email") or ""),
+            target_dimensions=body.target_dimensions,
+            run_label=body.run_label,
+            note=body.note,
+            trigger_type="manual",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/allocations/runs/{run_id}")
+async def get_allocation_run(
+    run_id: str,
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    payload = azure_finops_service.get_allocation_run(run_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Allocation run was not found")
+    return payload
+
+
+@router.get("/allocations/runs/{run_id}/results")
+async def get_allocation_run_results(
+    run_id: str,
+    target_dimension: str = Query(alias="dimension"),
+    bucket_type: str = Query(default=""),
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[dict[str, Any]]:
+    _ensure_azure_site()
+    if not azure_finops_service.get_allocation_run(run_id):
+        raise HTTPException(status_code=404, detail="Allocation run was not found")
+    try:
+        return azure_finops_service.list_allocation_results(
+            run_id,
+            target_dimension=target_dimension,
+            bucket_type=bucket_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/allocations/runs/{run_id}/residuals")
+async def get_allocation_run_residuals(
+    run_id: str,
+    target_dimension: str = Query(alias="dimension"),
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[dict[str, Any]]:
+    _ensure_azure_site()
+    if not azure_finops_service.get_allocation_run(run_id):
+        raise HTTPException(status_code=404, detail="Allocation run was not found")
+    try:
+        return azure_finops_service.list_allocation_residuals(run_id, target_dimension=target_dimension)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/advisor")
@@ -618,7 +1121,7 @@ async def get_advisor() -> list[dict[str, Any]]:
 @router.get("/savings/summary")
 async def get_savings_summary() -> AzureSavingsSummary:
     _ensure_azure_site()
-    return AzureSavingsSummary.model_validate(azure_cache.get_savings_summary())
+    return AzureSavingsSummary.model_validate(_get_savings_summary_payload())
 
 
 @router.get("/savings/opportunities")
@@ -646,6 +1149,605 @@ async def get_savings_opportunities(
         quantified_only=quantified_only,
     )
     return [AzureSavingsOpportunity.model_validate(item) for item in rows]
+
+
+@router.get("/recommendations/summary")
+async def get_recommendations_summary(_session: dict[str, Any] = Depends(require_authenticated_user)) -> dict[str, Any]:
+    _ensure_azure_site()
+    _refresh_finops_recommendations_from_cache()
+    summary = azure_finops_service.get_recommendation_summary()
+    if summary:
+        return _savings_summary_with_context(summary, source="recommendations")
+    return _savings_summary_with_context(
+        {
+            "currency": str(azure_cache.get_cost_summary().get("currency") or "USD"),
+            "total_opportunities": 0,
+            "quantified_opportunities": 0,
+            "quantified_monthly_savings": 0.0,
+            "quick_win_count": 0,
+            "quick_win_monthly_savings": 0.0,
+            "unquantified_opportunity_count": 0,
+            "by_category": [],
+            "by_opportunity_type": [],
+            "by_effort": [],
+            "by_risk": [],
+            "by_confidence": [],
+            "top_subscriptions": [],
+            "top_resource_groups": [],
+        },
+        source="cache",
+    )
+
+
+@router.get("/recommendations/resource-cost-bridge")
+async def get_recommendation_resource_cost_bridge(
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    cache_resources = azure_cache._snapshot("resources") or []
+    return azure_finops_service.get_resource_cost_bridge_summary(cache_resources)
+
+
+@router.get("/recommendations/aks-visibility")
+async def get_recommendation_aks_visibility(
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[dict[str, Any]]:
+    _ensure_azure_site()
+    cache_resources = azure_cache._snapshot("resources") or []
+    return azure_finops_service.list_aks_cost_visibility(cache_resources)
+
+
+@router.get("/recommendations")
+async def get_recommendations(
+    search: str = Query(default=""),
+    category: str = Query(default=""),
+    opportunity_type: str = Query(default=""),
+    subscription_id: str = Query(default=""),
+    resource_group: str = Query(default=""),
+    effort: str = Query(default=""),
+    risk: str = Query(default=""),
+    confidence: str = Query(default=""),
+    quantified_only: bool = Query(default=False),
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[dict[str, Any]]:
+    _ensure_azure_site()
+    return _list_filtered_recommendations(
+        search=search,
+        category=category,
+        opportunity_type=opportunity_type,
+        subscription_id=subscription_id,
+        resource_group=resource_group,
+        effort=effort,
+        risk=risk,
+        confidence=confidence,
+        quantified_only=quantified_only,
+    )
+
+
+@router.get("/recommendations/export.csv")
+async def export_recommendations_csv(
+    search: str = Query(default=""),
+    category: str = Query(default=""),
+    opportunity_type: str = Query(default=""),
+    subscription_id: str = Query(default=""),
+    resource_group: str = Query(default=""),
+    effort: str = Query(default=""),
+    risk: str = Query(default=""),
+    confidence: str = Query(default=""),
+    quantified_only: bool = Query(default=False),
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> FileResponse:
+    _ensure_azure_site()
+    rows = _savings_export_rows(
+        _list_filtered_recommendations(
+            search=search,
+            category=category,
+            opportunity_type=opportunity_type,
+            subscription_id=subscription_id,
+            resource_group=resource_group,
+            effort=effort,
+            risk=risk,
+            confidence=confidence,
+            quantified_only=quantified_only,
+        )
+    )
+    now = datetime.now(timezone.utc)
+    filename = f"azure_recommendations_{now.strftime('%Y%m%d_%H%M')}.csv"
+    headers = [
+        "Title",
+        "Category",
+        "Opportunity Type",
+        "Source",
+        "Subscription",
+        "Resource Group",
+        "Location",
+        "Resource Name",
+        "Resource Type",
+        "Current Monthly Cost",
+        "Estimated Monthly Savings",
+        "Quantified",
+        "Effort",
+        "Risk",
+        "Confidence",
+        "Estimate Basis",
+        "Summary",
+        "Recommended Steps",
+        "Evidence",
+        "Portal URL",
+        "Follow Up Route",
+    ]
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8")
+    try:
+        writer = csv.DictWriter(tmp, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(rows)
+        tmp.flush()
+    finally:
+        tmp.close()
+    return _build_vm_coverage_file_response(tmp.name, filename, "text/csv; charset=utf-8")
+
+
+@router.get("/recommendations/export.xlsx")
+async def export_recommendations_excel(
+    search: str = Query(default=""),
+    category: str = Query(default=""),
+    opportunity_type: str = Query(default=""),
+    subscription_id: str = Query(default=""),
+    resource_group: str = Query(default=""),
+    effort: str = Query(default=""),
+    risk: str = Query(default=""),
+    confidence: str = Query(default=""),
+    quantified_only: bool = Query(default=False),
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> FileResponse:
+    _ensure_azure_site()
+    rows = _savings_export_rows(
+        _list_filtered_recommendations(
+            search=search,
+            category=category,
+            opportunity_type=opportunity_type,
+            subscription_id=subscription_id,
+            resource_group=resource_group,
+            effort=effort,
+            risk=risk,
+            confidence=confidence,
+            quantified_only=quantified_only,
+        )
+    )
+    now = datetime.now(timezone.utc)
+    filename = f"azure_recommendations_{now.strftime('%Y%m%d_%H%M')}.xlsx"
+    headers = [
+        "Title",
+        "Category",
+        "Opportunity Type",
+        "Source",
+        "Subscription",
+        "Resource Group",
+        "Location",
+        "Resource Name",
+        "Resource Type",
+        "Current Monthly Cost",
+        "Estimated Monthly Savings",
+        "Quantified",
+        "Effort",
+        "Risk",
+        "Confidence",
+        "Estimate Basis",
+        "Summary",
+        "Recommended Steps",
+        "Evidence",
+        "Portal URL",
+        "Follow Up Route",
+    ]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Recommendations"
+    for column_index, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=column_index, value=header)
+        cell.font = _HEADER_FONT
+        cell.fill = _HEADER_FILL
+        cell.alignment = _HEADER_ALIGNMENT
+
+    for row_index, row in enumerate(rows, 2):
+        for column_index, header in enumerate(headers, 1):
+            ws.cell(row=row_index, column=column_index, value=row.get(header, ""))
+
+    for column_name, width in {
+        "A": 36,
+        "B": 14,
+        "C": 26,
+        "D": 12,
+        "E": 24,
+        "F": 24,
+        "G": 14,
+        "H": 28,
+        "I": 34,
+        "J": 18,
+        "K": 22,
+        "L": 12,
+        "M": 10,
+        "N": 10,
+        "O": 12,
+        "P": 42,
+        "Q": 48,
+        "R": 56,
+        "S": 64,
+        "T": 48,
+        "U": 18,
+    }.items():
+        ws.column_dimensions[column_name].width = width
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    try:
+        wb.save(tmp.name)
+    finally:
+        tmp.close()
+    return _build_vm_coverage_file_response(
+        tmp.name,
+        filename,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@router.get("/recommendations/{recommendation_id}")
+async def get_recommendation_detail(
+    recommendation_id: str,
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    _refresh_finops_recommendations_from_cache()
+    payload = azure_finops_service.get_recommendation(recommendation_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+    return payload
+
+
+@router.get(
+    "/recommendations/{recommendation_id}/actions",
+    response_model=AzureRecommendationActionContractResponse,
+)
+async def get_recommendation_action_contract(
+    recommendation_id: str,
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    _refresh_finops_recommendations_from_cache()
+    payload = azure_finops_service.get_recommendation_action_contract(recommendation_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+    return payload
+
+
+@router.get("/recommendations/{recommendation_id}/history")
+async def get_recommendation_history(
+    recommendation_id: str,
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[dict[str, Any]]:
+    _ensure_azure_site()
+    _refresh_finops_recommendations_from_cache()
+    if not azure_finops_service.get_recommendation(recommendation_id):
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+    return azure_finops_service.list_recommendation_action_history(recommendation_id)
+
+
+@router.post(
+    "/recommendations/{recommendation_id}/actions/create-ticket",
+    response_model=AzureRecommendationCreateTicketResponse,
+)
+async def create_recommendation_ticket(
+    recommendation_id: str,
+    body: AzureRecommendationCreateTicketRequest,
+    session: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    _refresh_finops_recommendations_from_cache()
+
+    recommendation = azure_finops_service.get_recommendation(recommendation_id)
+    if not recommendation:
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+
+    contract = azure_finops_service.get_recommendation_action_contract(recommendation_id)
+    create_ticket_action = next(
+        (
+            item
+            for item in (contract or {}).get("actions", [])
+            if str(item.get("action_type") or "").lower() == "create_ticket"
+        ),
+        None,
+    )
+    if create_ticket_action is None:
+        raise HTTPException(status_code=404, detail="Create-ticket action is not available for this recommendation")
+    if not bool(create_ticket_action.get("can_execute")):
+        blocked_reason = str(create_ticket_action.get("blocked_reason") or "").strip()
+        raise HTTPException(
+            status_code=409,
+            detail=blocked_reason or "Create-ticket action is not currently available for this recommendation",
+        )
+
+    project_key = (body.project_key or AZURE_FINOPS_RECOMMENDATION_JIRA_PROJECT or "").strip().upper()
+    issue_type = (body.issue_type or AZURE_FINOPS_RECOMMENDATION_JIRA_ISSUE_TYPE or "").strip() or "Task"
+    summary = (body.summary or "").strip() or _default_recommendation_ticket_summary(recommendation)
+    actor_id = str(session.get("email") or "")
+    description = _build_recommendation_ticket_description(recommendation, operator_note=body.note)
+    labels = [
+        "azure-finops",
+        str(recommendation.get("category") or "").strip().lower().replace(" ", "-"),
+        str(recommendation.get("opportunity_type") or "").strip().lower().replace(" ", "-"),
+    ]
+
+    try:
+        created_issue = _jira_client.create_issue(
+            project_key=project_key,
+            issue_type=issue_type,
+            summary=summary,
+            description=description,
+            labels=labels,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to create Jira ticket for recommendation %s", recommendation_id)
+        azure_finops_service.record_recommendation_action_event(
+            recommendation_id,
+            action_type="create_ticket",
+            action_status="failed",
+            actor_type="user",
+            actor_id=actor_id,
+            note=body.note,
+            metadata={
+                "project_key": project_key,
+                "issue_type": issue_type,
+                "summary": summary,
+                "error": str(exc),
+            },
+        )
+        raise HTTPException(status_code=502, detail="Could not create Jira ticket. Please try again in a moment.") from exc
+
+    ticket_key = str(created_issue.get("key") or "").strip()
+    jira_issue_id = str(created_issue.get("id") or "").strip()
+    ticket_url = f"{JIRA_BASE_URL}/browse/{ticket_key}" if JIRA_BASE_URL and ticket_key else ""
+    note = (body.note or "").strip() or f"Created Jira follow-up {ticket_key}."
+    updated_recommendation = azure_finops_service.update_recommendation_action_state(
+        recommendation_id,
+        action_state="ticket_created",
+        action_type="create_ticket",
+        actor_type="user",
+        actor_id=actor_id,
+        note=note,
+        metadata={
+            "project_key": project_key,
+            "issue_type": issue_type,
+            "summary": summary,
+            "ticket_key": ticket_key,
+            "ticket_url": ticket_url,
+            "jira_issue_id": jira_issue_id,
+        },
+    )
+    if not updated_recommendation:
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+
+    return {
+        "recommendation": updated_recommendation,
+        "ticket_key": ticket_key,
+        "ticket_url": ticket_url,
+        "jira_issue_id": jira_issue_id,
+        "project_key": project_key,
+        "issue_type": issue_type,
+        "summary": summary,
+    }
+
+
+@router.post(
+    "/recommendations/{recommendation_id}/actions/send-alert",
+    response_model=AzureRecommendationSendAlertResponse,
+)
+async def send_recommendation_alert(
+    recommendation_id: str,
+    body: AzureRecommendationSendAlertRequest,
+    session: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    _refresh_finops_recommendations_from_cache()
+
+    recommendation = azure_finops_service.get_recommendation(recommendation_id)
+    if not recommendation:
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+
+    contract = azure_finops_service.get_recommendation_action_contract(recommendation_id)
+    send_alert_action = next(
+        (
+            item
+            for item in (contract or {}).get("actions", [])
+            if str(item.get("action_type") or "").lower() == "send_alert"
+        ),
+        None,
+    )
+    if send_alert_action is None:
+        raise HTTPException(status_code=404, detail="Send-alert action is not available for this recommendation")
+    if not bool(send_alert_action.get("can_execute")):
+        blocked_reason = str(send_alert_action.get("blocked_reason") or "").strip()
+        raise HTTPException(
+            status_code=409,
+            detail=blocked_reason or "Send-alert action is not currently available for this recommendation",
+        )
+
+    webhook_url = (body.teams_webhook_url or AZURE_FINOPS_RECOMMENDATION_TEAMS_WEBHOOK_URL or "").strip()
+    if not webhook_url:
+        raise HTTPException(
+            status_code=422,
+            detail="A Teams webhook URL is required. Configure a default webhook or provide an override.",
+        )
+    channel_label = (body.channel or AZURE_FINOPS_RECOMMENDATION_TEAMS_CHANNEL_LABEL or "FinOps").strip() or "FinOps"
+    note = (body.note or "").strip()
+    actor_id = str(session.get("email") or "")
+    site_origin = f"https://{AZURE_APP_HOST}"
+
+    try:
+        await send_recommendation_teams_alert(
+            webhook_url,
+            recommendation,
+            site_origin=site_origin,
+            channel_label=channel_label,
+            operator_note=note,
+        )
+    except Exception as exc:
+        logger.exception("Failed to send Teams alert for recommendation %s", recommendation_id)
+        azure_finops_service.record_recommendation_action_event(
+            recommendation_id,
+            action_type="send_alert",
+            action_status="failed",
+            actor_type="user",
+            actor_id=actor_id,
+            note=note,
+            metadata={
+                "channel": channel_label,
+                "delivery_target": "teams_webhook",
+                "error": str(exc),
+            },
+        )
+        raise HTTPException(status_code=502, detail="Could not send Teams alert. Please try again in a moment.") from exc
+
+    updated_recommendation = azure_finops_service.update_recommendation_action_state(
+        recommendation_id,
+        action_state="alert_sent",
+        action_type="send_alert",
+        actor_type="user",
+        actor_id=actor_id,
+        note=note or f"Sent Teams alert to {channel_label}.",
+        metadata={
+            "channel": channel_label,
+            "delivery_target": "teams_webhook",
+            "alert_status": "sent",
+        },
+    )
+    if not updated_recommendation:
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+
+    return {
+        "recommendation": updated_recommendation,
+        "alert_status": "sent",
+        "delivery_channel": channel_label,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.post(
+    "/recommendations/{recommendation_id}/actions/run-safe-script",
+    response_model=AzureRecommendationRunSafeScriptResponse,
+)
+async def run_recommendation_safe_script(
+    recommendation_id: str,
+    body: AzureRecommendationRunSafeScriptRequest,
+    session: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    _refresh_finops_recommendations_from_cache()
+
+    recommendation = azure_finops_service.get_recommendation(recommendation_id)
+    if not recommendation:
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+
+    contract = azure_finops_service.get_recommendation_action_contract(recommendation_id)
+    script_action = next(
+        (
+            item
+            for item in (contract or {}).get("actions", [])
+            if str(item.get("action_type") or "").lower() == "run_safe_script"
+        ),
+        None,
+    )
+    if script_action is None:
+        raise HTTPException(status_code=404, detail="Run-safe-script action is not available for this recommendation")
+    if not bool(script_action.get("can_execute")):
+        blocked_reason = str(script_action.get("blocked_reason") or "").strip()
+        raise HTTPException(
+            status_code=409,
+            detail=blocked_reason or "Run-safe-script action is not currently available for this recommendation",
+        )
+
+    actor_id = str(session.get("email") or "")
+    try:
+        payload = await asyncio.to_thread(
+            azure_finops_service.run_recommendation_safe_hook,
+            recommendation_id,
+            hook_key=body.hook_key,
+            dry_run=body.dry_run,
+            actor_type="user",
+            actor_id=actor_id,
+            note=body.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if not payload:
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+    return payload
+
+
+@router.post("/recommendations/{recommendation_id}/dismiss")
+async def dismiss_recommendation(
+    recommendation_id: str,
+    body: AzureRecommendationDismissRequest,
+    session: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    _refresh_finops_recommendations_from_cache()
+    payload = azure_finops_service.dismiss_recommendation(
+        recommendation_id,
+        reason=body.reason,
+        actor_type="user",
+        actor_id=str(session.get("email") or ""),
+    )
+    if not payload:
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+    return payload
+
+
+@router.post("/recommendations/{recommendation_id}/reopen")
+async def reopen_recommendation(
+    recommendation_id: str,
+    body: AzureRecommendationReopenRequest,
+    session: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    _refresh_finops_recommendations_from_cache()
+    payload = azure_finops_service.reopen_recommendation(
+        recommendation_id,
+        actor_type="user",
+        actor_id=str(session.get("email") or ""),
+        note=body.note,
+    )
+    if not payload:
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+    return payload
+
+
+@router.post("/recommendations/{recommendation_id}/action-state")
+async def update_recommendation_action_state(
+    recommendation_id: str,
+    body: AzureRecommendationActionStateRequest,
+    session: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    _refresh_finops_recommendations_from_cache()
+    try:
+        payload = azure_finops_service.update_recommendation_action_state(
+            recommendation_id,
+            action_state=body.action_state,
+            action_type=body.action_type,
+            actor_type="user",
+            actor_id=str(session.get("email") or ""),
+            note=body.note,
+            metadata=body.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not payload:
+        raise HTTPException(status_code=404, detail="Recommendation was not found")
+    return payload
 
 
 @router.get("/savings/export.csv")
@@ -820,28 +1922,76 @@ async def get_storage(
     disk_unattached_only: bool = Query(default=False),
 ) -> dict[str, Any]:
     _ensure_azure_site()
-    return azure_cache.get_storage_summary(
+    payload = azure_cache.get_storage_summary(
         account_search=account_search,
         disk_search=disk_search,
         snapshot_search=snapshot_search,
         disk_unattached_only=disk_unattached_only,
     )
+    payload["cost_context"] = _get_cost_context_payload()
+    return payload
 
 
 @router.get("/compute/optimization")
 async def get_compute_optimization(idle_vm_search: str = Query(default="")) -> dict[str, Any]:
     _ensure_azure_site()
-    return azure_cache.get_compute_optimization(idle_vm_search=idle_vm_search)
+    payload = azure_cache.get_compute_optimization(idle_vm_search=idle_vm_search)
+    payload["cost_context"] = _get_cost_context_payload()
+    return payload
 
 
 @router.get("/ai/models")
-async def get_ai_models() -> list[dict[str, str]]:
+async def get_ai_models(_session: dict[str, Any] = Depends(require_authenticated_user)) -> list[dict[str, str]]:
     _ensure_azure_site()
     return [model.model_dump() for model in get_available_copilot_models()]
 
 
+@router.get("/ai-costs/summary")
+async def get_ai_cost_summary(
+    lookback_days: int | None = Query(default=None),
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    _ensure_azure_site()
+    return azure_finops_service.get_ai_cost_summary(lookback_days=lookback_days) or {
+        "lookback_days": int(lookback_days or 0),
+        "usage_record_count": 0,
+        "request_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "estimated_tokens": 0,
+        "estimated_cost": 0.0,
+        "currency": "USD",
+        "top_model": "",
+        "top_feature": "",
+        "window_start": "",
+        "window_end": "",
+    }
+
+
+@router.get("/ai-costs/trend")
+async def get_ai_cost_trend(
+    lookback_days: int | None = Query(default=None),
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[dict[str, Any]]:
+    _ensure_azure_site()
+    return azure_finops_service.get_ai_cost_trend(lookback_days=lookback_days)
+
+
+@router.get("/ai-costs/breakdown")
+async def get_ai_cost_breakdown(
+    group_by: str = Query(default="model"),
+    lookback_days: int | None = Query(default=None),
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[dict[str, Any]]:
+    _ensure_azure_site()
+    return azure_finops_service.get_ai_cost_breakdown(group_by=group_by, lookback_days=lookback_days)
+
+
 @router.post("/ai/cost-chat")
-async def post_cost_chat(body: AzureCostChatRequest) -> dict[str, Any]:
+async def post_cost_chat(
+    body: AzureCostChatRequest,
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
     _ensure_azure_site()
     available = get_available_copilot_models()
     if not available:
@@ -862,7 +2012,9 @@ async def post_cost_chat(body: AzureCostChatRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Question is required")
     result = answer_azure_cost_question(
         body.question,
-        azure_cache.get_grounding_context(),
+        _get_cost_copilot_context(),
         model_id,
+        actor_type="user",
+        actor_id="azure-portal",
     )
     return result.model_dump()

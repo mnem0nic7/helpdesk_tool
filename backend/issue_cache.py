@@ -9,7 +9,7 @@ import math
 import os
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from config import DATA_DIR, JIRA_PROJECT
@@ -35,6 +35,10 @@ _REFRESH_INTERVAL = 15
 _INCREMENTAL_LOOKBACK_MINUTES = 2
 _INCREMENTAL_OVERLAP_MINUTES = 2
 _KEY_REFRESH_BATCH_SIZE = 50
+_AUTO_TRIAGE_ONE_TIME_BACKFILL_METADATA_KEY = (
+    "auto_triage_backfill_older_than_24h_processed_v1"
+)
+_AUTO_TRIAGE_ONE_TIME_BACKFILL_HOURS = 24
 
 
 class IssueCache:
@@ -65,6 +69,7 @@ class IssueCache:
         self._auto_triage_current_key: str | None = None
         self._auto_triage_last_started: datetime | None = None
         self._auto_triage_last_finished: datetime | None = None
+        self._auto_triage_backfill_checked = False
 
         # Refresh progress tracking
         self._refresh_progress: dict[str, Any] = {}
@@ -136,6 +141,7 @@ class IssueCache:
             return result
 
     def auto_triage_status(self, scope: SiteScope | None = None) -> dict[str, Any]:
+        self.ensure_auto_triage_processed_backfill()
         seen = self._load_auto_triage_seen()
         with self._lock:
             issues = list(self._all_issues.values())
@@ -451,6 +457,7 @@ class IssueCache:
             len(new_filtered),
             self._last_refresh.isoformat() if self._last_refresh else "unknown",
         )
+        self.ensure_auto_triage_processed_backfill()
         return True
 
     def _save_all_to_db(self) -> None:
@@ -578,6 +585,7 @@ class IssueCache:
                 len(new_all),
                 len(new_filtered),
             )
+            self.ensure_auto_triage_processed_backfill()
             self._refresh_progress = {"phase": "saving", "current": 0, "total": 0}
             self._save_all_to_db()
         except _RefreshCancelled:
@@ -642,6 +650,8 @@ class IssueCache:
                         self._issues[key] = issue
                 self._last_refresh = datetime.now(timezone.utc)
             self._persist_last_refresh()
+
+            self.ensure_auto_triage_processed_backfill()
 
             # Return ALL keys not yet auto-triaged (not just updated ones)
             seen = self._load_auto_triage_seen()
@@ -768,6 +778,78 @@ class IssueCache:
             logger.info("Auto-triage: loaded %d previously processed keys", len(self._auto_triage_seen))
         return self._auto_triage_seen
 
+    @staticmethod
+    def _parse_issue_datetime(value: Any) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        normalized = text.replace("Z", "+00:00")
+        if (
+            len(normalized) >= 5
+            and normalized[-5] in {"+", "-"}
+            and normalized[-3] != ":"
+            and normalized[-4:].isdigit()
+        ):
+            normalized = f"{normalized[:-2]}:{normalized[-2:]}"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def ensure_auto_triage_processed_backfill(self) -> int:
+        """Run the one-time legacy processed backfill for already-old tickets.
+
+        This is intentionally a one-time migration: tickets that were already
+        older than 24 hours when this rule shipped are marked processed once so
+        they do not enter the auto-triage queue. Newer tickets keep the normal
+        "process once, then stay processed" lifecycle.
+        """
+        if self._auto_triage_backfill_checked:
+            return 0
+
+        from triage_store import store
+
+        if store.get_metadata(_AUTO_TRIAGE_ONE_TIME_BACKFILL_METADATA_KEY) == "1":
+            self._auto_triage_backfill_checked = True
+            return 0
+
+        with self._lock:
+            issues = list(self._all_issues.values())
+
+        if not issues:
+            return 0
+
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            hours=_AUTO_TRIAGE_ONE_TIME_BACKFILL_HOURS
+        )
+        keys_to_mark = [
+            key
+            for issue in issues
+            if (key := str(issue.get("key") or "").strip())
+            and (
+                (created_at := self._parse_issue_datetime(issue.get("fields", {}).get("created")))
+                is not None
+            )
+            and created_at <= cutoff
+        ]
+
+        inserted = store.mark_auto_triaged_if_missing(keys_to_mark)
+        seen = self._load_auto_triage_seen()
+        seen.update(keys_to_mark)
+        store.set_metadata(_AUTO_TRIAGE_ONE_TIME_BACKFILL_METADATA_KEY, "1")
+        self._auto_triage_backfill_checked = True
+
+        logger.info(
+            "Auto-triage: one-time backfill marked %d existing tickets older than %dh as processed (%d newly inserted)",
+            len(keys_to_mark),
+            _AUTO_TRIAGE_ONE_TIME_BACKFILL_HOURS,
+            inserted,
+        )
+        return inserted
+
     async def _auto_triage_new_tickets(self, new_keys: list[str], progress: dict | None = None) -> None:
         """Run AI triage on genuinely new tickets and apply high-confidence priority changes."""
         from config import AUTO_TRIAGE_MODEL
@@ -781,6 +863,7 @@ class IssueCache:
             logger.warning("Auto-triage: model %s not available from the active AI provider, skipping", AUTO_TRIAGE_MODEL)
             return
 
+        self.ensure_auto_triage_processed_backfill()
         seen = self._load_auto_triage_seen()
         keys_to_process = [k for k in new_keys if k not in seen]
         if not keys_to_process:

@@ -761,6 +761,20 @@ export interface AzureReporting {
   };
 }
 
+export interface AzureCostContext {
+  available: boolean;
+  source: "exports" | "cache";
+  source_label: string;
+  source_description: string;
+  window_start: string | null;
+  window_end: string | null;
+  record_count: number;
+  currency: string;
+  total_actual_cost: number;
+  total_amortized_cost: number;
+  export_backed: boolean;
+}
+
 export interface AzureStatus {
   configured: boolean;
   initialized: boolean;
@@ -769,17 +783,80 @@ export interface AzureStatus {
   datasets: AzureDatasetStatus[];
   cost_exports?: AzureCostExportStatus;
   reporting?: AzureReporting;
+  finops?: {
+    available: boolean;
+    record_count: number;
+    coverage_start?: string | null;
+    coverage_end?: string | null;
+    field_coverage?: Record<string, number>;
+    ai_usage?: Record<string, unknown>;
+    cost_context?: AzureCostContext;
+  };
+}
+
+export interface AzureFinopsValidationCheck {
+  key: string;
+  label: string;
+  state: "pass" | "warning" | "fail" | "unavailable" | "blocked";
+  detail: string;
+  source_a?: string;
+  source_b?: string;
+  metric?: string;
+  actual?: number | string | null;
+  expected?: number | string | null;
+  delta?: number | string | null;
+  tolerance?: number | string | null;
+  unit?: string;
+}
+
+export interface AzureFinopsValidationReport {
+  available: boolean;
+  overall_state: "pass" | "warning" | "fail" | "unavailable" | "blocked";
+  overall_label: string;
+  signoff_ready: boolean;
+  signoff_reason: string;
+  latest_import?: {
+    delivery_key?: string;
+    dataset?: string;
+    scope_key?: string;
+    manifest_path?: string;
+    parsed_at?: string;
+    row_count?: number;
+    source_updated_at?: string;
+    imported_at?: string;
+  } | null;
+  latest_import_age_hours?: number | null;
+  export_health?: {
+    state?: string;
+    reason?: string;
+    expected_cadence_hours?: number;
+    dataset_health?: Array<Record<string, unknown>>;
+  };
+  reconciliation?: Record<string, unknown>;
+  drift_summary?: Record<string, number | string | null>;
+  thresholds?: Record<string, number>;
+  checks: AzureFinopsValidationCheck[];
+  check_counts: Record<string, number>;
+  selected_portal_outputs?: Record<string, unknown>;
 }
 
 export interface AzureCostSummary {
   lookback_days: number;
   total_cost: number;
+  total_actual_cost?: number;
+  total_amortized_cost?: number;
   currency: string;
   top_service: string;
   top_subscription: string;
   top_resource_group: string;
   recommendation_count: number;
   potential_monthly_savings: number;
+  record_count?: number;
+  window_start?: string | null;
+  window_end?: string | null;
+  source?: "exports" | "cache";
+  source_label?: string;
+  export_backed?: boolean;
 }
 
 export interface AzureOverviewResponse {
@@ -797,6 +874,7 @@ export interface AzureOverviewResponse {
   last_refresh: string | null;
   cost_exports?: AzureCostExportStatus;
   reporting?: AzureReporting;
+  finops?: AzureStatus["finops"];
 }
 
 export interface AzureSubscription {
@@ -1219,7 +1297,10 @@ export interface UserAdminJobResult {
 export interface AzureCostPoint {
   date: string;
   cost: number;
+  actual_cost?: number;
+  amortized_cost?: number;
   currency: string;
+  source?: "exports" | "cache";
 }
 
 export type UserDirectoryReportFilter = "" | "disabled_licensed" | "active_no_success_30d";
@@ -1396,8 +1477,11 @@ export type AzureAlertTriggerSchema = Record<string, Record<string, Record<strin
 export interface AzureCostBreakdownItem {
   label: string;
   amount: number;
+  actual_cost?: number;
+  amortized_cost?: number;
   currency: string;
   share: number;
+  source?: "exports" | "cache";
 }
 
 export interface AzureAdvisorRecommendation {
@@ -1452,7 +1536,97 @@ export interface AzureSavingsOpportunity {
   evidence: AzureSavingsEvidenceRow[];
   portal_url: string;
   follow_up_route: string;
+  lifecycle_status?: "open" | "dismissed" | "accepted";
+  action_state?: string;
+  dismissed_reason?: string;
 }
+
+export interface AzureRecommendationActionEvent {
+  event_id: string;
+  recommendation_id: string;
+  action_type: string;
+  action_status: string;
+  actor_type: string;
+  actor_id: string;
+  note: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AzureRecommendationActionField {
+  key: string;
+  label: string;
+  description: string;
+  required: boolean;
+}
+
+export interface AzureRecommendationActionOption {
+  key: string;
+  label: string;
+  description: string;
+  default_dry_run: boolean;
+  allow_apply: boolean;
+  repeatable: boolean;
+}
+
+export interface AzureRecommendationActionContractItem {
+  action_type: "create_ticket" | "send_alert" | "export" | "run_safe_script";
+  label: string;
+  description: string;
+  category: "jira" | "teams" | "export" | "script";
+  status: "available" | "pending" | "completed" | "blocked" | "future";
+  can_execute: boolean;
+  requires_admin: boolean;
+  repeatable: boolean;
+  pending_action_state: string;
+  completed_action_state: string;
+  current_action_state: string;
+  blocked_reason: string;
+  note_placeholder: string;
+  metadata_fields: AzureRecommendationActionField[];
+  options: AzureRecommendationActionOption[];
+  latest_event: Record<string, unknown>;
+}
+
+export interface AzureRecommendationActionContract {
+  recommendation_id: string;
+  lifecycle_status: string;
+  current_action_state: string;
+  generated_at: string;
+  actions: AzureRecommendationActionContractItem[];
+}
+
+export interface AzureRecommendationCreateTicketResponse {
+  recommendation: AzureRecommendation;
+  ticket_key: string;
+  ticket_url: string;
+  jira_issue_id: string;
+  project_key: string;
+  issue_type: string;
+  summary: string;
+}
+
+export interface AzureRecommendationSendAlertResponse {
+  recommendation: AzureRecommendation;
+  alert_status: string;
+  delivery_channel: string;
+  sent_at: string;
+}
+
+export interface AzureRecommendationRunSafeScriptResponse {
+  recommendation: AzureRecommendation;
+  hook_key: string;
+  hook_label: string;
+  action_status: string;
+  dry_run: boolean;
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  exit_code: number | null;
+  output_excerpt: string;
+}
+
+export type AzureRecommendation = AzureSavingsOpportunity;
 
 export interface AzureSavingsSummary {
   currency: string;
@@ -1469,6 +1643,11 @@ export interface AzureSavingsSummary {
   by_confidence: AzureCountByLabel[];
   top_subscriptions: AzureSavingsAggregateRow[];
   top_resource_groups: AzureSavingsAggregateRow[];
+  source?: string;
+  source_label?: string;
+  source_description?: string;
+  last_refreshed_at?: string | null;
+  cost_context?: AzureCostContext;
 }
 
 export interface AzureComputeOptimizationSummary {
@@ -1488,6 +1667,7 @@ export interface AzureComputeOptimizationResponse {
   advisor_recommendations: AzureAdvisorRecommendation[];
   cost_available: boolean;
   reservation_data_available: boolean;
+  cost_context?: AzureCostContext;
 }
 
 export interface AzureStorageAccount {
@@ -1547,6 +1727,7 @@ export interface AzureStorageSummary {
   storage_services_cost: Array<{ label: string; amount: number; currency: string }>;
   cost_available: boolean;
   cost_basis: string | null;
+  cost_context?: AzureCostContext;
 }
 
 export interface AzureCitation {
@@ -1560,6 +1741,150 @@ export interface AzureCostChatResponse {
   model_used: string;
   generated_at: string;
   citations: AzureCitation[];
+}
+
+export interface AzureAICostSummary {
+  lookback_days: number;
+  usage_record_count: number;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_tokens: number;
+  estimated_cost: number;
+  currency: string;
+  top_model: string;
+  top_feature: string;
+  window_start: string;
+  window_end: string;
+}
+
+export interface AzureAICostTrendPoint {
+  date: string;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_tokens: number;
+  estimated_cost: number;
+  currency: string;
+}
+
+export interface AzureAICostBreakdownItem {
+  label: string;
+  request_count: number;
+  estimated_tokens: number;
+  estimated_cost: number;
+  currency: string;
+  share: number;
+}
+
+export type AzureAllocationDimension = "team" | "application" | "product";
+export type AzureAllocationRuleType = "tag" | "regex" | "percentage" | "shared";
+export type AzureAllocationBucketType = "direct" | "shared" | "fallback";
+
+export interface AzureAllocationDimensionPolicy {
+  dimension: AzureAllocationDimension;
+  label: string;
+  fallback_bucket: string;
+  shared_bucket: string;
+  description: string;
+}
+
+export interface AzureAllocationPolicy {
+  version: number;
+  target_dimensions: AzureAllocationDimensionPolicy[];
+  shared_cost_posture: {
+    mode: string;
+    description: string;
+  };
+  supported_rule_types: AzureAllocationRuleType[];
+  supported_match_fields: string[];
+}
+
+export interface AzureAllocationRule {
+  rule_id: string;
+  rule_version: number;
+  name: string;
+  description: string;
+  rule_type: AzureAllocationRuleType;
+  target_dimension: AzureAllocationDimension;
+  priority: number;
+  enabled: boolean;
+  condition: Record<string, unknown>;
+  allocation: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  superseded_at: string;
+}
+
+export interface AzureAllocationRunDimensionSummary {
+  target_dimension: AzureAllocationDimension;
+  source_record_count: number;
+  source_actual_cost: number;
+  source_amortized_cost: number;
+  source_usage_quantity: number;
+  direct_allocated_actual_cost: number;
+  direct_allocated_amortized_cost: number;
+  direct_allocated_usage_quantity: number;
+  residual_actual_cost: number;
+  residual_amortized_cost: number;
+  residual_usage_quantity: number;
+  total_allocated_actual_cost: number;
+  total_allocated_amortized_cost: number;
+  total_allocated_usage_quantity: number;
+  coverage_pct: number;
+  created_at: string;
+}
+
+export interface AzureAllocationRunRuleVersion {
+  rule_id: string;
+  rule_version: number;
+  target_dimension: AzureAllocationDimension;
+  rule_type: AzureAllocationRuleType;
+  priority: number;
+  snapshot: AzureAllocationRule;
+}
+
+export interface AzureAllocationRun {
+  run_id: string;
+  run_label: string;
+  trigger_type: string;
+  triggered_by: string;
+  note: string;
+  status: string;
+  target_dimensions: AzureAllocationDimension[];
+  policy_version: number;
+  source_record_count: number;
+  created_at: string;
+  completed_at: string;
+  dimensions: AzureAllocationRunDimensionSummary[];
+  rule_versions?: AzureAllocationRunRuleVersion[];
+}
+
+export interface AzureAllocationStatus {
+  available: boolean;
+  policy: AzureAllocationPolicy;
+  rule_version_count: number;
+  active_rule_count: number;
+  inactive_rule_count: number;
+  run_count: number;
+  last_run_at: string;
+  latest_run: AzureAllocationRun | null;
+}
+
+export interface AzureAllocationResult {
+  allocation_value: string;
+  bucket_type: AzureAllocationBucketType;
+  allocation_method: string;
+  source_record_count: number;
+  allocated_actual_cost: number;
+  allocated_amortized_cost: number;
+  allocated_usage_quantity: number;
+}
+
+export interface AzureAllocationRunRequest {
+  target_dimensions?: AzureAllocationDimension[];
+  run_label?: string;
+  note?: string;
 }
 
 export interface KnowledgeBaseArticle {
@@ -1942,6 +2267,10 @@ export const api = {
     return fetchJSON<AzureOverviewResponse>("/api/azure/overview");
   },
 
+  getAzureFinopsValidation(): Promise<AzureFinopsValidationReport> {
+    return fetchJSON<AzureFinopsValidationReport>("/api/azure/finops/validation");
+  },
+
   getAzureSubscriptions(): Promise<AzureSubscription[]> {
     return fetchJSON<AzureSubscription[]>("/api/azure/subscriptions");
   },
@@ -2125,6 +2454,46 @@ export const api = {
     return fetchJSON<AzureCostBreakdownItem[]>(`/api/azure/cost/breakdown${buildQuery({ group_by: groupBy })}`);
   },
 
+  getAzureAllocationPolicy(): Promise<AzureAllocationPolicy> {
+    return fetchJSON<AzureAllocationPolicy>("/api/azure/allocations/policy");
+  },
+
+  getAzureAllocationStatus(): Promise<AzureAllocationStatus> {
+    return fetchJSON<AzureAllocationStatus>("/api/azure/allocations/status");
+  },
+
+  getAzureAllocationRules(params: { include_inactive?: boolean; include_all_versions?: boolean } = {}): Promise<AzureAllocationRule[]> {
+    return fetchJSON<AzureAllocationRule[]>(`/api/azure/allocations/rules${buildQuery(params)}`);
+  },
+
+  getAzureAllocationRuns(limit = 20): Promise<AzureAllocationRun[]> {
+    return fetchJSON<AzureAllocationRun[]>(`/api/azure/allocations/runs${buildQuery({ limit })}`);
+  },
+
+  getAzureAllocationRun(runId: string): Promise<AzureAllocationRun> {
+    return fetchJSON<AzureAllocationRun>(`/api/azure/allocations/runs/${encodeURIComponent(runId)}`);
+  },
+
+  runAzureAllocation(body: AzureAllocationRunRequest): Promise<AzureAllocationRun> {
+    return postJSON<AzureAllocationRun>("/api/azure/allocations/runs", body);
+  },
+
+  getAzureAllocationResults(
+    runId: string,
+    dimension: AzureAllocationDimension,
+    bucketType = "",
+  ): Promise<AzureAllocationResult[]> {
+    return fetchJSON<AzureAllocationResult[]>(
+      `/api/azure/allocations/runs/${encodeURIComponent(runId)}/results${buildQuery({ dimension, bucket_type: bucketType })}`,
+    );
+  },
+
+  getAzureAllocationResiduals(runId: string, dimension: AzureAllocationDimension): Promise<AzureAllocationResult[]> {
+    return fetchJSON<AzureAllocationResult[]>(
+      `/api/azure/allocations/runs/${encodeURIComponent(runId)}/residuals${buildQuery({ dimension })}`,
+    );
+  },
+
   getAzureAdvisor(): Promise<AzureAdvisorRecommendation[]> {
     return fetchJSON<AzureAdvisorRecommendation[]>("/api/azure/advisor");
   },
@@ -2145,6 +2514,86 @@ export const api = {
     return `/api/azure/savings/export.xlsx${buildQuery(params)}`;
   },
 
+  getAzureRecommendationsSummary(): Promise<AzureSavingsSummary> {
+    return fetchJSON<AzureSavingsSummary>("/api/azure/recommendations/summary");
+  },
+
+  getAzureRecommendations(params: AzureSavingsQueryParams = {}): Promise<AzureRecommendation[]> {
+    return fetchJSON<AzureRecommendation[]>(`/api/azure/recommendations${buildQuery(params)}`);
+  },
+
+  getAzureRecommendation(recommendationId: string): Promise<AzureRecommendation> {
+    return fetchJSON<AzureRecommendation>(`/api/azure/recommendations/${encodeURIComponent(recommendationId)}`);
+  },
+
+  getAzureRecommendationActionContract(recommendationId: string): Promise<AzureRecommendationActionContract> {
+    return fetchJSON<AzureRecommendationActionContract>(
+      `/api/azure/recommendations/${encodeURIComponent(recommendationId)}/actions`,
+    );
+  },
+
+  getAzureRecommendationHistory(recommendationId: string): Promise<AzureRecommendationActionEvent[]> {
+    return fetchJSON<AzureRecommendationActionEvent[]>(
+      `/api/azure/recommendations/${encodeURIComponent(recommendationId)}/history`,
+    );
+  },
+
+  dismissAzureRecommendation(recommendationId: string, reason = ""): Promise<AzureRecommendation> {
+    return postJSON<AzureRecommendation>(`/api/azure/recommendations/${encodeURIComponent(recommendationId)}/dismiss`, { reason });
+  },
+
+  reopenAzureRecommendation(recommendationId: string, note = ""): Promise<AzureRecommendation> {
+    return postJSON<AzureRecommendation>(`/api/azure/recommendations/${encodeURIComponent(recommendationId)}/reopen`, { note });
+  },
+
+  updateAzureRecommendationActionState(
+    recommendationId: string,
+    body: { action_state: string; action_type?: string; note?: string; metadata?: Record<string, unknown> },
+  ): Promise<AzureRecommendation> {
+    return postJSON<AzureRecommendation>(
+      `/api/azure/recommendations/${encodeURIComponent(recommendationId)}/action-state`,
+      body,
+    );
+  },
+
+  createAzureRecommendationTicket(
+    recommendationId: string,
+    body: { project_key?: string; issue_type?: string; summary?: string; note?: string },
+  ): Promise<AzureRecommendationCreateTicketResponse> {
+    return postJSON<AzureRecommendationCreateTicketResponse>(
+      `/api/azure/recommendations/${encodeURIComponent(recommendationId)}/actions/create-ticket`,
+      body,
+    );
+  },
+
+  sendAzureRecommendationAlert(
+    recommendationId: string,
+    body: { channel?: string; teams_webhook_url?: string; note?: string },
+  ): Promise<AzureRecommendationSendAlertResponse> {
+    return postJSON<AzureRecommendationSendAlertResponse>(
+      `/api/azure/recommendations/${encodeURIComponent(recommendationId)}/actions/send-alert`,
+      body,
+    );
+  },
+
+  runAzureRecommendationSafeScript(
+    recommendationId: string,
+    body: { hook_key?: string; dry_run?: boolean; note?: string },
+  ): Promise<AzureRecommendationRunSafeScriptResponse> {
+    return postJSON<AzureRecommendationRunSafeScriptResponse>(
+      `/api/azure/recommendations/${encodeURIComponent(recommendationId)}/actions/run-safe-script`,
+      body,
+    );
+  },
+
+  exportAzureRecommendationsCsv(params: AzureSavingsQueryParams = {}): string {
+    return `/api/azure/recommendations/export.csv${buildQuery(params)}`;
+  },
+
+  exportAzureRecommendationsExcel(params: AzureSavingsQueryParams = {}): string {
+    return `/api/azure/recommendations/export.xlsx${buildQuery(params)}`;
+  },
+
   getAzureStorage(params: AzureStorageQueryParams = {}): Promise<AzureStorageSummary> {
     return fetchJSON<AzureStorageSummary>(`/api/azure/storage${buildQuery(params)}`);
   },
@@ -2155,6 +2604,18 @@ export const api = {
 
   getAzureAIModels(): Promise<AIModel[]> {
     return fetchJSON<AIModel[]>("/api/azure/ai/models");
+  },
+
+  getAzureAICostSummary(lookbackDays?: number): Promise<AzureAICostSummary> {
+    return fetchJSON<AzureAICostSummary>(`/api/azure/ai-costs/summary${buildQuery({ lookback_days: lookbackDays })}`);
+  },
+
+  getAzureAICostTrend(lookbackDays?: number): Promise<AzureAICostTrendPoint[]> {
+    return fetchJSON<AzureAICostTrendPoint[]>(`/api/azure/ai-costs/trend${buildQuery({ lookback_days: lookbackDays })}`);
+  },
+
+  getAzureAICostBreakdown(groupBy: "model" | "provider" | "feature" | "app" | "team" | "actor", lookbackDays?: number): Promise<AzureAICostBreakdownItem[]> {
+    return fetchJSON<AzureAICostBreakdownItem[]>(`/api/azure/ai-costs/breakdown${buildQuery({ group_by: groupBy, lookback_days: lookbackDays })}`);
   },
 
   askAzureCostCopilot(question: string, model?: string): Promise<AzureCostChatResponse> {

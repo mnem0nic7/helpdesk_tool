@@ -45,6 +45,12 @@ technician_scoring_manager = TechnicianScoringManager(
 )
 
 
+def _ensure_processed_backfill() -> None:
+    handler = getattr(cache, "ensure_auto_triage_processed_backfill", None)
+    if callable(handler):
+        handler()
+
+
 def _current_run_progress() -> dict[str, Any]:
     return _run_progress[get_current_site_scope()]
 
@@ -83,7 +89,7 @@ def _matches_technician_score_search(score: dict[str, Any], search: str) -> bool
 
 @router.get("/models")
 async def list_models() -> list[dict[str, Any]]:
-    """Return available AI models (filtered by configured API keys)."""
+    """Return available AI models from the active Ollama runtime."""
     return [m.model_dump() for m in get_available_models()]
 
 
@@ -103,6 +109,7 @@ async def get_run_status() -> dict[str, Any]:
     """Return progress of the current run-all background task, plus ticket counts."""
     result = dict(_current_run_progress())
     # Add counts for button labels
+    _ensure_processed_backfill()
     already_done = store.get_auto_triaged_keys()
     all_keys = [iss.get("key", "") for iss in get_scoped_issues() if iss.get("key")]
     result["remaining_count"] = len([k for k in all_keys if k not in already_done])
@@ -139,11 +146,12 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     if model not in available_ids:
         raise HTTPException(
             status_code=400,
-            detail=f"Model '{model}' not available. Configure the API key or choose another model.",
+            detail=f"Model '{model}' is not available from the active Ollama provider.",
         )
 
     all_issues = get_scoped_issues()
     all_keys = [issue.get("key", "") for issue in all_issues if issue.get("key")]
+    _ensure_processed_backfill()
 
     # Mode flags:
     #   reset=true  → clear tracking, reprocess everything
@@ -345,7 +353,7 @@ async def analyze(req: TriageAnalyzeRequest) -> list[dict[str, Any]]:
     if req.model not in model_ids:
         raise HTTPException(
             status_code=400,
-            detail=f"Model '{req.model}' not available. Configure the API key or choose another model.",
+            detail=f"Model '{req.model}' is not available from the active Ollama provider.",
         )
 
     # Check cache first (skip if force re-evaluation requested)

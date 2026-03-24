@@ -35,6 +35,12 @@ function ReportingCard({ target }: { target: AzureReportingTarget }) {
   );
 }
 
+function formatCoverageWindow(start?: string | null, end?: string | null): string {
+  if (!start || !end) return "";
+  if (start === end) return start;
+  return `${start} to ${end}`;
+}
+
 function getExportHealthView(costExports: AzureCostExportStatus | undefined) {
   if (!costExports) {
     return {
@@ -94,21 +100,34 @@ export default function AzureOverviewPage() {
   }
 
   const exportHealth = getExportHealthView(data.cost_exports);
+  const coverageWindow = formatCoverageWindow(data.cost.window_start, data.cost.window_end);
+  const showAmortized = Boolean(data.cost.export_backed);
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-slate-900">Azure Overview</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Tenant-wide inventory, identity, and cost posture from the Azure cache.
+          Tenant-wide inventory and identity posture from cached Azure snapshots, with export-backed cost context when local FinOps analytics are available.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <AzureSourceBadge
-            label={data.reporting?.sources.overview.label || "Cached app data"}
+            label={data.reporting?.sources.overview.label || data.cost.source_label || "Cached app data"}
             description={
               data.reporting?.sources.overview.description ||
-              "Overview metrics come from cached Azure snapshots and operational cost queries."
+              (data.cost.export_backed
+                ? "Overview inventory is cached, but cost posture now prefers local export-backed analytics."
+                : "Overview metrics come from cached Azure snapshots and operational cost queries.")
             }
+          />
+          <AzureSourceBadge
+            label={data.cost.source_label || "Cached app data"}
+            description={
+              data.cost.export_backed
+                ? "Spend totals on this page are coming from the local DuckDB FinOps lane built from parsed Azure Cost Management exports."
+                : "Spend totals on this page are still using cached app data because export-backed analytics are unavailable."
+            }
+            tone={data.cost.export_backed ? "sky" : "amber"}
           />
           <AzureSourceBadge
             label={data.reporting?.sources.exports.label || "Export-backed governed reporting"}
@@ -119,6 +138,11 @@ export default function AzureOverviewPage() {
             tone="emerald"
           />
         </div>
+        {coverageWindow ? (
+          <div className="mt-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+            Cost coverage window: {coverageWindow}
+          </div>
+        ) : null}
       </div>
 
       {data.reporting && (
@@ -143,16 +167,23 @@ export default function AzureOverviewPage() {
         </section>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Subscriptions" value={data.subscriptions.toLocaleString()} />
         <MetricCard label="Resources" value={data.resources.toLocaleString()} />
         <MetricCard label="Users" value={data.users.toLocaleString()} />
         <MetricCard label="Enterprise Apps" value={data.enterprise_apps.toLocaleString()} />
         <MetricCard
-          label={`Spend (${data.cost.lookback_days}d)`}
-          value={`$${data.cost.total_cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+          label={showAmortized ? `Actual Spend (${data.cost.lookback_days}d)` : `Spend (${data.cost.lookback_days}d)`}
+          value={`$${(data.cost.total_actual_cost ?? data.cost.total_cost).toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
           accent="text-emerald-700"
         />
+        {showAmortized && (
+          <MetricCard
+            label={`Amortized Spend (${data.cost.lookback_days}d)`}
+            value={`$${(data.cost.total_amortized_cost ?? data.cost.total_cost).toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+            accent="text-indigo-700"
+          />
+        )}
         <MetricCard
           label="Potential Monthly Savings"
           value={`$${data.cost.potential_monthly_savings.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}

@@ -26,6 +26,10 @@ class TriageStore:
         with sqlite3.connect(self._db_path) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
+                "CREATE TABLE IF NOT EXISTS metadata "
+                "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+            conn.execute(
                 "CREATE TABLE IF NOT EXISTS suggestions "
                 "(key TEXT PRIMARY KEY, data TEXT, model TEXT, "
                 "created_at TEXT, updated_at TEXT)"
@@ -156,6 +160,25 @@ class TriageStore:
                 (key, now, int(priority_updated), int(request_type_updated)),
             )
 
+    def mark_auto_triaged_if_missing(self, keys: list[str]) -> int:
+        """Record keys as processed without overwriting existing processed rows."""
+        normalized_keys = [
+            str(key or "").strip().upper()
+            for key in keys
+            if str(key or "").strip()
+        ]
+        if not normalized_keys:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        rows = [(key, now, 0, 0) for key in dict.fromkeys(normalized_keys)]
+        with self._conn() as conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO auto_triaged (key, processed_at, priority_updated, request_type_updated) "
+                "VALUES (?, ?, ?, ?)",
+                rows,
+            )
+            return conn.total_changes
+
     def get_auto_triaged_keys(self) -> set[str]:
         """Return all keys that have been auto-triaged."""
         with self._conn() as conn:
@@ -174,6 +197,21 @@ class TriageStore:
         placeholders = ",".join("?" for _ in keys)
         with self._conn() as conn:
             conn.execute(f"DELETE FROM auto_triaged WHERE key IN ({placeholders})", keys)
+
+    def get_metadata(self, key: str) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT value FROM metadata WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return str(row[0]) if row else None
+
+    def set_metadata(self, key: str, value: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+                (key, value),
+            )
 
     def log_change(
         self,

@@ -2,7 +2,67 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 from models import AIModel, TechnicianScore, TriageResult, TriageSuggestion
+
+
+class TestAutoTriageRoutes:
+    def test_run_status_applies_one_time_processed_backfill_before_counting(
+        self,
+        test_client,
+        monkeypatch,
+    ):
+        import routes_triage
+        from triage_store import store
+
+        store.clear_auto_triaged()
+        store.clear_auto_triaged_keys(["OIT-100", "OIT-200", "OIT-300", "OIT-400"])
+
+        def _backfill() -> None:
+            store.mark_auto_triaged("OIT-100")
+
+        monkeypatch.setattr(routes_triage.cache, "ensure_auto_triage_processed_backfill", _backfill)
+
+        resp = test_client.get("/api/triage/run-status")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["processed_count"] == 1
+        assert data["remaining_count"] == 3
+
+        store.clear_auto_triaged()
+
+    def test_run_all_default_uses_processed_backfill_before_selecting_keys(
+        self,
+        test_client,
+        monkeypatch,
+    ):
+        import routes_triage
+        from triage_store import store
+
+        store.clear_auto_triaged()
+
+        monkeypatch.setattr(
+            routes_triage,
+            "get_available_models",
+            lambda: [AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama")],
+        )
+        monkeypatch.setattr(routes_triage.cache, "_auto_triage_new_tickets", AsyncMock())
+
+        def _backfill() -> None:
+            store.mark_auto_triaged("OIT-100")
+
+        monkeypatch.setattr(routes_triage.cache, "ensure_auto_triage_processed_backfill", _backfill)
+
+        resp = test_client.post("/api/triage/run-all", json={})
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["started"] is True
+        assert payload["total_tickets"] == 3
+
+        store.clear_auto_triaged()
 
 
 class TestTechnicianScoringRoutes:

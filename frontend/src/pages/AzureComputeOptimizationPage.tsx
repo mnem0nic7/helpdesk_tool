@@ -7,6 +7,7 @@ import {
   type AzureVirtualMachineSizeCoverageRow,
   type AzureVirtualMachineRow,
 } from "../lib/api.ts";
+import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
@@ -21,6 +22,12 @@ function formatCurrency(value: number | null, currency = "USD"): string {
     currency,
     maximumFractionDigits: 2,
   }).format(value);
+}
+
+function formatCoverageWindow(start?: string | null, end?: string | null): string {
+  if (!start || !end) return "";
+  if (start === end) return start;
+  return `${start} to ${end}`;
 }
 
 function StatCard({
@@ -400,9 +407,10 @@ export default function AzureComputeOptimizationPage() {
     );
   }
 
-  const { summary, idle_vms, top_cost_vms, ri_coverage_gaps, advisor_recommendations, cost_available, reservation_data_available } = data;
+  const { summary, idle_vms, top_cost_vms, ri_coverage_gaps, advisor_recommendations, cost_available, reservation_data_available, cost_context } = data;
   const computeSavings = savingsQuery.data ?? [];
   const commitmentSavings = commitmentQuery.data ?? [];
+  const coverageWindow = formatCoverageWindow(cost_context?.window_start, cost_context?.window_end);
 
   return (
     <div className="space-y-6 p-6">
@@ -411,6 +419,28 @@ export default function AzureComputeOptimizationPage() {
         <p className="mt-1 text-sm text-slate-500">
           Idle VM detection, RI coverage gaps, top cost runners, and Advisor cost recommendations — all in one view.
         </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <AzureSourceBadge
+            label="Cache-backed compute drill-in"
+            description="VM state, RI coverage, and per-resource drill-in on this page still come from cached Azure inventory and Advisor snapshots."
+            tone="amber"
+          />
+          {cost_context && (
+            <AzureSourceBadge
+              label={cost_context.source_label}
+              description={
+                cost_context.export_backed
+                  ? "Shared cost prioritization now has export-backed context, even though VM-level drill-in on this page remains cache-backed."
+                  : cost_context.source_description
+              }
+            />
+          )}
+        </div>
+        {coverageWindow ? (
+          <div className="mt-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+            Shared cost coverage window: {coverageWindow}
+          </div>
+        ) : null}
       </div>
 
       {/* Summary Cards */}

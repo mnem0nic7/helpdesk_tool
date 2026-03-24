@@ -246,3 +246,79 @@ def test_resource_untagged_empty_required_tags():
     from azure_alert_engine import evaluate_resource_untagged
     resources = [{"id": "r1", "name": "r1", "resource_type": "t", "resource_group": "rg", "tags": {}}]
     assert evaluate_resource_untagged(resources, {"required_tags": []}) == []
+
+
+def test_parse_azure_alert_rule_uses_shared_ai_invocation(monkeypatch):
+    import ai_client
+    import azure_alert_engine as engine
+
+    class _Model:
+        id = "qwen2.5:7b"
+        provider = "ollama"
+
+    monkeypatch.setattr(ai_client, "get_available_models", lambda: [_Model()])
+    monkeypatch.setattr(
+        ai_client,
+        "invoke_model_text",
+        lambda model_id, system, user_msg, **kwargs: '{"parsed": true, "name": "Monthly cost", "domain": "cost", "trigger_type": "cost_threshold", "trigger_config": {"period": "monthly", "threshold_usd": 1000}, "frequency": "daily", "schedule_time": "09:00", "schedule_days": "0,1,2,3,4", "recipients": "", "teams_webhook_url": "", "summary": "Daily threshold"}',
+    )
+
+    result = engine.parse_azure_alert_rule("alert me when cost crosses 1000 this month")
+
+    assert result["parsed"] is True
+    assert result["trigger_type"] == "cost_threshold"
+
+
+def test_build_recommendation_teams_card_includes_recommendation_details():
+    from azure_alert_engine import build_recommendation_teams_card
+
+    card = build_recommendation_teams_card(
+        {
+            "id": "rec-1",
+            "title": "Release unattached public IP pip-1",
+            "summary": "The public IP is not attached.",
+            "category": "network",
+            "opportunity_type": "unattached_public_ip",
+            "resource_name": "pip-1",
+            "subscription_name": "Prod",
+            "currency": "USD",
+            "estimated_monthly_savings": 5.0,
+            "portal_url": "https://portal.azure.com/#resource/pip-1",
+            "follow_up_route": "/resources",
+        },
+        site_origin="https://azure.movedocs.com",
+        channel_label="FinOps Watch",
+        operator_note="Please review this in standup.",
+    )
+
+    content = card["attachments"][0]["content"]
+    body = content["body"]
+    assert body[0]["text"] == "Azure FinOps Recommendation · FinOps Watch"
+    assert "Release unattached public IP pip-1" in body[1]["text"]
+    assert "Please review this in standup." in body[-1]["text"]
+    assert content["actions"][0]["url"] == "https://azure.movedocs.com/savings"
+
+
+@pytest.mark.asyncio
+async def test_send_recommendation_teams_alert_posts_card(monkeypatch):
+    import azure_alert_engine as engine
+
+    calls: list[tuple[str, dict]] = []
+
+    async def _fake_post(webhook_url: str, card: dict[str, object]) -> bool:
+        calls.append((webhook_url, card))
+        return True
+
+    monkeypatch.setattr(engine, "_post_teams", _fake_post)
+
+    result = await engine.send_recommendation_teams_alert(
+        "https://hooks.example.test/finops",
+        {"id": "rec-1", "title": "Right-size VM vm-1", "category": "compute", "follow_up_route": "/compute"},
+        site_origin="https://azure.movedocs.com",
+        channel_label="FinOps",
+        operator_note="Please follow up.",
+    )
+
+    assert result is True
+    assert calls[0][0] == "https://hooks.example.test/finops"
+    assert calls[0][1]["attachments"][0]["content"]["actions"][2]["url"] == "https://azure.movedocs.com/compute"

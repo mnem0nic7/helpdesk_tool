@@ -2,6 +2,7 @@ import { useDeferredValue, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type AzureManagedDisk, type AzureStorageAccount } from "../lib/api.ts";
+import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
@@ -20,6 +21,12 @@ function formatCurrency(value: number | null, currency = "USD"): string {
 function tooltipCurrency(value: number | string | undefined): string {
   const n = typeof value === "number" ? value : Number(value || 0);
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function formatCoverageWindow(start?: string | null, end?: string | null): string {
+  if (!start || !end) return "";
+  if (start === end) return start;
+  return `${start} to ${end}`;
 }
 
 function StatCard({
@@ -363,10 +370,11 @@ export default function AzureStoragePage() {
     );
   }
 
-  const { summary, storage_services_cost, disk_by_sku, accounts_by_kind, cost_available } = data;
+  const { summary, storage_services_cost, disk_by_sku, accounts_by_kind, cost_available, cost_context } = data;
   const storageSavings = storageSavingsQuery.data ?? [];
   const unattachedDiskSavings = storageSavings.filter((item) => item.opportunity_type === "unattached_managed_disk");
   const staleSnapshotSavings = storageSavings.filter((item) => item.opportunity_type === "stale_snapshot");
+  const coverageWindow = formatCoverageWindow(cost_context?.window_start, cost_context?.window_end);
 
   const diskSkuChartData = Object.entries(disk_by_sku).map(([label, count]) => ({ label, count }));
   const kindChartData = Object.entries(accounts_by_kind).map(([label, count]) => ({ label, count }));
@@ -387,6 +395,28 @@ export default function AzureStoragePage() {
             <span className="ml-2 text-amber-600">Per-resource cost data unavailable — showing service-level cost breakdown only.</span>
           )}
         </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <AzureSourceBadge
+            label="Cache-backed storage drill-in"
+            description="Storage inventory, per-resource costs, and stale object drill-in on this page still come from cached Azure snapshots."
+            tone="amber"
+          />
+          {cost_context && (
+            <AzureSourceBadge
+              label={cost_context.source_label}
+              description={
+                cost_context.export_backed
+                  ? "Shared cost context is available from local export-backed analytics, even though storage drill-in on this page remains cache-backed."
+                  : cost_context.source_description
+              }
+            />
+          )}
+        </div>
+        {coverageWindow ? (
+          <div className="mt-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+            Shared cost coverage window: {coverageWindow}
+          </div>
+        ) : null}
       </div>
 
       {/* Summary cards */}

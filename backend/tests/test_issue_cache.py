@@ -5,15 +5,24 @@ from datetime import datetime, timedelta, timezone
 from issue_cache import IssueCache
 
 
-def _issue(key: str, summary: str, *, labels: list[str] | None = None) -> dict:
+def _issue(
+    key: str,
+    summary: str,
+    *,
+    labels: list[str] | None = None,
+    created: str | None = None,
+    updated: str | None = None,
+) -> dict:
+    created_at = created or (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    updated_at = updated or created_at
     return {
         "key": key,
         "fields": {
             "summary": summary,
             "labels": labels or [],
             "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
-            "created": "2026-03-09T00:00:00+00:00",
-            "updated": "2026-03-09T00:00:00+00:00",
+            "created": created_at,
+            "updated": updated_at,
         },
     }
 
@@ -80,3 +89,57 @@ def test_incremental_refresh_expands_lookback_from_last_refresh_gap(tmp_path):
     end = jql.index('m"', start)
     lookback_minutes = int(jql[start:end])
     assert lookback_minutes >= 10
+
+
+def test_auto_triage_status_marks_existing_old_tickets_processed_once(tmp_path, monkeypatch):
+    import triage_store
+
+    monkeypatch.setattr(
+        triage_store,
+        "store",
+        triage_store.TriageStore(str(tmp_path / "triage.db")),
+    )
+
+    cache = IssueCache(str(tmp_path / "issues.db"))
+    cache._initialized = True
+
+    old_issue = _issue(
+        "OIT-100",
+        "Old ticket",
+        created=(datetime.now(timezone.utc) - timedelta(hours=25)).isoformat(),
+    )
+    recent_issue = _issue(
+        "OIT-101",
+        "Recent ticket",
+        created=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+    )
+
+    cache._all_issues = {
+        old_issue["key"]: old_issue,
+        recent_issue["key"]: recent_issue,
+    }
+    cache._issues = dict(cache._all_issues)
+
+    first_status = cache.auto_triage_status("primary")
+
+    assert first_status["pending_keys"] == ["OIT-101"]
+    assert triage_store.store.get_auto_triaged_keys() == {"OIT-100"}
+    assert (
+        triage_store.store.get_metadata(
+            "auto_triage_backfill_older_than_24h_processed_v1"
+        )
+        == "1"
+    )
+
+    later_old_issue = _issue(
+        "OIT-102",
+        "Later old ticket",
+        created=(datetime.now(timezone.utc) - timedelta(hours=26)).isoformat(),
+    )
+    cache._all_issues[later_old_issue["key"]] = later_old_issue
+    cache._issues[later_old_issue["key"]] = later_old_issue
+
+    second_status = cache.auto_triage_status("primary")
+
+    assert second_status["pending_keys"] == ["OIT-101", "OIT-102"]
+    assert triage_store.store.get_auto_triaged_keys() == {"OIT-100"}

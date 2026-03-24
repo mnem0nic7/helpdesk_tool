@@ -1,7 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { api, type AzureSavingsOpportunity } from "../lib/api.ts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  api,
+  type AzureRecommendation,
+  type AzureRecommendationActionContract,
+  type AzureRecommendationActionContractItem,
+  type AzureRecommendationActionEvent,
+  type AzureRecommendationCreateTicketResponse,
+  type AzureRecommendationRunSafeScriptResponse,
+  type AzureRecommendationSendAlertResponse,
+  type AzureSavingsOpportunity,
+} from "../lib/api.ts";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzureSavingsHighlightsSection, { formatAzureCurrency } from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
@@ -19,6 +29,57 @@ type SavingsSortKey =
 
 const effortOptions = ["low", "medium", "high"] as const;
 const confidenceOptions = ["high", "medium", "low"] as const;
+const actionStateOptions = [
+  "none",
+  "reviewed",
+  "ticket_pending",
+  "ticket_created",
+  "alert_pending",
+  "alert_sent",
+  "exported",
+  "script_pending",
+  "script_executed",
+] as const;
+
+function formatActionState(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function workflowBadgeClass(value: string, kind: "lifecycle" | "action"): string {
+  const normalized = value.toLowerCase();
+  if (kind === "lifecycle") {
+    if (normalized === "open") return "bg-emerald-100 text-emerald-700";
+    if (normalized === "dismissed") return "bg-amber-100 text-amber-700";
+    return "bg-sky-100 text-sky-700";
+  }
+  if (normalized === "none") return "bg-slate-100 text-slate-600";
+  if (normalized.includes("ticket")) return "bg-sky-100 text-sky-700";
+  if (normalized.includes("alert")) return "bg-amber-100 text-amber-700";
+  if (normalized.includes("script")) return "bg-purple-100 text-purple-700";
+  return "bg-emerald-100 text-emerald-700";
+}
+
+function actionContractStatusClass(value: AzureRecommendationActionContractItem["status"]): string {
+  if (value === "available") return "bg-emerald-100 text-emerald-700";
+  if (value === "pending") return "bg-amber-100 text-amber-700";
+  if (value === "completed") return "bg-sky-100 text-sky-700";
+  if (value === "future") return "bg-violet-100 text-violet-700";
+  return "bg-slate-100 text-slate-600";
+}
+
+function formatActionContractStatus(value: AzureRecommendationActionContractItem["status"]): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatCoverageWindow(start?: string | null, end?: string | null): string {
+  if (!start || !end) return "";
+  if (start === end) return start;
+  return `${start} to ${end}`;
+}
 
 function StatCard({
   label,
@@ -86,12 +147,115 @@ function FilterChip({
 
 function OpportunityDrawer({
   opportunity,
+  actionContract,
+  actionContractLoading,
+  history,
+  historyLoading,
+  isAdmin,
+  onDismiss,
+  onReopen,
+  onUpdateActionState,
+  onCreateTicket,
+  onSendAlert,
+  onRunSafeScript,
+  createTicketBusy,
+  sendAlertBusy,
+  runSafeScriptBusy,
+  workflowBusy,
+  workflowError,
   onClose,
 }: {
-  opportunity: AzureSavingsOpportunity | null;
+  opportunity: AzureRecommendation | null;
+  actionContract: AzureRecommendationActionContract | null;
+  actionContractLoading: boolean;
+  history: AzureRecommendationActionEvent[];
+  historyLoading: boolean;
+  isAdmin: boolean;
+  onDismiss: (reason: string) => void;
+  onReopen: (note: string) => void;
+  onUpdateActionState: (actionState: string, note: string) => void;
+  onCreateTicket: (projectKey: string, issueType: string, summary: string, note: string) => void;
+  onSendAlert: (channel: string, teamsWebhookUrl: string, note: string) => void;
+  onRunSafeScript: (hookKey: string, dryRun: boolean, note: string) => void;
+  createTicketBusy: boolean;
+  sendAlertBusy: boolean;
+  runSafeScriptBusy: boolean;
+  workflowBusy: boolean;
+  workflowError: string;
   onClose: () => void;
 }) {
+  const [note, setNote] = useState("");
+  const [actionState, setActionState] = useState("none");
+  const [ticketProjectKey, setTicketProjectKey] = useState("");
+  const [ticketIssueType, setTicketIssueType] = useState("");
+  const [ticketSummary, setTicketSummary] = useState("");
+  const [ticketNote, setTicketNote] = useState("");
+  const [alertChannel, setAlertChannel] = useState("");
+  const [alertWebhookUrl, setAlertWebhookUrl] = useState("");
+  const [alertNote, setAlertNote] = useState("");
+  const [scriptHookKey, setScriptHookKey] = useState("");
+  const [scriptDryRun, setScriptDryRun] = useState(true);
+  const [scriptNote, setScriptNote] = useState("");
+
+  useEffect(() => {
+    setNote("");
+    setActionState(opportunity?.action_state || "none");
+    setTicketProjectKey("");
+    setTicketIssueType("");
+    setTicketSummary(opportunity ? `[FinOps] ${opportunity.title}` : "");
+    setTicketNote("");
+    setAlertChannel("");
+    setAlertWebhookUrl("");
+    setAlertNote("");
+    const safeScriptAction = actionContract?.actions.find((action) => action.action_type === "run_safe_script") ?? null;
+    const firstHook = safeScriptAction?.options?.[0] ?? null;
+    setScriptHookKey(firstHook?.key || "");
+    setScriptDryRun(firstHook ? firstHook.default_dry_run !== false : true);
+    setScriptNote("");
+  }, [opportunity?.id, opportunity?.action_state, actionContract]);
+
   if (!opportunity) return null;
+
+  const createTicketAction = actionContract?.actions.find((action) => action.action_type === "create_ticket") ?? null;
+  const createTicketLatestEvent =
+    createTicketAction && typeof createTicketAction.latest_event === "object" && createTicketAction.latest_event
+      ? (createTicketAction.latest_event as Record<string, unknown>)
+      : null;
+  const createTicketLatestMetadata =
+    createTicketLatestEvent && typeof createTicketLatestEvent.metadata === "object" && createTicketLatestEvent.metadata
+      ? (createTicketLatestEvent.metadata as Record<string, unknown>)
+      : null;
+  const createTicketLatestUrl = typeof createTicketLatestMetadata?.ticket_url === "string" ? createTicketLatestMetadata.ticket_url : "";
+  const createTicketLatestKey = typeof createTicketLatestMetadata?.ticket_key === "string" ? createTicketLatestMetadata.ticket_key : "";
+  const createTicketDisabled = !isAdmin || workflowBusy || createTicketBusy || !createTicketAction?.can_execute;
+  const sendAlertAction = actionContract?.actions.find((action) => action.action_type === "send_alert") ?? null;
+  const sendAlertLatestEvent =
+    sendAlertAction && typeof sendAlertAction.latest_event === "object" && sendAlertAction.latest_event
+      ? (sendAlertAction.latest_event as Record<string, unknown>)
+      : null;
+  const sendAlertLatestMetadata =
+    sendAlertLatestEvent && typeof sendAlertLatestEvent.metadata === "object" && sendAlertLatestEvent.metadata
+      ? (sendAlertLatestEvent.metadata as Record<string, unknown>)
+      : null;
+  const sendAlertLatestChannel = typeof sendAlertLatestMetadata?.channel === "string" ? sendAlertLatestMetadata.channel : "";
+  const sendAlertDisabled = !isAdmin || workflowBusy || sendAlertBusy || !sendAlertAction?.can_execute;
+  const safeScriptAction = actionContract?.actions.find((action) => action.action_type === "run_safe_script") ?? null;
+  const safeScriptLatestEvent =
+    safeScriptAction && typeof safeScriptAction.latest_event === "object" && safeScriptAction.latest_event
+      ? (safeScriptAction.latest_event as Record<string, unknown>)
+      : null;
+  const safeScriptLatestMetadata =
+    safeScriptLatestEvent && typeof safeScriptLatestEvent.metadata === "object" && safeScriptLatestEvent.metadata
+      ? (safeScriptLatestEvent.metadata as Record<string, unknown>)
+      : null;
+  const selectedHookOption = safeScriptAction?.options?.find((option) => option.key === scriptHookKey) ?? safeScriptAction?.options?.[0] ?? null;
+  const safeScriptResolvedDryRun = selectedHookOption?.allow_apply ? scriptDryRun : true;
+  const safeScriptDisabled =
+    !isAdmin ||
+    workflowBusy ||
+    runSafeScriptBusy ||
+    !safeScriptAction?.can_execute ||
+    !(safeScriptAction?.options?.length);
 
   return (
     <aside className="fixed inset-y-0 right-0 z-30 w-full max-w-2xl overflow-y-auto border-l border-slate-200 bg-white shadow-2xl">
@@ -134,6 +298,12 @@ function OpportunityDrawer({
             <ToneBadge label="Effort" value={opportunity.effort} tone="effort" />
             <ToneBadge label="Risk" value={opportunity.risk} tone="risk" />
             <ToneBadge label="Confidence" value={opportunity.confidence} tone="confidence" />
+            <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${workflowBadgeClass(opportunity.lifecycle_status || "open", "lifecycle")}`}>
+              Status: {formatActionState(opportunity.lifecycle_status || "open")}
+            </span>
+            <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${workflowBadgeClass(opportunity.action_state || "none", "action")}`}>
+              Action: {formatActionState(opportunity.action_state || "none")}
+            </span>
           </div>
           <div className="mt-4 grid gap-3 text-sm text-slate-600 md:grid-cols-2">
             <div>
@@ -149,6 +319,12 @@ function OpportunityDrawer({
               </div>
             </div>
           </div>
+          {opportunity.dismissed_reason ? (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Dismissed reason</div>
+              <div className="mt-1">{opportunity.dismissed_reason}</div>
+            </div>
+          ) : null}
         </section>
 
         <section>
@@ -182,6 +358,348 @@ function OpportunityDrawer({
           </ol>
         </section>
 
+        <section className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Action Contract</div>
+          {actionContractLoading ? (
+            <div className="mt-3 text-sm text-slate-500">Loading recommendation actions...</div>
+          ) : (
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              {(actionContract?.actions ?? []).map((action) => (
+                <div key={action.action_type} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm font-medium text-slate-900">{action.label}</div>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${actionContractStatusClass(action.status)}`}>
+                      {formatActionContractStatus(action.status)}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-sm text-slate-600">{action.description}</div>
+                  {action.blocked_reason ? (
+                    <div className="mt-2 text-xs text-slate-500">{action.blocked_reason}</div>
+                  ) : null}
+                  <div className="mt-2 text-xs text-slate-500">
+                    State binding: {action.pending_action_state || "—"} / {action.completed_action_state || "—"}
+                  </div>
+                  {action.note_placeholder ? (
+                    <div className="mt-1 text-xs text-slate-400">{action.note_placeholder}</div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+          {createTicketAction ? (
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="text-sm font-medium text-slate-900">Create Jira Follow-Up</div>
+              <div className="mt-1 text-sm text-slate-600">
+                Use the configured defaults or override the project, issue type, and summary before creating a linked Jira ticket.
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <input
+                  value={ticketProjectKey}
+                  onChange={(event) => setTicketProjectKey(event.target.value)}
+                  placeholder="Project key (optional)"
+                  disabled={createTicketDisabled}
+                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <input
+                  value={ticketIssueType}
+                  onChange={(event) => setTicketIssueType(event.target.value)}
+                  placeholder="Issue type (optional)"
+                  disabled={createTicketDisabled}
+                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              </div>
+              <input
+                value={ticketSummary}
+                onChange={(event) => setTicketSummary(event.target.value)}
+                placeholder="Ticket summary"
+                disabled={createTicketDisabled}
+                className="mt-3 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <textarea
+                value={ticketNote}
+                onChange={(event) => setTicketNote(event.target.value)}
+                rows={3}
+                placeholder={createTicketAction.note_placeholder || "Add an operator note for the Jira follow-up."}
+                disabled={createTicketDisabled}
+                className="mt-3 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => onCreateTicket(ticketProjectKey, ticketIssueType, ticketSummary, ticketNote)}
+                  disabled={createTicketDisabled}
+                  className="rounded-xl bg-sky-700 px-4 py-2 text-sm font-medium text-white hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {createTicketBusy ? "Creating Jira Ticket..." : "Create Jira Ticket"}
+                </button>
+                {!isAdmin ? (
+                  <span className="text-xs text-slate-500">Admin access is required for direct recommendation actions.</span>
+                ) : null}
+                {createTicketAction.blocked_reason ? (
+                  <span className="text-xs text-slate-500">{createTicketAction.blocked_reason}</span>
+                ) : null}
+                {createTicketLatestUrl ? (
+                  <a
+                    href={createTicketLatestUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm font-medium text-sky-700 hover:text-sky-800"
+                  >
+                    Open {createTicketLatestKey || "linked ticket"}
+                  </a>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {sendAlertAction ? (
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="text-sm font-medium text-slate-900">Send Teams Alert</div>
+              <div className="mt-1 text-sm text-slate-600">
+                Send the recommendation to a Teams webhook using the configured default channel or an operator-supplied override.
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <input
+                  value={alertChannel}
+                  onChange={(event) => setAlertChannel(event.target.value)}
+                  placeholder="Channel label (optional)"
+                  disabled={sendAlertDisabled}
+                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <input
+                  value={alertWebhookUrl}
+                  onChange={(event) => setAlertWebhookUrl(event.target.value)}
+                  placeholder="Teams webhook override (optional)"
+                  disabled={sendAlertDisabled}
+                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              </div>
+              <textarea
+                value={alertNote}
+                onChange={(event) => setAlertNote(event.target.value)}
+                rows={3}
+                placeholder={sendAlertAction.note_placeholder || "Add an operator note for the Teams alert."}
+                disabled={sendAlertDisabled}
+                className="mt-3 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => onSendAlert(alertChannel, alertWebhookUrl, alertNote)}
+                  disabled={sendAlertDisabled}
+                  className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {sendAlertBusy ? "Sending Teams Alert..." : "Send Teams Alert"}
+                </button>
+                {!isAdmin ? (
+                  <span className="text-xs text-slate-500">Admin access is required for direct recommendation actions.</span>
+                ) : null}
+                {sendAlertAction.blocked_reason ? (
+                  <span className="text-xs text-slate-500">{sendAlertAction.blocked_reason}</span>
+                ) : null}
+                {sendAlertLatestChannel ? (
+                  <span className="text-xs text-slate-500">Last sent to {sendAlertLatestChannel}</span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {safeScriptAction ? (
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="text-sm font-medium text-slate-900">Run Safe Remediation Hook</div>
+              <div className="mt-1 text-sm text-slate-600">
+                Execute an allowlisted remediation hook with structured recommendation input. Dry-run stays the default unless the selected hook explicitly permits apply mode.
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
+                <select
+                  value={scriptHookKey}
+                  onChange={(event) => {
+                    const nextHook = safeScriptAction.options.find((option) => option.key === event.target.value) ?? null;
+                    setScriptHookKey(event.target.value);
+                    setScriptDryRun(nextHook ? nextHook.default_dry_run !== false : true);
+                  }}
+                  disabled={safeScriptDisabled}
+                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {(safeScriptAction.options ?? []).map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <label className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={safeScriptResolvedDryRun}
+                    onChange={(event) => setScriptDryRun(event.target.checked)}
+                    disabled={safeScriptDisabled || !selectedHookOption?.allow_apply}
+                    className="h-4 w-4 rounded border-slate-300"
+                  />
+                  <span>Dry run</span>
+                </label>
+              </div>
+              {selectedHookOption ? (
+                <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                  <div className="font-medium text-slate-900">{selectedHookOption.label}</div>
+                  {selectedHookOption.description ? <div className="mt-1">{selectedHookOption.description}</div> : null}
+                  <div className="mt-2 text-xs text-slate-500">
+                    {selectedHookOption.allow_apply
+                      ? "Apply mode is permitted for this hook."
+                      : "This hook is dry-run only."}
+                  </div>
+                </div>
+              ) : null}
+              <textarea
+                value={scriptNote}
+                onChange={(event) => setScriptNote(event.target.value)}
+                rows={3}
+                placeholder={safeScriptAction.note_placeholder || "Add an operator note for the safe remediation hook run."}
+                disabled={safeScriptDisabled}
+                className="mt-3 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => onRunSafeScript(scriptHookKey, safeScriptResolvedDryRun, scriptNote)}
+                  disabled={safeScriptDisabled}
+                  className="rounded-xl bg-violet-700 px-4 py-2 text-sm font-medium text-white hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {runSafeScriptBusy ? "Running Safe Hook..." : safeScriptResolvedDryRun ? "Run Dry-Run Hook" : "Run Safe Hook"}
+                </button>
+                {!isAdmin ? (
+                  <span className="text-xs text-slate-500">Admin access is required for direct recommendation actions.</span>
+                ) : null}
+                {safeScriptAction.blocked_reason ? (
+                  <span className="text-xs text-slate-500">{safeScriptAction.blocked_reason}</span>
+                ) : null}
+                {typeof safeScriptLatestMetadata?.hook_label === "string" && safeScriptLatestMetadata.hook_label ? (
+                  <span className="text-xs text-slate-500">Last hook: {safeScriptLatestMetadata.hook_label}</span>
+                ) : null}
+              </div>
+              {typeof safeScriptLatestMetadata?.output_excerpt === "string" && safeScriptLatestMetadata.output_excerpt ? (
+                <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                  {safeScriptLatestMetadata.output_excerpt}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Workflow</div>
+          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+            <textarea
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              rows={3}
+              placeholder="Add an operator note for dismiss, reopen, or action-state updates..."
+              className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-500"
+            />
+            <div className="space-y-3">
+              <select
+                value={actionState}
+                onChange={(event) => setActionState(event.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-500"
+                disabled={!isAdmin || workflowBusy}
+              >
+                {actionStateOptions.map((value) => (
+                  <option key={value} value={value}>
+                    {formatActionState(value)}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => onUpdateActionState(actionState, note)}
+                disabled={!isAdmin || workflowBusy}
+                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Save Action State
+              </button>
+              {opportunity.lifecycle_status === "dismissed" ? (
+                <button
+                  type="button"
+                  onClick={() => onReopen(note)}
+                  disabled={!isAdmin || workflowBusy}
+                  className="w-full rounded-xl border border-emerald-300 px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Reopen Recommendation
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onDismiss(note)}
+                  disabled={!isAdmin || workflowBusy}
+                  className="w-full rounded-xl border border-amber-300 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Dismiss Recommendation
+                </button>
+              )}
+            </div>
+          </div>
+          {!isAdmin ? (
+            <div className="mt-3 text-xs text-slate-500">Admin access is required to change recommendation workflow state.</div>
+          ) : null}
+          {workflowError ? (
+            <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{workflowError}</div>
+          ) : null}
+        </section>
+
+        <section>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Action History</div>
+          {historyLoading ? (
+            <div className="mt-3 text-sm text-slate-500">Loading recommendation history...</div>
+          ) : history.length === 0 ? (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+              No workflow history has been recorded for this recommendation yet.
+            </div>
+          ) : (
+            <div className="mt-3 space-y-3">
+              {history.map((event) => (
+                <div key={event.event_id} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm font-medium text-slate-900">
+                      {formatActionState(event.action_type)} · {formatActionState(event.action_status)}
+                    </div>
+                    <div className="text-xs text-slate-400">{event.created_at}</div>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {event.actor_id ? `${event.actor_id} · ` : ""}{event.actor_type || "system"}
+                  </div>
+                  {typeof event.metadata.channel === "string" && event.metadata.channel ? (
+                    <div className="mt-1 text-xs text-slate-500">Channel: {event.metadata.channel}</div>
+                  ) : null}
+                  {typeof event.metadata.hook_label === "string" && event.metadata.hook_label ? (
+                    <div className="mt-1 text-xs text-slate-500">
+                      Hook: {event.metadata.hook_label}
+                      {typeof event.metadata.dry_run === "boolean" ? ` · ${event.metadata.dry_run ? "Dry run" : "Apply"}` : ""}
+                    </div>
+                  ) : null}
+                  {event.note ? <div className="mt-2 text-sm text-slate-700">{event.note}</div> : null}
+                  {typeof event.metadata.ticket_url === "string" && event.metadata.ticket_url ? (
+                    <div className="mt-2">
+                      <a
+                        href={event.metadata.ticket_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm font-medium text-sky-700 hover:text-sky-800"
+                      >
+                        Open {typeof event.metadata.ticket_key === "string" && event.metadata.ticket_key ? event.metadata.ticket_key : "linked ticket"}
+                      </a>
+                    </div>
+                  ) : null}
+                  {typeof event.metadata.error === "string" && event.metadata.error ? (
+                    <div className="mt-2 text-sm text-rose-700">{event.metadata.error}</div>
+                  ) : null}
+                  {typeof event.metadata.output_excerpt === "string" && event.metadata.output_excerpt ? (
+                    <div className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+                      {event.metadata.output_excerpt}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
         <section className="flex flex-wrap gap-3">
           <a
             href={opportunity.portal_url}
@@ -204,6 +722,7 @@ function OpportunityDrawer({
 }
 
 export default function AzureSavingsPage() {
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [opportunityType, setOpportunityType] = useState("");
@@ -214,17 +733,23 @@ export default function AzureSavingsPage() {
   const [confidence, setConfidence] = useState("");
   const [quantifiedOnly, setQuantifiedOnly] = useState(false);
   const [selectedOpportunityId, setSelectedOpportunityId] = useState("");
+  const [workflowError, setWorkflowError] = useState("");
   const { sortKey, sortDir, toggleSort } = useTableSort<SavingsSortKey>("estimated_monthly_savings", "desc");
+  const meQuery = useQuery({
+    queryKey: ["me"],
+    queryFn: () => api.getMe(),
+    staleTime: 60_000,
+  });
 
   const summaryQuery = useQuery({
-    queryKey: ["azure", "savings", "summary"],
-    queryFn: () => api.getAzureSavingsSummary(),
+    queryKey: ["azure", "recommendations", "summary"],
+    queryFn: () => api.getAzureRecommendationsSummary(),
     refetchInterval: 60_000,
   });
 
   const opportunitiesQuery = useQuery({
-    queryKey: ["azure", "savings", "opportunities", { search, category, opportunityType, subscriptionId, resourceGroup, effort, risk, confidence, quantifiedOnly }],
-    queryFn: () => api.getAzureSavingsOpportunities({
+    queryKey: ["azure", "recommendations", { search, category, opportunityType, subscriptionId, resourceGroup, effort, risk, confidence, quantifiedOnly }],
+    queryFn: () => api.getAzureRecommendations({
       search,
       category,
       opportunity_type: opportunityType,
@@ -237,12 +762,172 @@ export default function AzureSavingsPage() {
     }),
     refetchInterval: 60_000,
   });
+  const detailQuery = useQuery({
+    queryKey: ["azure", "recommendation", selectedOpportunityId],
+    queryFn: () => api.getAzureRecommendation(selectedOpportunityId),
+    enabled: !!selectedOpportunityId,
+    placeholderData: (prev) => prev,
+  });
+  const historyQuery = useQuery({
+    queryKey: ["azure", "recommendation", selectedOpportunityId, "history"],
+    queryFn: () => api.getAzureRecommendationHistory(selectedOpportunityId),
+    enabled: !!selectedOpportunityId,
+    placeholderData: (prev) => prev,
+  });
+  const actionContractQuery = useQuery({
+    queryKey: ["azure", "recommendation", selectedOpportunityId, "actions"],
+    queryFn: () => api.getAzureRecommendationActionContract(selectedOpportunityId),
+    enabled: !!selectedOpportunityId,
+    placeholderData: (prev) => prev,
+  });
+
+  async function refreshRecommendationQueries(recommendationId: string) {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["azure", "recommendations"] }),
+      queryClient.invalidateQueries({ queryKey: ["azure", "savings"] }),
+      queryClient.invalidateQueries({ queryKey: ["azure", "recommendation", recommendationId] }),
+      queryClient.invalidateQueries({ queryKey: ["azure", "recommendation", recommendationId, "actions"] }),
+      queryClient.invalidateQueries({ queryKey: ["azure", "recommendation", recommendationId, "history"] }),
+    ]);
+  }
+
+  const dismissMutation = useMutation({
+    mutationFn: ({ recommendationId, reason }: { recommendationId: string; reason: string }) =>
+      api.dismissAzureRecommendation(recommendationId, reason),
+    onMutate: () => setWorkflowError(""),
+    onSuccess: async (_, variables) => {
+      await refreshRecommendationQueries(variables.recommendationId);
+    },
+    onError: (error) => {
+      setWorkflowError(error instanceof Error ? error.message : "Failed to dismiss recommendation.");
+    },
+  });
+  const reopenMutation = useMutation({
+    mutationFn: ({ recommendationId, note }: { recommendationId: string; note: string }) =>
+      api.reopenAzureRecommendation(recommendationId, note),
+    onMutate: () => setWorkflowError(""),
+    onSuccess: async (_, variables) => {
+      await refreshRecommendationQueries(variables.recommendationId);
+    },
+    onError: (error) => {
+      setWorkflowError(error instanceof Error ? error.message : "Failed to reopen recommendation.");
+    },
+  });
+  const actionStateMutation = useMutation({
+    mutationFn: ({
+      recommendationId,
+      actionState,
+      note,
+    }: {
+      recommendationId: string;
+      actionState: string;
+      note: string;
+    }) =>
+      api.updateAzureRecommendationActionState(recommendationId, {
+        action_state: actionState,
+        action_type: "portal_workflow_update",
+        note,
+      }),
+    onMutate: () => setWorkflowError(""),
+    onSuccess: async (_, variables) => {
+      await refreshRecommendationQueries(variables.recommendationId);
+    },
+    onError: (error) => {
+      setWorkflowError(error instanceof Error ? error.message : "Failed to update recommendation workflow.");
+    },
+  });
+  const createTicketMutation = useMutation({
+    mutationFn: ({
+      recommendationId,
+      projectKey,
+      issueType,
+      summary,
+      note,
+    }: {
+      recommendationId: string;
+      projectKey: string;
+      issueType: string;
+      summary: string;
+      note: string;
+    }) =>
+      api.createAzureRecommendationTicket(recommendationId, {
+        project_key: projectKey,
+        issue_type: issueType,
+        summary,
+        note,
+      }),
+    onMutate: () => setWorkflowError(""),
+    onSuccess: async (result: AzureRecommendationCreateTicketResponse) => {
+      await refreshRecommendationQueries(result.recommendation.id);
+    },
+    onError: (error) => {
+      setWorkflowError(error instanceof Error ? error.message : "Failed to create Jira ticket.");
+    },
+  });
+  const sendAlertMutation = useMutation({
+    mutationFn: ({
+      recommendationId,
+      channel,
+      teamsWebhookUrl,
+      note,
+    }: {
+      recommendationId: string;
+      channel: string;
+      teamsWebhookUrl: string;
+      note: string;
+    }) =>
+      api.sendAzureRecommendationAlert(recommendationId, {
+        channel,
+        teams_webhook_url: teamsWebhookUrl,
+        note,
+      }),
+    onMutate: () => setWorkflowError(""),
+    onSuccess: async (result: AzureRecommendationSendAlertResponse) => {
+      await refreshRecommendationQueries(result.recommendation.id);
+    },
+    onError: (error) => {
+      setWorkflowError(error instanceof Error ? error.message : "Failed to send Teams alert.");
+    },
+  });
+  const runSafeScriptMutation = useMutation({
+    mutationFn: ({
+      recommendationId,
+      hookKey,
+      dryRun,
+      note,
+    }: {
+      recommendationId: string;
+      hookKey: string;
+      dryRun: boolean;
+      note: string;
+    }) =>
+      api.runAzureRecommendationSafeScript(recommendationId, {
+        hook_key: hookKey,
+        dry_run: dryRun,
+        note,
+      }),
+    onMutate: () => setWorkflowError(""),
+    onSuccess: async (result: AzureRecommendationRunSafeScriptResponse) => {
+      await refreshRecommendationQueries(result.recommendation.id);
+    },
+    onError: (error) => {
+      setWorkflowError(error instanceof Error ? error.message : "Failed to run safe remediation hook.");
+    },
+  });
 
   const summary = summaryQuery.data;
   const opportunities = opportunitiesQuery.data ?? [];
-  const actionableRows = opportunities.filter((item) => !(item.category === "commitment" && !item.quantified));
-  const commitmentRows = opportunities.filter((item) => item.category === "commitment" && !item.quantified);
-  const selectedOpportunity = opportunities.find((item) => item.id === selectedOpportunityId) ?? null;
+  const actionableRows = opportunities.filter((item) => item.category !== "commitment");
+  const commitmentRows = opportunities.filter((item) => item.category === "commitment");
+  const selectedOpportunity = detailQuery.data ?? opportunities.find((item) => item.id === selectedOpportunityId) ?? null;
+  const isAdmin = !!meQuery.data?.is_admin;
+  const workflowBusy =
+    dismissMutation.isPending ||
+    reopenMutation.isPending ||
+    actionStateMutation.isPending ||
+    createTicketMutation.isPending ||
+    sendAlertMutation.isPending ||
+    runSafeScriptMutation.isPending;
 
   const sortedActionableRows = sortRows(actionableRows, sortKey, sortDir, (item, key) => {
     if (key === "subscription") return item.subscription_name || item.subscription_id;
@@ -263,6 +948,8 @@ export default function AzureSavingsPage() {
   const opportunityTypeOptions = Array.from(new Set(opportunities.map((item) => item.opportunity_type))).sort();
   const subscriptionOptions = Array.from(new Set(opportunities.map((item) => item.subscription_name || item.subscription_id).filter(Boolean))).sort();
   const resourceGroupOptions = Array.from(new Set(opportunities.map((item) => item.resource_group).filter(Boolean))).sort();
+  const costContext = summary?.cost_context;
+  const coverageWindow = formatCoverageWindow(costContext?.window_start, costContext?.window_end);
 
   if (summaryQuery.isLoading || opportunitiesQuery.isLoading) {
     return <div className="text-sm text-slate-500">Loading Azure savings opportunities...</div>;
@@ -286,20 +973,38 @@ export default function AzureSavingsPage() {
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <AzureSourceBadge
-              label="Heuristic operational guidance"
-              description="Savings opportunities blend cached Azure data, Advisor signals, and app heuristics; this page is for operator triage."
+              label={summary.source_label || "Persisted recommendation workspace"}
+              description={
+                summary.source_description ||
+                "This page now uses the local recommendation model and workflow APIs, with cache and export-backed inputs hydrated behind the scenes."
+              }
               tone="amber"
             />
+            {costContext && (
+              <AzureSourceBadge
+                label={costContext.source_label}
+                description={
+                  costContext.source_description ||
+                  "Quantified savings on this page use the current shared cost context for prioritization."
+                }
+                tone={costContext.export_backed ? "sky" : "amber"}
+              />
+            )}
             <AzureSourceBadge
-              label="Not invoice-grade reporting"
+              label="Operational, not invoice-grade"
               description="Use the governed reporting handoff on Azure Overview for shared finance and showback reporting."
               tone="emerald"
             />
           </div>
+          {coverageWindow ? (
+            <div className="mt-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+              Cost coverage window: {coverageWindow}
+            </div>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-3">
           <a
-            href={api.exportAzureSavingsCsv({
+            href={api.exportAzureRecommendationsCsv({
               search,
               category,
               opportunity_type: opportunityType,
@@ -315,7 +1020,7 @@ export default function AzureSavingsPage() {
             Export CSV
           </a>
           <a
-            href={api.exportAzureSavingsExcel({
+            href={api.exportAzureRecommendationsExcel({
               search,
               category,
               opportunity_type: opportunityType,
@@ -337,7 +1042,11 @@ export default function AzureSavingsPage() {
         <StatCard
           label="Quantified Savings"
           value={formatAzureCurrency(summary.quantified_monthly_savings, summary.currency)}
-          sub="Monthly proxy from cached Azure cost data"
+          sub={
+            costContext?.export_backed
+              ? "Monthly proxy using export-backed cost analytics"
+              : "Monthly proxy from cached Azure cost data"
+          }
           tone="text-emerald-700"
         />
         <StatCard
@@ -493,9 +1202,9 @@ export default function AzureSavingsPage() {
 
       <AzureSavingsHighlightsSection
         title="Commitment Strategy"
-        description="Reservation coverage gaps and excesses need review, but they are intentionally kept out of the quantified totals until pricing is validated."
-        opportunities={commitmentRows}
-        emptyMessage="No unquantified reservation strategy items are active in the current filtered view."
+          description="Reservation coverage gaps and excesses need review, but they are intentionally kept out of the quantified totals until pricing is validated."
+          opportunities={commitmentRows}
+        emptyMessage="No reservation strategy items are active in the current filtered view."
         maxItems={8}
       />
 
@@ -529,7 +1238,63 @@ export default function AzureSavingsPage() {
         </div>
       </section>
 
-      <OpportunityDrawer opportunity={selectedOpportunity} onClose={() => setSelectedOpportunityId("")} />
+      <OpportunityDrawer
+        opportunity={selectedOpportunity}
+        actionContract={actionContractQuery.data ?? null}
+        actionContractLoading={actionContractQuery.isLoading}
+        history={historyQuery.data ?? []}
+        historyLoading={historyQuery.isLoading}
+        isAdmin={isAdmin}
+        workflowBusy={workflowBusy}
+        workflowError={workflowError}
+        onDismiss={(reason) => {
+          if (!selectedOpportunityId) return;
+          dismissMutation.mutate({ recommendationId: selectedOpportunityId, reason });
+        }}
+        onReopen={(note) => {
+          if (!selectedOpportunityId) return;
+          reopenMutation.mutate({ recommendationId: selectedOpportunityId, note });
+        }}
+        onUpdateActionState={(actionState, note) => {
+          if (!selectedOpportunityId) return;
+          actionStateMutation.mutate({ recommendationId: selectedOpportunityId, actionState, note });
+        }}
+        onCreateTicket={(projectKey, issueType, summary, note) => {
+          if (!selectedOpportunityId) return;
+          createTicketMutation.mutate({
+            recommendationId: selectedOpportunityId,
+            projectKey,
+            issueType,
+            summary,
+            note,
+          });
+        }}
+        createTicketBusy={createTicketMutation.isPending}
+        onSendAlert={(channel, teamsWebhookUrl, note) => {
+          if (!selectedOpportunityId) return;
+          sendAlertMutation.mutate({
+            recommendationId: selectedOpportunityId,
+            channel,
+            teamsWebhookUrl,
+            note,
+          });
+        }}
+        onRunSafeScript={(hookKey, dryRun, note) => {
+          if (!selectedOpportunityId) return;
+          runSafeScriptMutation.mutate({
+            recommendationId: selectedOpportunityId,
+            hookKey,
+            dryRun,
+            note,
+          });
+        }}
+        sendAlertBusy={sendAlertMutation.isPending}
+        runSafeScriptBusy={runSafeScriptMutation.isPending}
+        onClose={() => {
+          setSelectedOpportunityId("");
+          setWorkflowError("");
+        }}
+      />
     </div>
   );
 }
