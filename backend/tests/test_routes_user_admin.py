@@ -323,6 +323,87 @@ def test_user_export_csv_applies_report_filter(test_client, monkeypatch):
     mock_cache.list_directory_objects.assert_called_once_with("users", search="")
 
 
+def test_user_export_csv_applies_license_and_activity_filters(test_client, monkeypatch):
+    import routes_user_admin
+
+    mock_cache = MagicMock()
+    mock_cache.list_directory_objects.return_value = [
+        {
+            "id": "user-1",
+            "display_name": "Disabled Licensed",
+            "object_type": "user",
+            "principal_name": "disabled@example.com",
+            "mail": "disabled@example.com",
+            "app_id": "",
+            "enabled": False,
+            "extra": {
+                "user_type": "Member",
+                "is_licensed": "true",
+                "license_count": "2",
+                "sku_part_numbers": "M365_BUSINESS_PREMIUM, EMS",
+                "last_successful_utc": "",
+                "last_successful_local": "",
+            },
+        },
+        {
+            "id": "user-2",
+            "display_name": "Enabled Stale",
+            "object_type": "user",
+            "principal_name": "stale@example.com",
+            "mail": "stale@example.com",
+            "app_id": "",
+            "enabled": True,
+            "extra": {
+                "user_type": "Member",
+                "is_licensed": "",
+                "license_count": "0",
+                "sku_part_numbers": "",
+                "last_successful_utc": "2026-01-01T00:00:00+00:00",
+                "last_successful_local": "2025-12-31 16:00 PT",
+            },
+        },
+        {
+            "id": "user-3",
+            "display_name": "Enabled Recent",
+            "object_type": "user",
+            "principal_name": "recent@example.com",
+            "mail": "recent@example.com",
+            "app_id": "",
+            "enabled": True,
+            "extra": {
+                "user_type": "Member",
+                "is_licensed": "true",
+                "license_count": "1",
+                "sku_part_numbers": "M365_BUSINESS_BASIC",
+                "last_successful_utc": "2026-03-18T00:00:00+00:00",
+                "last_successful_local": "2026-03-17 17:00 PT",
+            },
+        },
+    ]
+    monkeypatch.setattr(routes_user_admin, "azure_cache", mock_cache)
+
+    licensed_resp = test_client.get(
+        "/api/user-admin/users/export.csv",
+        headers={"host": "it-app.movedocs.com"},
+        params={"status": "disabled", "license": "licensed", "scope": "filtered"},
+    )
+    activity_resp = test_client.get(
+        "/api/user-admin/users/export.csv",
+        headers={"host": "it-app.movedocs.com"},
+        params={"activity": "no_success_30d", "scope": "filtered"},
+    )
+
+    assert licensed_resp.status_code == 200
+    assert "Disabled Licensed" in licensed_resp.text
+    assert "Enabled Recent" not in licensed_resp.text
+
+    assert activity_resp.status_code == 200
+    assert "Enabled Stale" in activity_resp.text
+    assert "Enabled Recent" not in activity_resp.text
+    assert "Disabled Licensed" not in activity_resp.text
+    assert mock_cache.list_directory_objects.call_count == 2
+
+
 def test_user_export_xlsx_supports_scope_all(test_client, monkeypatch):
     import routes_user_admin
 
@@ -379,3 +460,61 @@ def test_user_export_xlsx_supports_scope_all(test_client, monkeypatch):
     assert "Ada Lovelace" in names
     assert "Grace Hopper" in names
     mock_cache.list_directory_objects.assert_called_once_with("users", search="")
+
+
+def test_user_export_xlsx_applies_sync_filter(test_client, monkeypatch):
+    import routes_user_admin
+
+    mock_cache = MagicMock()
+    mock_cache.list_directory_objects.return_value = [
+        {
+            "id": "user-1",
+            "display_name": "Synced User",
+            "object_type": "user",
+            "principal_name": "synced@example.com",
+            "mail": "synced@example.com",
+            "app_id": "",
+            "enabled": True,
+            "extra": {
+                "user_type": "Member",
+                "on_prem_sync": "true",
+                "is_licensed": "true",
+                "license_count": "1",
+                "sku_part_numbers": "M365_BUSINESS_PREMIUM",
+                "last_successful_utc": "2026-03-19T00:00:00+00:00",
+                "last_successful_local": "2026-03-18 17:00 PT",
+            },
+        },
+        {
+            "id": "user-2",
+            "display_name": "Cloud User",
+            "object_type": "user",
+            "principal_name": "cloud@example.com",
+            "mail": "cloud@example.com",
+            "app_id": "",
+            "enabled": True,
+            "extra": {
+                "user_type": "Member",
+                "on_prem_sync": "false",
+                "is_licensed": "",
+                "license_count": "0",
+                "sku_part_numbers": "",
+                "last_successful_utc": "2026-03-19T00:00:00+00:00",
+                "last_successful_local": "2026-03-18 17:00 PT",
+            },
+        },
+    ]
+    monkeypatch.setattr(routes_user_admin, "azure_cache", mock_cache)
+
+    resp = test_client.get(
+        "/api/user-admin/users/export.xlsx",
+        headers={"host": "it-app.movedocs.com"},
+        params={"sync": "on_prem_synced", "scope": "filtered"},
+    )
+
+    assert resp.status_code == 200
+    workbook = load_workbook(BytesIO(resp.content))
+    sheet = workbook.active
+    names = [sheet.cell(row=row, column=1).value for row in range(2, sheet.max_row + 1)]
+    assert "Synced User" in names
+    assert "Cloud User" not in names

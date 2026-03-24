@@ -150,7 +150,9 @@ describe("api.exportExcel", () => {
       api.exportUserAdminUsersCsv({
         search: "ada",
         status: "disabled",
-        report_filter: "disabled_licensed",
+        license: "licensed",
+        activity: "no_success_30d",
+        sync: "on_prem_synced",
         scope: "filtered",
       }),
     ).toContain("/api/user-admin/users/export.csv");
@@ -158,10 +160,32 @@ describe("api.exportExcel", () => {
       api.exportUserAdminUsersCsv({
         search: "ada",
         status: "disabled",
-        report_filter: "disabled_licensed",
+        license: "licensed",
+        activity: "no_success_30d",
+        sync: "on_prem_synced",
         scope: "filtered",
       }),
-    ).toContain("report_filter=disabled_licensed");
+    ).toContain("license=licensed");
+    expect(
+      api.exportUserAdminUsersCsv({
+        search: "ada",
+        status: "disabled",
+        license: "licensed",
+        activity: "no_success_30d",
+        sync: "on_prem_synced",
+        scope: "filtered",
+      }),
+    ).toContain("activity=no_success_30d");
+    expect(
+      api.exportUserAdminUsersCsv({
+        search: "ada",
+        status: "disabled",
+        license: "licensed",
+        activity: "no_success_30d",
+        sync: "on_prem_synced",
+        scope: "filtered",
+      }),
+    ).toContain("sync=on_prem_synced");
     expect(api.exportUserAdminUsersExcel({ scope: "all" })).toContain("/api/user-admin/users/export.xlsx");
     expect(api.exportUserAdminUsersExcel({ scope: "all" })).toContain("scope=all");
   });

@@ -116,17 +116,31 @@ def _directory_label(user: dict[str, Any]) -> str:
     return "Cloud"
 
 
-def _matches_report_filter(user: dict[str, Any], report_filter: UserExitReportFilter) -> bool:
+def _is_licensed_user(user: dict[str, Any]) -> bool:
     extra = user.get("extra") if isinstance(user.get("extra"), dict) else {}
+    return str(extra.get("is_licensed") or "").strip().lower() == "true"
+
+
+def _is_on_prem_synced_user(user: dict[str, Any]) -> bool:
+    extra = user.get("extra") if isinstance(user.get("extra"), dict) else {}
+    return str(extra.get("on_prem_sync") or "").strip().lower() == "true"
+
+
+def _has_no_successful_sign_in_30d(user: dict[str, Any]) -> bool:
+    if user.get("enabled") is not True:
+        return False
+    extra = user.get("extra") if isinstance(user.get("extra"), dict) else {}
+    last_successful = _parse_datetime(str(extra.get("last_successful_utc") or ""))
+    if last_successful is None:
+        return True
+    return last_successful <= datetime.now(timezone.utc) - timedelta(days=30)
+
+
+def _matches_report_filter(user: dict[str, Any], report_filter: UserExitReportFilter) -> bool:
     if report_filter == "disabled_licensed":
-        return user.get("enabled") is False and str(extra.get("is_licensed") or "").strip().lower() == "true"
+        return user.get("enabled") is False and _is_licensed_user(user)
     if report_filter == "active_no_success_30d":
-        if user.get("enabled") is not True:
-            return False
-        last_successful = _parse_datetime(str(extra.get("last_successful_utc") or ""))
-        if last_successful is None:
-            return True
-        return last_successful <= datetime.now(timezone.utc) - timedelta(days=30)
+        return _has_no_successful_sign_in_30d(user)
     return True
 
 
@@ -135,6 +149,9 @@ def _filter_directory_users(
     search: str = "",
     status: str = "all",
     type: str = "all",
+    license: str = "all",
+    activity: str = "all",
+    sync: str = "all",
     directory: str = "",
     report_filter: UserExitReportFilter = "",
     scope: str = "filtered",
@@ -146,6 +163,9 @@ def _filter_directory_users(
     filtered: list[dict[str, Any]] = []
     status_value = status.strip().lower()
     type_value = type.strip().lower()
+    license_value = license.strip().lower()
+    activity_value = activity.strip().lower()
+    sync_value = sync.strip().lower()
     directory_value = directory.strip().lower()
     for user in rows:
         extra = user.get("extra") if isinstance(user.get("extra"), dict) else {}
@@ -156,6 +176,12 @@ def _filter_directory_users(
         if type_value == "member" and str(extra.get("user_type") or "") == "Guest":
             continue
         if type_value == "guest" and str(extra.get("user_type") or "") != "Guest":
+            continue
+        if license_value == "licensed" and not _is_licensed_user(user):
+            continue
+        if activity_value == "no_success_30d" and not _has_no_successful_sign_in_30d(user):
+            continue
+        if sync_value == "on_prem_synced" and not _is_on_prem_synced_user(user):
             continue
         if directory_value and _directory_label(user).lower() != directory_value:
             continue
@@ -383,6 +409,9 @@ def export_user_admin_users_csv(
     search: str = Query(default=""),
     status: str = Query(default="all"),
     type: str = Query(default="all"),
+    license: str = Query(default="all"),
+    activity: str = Query(default="all"),
+    sync: str = Query(default="all"),
     directory: str = Query(default=""),
     report_filter: UserExitReportFilter = Query(default=""),
     scope: str = Query(default="filtered"),
@@ -395,6 +424,9 @@ def export_user_admin_users_csv(
             search=search,
             status=status,
             type=type,
+            license=license,
+            activity=activity,
+            sync=sync,
             directory=directory,
             report_filter=report_filter,
             scope=scope,
@@ -419,6 +451,9 @@ def export_user_admin_users_excel(
     search: str = Query(default=""),
     status: str = Query(default="all"),
     type: str = Query(default="all"),
+    license: str = Query(default="all"),
+    activity: str = Query(default="all"),
+    sync: str = Query(default="all"),
     directory: str = Query(default=""),
     report_filter: UserExitReportFilter = Query(default=""),
     scope: str = Query(default="filtered"),
@@ -431,6 +466,9 @@ def export_user_admin_users_excel(
             search=search,
             status=status,
             type=type,
+            license=license,
+            activity=activity,
+            sync=sync,
             directory=directory,
             report_filter=report_filter,
             scope=scope,

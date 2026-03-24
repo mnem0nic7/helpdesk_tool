@@ -872,7 +872,7 @@ export default function ReportsPage() {
   async function handleExport() {
     setExporting(true);
     try {
-      await api.exportReport(config);
+      await api.exportReport(config, selectedTemplate?.id);
     } catch (err) {
       logClientError("Export failed", err, { kind: "report" });
     } finally {
@@ -987,7 +987,7 @@ export default function ReportsPage() {
           <p className="mt-1 text-sm text-gray-500">
             {isOasisDev
               ? "Run the OasisDev workload report for Dave, or build your own custom export below."
-              : "Configure filters, select columns, and preview before exporting."}
+              : "Configure filters, select columns, and preview before exporting 7-day and 30-day workbook tabs."}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -1000,7 +1000,7 @@ export default function ReportsPage() {
                 className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 shadow-sm transition-colors hover:bg-emerald-100 hover:text-emerald-800"
               >
                 <DownloadIcon className="h-3.5 w-3.5" />
-                {`Master Workbook (${exportIncludedCount})`}
+                {`Master Workbook 7d/30d (${exportIncludedCount})`}
               </a>
             ) : (
               <span className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-500 shadow-sm">
@@ -1034,7 +1034,7 @@ export default function ReportsPage() {
             ) : (
               <>
                 <DownloadIcon className="h-4 w-4" />
-                Export to Excel
+                Export 7d / 30d Excel
               </>
             )}
           </button>

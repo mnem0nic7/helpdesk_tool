@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type AzureDirectoryObject,
-  type UserDirectoryReportFilter,
   type UserAdminActionType,
   type UserAdminAuditEntry,
   type UserAdminCapabilities,
@@ -36,6 +35,19 @@ type UserColKey =
 type DirectoryUsersPageMode = "primary" | "azure";
 type StatusFilter = "all" | "enabled" | "disabled";
 type TypeFilter = "all" | "member" | "guest";
+type LicenseFilter = "all" | "licensed";
+type ActivityFilter = "all" | "no_success_30d";
+type SyncFilter = "all" | "on_prem_synced";
+type SummaryPresetKey =
+  | "total"
+  | "enabled"
+  | "disabled"
+  | "licensed"
+  | "disabled_licensed"
+  | "no_success_30d"
+  | "members"
+  | "guests"
+  | "on_prem_synced";
 type UserDrawerTab = "overview" | "access" | "groups" | "licenses" | "roles" | "mailbox" | "devices" | "activity" | "exit";
 
 interface PendingAction {
@@ -169,6 +181,10 @@ function hasNoSuccessfulSignIn30d(user: AzureDirectoryObject): boolean {
   return Date.now() - time >= 30 * 24 * 60 * 60 * 1000;
 }
 
+function isOnPremSynced(user: AzureDirectoryObject): boolean {
+  return String(user.extra.on_prem_sync || "").toLowerCase() === "true";
+}
+
 function lastSuccessfulText(user: AzureDirectoryObject): string {
   return user.extra.last_successful_local || formatDateTime(user.extra.last_successful_utc);
 }
@@ -300,16 +316,44 @@ function StatCard({
   label,
   value,
   tone = "text-slate-900",
+  active = false,
+  onClick,
 }: {
   label: string;
   value: string;
   tone?: string;
+  active?: boolean;
+  onClick?: () => void;
 }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+  const className = [
+    "w-full rounded-2xl border bg-white p-5 text-left shadow-sm transition",
+    onClick
+      ? active
+        ? "border-sky-500 ring-2 ring-sky-200"
+        : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"
+      : "border-slate-200",
+  ].join(" ");
+  const content = (
+    <>
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
       <div className={`mt-2 text-3xl font-semibold ${tone}`}>{value}</div>
-    </div>
+    </>
+  );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={className}
+        aria-pressed={active}
+        aria-label={`${label} summary filter`}
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <div className={className}>{content}</div>
   );
 }
 
@@ -1625,7 +1669,9 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
-  const [reportFilter, setReportFilter] = useState<UserDirectoryReportFilter>("");
+  const [licenseFilter, setLicenseFilter] = useState<LicenseFilter>("all");
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
+  const [syncFilter, setSyncFilter] = useState<SyncFilter>("all");
   const [directoryFilter, setDirectoryFilter] = useState("");
   const [selectedUser, setSelectedUser] = useState<AzureDirectoryObject | null>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
@@ -1719,8 +1765,167 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
   const noSuccess30dCount = users.filter(hasNoSuccessfulSignIn30d).length;
   const memberCount = users.filter((user) => user.extra.user_type !== "Guest").length;
   const guestCount = users.filter((user) => user.extra.user_type === "Guest").length;
-  const onPremCount = users.filter((user) => user.extra.on_prem_sync === "true").length;
+  const onPremCount = users.filter(isOnPremSynced).length;
   const directoryOptions = Array.from(new Set(users.map(getDirectoryLabel))).sort();
+
+  function applySummaryPreset(preset: SummaryPresetKey) {
+    if (preset === "total") {
+      setStatusFilter("all");
+      setTypeFilter("all");
+      setLicenseFilter("all");
+      setActivityFilter("all");
+      setSyncFilter("all");
+      return;
+    }
+    if (preset === "enabled") {
+      setStatusFilter("enabled");
+      setTypeFilter("all");
+      setLicenseFilter("all");
+      setActivityFilter("all");
+      setSyncFilter("all");
+      return;
+    }
+    if (preset === "disabled") {
+      setStatusFilter("disabled");
+      setTypeFilter("all");
+      setLicenseFilter("all");
+      setActivityFilter("all");
+      setSyncFilter("all");
+      return;
+    }
+    if (preset === "licensed") {
+      setStatusFilter("all");
+      setTypeFilter("all");
+      setLicenseFilter("licensed");
+      setActivityFilter("all");
+      setSyncFilter("all");
+      return;
+    }
+    if (preset === "disabled_licensed") {
+      setStatusFilter("disabled");
+      setTypeFilter("all");
+      setLicenseFilter("licensed");
+      setActivityFilter("all");
+      setSyncFilter("all");
+      return;
+    }
+    if (preset === "no_success_30d") {
+      setStatusFilter("all");
+      setTypeFilter("all");
+      setLicenseFilter("all");
+      setActivityFilter("no_success_30d");
+      setSyncFilter("all");
+      return;
+    }
+    if (preset === "members") {
+      setStatusFilter("all");
+      setTypeFilter("member");
+      setLicenseFilter("all");
+      setActivityFilter("all");
+      setSyncFilter("all");
+      return;
+    }
+    if (preset === "guests") {
+      setStatusFilter("all");
+      setTypeFilter("guest");
+      setLicenseFilter("all");
+      setActivityFilter("all");
+      setSyncFilter("all");
+      return;
+    }
+    setStatusFilter("all");
+    setTypeFilter("all");
+    setLicenseFilter("all");
+    setActivityFilter("all");
+    setSyncFilter("on_prem_synced");
+  }
+
+  function activeSummaryPreset(): SummaryPresetKey | null {
+    if (
+      statusFilter === "all" &&
+      typeFilter === "all" &&
+      licenseFilter === "all" &&
+      activityFilter === "all" &&
+      syncFilter === "all"
+    ) {
+      return "total";
+    }
+    if (
+      statusFilter === "enabled" &&
+      typeFilter === "all" &&
+      licenseFilter === "all" &&
+      activityFilter === "all" &&
+      syncFilter === "all"
+    ) {
+      return "enabled";
+    }
+    if (
+      statusFilter === "disabled" &&
+      typeFilter === "all" &&
+      licenseFilter === "all" &&
+      activityFilter === "all" &&
+      syncFilter === "all"
+    ) {
+      return "disabled";
+    }
+    if (
+      statusFilter === "all" &&
+      typeFilter === "all" &&
+      licenseFilter === "licensed" &&
+      activityFilter === "all" &&
+      syncFilter === "all"
+    ) {
+      return "licensed";
+    }
+    if (
+      statusFilter === "disabled" &&
+      typeFilter === "all" &&
+      licenseFilter === "licensed" &&
+      activityFilter === "all" &&
+      syncFilter === "all"
+    ) {
+      return "disabled_licensed";
+    }
+    if (
+      statusFilter === "all" &&
+      typeFilter === "all" &&
+      licenseFilter === "all" &&
+      activityFilter === "no_success_30d" &&
+      syncFilter === "all"
+    ) {
+      return "no_success_30d";
+    }
+    if (
+      statusFilter === "all" &&
+      typeFilter === "member" &&
+      licenseFilter === "all" &&
+      activityFilter === "all" &&
+      syncFilter === "all"
+    ) {
+      return "members";
+    }
+    if (
+      statusFilter === "all" &&
+      typeFilter === "guest" &&
+      licenseFilter === "all" &&
+      activityFilter === "all" &&
+      syncFilter === "all"
+    ) {
+      return "guests";
+    }
+    if (
+      statusFilter === "all" &&
+      typeFilter === "all" &&
+      licenseFilter === "all" &&
+      activityFilter === "all" &&
+      syncFilter === "on_prem_synced"
+    ) {
+      return "on_prem_synced";
+    }
+    return null;
+  }
+
+  const activeSummary = activeSummaryPreset();
 
   const filtered = sortRows<AzureDirectoryObject>(
     users.filter((user) => {
@@ -1728,9 +1933,10 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
       if (statusFilter === "disabled" && user.enabled !== false) return false;
       if (typeFilter === "member" && user.extra.user_type === "Guest") return false;
       if (typeFilter === "guest" && user.extra.user_type !== "Guest") return false;
+      if (licenseFilter === "licensed" && !isLicensedUser(user)) return false;
+      if (activityFilter === "no_success_30d" && !hasNoSuccessfulSignIn30d(user)) return false;
+      if (syncFilter === "on_prem_synced" && !isOnPremSynced(user)) return false;
       if (directoryFilter && getDirectoryLabel(user) !== directoryFilter) return false;
-      if (reportFilter === "disabled_licensed" && !(user.enabled === false && isLicensedUser(user))) return false;
-      if (reportFilter === "active_no_success_30d" && !hasNoSuccessfulSignIn30d(user)) return false;
       return true;
     }),
     sortKey,
@@ -1750,13 +1956,15 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
     search,
     status: statusFilter,
     type: typeFilter,
+    license: licenseFilter,
+    activity: activityFilter,
+    sync: syncFilter,
     directory: directoryFilter,
-    report_filter: reportFilter,
     scope: "filtered" as const,
   };
   const allExportParams = { scope: "all" as const };
 
-  const filterKey = [mode, search, statusFilter, typeFilter, reportFilter, directoryFilter, sortKey, sortDir].join("|");
+  const filterKey = [mode, search, statusFilter, typeFilter, licenseFilter, activityFilter, syncFilter, directoryFilter, sortKey, sortDir].join("|");
   const scroll = useInfiniteScrollCount(filtered.length, 50, filterKey);
   const visibleUsers = filtered.slice(0, scroll.visibleCount);
   const allVisibleSelected = visibleUsers.length > 0 && visibleUsers.every((user) => selectedUserIds.includes(user.id));
@@ -1858,15 +2066,68 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
       {mode === "primary" && activeJobId && activeJobQuery.data ? <JobProgressCard job={activeJobQuery.data} results={activeJobResults} /> : null}
 
       <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-9">
-        <StatCard label="Total" value={totalCount.toLocaleString()} />
-        <StatCard label="Enabled" value={enabledCount.toLocaleString()} tone="text-emerald-700" />
-        <StatCard label="Disabled" value={disabledCount.toLocaleString()} tone="text-red-700" />
-        <StatCard label="Licensed" value={licensedCount.toLocaleString()} tone="text-sky-700" />
-        <StatCard label="Disabled + Licensed" value={disabledLicensedCount.toLocaleString()} tone="text-amber-700" />
-        <StatCard label="No Success 30d" value={noSuccess30dCount.toLocaleString()} tone="text-rose-700" />
-        <StatCard label="Members" value={memberCount.toLocaleString()} tone="text-sky-700" />
-        <StatCard label="Guests" value={guestCount.toLocaleString()} tone="text-amber-700" />
-        <StatCard label="On-Prem Synced" value={onPremCount.toLocaleString()} tone="text-violet-700" />
+        <StatCard
+          label="Total"
+          value={totalCount.toLocaleString()}
+          active={activeSummary === "total"}
+          onClick={() => applySummaryPreset("total")}
+        />
+        <StatCard
+          label="Enabled"
+          value={enabledCount.toLocaleString()}
+          tone="text-emerald-700"
+          active={activeSummary === "enabled"}
+          onClick={() => applySummaryPreset("enabled")}
+        />
+        <StatCard
+          label="Disabled"
+          value={disabledCount.toLocaleString()}
+          tone="text-red-700"
+          active={activeSummary === "disabled"}
+          onClick={() => applySummaryPreset("disabled")}
+        />
+        <StatCard
+          label="Licensed"
+          value={licensedCount.toLocaleString()}
+          tone="text-sky-700"
+          active={activeSummary === "licensed"}
+          onClick={() => applySummaryPreset("licensed")}
+        />
+        <StatCard
+          label="Disabled + Licensed"
+          value={disabledLicensedCount.toLocaleString()}
+          tone="text-amber-700"
+          active={activeSummary === "disabled_licensed"}
+          onClick={() => applySummaryPreset("disabled_licensed")}
+        />
+        <StatCard
+          label="No Success 30d"
+          value={noSuccess30dCount.toLocaleString()}
+          tone="text-rose-700"
+          active={activeSummary === "no_success_30d"}
+          onClick={() => applySummaryPreset("no_success_30d")}
+        />
+        <StatCard
+          label="Members"
+          value={memberCount.toLocaleString()}
+          tone="text-sky-700"
+          active={activeSummary === "members"}
+          onClick={() => applySummaryPreset("members")}
+        />
+        <StatCard
+          label="Guests"
+          value={guestCount.toLocaleString()}
+          tone="text-amber-700"
+          active={activeSummary === "guests"}
+          onClick={() => applySummaryPreset("guests")}
+        />
+        <StatCard
+          label="On-Prem Synced"
+          value={onPremCount.toLocaleString()}
+          tone="text-violet-700"
+          active={activeSummary === "on_prem_synced"}
+          onClick={() => applySummaryPreset("on_prem_synced")}
+        />
       </div>
 
       <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1892,6 +2153,27 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
               {value === "all" ? "All" : value === "member" ? "Members" : "Guests"}
             </button>
           ))}
+          <span className="mx-2 self-center text-slate-300">|</span>
+          <span className="self-center text-xs font-semibold uppercase tracking-wide text-slate-400">License</span>
+          {(["all", "licensed"] as LicenseFilter[]).map((value) => (
+            <button key={value} type="button" onClick={() => setLicenseFilter(value)} className={pillClass(licenseFilter === value)}>
+              {value === "all" ? "All" : "Licensed"}
+            </button>
+          ))}
+          <span className="mx-2 self-center text-slate-300">|</span>
+          <span className="self-center text-xs font-semibold uppercase tracking-wide text-slate-400">Activity</span>
+          {(["all", "no_success_30d"] as ActivityFilter[]).map((value) => (
+            <button key={value} type="button" onClick={() => setActivityFilter(value)} className={pillClass(activityFilter === value)}>
+              {value === "all" ? "All" : "No Success 30d"}
+            </button>
+          ))}
+          <span className="mx-2 self-center text-slate-300">|</span>
+          <span className="self-center text-xs font-semibold uppercase tracking-wide text-slate-400">Sync</span>
+          {(["all", "on_prem_synced"] as SyncFilter[]).map((value) => (
+            <button key={value} type="button" onClick={() => setSyncFilter(value)} className={pillClass(syncFilter === value)}>
+              {value === "all" ? "All" : "On-Prem Synced"}
+            </button>
+          ))}
           {directoryOptions.length > 1 ? (
             <>
               <span className="mx-2 self-center text-slate-300">|</span>
@@ -1911,28 +2193,6 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
             </>
           ) : null}
         </div>
-        {mode === "primary" ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="self-center text-xs font-semibold uppercase tracking-wide text-slate-400">Saved Filters</span>
-            <button type="button" onClick={() => setReportFilter("")} className={pillClass(reportFilter === "")}>
-              All Users
-            </button>
-            <button
-              type="button"
-              onClick={() => setReportFilter("disabled_licensed")}
-              className={pillClass(reportFilter === "disabled_licensed")}
-            >
-              Disabled + Licensed
-            </button>
-            <button
-              type="button"
-              onClick={() => setReportFilter("active_no_success_30d")}
-              className={pillClass(reportFilter === "active_no_success_30d")}
-            >
-              Active + No Successful Sign-In (30d)
-            </button>
-          </div>
-        ) : null}
         {mode === "primary" && me?.can_manage_users ? (
           <div className="flex flex-wrap items-center gap-2">
             <span className="self-center text-xs font-semibold uppercase tracking-wide text-slate-400">Exports</span>

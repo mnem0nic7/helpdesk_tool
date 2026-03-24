@@ -1353,6 +1353,9 @@ export interface UserDirectoryExportParams {
   search?: string;
   status?: "all" | "enabled" | "disabled";
   type?: "all" | "member" | "guest";
+  license?: "all" | "licensed";
+  activity?: "all" | "no_success_30d";
+  sync?: "all" | "on_prem_synced";
   directory?: string;
   report_filter?: UserDirectoryReportFilter;
   scope?: "filtered" | "all";
@@ -2273,8 +2276,8 @@ export const api = {
   },
 
   /** Export a report as Excel — returns a Blob for download. */
-  async exportReport(config: ReportConfig): Promise<void> {
-    await downloadPost("/api/report/export", config, "OIT_Report.xlsx");
+  async exportReport(config: ReportConfig, templateId?: string | null): Promise<void> {
+    await downloadPost(`/api/report/export${buildQuery({ template_id: templateId || undefined })}`, config, "OIT_Report_Windows.xlsx");
   },
 
   exportMasterReportWorkbook(): string {

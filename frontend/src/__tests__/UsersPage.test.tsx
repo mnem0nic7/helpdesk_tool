@@ -111,6 +111,43 @@ const directoryUsers = [
       on_prem_distinguished_name: "",
     },
   },
+  {
+    id: "user-3",
+    display_name: "Linus Queue",
+    object_type: "user" as const,
+    principal_name: "linus@contoso.com",
+    mail: "linus@contoso.com",
+    app_id: "",
+    enabled: true,
+    extra: {
+      user_type: "Member",
+      on_prem_domain: "",
+      on_prem_netbios: "",
+      on_prem_sync: "false",
+      department: "Helpdesk",
+      job_title: "Support Engineer",
+      company_name: "MoveDocs",
+      office_location: "Seattle",
+      created_datetime: "2024-03-01T00:00:00Z",
+      last_password_change: "2026-01-10T00:00:00Z",
+      proxy_addresses: "SMTP:linus@contoso.com",
+      mobile_phone: "555-0130",
+      business_phones: "555-0140",
+      city: "Seattle",
+      country: "USA",
+      is_licensed: "false",
+      license_count: "0",
+      sku_part_numbers: "",
+      last_interactive_utc: "",
+      last_interactive_local: "",
+      last_noninteractive_utc: "",
+      last_noninteractive_local: "",
+      last_successful_utc: "",
+      last_successful_local: "",
+      on_prem_sam_account_name: "",
+      on_prem_distinguished_name: "",
+    },
+  },
 ];
 
 let originalIntersectionObserver: typeof IntersectionObserver | undefined;
@@ -545,12 +582,12 @@ describe("Users directory pages", () => {
     expect(await screen.findByRole("heading", { name: "Users" })).toBeInTheDocument();
     expect(screen.getByText(/admin workspace/i)).toBeInTheDocument();
     expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
-    expect(screen.getByText("Licensed")).toBeInTheDocument();
-    expect(screen.getByText("No Success 30d")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Licensed summary filter" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "No Success 30d summary filter" })).toBeInTheDocument();
     expect(screen.getByText("Recent Activity")).toBeInTheDocument();
     expect(screen.getByText("Bulk Actions")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Export Filtered CSV" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Disabled + Licensed" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disabled + Licensed summary filter" })).toBeInTheDocument();
 
     await user.click(screen.getByLabelText("Select Ada Lovelace"));
     expect(screen.getByText("1 selected. Bulk actions are the fastest path for identity admin work on it-app.")).toBeInTheDocument();
@@ -573,6 +610,85 @@ describe("Users directory pages", () => {
 
     expect(await screen.findByText("Latest Job")).toBeInTheDocument();
     expect(await screen.findByText("Disabled sign-in")).toBeInTheDocument();
+  });
+
+  it("lets summary cards drive the shared filters and preserves search plus directory on reset", async () => {
+    const user = userEvent.setup();
+
+    render(<UsersPage />);
+
+    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
+    expect(screen.getByText("Linus Queue")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Disabled + Licensed summary filter" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
+    expect(screen.queryByText("Linus Queue")).not.toBeInTheDocument();
+
+    const disabledPill = screen
+      .getAllByRole("button", { name: "Disabled" })
+      .find((button) => !button.hasAttribute("aria-pressed"));
+    const licensedPill = screen
+      .getAllByRole("button", { name: "Licensed" })
+      .find((button) => !button.hasAttribute("aria-pressed"));
+    expect(disabledPill?.className).toContain("border-sky-500");
+    expect(licensedPill?.className).toContain("border-sky-500");
+
+    await user.click(screen.getByRole("button", { name: "No Success 30d summary filter" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText("Grace Hopper")).not.toBeInTheDocument();
+    expect(screen.getByText("Linus Queue")).toBeInTheDocument();
+
+    const activityPill = screen
+      .getAllByRole("button", { name: "No Success 30d" })
+      .find((button) => !button.hasAttribute("aria-pressed"));
+    expect(activityPill?.className).toContain("border-sky-500");
+
+    await user.type(screen.getByPlaceholderText("Search name, email, department..."), "Ada");
+    await user.selectOptions(screen.getAllByRole("combobox")[0], "MOVEDOCS");
+    await user.click(screen.getByRole("button", { name: "Total summary filter" }));
+
+    expect(screen.getByPlaceholderText("Search name, email, department...")).toHaveValue("Ada");
+    expect(screen.getAllByRole("combobox")[0]).toHaveValue("MOVEDOCS");
+    expect(screen.getByRole("button", { name: "Total summary filter" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("highlights summary cards only when the visible filter state exactly matches a preset", async () => {
+    const user = userEvent.setup();
+
+    render(<UsersPage />);
+
+    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
+
+    const disabledPill = screen
+      .getAllByRole("button", { name: "Disabled" })
+      .find((button) => !button.hasAttribute("aria-pressed"));
+    const licensedPill = screen
+      .getAllByRole("button", { name: "Licensed" })
+      .find((button) => !button.hasAttribute("aria-pressed"));
+    const guestsPill = screen
+      .getAllByRole("button", { name: "Guests" })
+      .find((button) => !button.hasAttribute("aria-pressed"));
+
+    expect(disabledPill).toBeTruthy();
+    expect(licensedPill).toBeTruthy();
+    expect(guestsPill).toBeTruthy();
+
+    await user.click(disabledPill!);
+    await user.click(licensedPill!);
+
+    expect(screen.getByRole("button", { name: "Disabled + Licensed summary filter" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(guestsPill!);
+
+    expect(screen.getByRole("button", { name: "Disabled + Licensed summary filter" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("renders the primary drawer tabs and live data sections", async () => {
