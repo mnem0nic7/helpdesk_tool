@@ -35,6 +35,7 @@ _WINDOW_EXPORT_SPECS: list[tuple[str, int]] = [
 ]
 
 _MASTER_CHANGELOG_PREFETCH_LIMIT = 250
+_MASTER_CHANGELOG_SKIP_PREFIX = "Skipped Jira changelog fetch for large master export"
 
 _DETAIL_WIDTH_DEFAULTS: dict[str, int] = {
     "key": 12,
@@ -424,9 +425,14 @@ def _report_kind_requires_changelog(report_kind: str) -> bool:
     return report_kind in {"escalation", "reopen"}
 
 
+def _is_master_changelog_skip_error(message: str) -> bool:
+    return str(message or "").startswith(_MASTER_CHANGELOG_SKIP_PREFIX)
+
+
 def _template_readiness(template: ReportTemplate, *, facts: Sequence[ReportIssueFact]) -> str:
     name = template.name.strip().lower()
     changelog_available = any(fact.changelog_loaded and not fact.changelog_error for fact in facts)
+    changelog_skipped = any(_is_master_changelog_skip_error(fact.changelog_error) for fact in facts)
     if "csat" in name:
         return "gap"
     if "first contact" in name:
@@ -435,9 +441,9 @@ def _template_readiness(template: ReportTemplate, *, facts: Sequence[ReportIssue
         missing_first_response = any(fact.first_response_hours is None for fact in facts)
         return "proxy" if missing_first_response else (template.readiness or "custom")
     if "escalation" in name:
-        return "proxy" if changelog_available else "gap"
+        return "proxy" if changelog_available or changelog_skipped else "gap"
     if "reopen" in name:
-        return "proxy" if changelog_available else "gap"
+        return "proxy" if changelog_available or changelog_skipped else "gap"
     return template.readiness or "custom"
 
 
@@ -684,7 +690,7 @@ class ReportWorkbookBuilder:
         keys = self._changelog_target_keys_for_master(templates)
         if len(keys) > _MASTER_CHANGELOG_PREFETCH_LIMIT:
             message = (
-                f"Skipped Jira changelog fetch for large master export "
+                f"{_MASTER_CHANGELOG_SKIP_PREFIX} "
                 f"({len(keys)} issues exceeds {_MASTER_CHANGELOG_PREFETCH_LIMIT} issue limit)"
             )
             logger.warning(message)
@@ -2557,7 +2563,22 @@ class ReportWorkbookBuilder:
                     "Connect CSAT survey data to Jira or a linked satisfaction feed.",
                 )
             )
-        if any(fact.changelog_error for fact in facts):
+        if any(_is_master_changelog_skip_error(fact.changelog_error) for fact in facts):
+            gaps.append(
+                TemplateGap(
+                    report_name,
+                    "All",
+                    "proxy",
+                    "Jira changelog prefetch was skipped for this large master export, so escalation and reopen heuristics may be incomplete.",
+                    "Reduce master export scope or move changelog enrichment to an asynchronous export pipeline.",
+                )
+            )
+        non_skip_changelog_errors = [
+            fact.changelog_error
+            for fact in facts
+            if fact.changelog_error and not _is_master_changelog_skip_error(fact.changelog_error)
+        ]
+        if non_skip_changelog_errors:
             gaps.append(
                 TemplateGap(
                     report_name,

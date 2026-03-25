@@ -241,6 +241,14 @@ def test_master_changelog_prefetch_is_skipped_for_large_exports(monkeypatch):
     fact = builder._facts_by_key["OIT-ESC-0"]
     assert fact.changelog_loaded is True
     assert "Skipped Jira changelog fetch for large master export" in fact.changelog_error
+    assert _template_readiness(templates[0], facts=list(builder._facts_by_key.values())) == "proxy"
+    gaps = builder._build_data_gaps(
+        template=templates[0],
+        report_name=templates[0].name,
+        facts=list(builder._facts_by_key.values()),
+    )
+    assert any("prefetch was skipped" in gap.limitation for gap in gaps)
+    assert not any("Some Jira changelog fetches failed" in gap.limitation for gap in gaps)
 
 
 def test_template_readiness_marks_first_response_as_proxy_when_elapsed_is_missing():
