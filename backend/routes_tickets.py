@@ -8,7 +8,17 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, Response
 
+from attachment_service import (
+    AttachmentPreviewError,
+    build_content_disposition,
+    ensure_office_preview_pdf,
+    fetch_attachment_content,
+    find_attachment,
+    preview_kind_for_attachment,
+    serialize_attachment,
+)
 from ai_client import _extract_reporter_hint_from_text, extract_adf_text
 from auth import require_admin
 from config import JIRA_BASE_URL, JIRA_PROJECT
@@ -214,6 +224,25 @@ def _issue_url(key: str) -> str:
     return f"{JIRA_BASE_URL.rstrip('/')}/browse/{key}" if JIRA_BASE_URL else ""
 
 
+def _get_cached_issue(key: str) -> dict[str, Any] | None:
+    all_issues = {iss["key"]: iss for iss in cache.get_all_issues() if iss.get("key")}
+    return all_issues.get(key)
+
+
+def _get_issue_and_attachment(key: str, attachment_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    issue = _get_cached_issue(key)
+    attachment = find_attachment(issue or {}, attachment_id) if issue else None
+    if attachment:
+        return issue, attachment
+
+    issue = _client.get_issue(key)
+    cache.upsert_issue(issue)
+    attachment = find_attachment(issue, attachment_id)
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found on this ticket")
+    return issue, attachment
+
+
 def _ticket_text(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -255,19 +284,9 @@ def _serialize_comments(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _serialize_attachments(issue: dict[str, Any]) -> list[dict[str, Any]]:
     attachments = issue.get("fields", {}).get("attachment") or []
     result: list[dict[str, Any]] = []
+    ticket_key = str(issue.get("key") or "").strip()
     for attachment in attachments:
-        result.append(
-            {
-                "id": str(attachment.get("id", "")),
-                "filename": attachment.get("filename", ""),
-                "mime_type": attachment.get("mimeType", ""),
-                "size": attachment.get("size", 0),
-                "created": attachment.get("created", ""),
-                "author": ((attachment.get("author") or {}).get("displayName") or ""),
-                "content_url": attachment.get("content", ""),
-                "thumbnail_url": attachment.get("thumbnail", ""),
-            }
-        )
+        result.append(serialize_attachment(ticket_key, attachment))
     return result
 
 
@@ -886,3 +905,87 @@ async def remove_oasisdev_label(
     except Exception as exc:
         logger.exception("Failed to remove oasisdev label from ticket %s", key)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tickets/{key}/attachments/{attachment_id}/download")
+async def download_ticket_attachment(key: str, attachment_id: str) -> Response:
+    """Download the original Jira attachment through the app."""
+    try:
+        validate_jira_key(key)
+        _ensure_ticket_visible(key)
+        _issue, attachment = _get_issue_and_attachment(key, attachment_id)
+        blob, media_type = fetch_attachment_content(_client, attachment)
+        filename = str(attachment.get("filename") or "").strip() or "attachment"
+        headers = {
+            "Content-Disposition": build_content_disposition(filename, inline=False),
+            "Cache-Control": "private, no-store",
+        }
+        return Response(content=blob, media_type=media_type, headers=headers)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
+    except HTTPException:
+        raise
+    except AttachmentPreviewError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to download attachment %s for %s", attachment_id, key)
+        raise HTTPException(status_code=502, detail="Could not download attachment.") from exc
+
+
+@router.get("/tickets/{key}/attachments/{attachment_id}/preview")
+async def preview_ticket_attachment(key: str, attachment_id: str) -> Response:
+    """Preview browser-viewable original attachment content."""
+    try:
+        validate_jira_key(key)
+        _ensure_ticket_visible(key)
+        _issue, attachment = _get_issue_and_attachment(key, attachment_id)
+        preview_kind = preview_kind_for_attachment(
+            str(attachment.get("filename") or ""),
+            str(attachment.get("mimeType") or ""),
+        )
+        if preview_kind not in {"image", "pdf", "text"}:
+            raise HTTPException(status_code=415, detail="Attachment does not support native inline preview")
+        blob, media_type = fetch_attachment_content(_client, attachment)
+        filename = str(attachment.get("filename") or "").strip() or "attachment"
+        headers = {
+            "Content-Disposition": build_content_disposition(filename, inline=True),
+            "Cache-Control": "private, no-store",
+        }
+        return Response(content=blob, media_type=media_type, headers=headers)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
+    except HTTPException:
+        raise
+    except AttachmentPreviewError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to preview attachment %s for %s", attachment_id, key)
+        raise HTTPException(status_code=502, detail="Could not preview attachment.") from exc
+
+
+@router.get("/tickets/{key}/attachments/{attachment_id}/preview-converted")
+async def preview_ticket_attachment_converted(key: str, attachment_id: str) -> FileResponse:
+    """Preview supported Office attachments as converted PDFs."""
+    try:
+        validate_jira_key(key)
+        _ensure_ticket_visible(key)
+        _issue, attachment = _get_issue_and_attachment(key, attachment_id)
+        cache_path = ensure_office_preview_pdf(_client, attachment)
+        filename = str(attachment.get("filename") or "").strip() or "attachment"
+        stem = filename.rsplit(".", 1)[0] or filename
+        return FileResponse(
+            cache_path,
+            media_type="application/pdf",
+            filename=f"{stem}.pdf",
+            content_disposition_type="inline",
+            headers={"Cache-Control": "private, no-store"},
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
+    except HTTPException:
+        raise
+    except AttachmentPreviewError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to generate converted preview for attachment %s on %s", attachment_id, key)
+        raise HTTPException(status_code=502, detail="Could not generate Office preview.") from exc

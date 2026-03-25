@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.responses import RedirectResponse
 
 # Make backend importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -416,3 +417,39 @@ class TestAuthMiddleware:
         )
 
         assert resp.status_code == 200
+
+    def test_atlassian_connect_uses_https_callback_on_public_host(self, auth_client, monkeypatch):
+        import routes_auth
+
+        class _StubAtlassianClient:
+            def __init__(self):
+                self.redirect_uri = ""
+                self.kwargs = {}
+
+            async def authorize_redirect(self, request, redirect_uri, **kwargs):
+                self.redirect_uri = redirect_uri
+                self.kwargs = kwargs
+                return RedirectResponse(url="https://auth.atlassian.com/mock")
+
+        stub = _StubAtlassianClient()
+        monkeypatch.setattr(routes_auth, "atlassian_oauth_configured", lambda: True)
+        monkeypatch.setattr(
+            routes_auth.oauth,
+            "create_client",
+            lambda name: stub if name == "atlassian" else None,
+        )
+
+        from auth import create_session
+
+        sid = create_session("test@example.com", "Test User")
+        auth_client.cookies.set("session_id", sid)
+        resp = auth_client.get(
+            "/api/auth/atlassian/connect?return_to=%2Ftickets%2FOIT-1",
+            headers={"host": "it-app.movedocs.com"},
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 307
+        assert stub.redirect_uri == "https://it-app.movedocs.com/api/auth/atlassian/callback"
+        assert stub.kwargs["audience"] == "api.atlassian.com"
+        assert stub.kwargs["prompt"] == "consent"

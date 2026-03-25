@@ -7,6 +7,7 @@ import type {
   Assignee,
   PriorityOption,
   TicketComment,
+  TicketAttachment,
   RequestTypeOption,
   TicketDetail,
   TicketRow,
@@ -52,6 +53,30 @@ function formatBytes(size: number): string {
     index += 1;
   }
   return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function formatAttachmentType(attachment: TicketAttachment): string {
+  const extension = attachment.extension.replace(/^\./, "").toUpperCase();
+  if (attachment.preview_kind === "office") {
+    return extension || "Office Document";
+  }
+  if (attachment.preview_kind === "pdf") {
+    return "PDF";
+  }
+  if (attachment.preview_kind === "image") {
+    return extension ? `${extension} Image` : "Image";
+  }
+  if (attachment.preview_kind === "text") {
+    return extension || "Text";
+  }
+  return attachment.mime_type || extension || "Unknown type";
+}
+
+function previewButtonLabel(attachment: TicketAttachment): string {
+  if (attachment.preview_kind === "office") {
+    return "Preview Document";
+  }
+  return "Preview";
 }
 
 function chipClass(color: "slate" | "blue" | "amber" | "green") {
@@ -129,6 +154,11 @@ export default function TicketWorkbenchDrawer({
   const [comment, setComment] = useState("");
   const [commentAudience, setCommentAudience] = useState<"internal" | "customer">("internal");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [previewAttachment, setPreviewAttachment] = useState<TicketAttachment | null>(null);
+  const [previewObjectUrl, setPreviewObjectUrl] = useState("");
+  const [previewText, setPreviewText] = useState("");
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
   const summaryInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -213,7 +243,73 @@ export default function TicketWorkbenchDrawer({
     setApplicationInput(detail.ticket.components.join(", "));
     setWorkCategoryInput(detail.work_category ?? "");
     setIsHistoryOpen(false);
+    setPreviewAttachment(null);
   }, [detail]);
+
+  useEffect(() => {
+    if (!previewAttachment) {
+      setPreviewObjectUrl((current) => {
+        if (current) {
+          URL.revokeObjectURL(current);
+        }
+        return "";
+      });
+      setPreviewText("");
+      setPreviewError(null);
+      setIsPreviewLoading(false);
+      return;
+    }
+
+    let objectUrl = "";
+    let cancelled = false;
+
+    setPreviewText("");
+    setPreviewError(null);
+    setIsPreviewLoading(true);
+
+    const loadPreview = async () => {
+      try {
+        if (!previewAttachment.preview_available || !previewAttachment.preview_url) {
+          throw new Error("Preview is not available for this attachment.");
+        }
+        if (previewAttachment.preview_kind === "text") {
+          const text = await api.fetchAttachmentPreviewText(previewAttachment.preview_url);
+          if (!cancelled) {
+            setPreviewText(text);
+          }
+          return;
+        }
+        const blob = await api.fetchAttachmentPreviewBlob(previewAttachment.preview_url);
+        objectUrl = URL.createObjectURL(blob);
+        if (!cancelled) {
+          setPreviewObjectUrl(objectUrl);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPreviewError(error instanceof Error ? error.message : "Unable to load attachment preview.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsPreviewLoading(false);
+        }
+      }
+    };
+
+    setPreviewObjectUrl((current) => {
+      if (current) {
+        URL.revokeObjectURL(current);
+      }
+      return "";
+    });
+    loadPreview();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [previewAttachment]);
 
   useEffect(() => {
     const textarea = summaryInputRef.current;
@@ -1069,25 +1165,51 @@ export default function TicketWorkbenchDrawer({
                         <div className="text-sm text-slate-500">No attachments on this ticket.</div>
                       )}
                       {detail.attachments.map((attachment) => (
-                        <a
+                        <div
                           key={attachment.id}
-                          href={attachment.content_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="block rounded-lg border border-slate-200 px-3 py-3 hover:bg-slate-50"
+                          className="rounded-lg border border-slate-200 px-3 py-3"
                         >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
                               <div className="truncate text-sm font-medium text-slate-800">
-                                {attachment.filename}
+                                {attachment.display_name}
                               </div>
-                              <div className="mt-1 text-xs text-slate-500">
-                                {attachment.mime_type || "Unknown type"} • {formatBytes(attachment.size)}
+                              {attachment.raw_filename && attachment.raw_filename !== attachment.display_name ? (
+                                <div className="mt-1 truncate text-xs text-slate-400">
+                                  Jira file: {attachment.raw_filename}
+                                </div>
+                              ) : null}
+                              <div className="mt-2 text-xs text-slate-500">
+                                {formatAttachmentType(attachment)} • {formatBytes(attachment.size)} • {attachment.author || "Unknown author"}
                               </div>
                             </div>
-                            <div className="text-xs text-slate-500">{formatDateTime(attachment.created)}</div>
+                            <div className="text-right">
+                              <div className="text-xs text-slate-500">{formatDateTime(attachment.created)}</div>
+                              <div className="mt-2 flex flex-wrap justify-end gap-2">
+                                <button
+                                  type="button"
+                                  disabled={!attachment.preview_available}
+                                  onClick={() => setPreviewAttachment(attachment)}
+                                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium ${
+                                    attachment.preview_available
+                                      ? "border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                      : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
+                                  }`}
+                                >
+                                  {previewButtonLabel(attachment)}
+                                </button>
+                                <a
+                                  href={attachment.download_url || attachment.content_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                >
+                                  Download
+                                </a>
+                              </div>
+                            </div>
                           </div>
-                        </a>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -1233,6 +1355,104 @@ export default function TicketWorkbenchDrawer({
         </div>
 
       </aside>
+
+      {previewAttachment && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-5"
+          onClick={(event) => {
+            event.stopPropagation();
+            setPreviewAttachment(null);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ticket-attachment-preview-title"
+            className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-slate-200 px-5 py-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h3
+                    id="ticket-attachment-preview-title"
+                    className="truncate text-lg font-semibold text-slate-900"
+                  >
+                    {previewAttachment.display_name}
+                  </h3>
+                  <div className="mt-1 flex flex-wrap gap-2 text-sm text-slate-500">
+                    <span>{formatAttachmentType(previewAttachment)}</span>
+                    <span>•</span>
+                    <span>{formatBytes(previewAttachment.size)}</span>
+                    <span>•</span>
+                    <span>{formatDateTime(previewAttachment.created)}</span>
+                  </div>
+                  {previewAttachment.raw_filename && previewAttachment.raw_filename !== previewAttachment.display_name ? (
+                    <div className="mt-2 text-xs text-slate-400">
+                      Jira filename: {previewAttachment.raw_filename}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={previewAttachment.download_url || previewAttachment.content_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Download
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewAttachment(null)}
+                    className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-auto bg-slate-50 px-5 py-4">
+              {!previewAttachment.preview_available ? (
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-500">
+                  Preview is not available for this attachment type.
+                </div>
+              ) : isPreviewLoading ? (
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">
+                  Loading attachment preview...
+                </div>
+              ) : previewError ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-6 text-sm text-red-700">
+                  {previewError}
+                </div>
+              ) : previewAttachment.preview_kind === "text" ? (
+                <pre className="overflow-auto rounded-xl border border-slate-200 bg-white px-4 py-4 text-sm leading-6 text-slate-700">
+                  {previewText || "No preview text available."}
+                </pre>
+              ) : previewAttachment.preview_kind === "image" && previewObjectUrl ? (
+                <div className="flex justify-center rounded-xl border border-slate-200 bg-white p-4">
+                  <img
+                    src={previewObjectUrl}
+                    alt={previewAttachment.display_name}
+                    className="max-h-[72vh] max-w-full rounded-lg object-contain"
+                  />
+                </div>
+              ) : previewObjectUrl ? (
+                <iframe
+                  title={`${previewAttachment.display_name} preview`}
+                  src={previewObjectUrl}
+                  className="h-[72vh] w-full rounded-xl border border-slate-200 bg-white"
+                />
+              ) : (
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-500">
+                  Preview is not available for this attachment.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {isHistoryOpen && detail && (
         <div

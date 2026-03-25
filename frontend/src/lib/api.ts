@@ -24,6 +24,32 @@ async function fetchJSON<T>(url: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function fetchBlob(url: string): Promise<Blob> {
+  const res = await fetch(url);
+  if (res.status === 401) {
+    window.location.href = "/api/auth/login";
+    throw new Error("Not authenticated");
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GET ${url} failed (${res.status}): ${text}`);
+  }
+  return res.blob();
+}
+
+async function fetchText(url: string): Promise<string> {
+  const res = await fetch(url);
+  if (res.status === 401) {
+    window.location.href = "/api/auth/login";
+    throw new Error("Not authenticated");
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GET ${url} failed (${res.status}): ${text}`);
+  }
+  return res.text();
+}
+
 async function postJSON<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
@@ -367,12 +393,20 @@ export interface TicketComment {
 export interface TicketAttachment {
   id: string;
   filename: string;
+  raw_filename: string;
+  display_name: string;
+  extension: string;
   mime_type: string;
   size: number;
   created: string;
   author: string;
   content_url: string;
   thumbnail_url: string;
+  download_url: string;
+  preview_url: string;
+  converted_preview_url: string;
+  preview_kind: "image" | "pdf" | "text" | "office" | "unsupported";
+  preview_available: boolean;
 }
 
 export interface TicketIssueLink {
@@ -2388,6 +2422,14 @@ export const api = {
       comment,
       public: isPublic,
     });
+  },
+
+  fetchAttachmentPreviewBlob(url: string): Promise<Blob> {
+    return fetchBlob(url);
+  },
+
+  fetchAttachmentPreviewText(url: string): Promise<string> {
+    return fetchText(url);
   },
 
   /** Remove the oasisdev label from a ticket and add an internal note. */

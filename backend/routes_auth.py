@@ -44,10 +44,14 @@ def _safe_return_to(value: str | None) -> str:
 
 
 def _oauth_redirect_uri(request: Request, route_name: str) -> str:
-    redirect_uri = str(request.url_for(route_name))
+    callback_path = str(request.app.url_path_for(route_name))
+    host = (request.headers.get("host") or request.url.netloc or "").strip().lower()
+    if host.endswith(".movedocs.com"):
+        return f"https://{host}{callback_path}"
+    origin = get_request_origin(request).rstrip("/")
     if request.headers.get("x-forwarded-proto") == "https":
-        redirect_uri = redirect_uri.replace("http://", "https://")
-    return redirect_uri
+        origin = origin.replace("http://", "https://", 1)
+    return f"{origin}{callback_path}"
 
 
 @router.get("/login")

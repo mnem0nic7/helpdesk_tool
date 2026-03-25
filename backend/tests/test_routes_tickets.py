@@ -395,8 +395,41 @@ class TestTicketDetailAndActions:
         assert data["comments"][0]["body"] == "Investigating now."
         assert data["comments"][0]["public"] is False
         assert data["attachments"][0]["filename"] == "screenshot.png"
+        assert data["attachments"][0]["display_name"] == "screenshot.png"
+        assert data["attachments"][0]["download_url"].endswith("/api/tickets/OIT-123/attachments/9001/download")
+        assert data["attachments"][0]["preview_url"].endswith("/api/tickets/OIT-123/attachments/9001/preview")
         assert data["issue_links"][0]["key"] == "OIT-456"
         mock_cache.upsert_issue.assert_called_once_with(issue)
+
+    def test_get_ticket_detail_aliases_generated_attachment_names(self, test_client, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        issue["fields"]["attachment"].append(
+            {
+                "id": "9002",
+                "filename": "10875238511763560924.xls",
+                "mimeType": "application/vnd.ms-excel",
+                "size": 65000,
+                "created": "2026-03-01T10:00:00+00:00",
+                "author": {"displayName": "Alice Admin"},
+                "content": "https://example.atlassian.net/file/9002",
+                "thumbnail": "",
+            }
+        )
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
+        monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
+
+        resp = test_client.get("/api/tickets/OIT-123")
+
+        assert resp.status_code == 200
+        attachments = resp.json()["attachments"]
+        generated = next(item for item in attachments if item["id"] == "9002")
+        assert generated["raw_filename"] == "10875238511763560924.xls"
+        assert generated["display_name"] == "OIT-123 - Office Document - 2026-03-01 10-00.xls"
+        assert generated["preview_kind"] == "office"
+        assert generated["preview_url"].endswith("/api/tickets/OIT-123/attachments/9002/preview-converted")
 
     def test_get_assignable_display_name_logs_and_falls_back_when_lookup_fails(self, monkeypatch, caplog):
         import routes_tickets
@@ -733,3 +766,68 @@ class TestTicketDetailAndActions:
         mock_cache.upsert_issue.assert_called_once_with(issue)
         assert resp.json()["comments"][-1]["body"] == "Please retry now."
         assert resp.json()["comments"][-1]["public"] is True
+
+    def test_attachment_download_returns_original_bytes(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        mock_cache.get_all_issues.return_value = [issue]
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(
+            routes_tickets,
+            "fetch_attachment_content",
+            lambda client, attachment: (b"file-bytes", "image/png"),
+        )
+
+        resp = test_client.get("/api/tickets/OIT-123/attachments/9001/download")
+
+        assert resp.status_code == 200
+        assert resp.content == b"file-bytes"
+        assert resp.headers["content-disposition"].startswith("attachment;")
+        assert resp.headers["content-type"].startswith("image/png")
+
+    def test_attachment_preview_returns_original_image(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        mock_cache.get_all_issues.return_value = [issue]
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(
+            routes_tickets,
+            "fetch_attachment_content",
+            lambda client, attachment: (b"image-bytes", "image/png"),
+        )
+
+        resp = test_client.get("/api/tickets/OIT-123/attachments/9001/preview")
+
+        assert resp.status_code == 200
+        assert resp.content == b"image-bytes"
+        assert resp.headers["content-disposition"].startswith("inline;")
+
+    def test_attachment_converted_preview_returns_pdf(self, test_client, mock_cache, monkeypatch, tmp_path):
+        import routes_tickets
+
+        issue = _detail_issue()
+        issue["fields"]["attachment"] = [
+            {
+                "id": "9002",
+                "filename": "10875238511763560924.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "size": 4096,
+                "created": "2026-03-01T10:00:00+00:00",
+                "author": {"displayName": "Alice Admin"},
+                "content": "https://example.atlassian.net/file/9002",
+                "thumbnail": "",
+            }
+        ]
+        pdf_path = tmp_path / "preview.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\npreview")
+        mock_cache.get_all_issues.return_value = [issue]
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(routes_tickets, "ensure_office_preview_pdf", lambda client, attachment: pdf_path)
+
+        resp = test_client.get("/api/tickets/OIT-123/attachments/9002/preview-converted")
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/pdf")
+        assert resp.content.startswith(b"%PDF-1.4")

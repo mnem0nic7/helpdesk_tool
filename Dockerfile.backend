@@ -7,6 +7,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        fonts-dejavu-core \
+        libreoffice-calc \
+        libreoffice-common \
+        libreoffice-core \
+        libreoffice-draw \
+        libreoffice-impress \
+        libreoffice-writer \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY backend/requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir -r /tmp/requirements.txt

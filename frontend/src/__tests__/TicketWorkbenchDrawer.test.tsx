@@ -14,10 +14,13 @@ const { mockApi } = vi.hoisted(() => ({
     getTransitions: vi.fn(),
     getTechnicianScores: vi.fn(),
     getMe: vi.fn(),
+    fetchAttachmentPreviewBlob: vi.fn(),
+    fetchAttachmentPreviewText: vi.fn(),
     syncTicketReporter: vi.fn(),
     updateTicket: vi.fn(),
     transitionTicket: vi.fn(),
     addTicketComment: vi.fn(),
+    removeOasisDevLabel: vi.fn(),
   },
 }));
 
@@ -109,6 +112,16 @@ const historyComments = [
 describe("TicketWorkbenchDrawer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(globalThis.URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => "blob:preview-object-url"),
+    });
+    Object.defineProperty(globalThis.URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
       writable: true,
@@ -129,6 +142,8 @@ describe("TicketWorkbenchDrawer", () => {
     mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Hardware", description: "" }]);
     mockApi.getTransitions.mockResolvedValue([]);
     mockApi.getTechnicianScores.mockResolvedValue([]);
+    mockApi.fetchAttachmentPreviewBlob.mockResolvedValue(new Blob(["preview"], { type: "image/png" }));
+    mockApi.fetchAttachmentPreviewText.mockResolvedValue("preview text");
     mockApi.getMe.mockResolvedValue({
       email: "test@example.com",
       name: "Test User",
@@ -229,6 +244,53 @@ describe("TicketWorkbenchDrawer", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("Customer Reply").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Internal Note").length).toBeGreaterThan(0);
+  });
+
+  it("shows friendly attachment names and previews supported files in-site", async () => {
+    mockApi.getTicket.mockResolvedValue({
+      ...ticketDetail,
+      attachments: [
+        {
+          id: "att-1",
+          filename: "10875238511763560924.png",
+          raw_filename: "10875238511763560924.png",
+          display_name: "OIT-1 - Image - 2026-03-03 10-14.png",
+          extension: ".png",
+          mime_type: "image/png",
+          size: 12288,
+          created: "2026-03-03T17:14:00Z",
+          author: "Ada Lovelace",
+          content_url: "/api/tickets/OIT-1/attachments/att-1/download",
+          download_url: "/api/tickets/OIT-1/attachments/att-1/download",
+          preview_url: "/api/tickets/OIT-1/attachments/att-1/preview",
+          converted_preview_url: "",
+          preview_kind: "image",
+          preview_available: true,
+          thumbnail_url: "/api/tickets/OIT-1/attachments/att-1/preview",
+        },
+      ],
+    });
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Attachments");
+
+    expect(screen.getByText("OIT-1 - Image - 2026-03-03 10-14.png")).toBeInTheDocument();
+    expect(screen.getByText("Jira file: 10875238511763560924.png")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    await screen.findByRole("dialog");
+    await waitFor(() => {
+      expect(mockApi.fetchAttachmentPreviewBlob).toHaveBeenCalledWith("/api/tickets/OIT-1/attachments/att-1/preview");
+    });
+    expect(screen.getByAltText("OIT-1 - Image - 2026-03-03 10-14.png")).toBeInTheDocument();
   });
 
   it("lets the user manually change the reporter before saving", async () => {
