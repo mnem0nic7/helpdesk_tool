@@ -463,7 +463,7 @@ if ATLASSIAN_CLIENT_ID and ATLASSIAN_CLIENT_SECRET:
         access_token_url="https://auth.atlassian.com/oauth/token",
         client_kwargs={
             "scope": (
-                "openid profile email offline_access read:jira-user read:jira-work write:jira-work "
+                "offline_access read:me read:jira-user read:jira-work write:jira-work "
                 "read:servicedesk-request write:servicedesk-request"
             ),
             "token_endpoint_auth_method": "client_secret_post",
