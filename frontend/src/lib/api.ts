@@ -99,8 +99,33 @@ async function downloadPost(url: string, body: unknown, fallbackFilename: string
   URL.revokeObjectURL(urlObject);
 }
 
-async function downloadGet(url: string, fallbackFilename: string): Promise<void> {
-  const res = await fetch(url);
+interface DownloadGetOptions {
+  timeoutMs?: number;
+  timeoutMessage?: string;
+}
+
+async function downloadGet(
+  url: string,
+  fallbackFilename: string,
+  options: DownloadGetOptions = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 120_000;
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: controller.signal });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error(
+        options.timeoutMessage ??
+          `Export timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
+      );
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
   if (res.status === 401) {
     window.location.href = "/api/auth/login";
     throw new Error("Not authenticated");
@@ -2364,7 +2389,11 @@ export const api = {
   },
 
   async exportMasterReportWorkbook(): Promise<void> {
-    await downloadGet("/api/report/templates/master.xlsx", "OIT_Master_Report.xlsx");
+    await downloadGet("/api/report/templates/master.xlsx", "OIT_Master_Report.xlsx", {
+      timeoutMs: 120_000,
+      timeoutMessage:
+        "Master workbook export timed out after 120 seconds. The backend may be restarting or the export may have stalled. Please try again.",
+    });
   },
 
   listReportTemplates(): Promise<ReportTemplate[]> {
