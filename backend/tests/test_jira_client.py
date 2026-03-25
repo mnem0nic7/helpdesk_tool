@@ -1,9 +1,11 @@
-"""Focused tests for Jira user matching helpers."""
+"""Focused tests for Jira helpers."""
 
 from __future__ import annotations
 
 import threading
 from unittest.mock import MagicMock
+
+import requests
 
 from jira_client import JiraClient
 
@@ -138,3 +140,76 @@ def test_get_thread_session_is_isolated_per_thread():
     assert worker_sessions[0] is not main_session
     assert worker_sessions[1] is not main_session
     assert worker_sessions[0] is not worker_sessions[1]
+
+
+def test_get_request_comments_falls_back_to_issue_comments_on_404():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+
+    class _Response:
+        def __init__(self, *, status_code: int, payload: dict | None = None) -> None:
+            self.status_code = status_code
+            self.ok = status_code < 400
+            self.reason = "Not Found" if status_code == 404 else "OK"
+            self._payload = payload or {}
+            self.text = ""
+            self.request = MagicMock()
+            self.headers = {}
+
+        def json(self) -> dict:
+            return self._payload
+
+    session = MagicMock()
+    session.get.side_effect = [
+        _Response(status_code=404),
+        _Response(
+            status_code=200,
+            payload={
+                "comments": [
+                    {
+                        "id": "1",
+                        "created": "2026-03-01T08:00:00+00:00",
+                        "author": {"accountId": "acc-agent"},
+                        "jsdPublic": True,
+                    },
+                    {
+                        "id": "2",
+                        "created": "2026-03-01T09:00:00+00:00",
+                        "author": {"accountId": "acc-agent"},
+                        "jsdPublic": False,
+                    },
+                ],
+                "startAt": 0,
+                "maxResults": 100,
+                "total": 2,
+            },
+        ),
+    ]
+    client._thread_local.session = session
+
+    comments = client.get_request_comments("OIT-123")
+
+    assert [comment["id"] for comment in comments] == ["1", "2"]
+    assert comments[0]["public"] is True
+    assert comments[1]["public"] is False
+
+
+def test_get_request_comments_raises_non_404_errors():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+
+    response = MagicMock()
+    response.status_code = 500
+    response.ok = False
+    response.reason = "Server Error"
+    response.request = MagicMock()
+    response.text = "boom"
+    response.headers = {}
+    session = MagicMock()
+    session.get.return_value = response
+    client._thread_local.session = session
+
+    try:
+        client.get_request_comments("OIT-123")
+    except requests.HTTPError:
+        pass
+    else:
+        raise AssertionError("Expected HTTPError for non-404 comment failure")

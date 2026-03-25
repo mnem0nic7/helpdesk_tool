@@ -338,20 +338,52 @@ class JiraClient:
         url = f"{self.base_url}/rest/servicedeskapi/request/{key}/comment"
         comments: list[dict[str, Any]] = []
         start = 0
+        session = self._get_thread_session()
 
         while True:
-            resp = self.session.get(
+            resp = session.get(
                 url,
                 params={"start": start, "limit": 100, "public": "true", "internal": "true"},
                 timeout=self._TIMEOUT,
             )
-            resp.raise_for_status()
+            if resp.status_code == 404:
+                return self._get_issue_comments_with_visibility(key)
+            self._raise_for_status(resp)
             data = resp.json()
             values = data.get("values", [])
             comments.extend(values)
             if data.get("isLastPage", True):
                 break
             start += len(values)
+
+        return comments
+
+    def _get_issue_comments_with_visibility(self, key: str) -> list[dict[str, Any]]:
+        """Fallback to Jira issue comments when JSM request comments are unavailable."""
+        validate_jira_key(key)
+        url = f"{self.base_url}/rest/api/3/issue/{key}/comment"
+        comments: list[dict[str, Any]] = []
+        start_at = 0
+        session = self._get_thread_session()
+
+        while True:
+            resp = session.get(
+                url,
+                params={"startAt": start_at, "maxResults": 100},
+                timeout=self._TIMEOUT,
+            )
+            self._raise_for_status(resp)
+            data = resp.json()
+            page_comments = data.get("comments", [])
+            for comment in page_comments:
+                normalized = dict(comment)
+                normalized["public"] = bool(comment.get("jsdPublic", False))
+                comments.append(normalized)
+            page_size = int(data.get("maxResults") or 100)
+            total = int(data.get("total") or len(page_comments))
+            start_at += page_size
+            if start_at >= total or not page_comments:
+                break
 
         return comments
 
