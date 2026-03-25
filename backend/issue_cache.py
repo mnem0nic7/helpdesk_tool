@@ -346,6 +346,8 @@ class IssueCache:
             refreshed_batch = client.search_all(jql)
             if refreshed_batch:
                 client.enrich_request_types(refreshed_batch, existing_cache=existing_cache)
+                self._sync_requestors_best_effort(refreshed_batch, open_only=False)
+                self._sync_followup_authority_best_effort(refreshed_batch, force=True)
             for issue in refreshed_batch:
                 key = issue.get("key", "")
                 if not key:
@@ -565,6 +567,9 @@ class IssueCache:
                             "requestType": {"name": cached_name}
                         }
 
+            self._sync_requestors_best_effort(all_issues, open_only=True)
+            self._sync_followup_authority_best_effort(all_issues, recent_days=35)
+
             new_all: dict[str, dict[str, Any]] = {}
             new_filtered: dict[str, dict[str, Any]] = {}
             for issue in all_issues:
@@ -639,6 +644,8 @@ class IssueCache:
             # Enrich request types for the updated batch
             if updated_issues:
                 self._client.enrich_request_types(updated_issues, existing_cache=self._all_issues)
+                self._sync_requestors_best_effort(updated_issues, open_only=False)
+                self._sync_followup_authority_best_effort(updated_issues, recent_days=35)
 
             with self._lock:
                 for issue in updated_issues:
@@ -688,6 +695,41 @@ class IssueCache:
     def trigger_incremental_refresh(self) -> None:
         """Trigger an incremental refresh using the last successful sync watermark."""
         self._incremental_refresh()
+
+    @staticmethod
+    def _sync_requestors_best_effort(
+        issues: list[dict[str, Any]],
+        *,
+        open_only: bool = False,
+    ) -> None:
+        if not issues:
+            return
+        try:
+            from requestor_sync_service import requestor_sync_service
+
+            requestor_sync_service.reconcile_issues(issues, open_only=open_only)
+        except Exception:
+            logger.exception("Requestor sync pass failed during Jira cache refresh")
+
+    @staticmethod
+    def _sync_followup_authority_best_effort(
+        issues: list[dict[str, Any]],
+        *,
+        force: bool = False,
+        recent_days: int = 35,
+    ) -> None:
+        if not issues:
+            return
+        try:
+            from followup_sync_service import followup_sync_service
+
+            followup_sync_service.reconcile_issues(
+                issues,
+                force=force,
+                recent_days=recent_days,
+            )
+        except Exception:
+            logger.exception("Follow-up authority sync failed during Jira cache refresh")
 
     def enrich_missing_request_types(self) -> int:
         """Enrich all cached issues that are missing request type data.
@@ -853,7 +895,13 @@ class IssueCache:
     async def _auto_triage_new_tickets(self, new_keys: list[str], progress: dict | None = None) -> None:
         """Run AI triage on genuinely new tickets and apply high-confidence priority changes."""
         from config import AUTO_TRIAGE_MODEL, OLLAMA_MODEL
-        from ai_client import analyze_ticket, get_available_models, select_available_ollama_model, validate_suggestions
+        from ai_client import (
+            analyze_ticket,
+            get_available_models,
+            normalize_triage_priority_value,
+            select_available_ollama_model,
+            validate_suggestions,
+        )
         from triage_store import store
         from jira_client import JiraClient
 
@@ -928,20 +976,21 @@ class IssueCache:
                     for s in result.suggestions:
                         try:
                             if s.field == "priority" and s.confidence >= 0.7:
+                                target_priority = normalize_triage_priority_value(s.suggested_value)
                                 await loop.run_in_executor(
-                                    None, client.update_priority, key, s.suggested_value
+                                    None, client.update_priority, key, target_priority
                                 )
                                 store.log_change(
-                                    key, "priority", s.current_value, s.suggested_value,
+                                    key, "priority", s.current_value, target_priority,
                                     s.confidence, model_id,
                                 )
                                 # Update local cache
-                                self.update_cached_field(key, "priority", s.suggested_value)
+                                self.update_cached_field(key, "priority", target_priority)
                                 priority_updated = True
                                 applied_fields.append("priority")
                                 logger.info(
                                     "Auto-triage: %s priority %s -> %s (conf=%.2f)",
-                                    key, s.current_value, s.suggested_value, s.confidence,
+                                    key, s.current_value, target_priority, s.confidence,
                                 )
                             elif s.field == "request_type" and s.confidence >= 0.9:
                                 from ai_client import get_request_type_id

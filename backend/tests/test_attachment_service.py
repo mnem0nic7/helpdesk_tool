@@ -47,6 +47,25 @@ def test_serialize_attachment_aliases_generated_numeric_name():
     assert payload["converted_preview_url"].endswith("/preview-converted")
 
 
+def test_serialize_attachment_treats_generic_png_mimetype_as_image_preview():
+    payload = attachment_service.serialize_attachment(
+        "OIT-19355",
+        {
+            "id": "9011",
+            "filename": "1609241234567.png",
+            "mimeType": "application-type",
+            "size": 10240,
+            "created": "2026-03-25T17:53:18+00:00",
+            "author": {"displayName": "OSIJIRAOCC"},
+        },
+    )
+
+    assert payload["mime_type"] == "image/png"
+    assert payload["preview_kind"] == "image"
+    assert payload["preview_available"] is True
+    assert payload["thumbnail_url"].endswith("/api/tickets/OIT-19355/attachments/9011/preview")
+
+
 def test_serialize_attachment_aliases_long_machine_upload_name():
     payload = attachment_service.serialize_attachment(
         "OIT-19355",

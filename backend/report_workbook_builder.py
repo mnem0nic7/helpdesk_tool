@@ -588,7 +588,16 @@ class ReportWorkbookBuilder:
         report_kind = _report_kind(template.name, template.config)
         if report_kind not in {"follow_up", "first_response"}:
             return template.readiness or "custom"
-        return _template_readiness(template, facts=self._facts_for_config(template.config))
+        facts = self._facts_for_config(template.config)
+        window_field = _date_field_for_report_window_config(template.config, report_name=template.name)
+        current_start, current_end = _window_bounds(30, today=self.today)
+        window_facts = self._facts_for_window(
+            facts,
+            window_field=window_field,
+            window_start=current_start,
+            window_end=current_end,
+        )
+        return _template_readiness(template, facts=window_facts or facts)
 
     def _facts_for_window(
         self,
@@ -2581,7 +2590,7 @@ class ReportWorkbookBuilder:
                 limitation_parts: list[str] = []
                 if missing_followup:
                     limitation_parts.append(
-                        f"{missing_followup} tickets are missing authoritative Daily Public Follow-Up fields"
+                        f"{missing_followup} tickets are missing authoritative Daily Public Follow-Up coverage from public agent comments"
                     )
                 if missing_first_response:
                     limitation_parts.append(
@@ -2593,7 +2602,7 @@ class ReportWorkbookBuilder:
                         "All",
                         "proxy",
                         "; ".join(limitation_parts) + ". Proxy fallback is being used for those tickets.",
-                        "Populate Jira public-agent touch fields via Automation and confirm the first-response SLA timer is available for all relevant requests.",
+                        "Refresh the local follow-up authority cache from Jira public comments and confirm the first-response SLA timer is available for all relevant requests.",
                     )
                 )
         if report_kind == "escalation" or "escalation" in name:

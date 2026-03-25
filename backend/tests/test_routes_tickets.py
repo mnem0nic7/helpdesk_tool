@@ -380,6 +380,21 @@ class TestTicketDetailAndActions:
         monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
         monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
         monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
+        monkeypatch.setattr(
+            routes_tickets.requestor_sync_service,
+            "maybe_reconcile_issue",
+            lambda issue: {
+                "updated": False,
+                "message": "",
+                "requestor_identity": {
+                    "extracted_email": "reporter@example.com",
+                    "directory_match": True,
+                    "jira_account_id": "acct-reporter",
+                    "jira_status": "already_synced",
+                    "message": "Reporter already matched Reporter One.",
+                },
+            },
+        )
 
         resp = test_client.get("/api/tickets/OIT-123")
         assert resp.status_code == 200
@@ -392,6 +407,13 @@ class TestTicketDetailAndActions:
         assert data["work_category"] == "Identity"
         assert data["jira_url"].endswith("/browse/OIT-123")
         assert data["portal_url"].endswith("/portal/1/OIT-123")
+        assert data["requestor_identity"] == {
+            "extracted_email": "reporter@example.com",
+            "directory_match": True,
+            "jira_account_id": "acct-reporter",
+            "jira_status": "already_synced",
+            "message": "Reporter already matched Reporter One.",
+        }
         assert data["comments"][0]["body"] == "Investigating now."
         assert data["comments"][0]["public"] is False
         assert data["attachments"][0]["filename"] == "screenshot.png"
@@ -595,6 +617,21 @@ class TestTicketDetailAndActions:
         monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
         monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issues.pop(0))
         monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
+        monkeypatch.setattr(
+            routes_tickets.requestor_sync_service,
+            "reconcile_issue",
+            lambda issue, force=False: {
+                "updated": False,
+                "message": "No requestor email was extracted from this ticket.",
+                "requestor_identity": {
+                    "extracted_email": "",
+                    "directory_match": False,
+                    "jira_account_id": "",
+                    "jira_status": "no_email_extracted",
+                    "message": "No requestor email was extracted from this ticket.",
+                },
+            },
+        )
         monkeypatch.setattr(routes_tickets._client, "find_user_account_id", lambda name: "acct-raza")
         monkeypatch.setattr(
             routes_tickets._client,
@@ -615,6 +652,127 @@ class TestTicketDetailAndActions:
             {"displayName": "Raza Abidi", "accountId": "acct-raza"},
         )
         mock_cache.upsert_issue.assert_called_once_with(issue_after)
+
+    def test_sync_ticket_reporter_uses_requestor_sync_when_email_path_exists(self, test_client, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        issue["fields"]["reporter"] = {"displayName": "OSIJIRAOCC", "accountId": "acct-occ"}
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
+        monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
+        monkeypatch.setattr(
+            routes_tickets.requestor_sync_service,
+            "reconcile_issue",
+            lambda issue, force=False: {
+                "updated": True,
+                "message": "Reporter synced to Grace Hopper.",
+                "requestor_identity": {
+                    "extracted_email": "grace.hopper@example.com",
+                    "directory_match": True,
+                    "jira_account_id": "acct-grace",
+                    "jira_status": "updated_reporter",
+                    "message": "Reporter synced to Grace Hopper.",
+                },
+            },
+        )
+        monkeypatch.setattr(
+            routes_tickets.requestor_sync_service,
+            "maybe_reconcile_issue",
+            lambda issue: {
+                "updated": False,
+                "message": "",
+                "requestor_identity": {
+                    "extracted_email": "grace.hopper@example.com",
+                    "directory_match": True,
+                    "jira_account_id": "acct-grace",
+                    "jira_status": "updated_reporter",
+                    "message": "Reporter synced to Grace Hopper.",
+                },
+            },
+        )
+
+        resp = test_client.post("/api/tickets/OIT-123/sync-reporter")
+
+        assert resp.status_code == 200
+        assert resp.json()["updated"] is True
+        assert resp.json()["message"] == "Reporter synced to Grace Hopper."
+        assert resp.json()["detail"]["requestor_identity"]["jira_account_id"] == "acct-grace"
+
+    def test_sync_ticket_requestor_returns_reconciled_detail(self, test_client, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
+        monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
+        monkeypatch.setattr(
+            routes_tickets.requestor_sync_service,
+            "reconcile_issue",
+            lambda issue, force=False: {
+                "updated": True,
+                "message": "Created Jira customer and synced reporter to Grace Hopper.",
+                "requestor_identity": {
+                    "extracted_email": "grace.hopper@example.com",
+                    "directory_match": True,
+                    "jira_account_id": "acct-grace",
+                    "jira_status": "created_jira_customer",
+                    "message": "Created Jira customer and synced reporter to Grace Hopper.",
+                },
+            },
+        )
+        monkeypatch.setattr(
+            routes_tickets.requestor_sync_service,
+            "maybe_reconcile_issue",
+            lambda issue: {
+                "updated": False,
+                "message": "",
+                "requestor_identity": {
+                    "extracted_email": "grace.hopper@example.com",
+                    "directory_match": True,
+                    "jira_account_id": "acct-grace",
+                    "jira_status": "created_jira_customer",
+                    "message": "Created Jira customer and synced reporter to Grace Hopper.",
+                },
+            },
+        )
+
+        resp = test_client.post("/api/tickets/OIT-123/sync-requestor")
+
+        assert resp.status_code == 200
+        assert resp.json()["updated"] is True
+        assert resp.json()["message"] == "Created Jira customer and synced reporter to Grace Hopper."
+        assert resp.json()["detail"]["requestor_identity"]["jira_status"] == "created_jira_customer"
+
+    def test_get_requestor_sync_status_returns_recent_rows(self, test_client, monkeypatch):
+        import routes_tickets
+
+        monkeypatch.setattr(
+            routes_tickets.requestor_sync_service,
+            "list_recent_status",
+            lambda limit=100, failures_only=False: [
+                {
+                    "ticket_key": "OIT-123",
+                    "email_key": "grace.hopper@example.com",
+                    "sync_status": "created_jira_customer",
+                    "message": "Created Jira customer and synced reporter to Grace Hopper.",
+                }
+            ],
+        )
+
+        resp = test_client.get("/api/requestor-sync/status?limit=10")
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "items": [
+                {
+                    "ticket_key": "OIT-123",
+                    "email_key": "grace.hopper@example.com",
+                    "sync_status": "created_jira_customer",
+                    "message": "Created Jira customer and synced reporter to Grace Hopper.",
+                }
+            ]
+        }
 
     def test_update_ticket_writes_supported_fields(self, test_client, mock_cache, monkeypatch):
         import routes_tickets

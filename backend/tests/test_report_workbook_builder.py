@@ -613,4 +613,4 @@ def test_followup_template_readiness_and_gaps_do_not_depend_on_report_name():
         facts=facts,
     )
 
-    assert any("daily public follow-up fields" in gap.limitation.lower() for gap in gaps)
+    assert any("daily public follow-up" in gap.limitation.lower() for gap in gaps)

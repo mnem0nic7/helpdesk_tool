@@ -539,3 +539,37 @@ class TestIssueToRow:
         assert row["support_touch_count"] == 2
         assert row["first_response_authoritative"] is True
         assert row["followup_authoritative"] is True
+
+    def test_response_followup_prefers_local_authoritative_followup_cache_when_present(self, freeze_time):
+        issue = {
+            "key": "OIT-706",
+            "fields": {
+                "summary": "Local authoritative public touch cache",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-03T05:00:00+00:00",
+                "resolutiondate": "2026-03-03T05:00:00+00:00",
+                "customfield_11266": {"completedCycles": [{"breached": False}]},
+                "_movedocs_followup_status": "Met",
+                "_movedocs_followup_last_touch_at": "2026-03-02T22:00:00+00:00",
+                "_movedocs_followup_touch_count": 2,
+                "comment": {
+                    "total": 0,
+                    "comments": [],
+                },
+            },
+        }
+
+        row = issue_to_row(issue)
+
+        assert row["first_response_2h_status"] == "Met"
+        assert row["daily_followup_status"] == "Met"
+        assert row["response_followup_status"] == "Met"
+        assert row["last_support_touch_date"] == "2026-03-02T22:00:00+00:00"
+        assert row["support_touch_count"] == 2
+        assert row["first_response_authoritative"] is True
+        assert row["followup_authoritative"] is True

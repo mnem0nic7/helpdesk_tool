@@ -3,6 +3,7 @@ import json
 import ai_client
 from ai_client import (
     analyze_ticket,
+    _enforce_non_new_priority,
     _enforce_reporter_hint,
     _enforce_security_priority,
     _extract_reporter_hint_from_text,
@@ -85,6 +86,36 @@ def test_security_alert_adds_high_priority_when_missing():
     priority = next(s for s in normalized if s.field == "priority")
     assert priority.suggested_value == "High"
     assert priority.current_value == "New"
+
+
+def test_non_new_priority_adds_low_priority_when_missing():
+    issue = _issue(priority="New")
+
+    normalized = _enforce_non_new_priority(issue, [])
+
+    priority = next(s for s in normalized if s.field == "priority")
+    assert priority.suggested_value == "Low"
+    assert priority.current_value == "New"
+
+
+def test_non_new_priority_replaces_new_priority_suggestion():
+    issue = _issue(priority="New")
+    suggestions = [
+        TriageSuggestion(
+            field="priority",
+            current_value="New",
+            suggested_value="New",
+            reasoning="Leave as-is.",
+            confidence=0.72,
+        )
+    ]
+
+    normalized = _enforce_non_new_priority(issue, suggestions)
+
+    priority = next(s for s in normalized if s.field == "priority")
+    assert priority.suggested_value == "Low"
+    assert priority.current_value == "New"
+    assert priority.confidence >= 0.9
 
 
 def test_existing_high_security_ticket_does_not_get_priority_change():

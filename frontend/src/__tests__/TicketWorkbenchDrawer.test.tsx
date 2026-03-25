@@ -17,6 +17,7 @@ const { mockApi } = vi.hoisted(() => ({
     fetchAttachmentPreviewBlob: vi.fn(),
     fetchAttachmentPreviewText: vi.fn(),
     syncTicketReporter: vi.fn(),
+    syncTicketRequestor: vi.fn(),
     updateTicket: vi.fn(),
     transitionTicket: vi.fn(),
     addTicketComment: vi.fn(),
@@ -79,6 +80,13 @@ const ticketDetail = {
   issue_links: [],
   jira_url: "https://jira.example.com/browse/OIT-1",
   portal_url: "https://portal.example.com/requests/OIT-1",
+  requestor_identity: {
+    extracted_email: "grace.hopper@example.com",
+    directory_match: true,
+    jira_account_id: "",
+    jira_status: "match_pending",
+    message: "Exact Office 365 directory match found.",
+  },
   raw_issue: {},
 };
 
@@ -154,6 +162,19 @@ describe("TicketWorkbenchDrawer", () => {
       updated: false,
       message: "Reporter already matches Grace Hopper.",
       detail: ticketDetail,
+    });
+    mockApi.syncTicketRequestor.mockResolvedValue({
+      updated: true,
+      message: "Reporter synced to Grace Hopper.",
+      detail: {
+        ...ticketDetail,
+        requestor_identity: {
+          ...ticketDetail.requestor_identity,
+          jira_account_id: "acct-grace",
+          jira_status: "updated_reporter",
+          message: "Reporter synced to Grace Hopper.",
+        },
+      },
     });
   });
 
@@ -292,6 +313,27 @@ describe("TicketWorkbenchDrawer", () => {
       expect(mockApi.fetchAttachmentPreviewBlob).toHaveBeenCalledWith("/api/tickets/OIT-1/attachments/att-1/preview");
     });
     expect(screen.getAllByAltText("OIT-1 - Image - 2026-03-03 10-14.png").length).toBeGreaterThan(0);
+  });
+
+  it("shows requestor reconciliation status and lets admins trigger a sync", async () => {
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Requestor Reconciliation");
+    expect(screen.getByText("Match Pending")).toBeInTheDocument();
+    expect(screen.getByText(/grace\.hopper@example\.com/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync Requestor" }));
+
+    await waitFor(() => {
+      expect(mockApi.syncTicketRequestor).toHaveBeenCalledWith("OIT-1");
+    });
+    expect(await screen.findByText("Reporter synced to Grace Hopper.")).toBeInTheDocument();
   });
 
   it("renders office previews from the same-origin preview URL instead of a blob iframe", async () => {

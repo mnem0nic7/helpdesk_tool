@@ -553,12 +553,28 @@ class AzureCache:
             assigned_license_names=assigned_license_names,
         )
         missing_profile_fields = cls._missing_profile_fields(item)
+        email_aliases = []
+        seen_aliases: set[str] = set()
+        for raw_value in item.get("proxyAddresses") or []:
+            value = str(raw_value or "").strip()
+            if not value.lower().startswith("smtp:"):
+                continue
+            alias = value.split(":", 1)[1].strip()
+            normalized_alias = alias.lower()
+            if not normalized_alias or normalized_alias in seen_aliases:
+                continue
+            seen_aliases.add(normalized_alias)
+            email_aliases.append(alias)
+        primary_mail = item.get("mail") or item.get("userPrincipalName") or ""
         return {
             "id": item.get("id") or "",
             "display_name": item.get("displayName") or "",
             "object_type": "user",
             "principal_name": item.get("userPrincipalName") or "",
             "mail": item.get("mail") or "",
+            "primary_mail": primary_mail,
+            "email_aliases": email_aliases,
+            "account_class": account_class,
             "enabled": item.get("accountEnabled"),
             "app_id": "",
             "extra": {
@@ -666,6 +682,12 @@ class AzureCache:
                 self._normalize_user({**item, "_sku_map": sku_map})
                 for item in self._client.list_users()
             ]
+            try:
+                from requestor_sync_service import requestor_sync_service
+
+                requestor_sync_service.refresh_directory_emails(users)
+            except Exception:
+                logger.exception("Failed to refresh Office 365 requestor mirror from Azure directory users")
             groups = [self._normalize_group(item) for item in self._client.list_groups()]
             service_principals = [
                 self._normalize_service_principal(item)
@@ -728,6 +750,12 @@ class AzureCache:
 
         refreshed_users = list(user_by_id.values())
         refreshed_users.sort(key=lambda item: str(item.get("display_name") or "").lower())
+        try:
+            from requestor_sync_service import requestor_sync_service
+
+            requestor_sync_service.refresh_directory_emails(refreshed_users)
+        except Exception:
+            logger.exception("Failed to refresh Office 365 requestor mirror from targeted Azure user refresh")
         self._update_snapshots({"users": refreshed_users})
         updated_at = datetime.now(timezone.utc).isoformat()
         self._set_dataset_status("directory", updated_at=updated_at, error=None)

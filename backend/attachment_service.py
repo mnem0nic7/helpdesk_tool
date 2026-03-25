@@ -40,6 +40,20 @@ _TEXT_EXTENSIONS = {
     ".yaml",
     ".yml",
 }
+_IMAGE_EXTENSIONS = {
+    ".avif",
+    ".bmp",
+    ".gif",
+    ".heic",
+    ".heif",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".svg",
+    ".tif",
+    ".tiff",
+    ".webp",
+}
 _GENERATED_STEM_RE = re.compile(r"^(?:\d{10,}|[0-9a-f]{24,}|[0-9_-]{14,})$", re.IGNORECASE)
 _MACHINE_TOKEN_RE = re.compile(r"(?:^|[_\-.])(upload|uploads|attachment|attachments)(?:[_\-.]|$)", re.IGNORECASE)
 _DOMAIN_LIKE_RE = re.compile(r"[a-z0-9-]+\.[a-z]{2,}", re.IGNORECASE)
@@ -48,6 +62,13 @@ _CONVERSION_TIMEOUT_SECONDS = 90
 _CACHE_TTL = timedelta(days=7)
 _CLEANUP_INTERVAL_SECONDS = 30 * 60
 _last_cleanup_started = 0.0
+_GENERIC_MIME_TYPES = {
+    "",
+    "application-type",
+    "application/octet-stream",
+    "application/unknown",
+    "binary/octet-stream",
+}
 
 
 class AttachmentPreviewError(RuntimeError):
@@ -85,7 +106,7 @@ def is_generated_attachment_name(filename: str) -> bool:
 
 def infer_attachment_mime_type(filename: str, mime_type: str = "") -> str:
     normalized = str(mime_type or "").split(";")[0].strip().lower()
-    if normalized:
+    if normalized and "/" in normalized and normalized not in _GENERIC_MIME_TYPES:
         return normalized
     guessed, _encoding = mimetypes.guess_type(filename or "")
     return str(guessed or "application/octet-stream")
@@ -96,7 +117,7 @@ def preview_kind_for_attachment(filename: str, mime_type: str = "") -> str:
     normalized_mime = infer_attachment_mime_type(filename, mime_type)
     if normalized_mime == "application/pdf" or ext == ".pdf":
         return "pdf"
-    if normalized_mime.startswith("image/"):
+    if normalized_mime.startswith("image/") or ext in _IMAGE_EXTENSIONS:
         return "image"
     if ext in _TEXT_EXTENSIONS or normalized_mime.startswith("text/"):
         return "text"

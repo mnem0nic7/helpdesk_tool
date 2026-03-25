@@ -399,7 +399,7 @@ def extract_adf_text(adf: dict | None) -> str:
 # Prompt construction
 # ---------------------------------------------------------------------------
 
-KNOWN_PRIORITIES = ["Highest", "High", "Medium", "Low", "New"]
+KNOWN_PRIORITIES = ["Highest", "High", "Medium", "Low"]
 
 KNOWN_STATUSES = [
     "New", "Open", "Assigned", "In Progress", "Work in Progress",
@@ -412,6 +412,7 @@ KNOWN_STATUSES = [
 _SECURITY_ALERT_REQUEST_TYPE = "Security Alert"
 _SECURITY_PRIORITY_REASONING = "Security Alert tickets must be triaged at High priority."
 _HIGH_ENOUGH_SECURITY_PRIORITIES = {"High", "Highest"}
+_NON_NEW_PRIORITY_REASONING = "Triage must assign an operational priority; tickets should not remain at New."
 _REPORTER_HINT_PATTERNS = [
     re.compile(r"(?im)\b(?:occ\s+)?ticket\s+created\s+by\s*:\s*([^\n\r|*]+)"),
 ]
@@ -1339,6 +1340,59 @@ def _enforce_security_priority(issue: dict[str, Any], suggestions: list[TriageSu
     return normalized
 
 
+def normalize_triage_priority_value(value: str) -> str:
+    """Return a triage-safe operational priority.
+
+    Jira may expose `New` as a valid priority, but triage should never leave a
+    ticket there. We normalize it to `Low`, which is the lowest operational
+    priority after a triage pass.
+    """
+    normalized = str(value or "").strip()
+    if normalized.lower() == "new":
+        return "Low"
+    return normalized
+
+
+def _enforce_non_new_priority(issue: dict[str, Any], suggestions: list[TriageSuggestion]) -> list[TriageSuggestion]:
+    """Ensure triage never leaves a ticket at the placeholder `New` priority."""
+    fields = issue.get("fields", {})
+    current_priority = str((fields.get("priority") or {}).get("name") or "").strip()
+
+    normalized: list[TriageSuggestion] = []
+    saw_priority = False
+    for suggestion in suggestions:
+        if suggestion.field != "priority":
+            normalized.append(suggestion)
+            continue
+        saw_priority = True
+        target_priority = normalize_triage_priority_value(suggestion.suggested_value)
+        if target_priority == suggestion.suggested_value:
+            normalized.append(suggestion)
+            continue
+        normalized.append(
+            TriageSuggestion(
+                field="priority",
+                current_value=suggestion.current_value or current_priority,
+                suggested_value=target_priority,
+                reasoning=_NON_NEW_PRIORITY_REASONING,
+                confidence=max(suggestion.confidence, 0.9),
+            )
+        )
+
+    if current_priority.lower() == "new" and not saw_priority:
+        normalized.append(
+            TriageSuggestion(
+                field="priority",
+                current_value=current_priority,
+                suggested_value="Low",
+                reasoning=_NON_NEW_PRIORITY_REASONING,
+                confidence=0.9,
+            )
+        )
+
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Main analysis entry point
 # ---------------------------------------------------------------------------
@@ -1383,7 +1437,10 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
 
     suggestions = _enforce_reporter_hint(
         issue,
-        _enforce_security_priority(issue, _parse_suggestions(raw, issue)),
+        _enforce_security_priority(
+            issue,
+            _enforce_non_new_priority(issue, _parse_suggestions(raw, issue)),
+        ),
     )
 
     return TriageResult(

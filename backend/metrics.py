@@ -16,6 +16,11 @@ from config import (
     JIRA_FOLLOWUP_PUBLIC_AGENT_TOUCH_COUNT_FIELD_ID,
     JIRA_FOLLOWUP_STATUS_FIELD_ID,
 )
+from followup_authority import (
+    LOCAL_FOLLOWUP_LAST_TOUCH_FIELD,
+    LOCAL_FOLLOWUP_STATUS_FIELD,
+    LOCAL_FOLLOWUP_TOUCH_COUNT_FIELD,
+)
 from request_type import extract_request_type_id_from_fields, extract_request_type_name_from_fields
 
 
@@ -1074,6 +1079,10 @@ def _authoritative_followup(fields: dict[str, Any]) -> dict[str, Any]:
     status = _followup_status_value(_followup_field_value(fields, JIRA_FOLLOWUP_STATUS_FIELD_ID))
     last_touch_raw = str(_followup_field_value(fields, JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID) or "").strip()
     touch_count = _followup_count_value(_followup_field_value(fields, JIRA_FOLLOWUP_PUBLIC_AGENT_TOUCH_COUNT_FIELD_ID))
+    if status not in {"Running", "Met", "BREACHED"}:
+        status = _followup_status_value(fields.get(LOCAL_FOLLOWUP_STATUS_FIELD))
+        last_touch_raw = str(fields.get(LOCAL_FOLLOWUP_LAST_TOUCH_FIELD) or "").strip()
+        touch_count = _followup_count_value(fields.get(LOCAL_FOLLOWUP_TOUCH_COUNT_FIELD))
     if status not in {"Running", "Met", "BREACHED"}:
         return {
             "available": False,

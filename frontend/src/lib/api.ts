@@ -419,6 +419,14 @@ export interface TicketIssueLink {
   url: string;
 }
 
+export interface RequestorIdentity {
+  extracted_email: string;
+  directory_match: boolean;
+  jira_account_id: string;
+  jira_status: string;
+  message: string;
+}
+
 export interface TicketDetail {
   ticket: TicketRow;
   description: string;
@@ -430,6 +438,7 @@ export interface TicketDetail {
   issue_links: TicketIssueLink[];
   jira_url: string;
   portal_url: string;
+  requestor_identity: RequestorIdentity;
   raw_issue: Record<string, unknown>;
 }
 
@@ -2301,6 +2310,11 @@ export const api = {
   /** Update a ticket reporter from the OCC creator line in the saved description. */
   syncTicketReporter(key: string): Promise<SyncTicketReporterResponse> {
     return postJSON<SyncTicketReporterResponse>(`/api/tickets/${encodeURIComponent(key)}/sync-reporter`, {});
+  },
+
+  /** Reconcile a ticket requestor against the Office 365 mirror and Jira customers. */
+  syncTicketRequestor(key: string): Promise<SyncTicketReporterResponse> {
+    return postJSON<SyncTicketReporterResponse>(`/api/tickets/${encodeURIComponent(key)}/sync-requestor`, {});
   },
 
   getPriorities(): Promise<PriorityOption[]> {

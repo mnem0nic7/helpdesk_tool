@@ -640,6 +640,61 @@ class JiraClient:
                 return str(desk.get("id", ""))
         return None
 
+    def get_service_desk_customers(self, service_desk_id: str, *, query: str = "") -> list[dict[str, Any]]:
+        """GET /rest/servicedeskapi/servicedesk/{id}/customer with pagination."""
+        service_desk = str(service_desk_id or "").strip()
+        if not service_desk:
+            return []
+        url = f"{self.base_url}/rest/servicedeskapi/servicedesk/{service_desk}/customer"
+        start = 0
+        customers: list[dict[str, Any]] = []
+        while True:
+            params: dict[str, Any] = {"start": start, "limit": 100}
+            if query.strip():
+                params["query"] = query.strip()
+            resp = self.session.get(url, params=params, timeout=self._TIMEOUT)
+            self._raise_for_status(resp)
+            data = resp.json()
+            values = data.get("values") or []
+            customers.extend(values)
+            if data.get("isLastPage", True):
+                break
+            start += len(values)
+        return customers
+
+    def add_customers_to_service_desk(self, service_desk_id: str, account_ids: list[str]) -> None:
+        """POST /rest/servicedeskapi/servicedesk/{id}/customer."""
+        service_desk = str(service_desk_id or "").strip()
+        cleaned_ids = [str(account_id or "").strip() for account_id in account_ids if str(account_id or "").strip()]
+        if not service_desk or not cleaned_ids:
+            return
+        url = f"{self.base_url}/rest/servicedeskapi/servicedesk/{service_desk}/customer"
+        resp = self.session.post(url, json={"accountIds": cleaned_ids}, timeout=self._TIMEOUT)
+        self._raise_for_status(resp)
+
+    def create_customer(
+        self,
+        *,
+        email: str,
+        display_name: str,
+        strict_conflict_status_code: bool = False,
+    ) -> dict[str, Any]:
+        """POST /rest/servicedeskapi/customer to create a JSM customer."""
+        email_text = str(email or "").strip()
+        display_name_text = str(display_name or "").strip() or email_text
+        if not email_text:
+            raise ValueError("email is required")
+        url = f"{self.base_url}/rest/servicedeskapi/customer"
+        params = {"strictConflictStatusCode": "true"} if strict_conflict_status_code else None
+        resp = self.session.post(
+            url,
+            params=params,
+            json={"email": email_text, "displayName": display_name_text},
+            timeout=self._TIMEOUT,
+        )
+        self._raise_for_status(resp)
+        return resp.json()
+
     def set_request_type(self, key: str, request_type_id: str) -> None:
         """Change request type via PUT /rest/api/3/issue/{key} using customfield_11102.
 

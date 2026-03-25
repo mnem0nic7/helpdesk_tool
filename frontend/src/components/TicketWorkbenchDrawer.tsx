@@ -6,6 +6,7 @@ import JiraWriteIdentityNotice from "./JiraWriteIdentityNotice.tsx";
 import type {
   Assignee,
   PriorityOption,
+  RequestorIdentity,
   TicketComment,
   TicketAttachment,
   RequestTypeOption,
@@ -134,6 +135,49 @@ function normalizeSummaryInput(value: string): string {
 
 function formatScore(score: number): string {
   return `${score.toFixed(1)}/5`;
+}
+
+function requestorStatusTone(
+  status: string,
+): "slate" | "blue" | "amber" | "green" {
+  switch (status) {
+    case "updated_reporter":
+    case "created_jira_customer":
+    case "already_synced":
+      return "green";
+    case "match_pending":
+      return "blue";
+    case "ambiguous_directory_match":
+    case "jira_conflict":
+      return "amber";
+    default:
+      return "slate";
+  }
+}
+
+function requestorStatusLabel(status: string): string {
+  switch (status) {
+    case "no_email_extracted":
+      return "No Email";
+    case "match_pending":
+      return "Match Pending";
+    case "not_in_office365":
+      return "Not In O365";
+    case "ambiguous_directory_match":
+      return "Directory Conflict";
+    case "jira_conflict":
+      return "Jira Conflict";
+    case "updated_reporter":
+      return "Reporter Synced";
+    case "created_jira_customer":
+      return "Customer Created";
+    case "already_synced":
+      return "Already Synced";
+    case "sync_failed":
+      return "Sync Failed";
+    default:
+      return status || "Unknown";
+  }
 }
 
 export default function TicketWorkbenchDrawer({
@@ -543,6 +587,20 @@ export default function TicketWorkbenchDrawer({
     },
   });
 
+  const syncRequestorMutation = useMutation({
+    mutationFn: () => {
+      if (!ticketKey) {
+        throw new Error("No ticket selected");
+      }
+      return api.syncTicketRequestor(ticketKey);
+    },
+    onSuccess: (result) => handleUpdated(result.detail, result.message),
+    onError: (error) => {
+      setErrorText(error instanceof Error ? error.message : "Failed to sync requestor");
+      setFeedback(null);
+    },
+  });
+
   const transitionMutation = useMutation({
     mutationFn: () => {
       if (!ticketKey || !selectedTransitionId) {
@@ -634,6 +692,7 @@ export default function TicketWorkbenchDrawer({
   const customerReplyCount = historyItems.filter((item) => item.public).length;
   const internalNoteCount = historyItems.length - customerReplyCount;
   const technicianScore = technicianScores[0] ?? null;
+  const requestorIdentity: RequestorIdentity | null = detail?.requestor_identity ?? null;
 
   return (
     <div className="fixed inset-0 z-50 flex bg-slate-950/35" onClick={onClose}>
@@ -868,6 +927,43 @@ export default function TicketWorkbenchDrawer({
                     <div className="mt-1 text-xs text-slate-500">
                       Uses the saved description line like "OCC Ticket Created By: Jane Doe".
                     </div>
+
+                    {requestorIdentity ? (
+                      <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                              Requestor Reconciliation
+                            </div>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <span className={chipClass(requestorStatusTone(requestorIdentity.jira_status))}>
+                                {requestorStatusLabel(requestorIdentity.jira_status)}
+                              </span>
+                              {requestorIdentity.directory_match ? (
+                                <span className={chipClass("blue")}>Office 365 Match</span>
+                              ) : null}
+                            </div>
+                          </div>
+                          {me?.is_admin ? (
+                            <button
+                              type="button"
+                              onClick={() => syncRequestorMutation.mutate()}
+                              disabled={syncRequestorMutation.isPending}
+                              className="shrink-0 rounded-md border border-green-300 bg-green-50 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {syncRequestorMutation.isPending ? "Syncing..." : "Sync Requestor"}
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 space-y-1 text-xs text-slate-600">
+                          <div>
+                            <span className="font-medium text-slate-700">Extracted email:</span>{" "}
+                            {requestorIdentity.extracted_email || "None"}
+                          </div>
+                          <div>{requestorIdentity.message || "No requestor reconciliation status yet."}</div>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
 
                   <label className="block xl:col-span-4">

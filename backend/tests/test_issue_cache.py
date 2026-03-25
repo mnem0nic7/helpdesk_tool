@@ -46,6 +46,10 @@ def _build_cache(tmp_path, updated_issues: list[dict]) -> IssueCache:
     cache._client = _FakeClient(updated_issues)
     cache._initialized = True
     cache._auto_triage_seen = set()
+    cache._sync_requestors_best_effort = lambda issues, open_only=False: None
+    cache._sync_followup_authority_best_effort = (
+        lambda issues, force=False, recent_days=35: None
+    )
 
     primary_old = _issue("OIT-100", "Primary old")
     oasis_old = _issue("OIT-500", "Oasis old", labels=["oasisdev"])

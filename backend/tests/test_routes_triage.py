@@ -244,6 +244,40 @@ class TestTechnicianScoringRoutes:
 
 
 class TestSuggestionApplyRoutes:
+    def test_apply_single_field_normalizes_new_priority_to_low(self, test_client, mock_cache, monkeypatch):
+        import routes_triage
+        from triage_store import store
+
+        key = "OIT-100"
+        store.delete(key)
+        store.save(
+            TriageResult(
+                key=key,
+                suggestions=[
+                    TriageSuggestion(
+                        field="priority",
+                        current_value="New",
+                        suggested_value="New",
+                        reasoning="Leave as-is.",
+                        confidence=0.83,
+                    )
+                ],
+                model_used="gpt-test",
+                created_at="2026-03-17T20:00:00+00:00",
+            )
+        )
+
+        applied: list[tuple[str, str]] = []
+        monkeypatch.setattr(routes_triage._client, "update_priority", lambda issue_key, value: applied.append((issue_key, value)))
+
+        resp = test_client.post("/api/triage/apply-field", json={"key": key, "field": "priority"})
+
+        assert resp.status_code == 200
+        assert resp.json()["applied"] is True
+        assert applied == [(key, "Low")]
+        mock_cache.update_cached_field.assert_called_with(key, "priority", "Low")
+        store.delete(key)
+
     def test_apply_single_field_updates_reporter_with_account_id(self, test_client, mock_cache, monkeypatch):
         import routes_triage
         from triage_store import store

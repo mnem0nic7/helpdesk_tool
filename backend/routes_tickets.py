@@ -27,6 +27,7 @@ from jira_client import JiraClient, validate_jira_key
 from jira_write_service import add_fallback_internal_audit_note, get_jira_write_context, prepend_fallback_actor_line
 from metrics import _is_open, issue_to_row
 from models import TicketCommentRequest, TicketRefreshRequest, TicketTransitionRequest, TicketUpdateRequest
+from requestor_sync_service import requestor_sync_service
 from request_type import extract_request_type_name_from_fields
 from site_context import get_scoped_issues, key_is_visible_in_scope
 
@@ -317,7 +318,12 @@ def _serialize_issue_links(issue: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _ticket_detail(issue: dict[str, Any], comments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def _ticket_detail(
+    issue: dict[str, Any],
+    comments: list[dict[str, Any]] | None = None,
+    *,
+    requestor_identity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     fields = issue.get("fields", {})
     request_field = fields.get("customfield_11102") or {}
     request_links = request_field.get("_links") if isinstance(request_field, dict) else {}
@@ -332,6 +338,7 @@ def _ticket_detail(issue: dict[str, Any], comments: list[dict[str, Any]] | None 
         "issue_links": _serialize_issue_links(issue),
         "jira_url": request_links.get("agent") or _issue_url(issue.get("key", "")),
         "portal_url": request_links.get("web", ""),
+        "requestor_identity": requestor_identity or requestor_sync_service.get_requestor_identity(issue),
         "raw_issue": issue,
     }
 
@@ -365,9 +372,10 @@ def _get_user_display_name(account_id: str | None) -> str:
 
 def _load_ticket_detail(key: str, issue: dict[str, Any] | None = None) -> dict[str, Any]:
     issue = issue or _client.get_issue(key)
+    requestor_result = requestor_sync_service.maybe_reconcile_issue(issue)
     cache.upsert_issue(issue)
     comments = _client.get_request_comments(key)
-    return _ticket_detail(issue, comments)
+    return _ticket_detail(issue, comments, requestor_identity=requestor_result["requestor_identity"])
 
 
 def _ensure_ticket_visible(key: str) -> None:
@@ -675,6 +683,14 @@ async def sync_ticket_reporter(
 
     try:
         issue = _client.get_issue(key)
+        requestor_result = requestor_sync_service.reconcile_issue(issue, force=True)
+        if requestor_result["requestor_identity"]["jira_status"] != "no_email_extracted":
+            detail = _load_ticket_detail(key, issue=issue)
+            return {
+                "detail": detail,
+                "updated": bool(requestor_result["updated"]),
+                "message": requestor_result["message"],
+            }
         updated, message = _sync_reporter_from_ticket_text(issue, source="Update reporter button", session=_admin)
         detail = _load_ticket_detail(key) if updated else _load_ticket_detail(key, issue=issue)
         return {
@@ -687,6 +703,46 @@ async def sync_ticket_reporter(
     except Exception as exc:
         logger.exception("Failed to sync reporter for ticket %s", key)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/tickets/{key}/sync-requestor")
+async def sync_ticket_requestor(
+    key: str,
+    _admin: dict = Depends(require_admin),
+) -> dict[str, Any]:
+    """Reconcile a ticket requestor against Office 365 and Jira customers."""
+    del _admin
+    try:
+        validate_jira_key(key)
+        _ensure_ticket_visible(key)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
+
+    try:
+        issue = _client.get_issue(key)
+        result = requestor_sync_service.reconcile_issue(issue, force=True)
+        detail = _load_ticket_detail(key, issue=issue)
+        return {
+            "detail": detail,
+            "updated": bool(result["updated"]),
+            "message": result["message"],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to sync requestor for ticket %s", key)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/requestor-sync/status")
+async def get_requestor_sync_status(
+    limit: int = Query(default=50, ge=1, le=200),
+    failures_only: bool = Query(default=False),
+    _admin: dict = Depends(require_admin),
+) -> dict[str, Any]:
+    """Return recent Office 365 requestor reconciliation outcomes."""
+    del _admin
+    return {"items": requestor_sync_service.list_recent_status(limit=limit, failures_only=failures_only)}
 
 
 @router.put("/tickets/{key}")

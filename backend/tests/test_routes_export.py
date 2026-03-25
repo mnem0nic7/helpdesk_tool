@@ -505,6 +505,67 @@ class TestReportTemplates:
         followup = next(row for row in resp.json() if row["name"] == "2-Hour Response & Daily Follow-Up")
         assert followup["readiness"] == "ready"
 
+    def test_followup_template_readiness_uses_current_30_day_window(self, test_client, mock_cache):
+        old_issue = {
+            "key": "OIT-101",
+            "fields": {
+                "summary": "Old follow-up history without authoritative cache",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "High"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": {"name": "Done"},
+                "created": "2025-12-20T08:00:00+00:00",
+                "updated": "2025-12-21T12:00:00+00:00",
+                "resolutiondate": "2025-12-21T12:00:00+00:00",
+                "labels": [],
+                "components": [],
+                "customfield_10010": {"requestType": {"name": "Laptop"}},
+                "customfield_11239": "Service requests",
+                "customfield_11266": {"completedCycles": [{"breached": False}]},
+                "customfield_11264": None,
+                "customfield_10700": [],
+                "attachment": [],
+                "comment": {"total": 0, "comments": []},
+            },
+        }
+        recent_issue = {
+            "key": "OIT-102",
+            "fields": {
+                "summary": "Recent ticket with local authoritative follow-up cache",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "High"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": {"name": "Done"},
+                "created": "2026-03-23T08:00:00+00:00",
+                "updated": "2026-03-23T12:00:00+00:00",
+                "resolutiondate": "2026-03-23T12:00:00+00:00",
+                "labels": [],
+                "components": [],
+                "customfield_10010": {"requestType": {"name": "Laptop"}},
+                "customfield_11239": "Service requests",
+                "customfield_11266": {"completedCycles": [{"breached": False}]},
+                "customfield_11264": None,
+                "_movedocs_followup_status": "Met",
+                "_movedocs_followup_last_touch_at": "2026-03-23T10:00:00+00:00",
+                "_movedocs_followup_touch_count": 1,
+                "customfield_10700": [],
+                "attachment": [],
+                "comment": {"total": 0, "comments": []},
+            },
+        }
+        mock_cache.get_all_issues.return_value = [old_issue, recent_issue]
+        mock_cache.get_filtered_issues.return_value = [old_issue, recent_issue]
+
+        resp = test_client.get("/api/report/templates")
+
+        assert resp.status_code == 200
+        followup = next(row for row in resp.json() if row["name"] == "2-Hour Response & Daily Follow-Up")
+        assert followup["readiness"] == "ready"
+
     def test_create_update_and_delete_custom_template(self, test_client):
         create_resp = test_client.post(
             "/api/report/templates",

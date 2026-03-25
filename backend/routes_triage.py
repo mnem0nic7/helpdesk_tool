@@ -7,7 +7,13 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 
-from ai_client import analyze_ticket, get_available_models, select_available_ollama_model, validate_suggestions
+from ai_client import (
+    analyze_ticket,
+    get_available_models,
+    normalize_triage_priority_value,
+    select_available_ollama_model,
+    validate_suggestions,
+)
 from auth import get_session
 from config import TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES
 from issue_cache import cache
@@ -417,13 +423,14 @@ async def apply_suggestion(req: TriageApplyRequest, request: Request) -> dict[st
             if field_name == "priority":
                 from ai_client import _get_valid_priorities
                 valid = _get_valid_priorities()
-                if s.suggested_value not in valid:
-                    errors.append({"field": field_name, "error": f"Invalid priority '{s.suggested_value}'. Valid: {', '.join(sorted(valid))}"})
+                target_priority = normalize_triage_priority_value(s.suggested_value)
+                if target_priority not in valid:
+                    errors.append({"field": field_name, "error": f"Invalid priority '{target_priority}'. Valid: {', '.join(sorted(valid))}"})
                     continue
-                ctx.client.update_priority(req.key, s.suggested_value)
-                cache.update_cached_field(req.key, "priority", s.suggested_value)
+                ctx.client.update_priority(req.key, target_priority)
+                cache.update_cached_field(req.key, "priority", target_priority)
                 applied.append(field_name)
-                audit_lines.append(f"AI applied priority -> {s.suggested_value}")
+                audit_lines.append(f"AI applied priority -> {target_priority}")
 
             elif field_name == "assignee":
                 from config import JIRA_PROJECT
@@ -539,13 +546,14 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
         if req.field == "priority":
             from ai_client import _get_valid_priorities
             valid = _get_valid_priorities()
-            if s.suggested_value not in valid:
+            target_priority = normalize_triage_priority_value(s.suggested_value)
+            if target_priority not in valid:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid priority '{s.suggested_value}'. Valid: {', '.join(sorted(valid))}",
+                    detail=f"Invalid priority '{target_priority}'. Valid: {', '.join(sorted(valid))}",
                 )
-            ctx.client.update_priority(req.key, s.suggested_value)
-            cache.update_cached_field(req.key, "priority", s.suggested_value)
+            ctx.client.update_priority(req.key, target_priority)
+            cache.update_cached_field(req.key, "priority", target_priority)
 
         elif req.field == "assignee":
             from config import JIRA_PROJECT
@@ -618,7 +626,7 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
         key=req.key,
         field=req.field,
         old_value=s.current_value,
-        new_value=s.suggested_value,
+        new_value=normalize_triage_priority_value(s.suggested_value) if req.field == "priority" else s.suggested_value,
         confidence=s.confidence,
         model=suggestion.model_used,
         source="user",
@@ -630,7 +638,10 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
     if ctx.is_fallback and req.field != "comment":
         add_fallback_internal_audit_note(
             req.key,
-            action_summary=f"AI applied {req.field} -> {s.suggested_value}",
+            action_summary=(
+                f"AI applied {req.field} -> "
+                f"{normalize_triage_priority_value(s.suggested_value) if req.field == 'priority' else s.suggested_value}"
+            ),
             session=session,
             shared_client=_client,
         )
