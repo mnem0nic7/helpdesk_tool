@@ -21,7 +21,7 @@ from ai_client import (
     get_available_copilot_models,
     get_default_copilot_model_id,
 )
-from auth import is_admin_user, require_admin, require_authenticated_user
+from auth import require_admin, require_authenticated_user, session_is_admin
 from azure_cache import azure_cache
 from azure_cost_exports import azure_cost_export_service
 from azure_finops import azure_finops_service
@@ -379,7 +379,7 @@ def _ensure_export_job_access(job_id: str, session: dict[str, Any]) -> dict[str,
     if not azure_vm_export_jobs.job_belongs_to(
         job_id,
         str(session.get("email") or ""),
-        is_admin=is_admin_user(str(session.get("email") or "")),
+        is_admin=session_is_admin(session),
     ):
         raise HTTPException(status_code=403, detail="You do not have access to this Azure VM export job")
     return job

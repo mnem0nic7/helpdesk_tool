@@ -15,7 +15,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from starlette.background import BackgroundTask
 
-from auth import is_admin_user, require_authenticated_user
+from auth import require_can_manage_users, session_is_admin
 from azure_cache import azure_cache
 from models import (
     UserAdminAuditEntryResponse,
@@ -278,14 +278,14 @@ def _write_export_workbook(title: str, rows: list[dict[str, Any]]) -> str:
 
 
 @router.get("/capabilities", response_model=UserAdminCapabilitiesResponse)
-def get_user_admin_capabilities(session: dict = Depends(require_authenticated_user)):
+def get_user_admin_capabilities(session: dict = Depends(require_can_manage_users)):
     del session
     _ensure_primary_site()
     return user_admin_providers.get_capabilities()
 
 
 @router.get("/users/{user_id}/detail", response_model=UserAdminUserDetailResponse)
-def get_user_detail(user_id: str, session: dict = Depends(require_authenticated_user)):
+def get_user_detail(user_id: str, session: dict = Depends(require_can_manage_users)):
     del session
     _ensure_primary_site()
     try:
@@ -295,7 +295,7 @@ def get_user_detail(user_id: str, session: dict = Depends(require_authenticated_
 
 
 @router.get("/users/{user_id}/groups", response_model=list[UserAdminGroupMembershipResponse])
-def get_user_groups(user_id: str, session: dict = Depends(require_authenticated_user)):
+def get_user_groups(user_id: str, session: dict = Depends(require_can_manage_users)):
     del session
     _ensure_primary_site()
     try:
@@ -305,7 +305,7 @@ def get_user_groups(user_id: str, session: dict = Depends(require_authenticated_
 
 
 @router.get("/users/{user_id}/licenses", response_model=list[UserAdminLicenseResponse])
-def get_user_licenses(user_id: str, session: dict = Depends(require_authenticated_user)):
+def get_user_licenses(user_id: str, session: dict = Depends(require_can_manage_users)):
     del session
     _ensure_primary_site()
     try:
@@ -315,7 +315,7 @@ def get_user_licenses(user_id: str, session: dict = Depends(require_authenticate
 
 
 @router.get("/users/{user_id}/roles", response_model=list[UserAdminRoleResponse])
-def get_user_roles(user_id: str, session: dict = Depends(require_authenticated_user)):
+def get_user_roles(user_id: str, session: dict = Depends(require_can_manage_users)):
     del session
     _ensure_primary_site()
     try:
@@ -325,7 +325,7 @@ def get_user_roles(user_id: str, session: dict = Depends(require_authenticated_u
 
 
 @router.get("/users/{user_id}/mailbox", response_model=UserAdminMailboxResponse)
-def get_user_mailbox(user_id: str, session: dict = Depends(require_authenticated_user)):
+def get_user_mailbox(user_id: str, session: dict = Depends(require_can_manage_users)):
     del session
     _ensure_primary_site()
     try:
@@ -335,7 +335,7 @@ def get_user_mailbox(user_id: str, session: dict = Depends(require_authenticated
 
 
 @router.get("/users/{user_id}/devices", response_model=list[UserAdminDeviceResponse])
-def get_user_devices(user_id: str, session: dict = Depends(require_authenticated_user)):
+def get_user_devices(user_id: str, session: dict = Depends(require_can_manage_users)):
     del session
     _ensure_primary_site()
     try:
@@ -348,7 +348,7 @@ def get_user_devices(user_id: str, session: dict = Depends(require_authenticated
 def get_user_activity(
     user_id: str,
     limit: int = Query(50, ge=1, le=200),
-    session: dict = Depends(require_authenticated_user),
+    session: dict = Depends(require_can_manage_users),
 ):
     del session
     _ensure_primary_site()
@@ -358,7 +358,7 @@ def get_user_activity(
 @router.post("/jobs", response_model=UserAdminJobResponse)
 def create_user_admin_job(
     body: UserAdminJobCreateRequest,
-    session: dict = Depends(require_authenticated_user),
+    session: dict = Depends(require_can_manage_users),
 ):
     _ensure_primary_site()
     try:
@@ -374,9 +374,9 @@ def create_user_admin_job(
 
 
 @router.get("/jobs/{job_id}", response_model=UserAdminJobResponse)
-def get_user_admin_job(job_id: str, session: dict = Depends(require_authenticated_user)):
+def get_user_admin_job(job_id: str, session: dict = Depends(require_can_manage_users)):
     _ensure_primary_site()
-    if not user_admin_jobs.job_belongs_to(job_id, str(session.get("email") or ""), is_admin=is_admin_user(str(session.get("email") or ""))):
+    if not user_admin_jobs.job_belongs_to(job_id, str(session.get("email") or ""), is_admin=session_is_admin(session)):
         raise HTTPException(status_code=404, detail="Job not found")
     job = user_admin_jobs.get_job(job_id)
     if not job:
@@ -385,9 +385,9 @@ def get_user_admin_job(job_id: str, session: dict = Depends(require_authenticate
 
 
 @router.get("/jobs/{job_id}/results", response_model=list[UserAdminJobResultResponse])
-def get_user_admin_job_results(job_id: str, session: dict = Depends(require_authenticated_user)):
+def get_user_admin_job_results(job_id: str, session: dict = Depends(require_can_manage_users)):
     _ensure_primary_site()
-    if not user_admin_jobs.job_belongs_to(job_id, str(session.get("email") or ""), is_admin=is_admin_user(str(session.get("email") or ""))):
+    if not user_admin_jobs.job_belongs_to(job_id, str(session.get("email") or ""), is_admin=session_is_admin(session)):
         raise HTTPException(status_code=404, detail="Job not found")
     if not user_admin_jobs.get_job(job_id):
         raise HTTPException(status_code=404, detail="Job not found")
@@ -397,7 +397,7 @@ def get_user_admin_job_results(job_id: str, session: dict = Depends(require_auth
 @router.get("/audit", response_model=list[UserAdminAuditEntryResponse])
 def get_user_admin_audit(
     limit: int = Query(100, ge=1, le=500),
-    session: dict = Depends(require_authenticated_user),
+    session: dict = Depends(require_can_manage_users),
 ):
     del session
     _ensure_primary_site()
@@ -415,7 +415,7 @@ def export_user_admin_users_csv(
     directory: str = Query(default=""),
     report_filter: UserExitReportFilter = Query(default=""),
     scope: str = Query(default="filtered"),
-    session: dict = Depends(require_authenticated_user),
+    session: dict = Depends(require_can_manage_users),
 ) -> FileResponse:
     del session
     _ensure_primary_site()
@@ -457,7 +457,7 @@ def export_user_admin_users_excel(
     directory: str = Query(default=""),
     report_filter: UserExitReportFilter = Query(default=""),
     scope: str = Query(default="filtered"),
-    session: dict = Depends(require_authenticated_user),
+    session: dict = Depends(require_can_manage_users),
 ) -> FileResponse:
     del session
     _ensure_primary_site()

@@ -54,6 +54,15 @@ def _init_session_db() -> None:
                 expires_at TEXT NOT NULL
             )
         """)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+        for name, ddl in (
+            ("auth_provider", "ALTER TABLE sessions ADD COLUMN auth_provider TEXT"),
+            ("is_admin", "ALTER TABLE sessions ADD COLUMN is_admin INTEGER"),
+            ("can_manage_users", "ALTER TABLE sessions ADD COLUMN can_manage_users INTEGER"),
+            ("site_scope", "ALTER TABLE sessions ADD COLUMN site_scope TEXT"),
+        ):
+            if name not in columns:
+                conn.execute(ddl)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS atlassian_connections (
                 email                    TEXT PRIMARY KEY,
@@ -73,14 +82,37 @@ def _init_session_db() -> None:
 _init_session_db()
 
 
-def create_session(email: str, name: str) -> str:
+def create_session(
+    email: str,
+    name: str,
+    *,
+    auth_provider: str = "entra",
+    is_admin: bool | None = None,
+    can_manage_users: bool | None = None,
+    site_scope: str = "primary",
+) -> str:
     """Create a new session, persist it, and return the session ID."""
     sid = secrets.token_urlsafe(32)
     expires_at = (datetime.now(timezone.utc) + _SESSION_TTL).isoformat()
+    resolved_is_admin = is_admin_user(email) if is_admin is None else bool(is_admin)
+    resolved_can_manage_users = resolved_is_admin if can_manage_users is None else bool(can_manage_users)
     with sqlite3.connect(_DB_PATH) as conn:
         conn.execute(
-            "INSERT INTO sessions (sid, email, name, expires_at) VALUES (?, ?, ?, ?)",
-            (sid, email, name, expires_at),
+            """
+            INSERT INTO sessions (
+                sid, email, name, expires_at, auth_provider, is_admin, can_manage_users, site_scope
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sid,
+                email,
+                name,
+                expires_at,
+                str(auth_provider or "entra"),
+                int(resolved_is_admin),
+                int(resolved_can_manage_users),
+                str(site_scope or "primary"),
+            ),
         )
     logger.info("Session created for %s", email)
     return sid
@@ -108,7 +140,11 @@ def get_session(session_id: str) -> dict[str, Any] | None:
     with sqlite3.connect(_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT email, name, expires_at FROM sessions WHERE sid = ?",
+            """
+            SELECT email, name, expires_at, auth_provider, is_admin, can_manage_users, site_scope
+            FROM sessions
+            WHERE sid = ?
+            """,
             (session_id,),
         ).fetchone()
     if not row:
@@ -117,7 +153,21 @@ def get_session(session_id: str) -> dict[str, Any] | None:
     if datetime.now(timezone.utc) > expires_at:
         delete_session(session_id)
         return None
-    return {"email": row["email"], "name": row["name"], "expires_at": expires_at}
+    stored_is_admin = row["is_admin"]
+    stored_can_manage_users = row["can_manage_users"]
+    return {
+        "email": row["email"],
+        "name": row["name"],
+        "expires_at": expires_at,
+        "auth_provider": str(row["auth_provider"] or "entra"),
+        "is_admin": bool(stored_is_admin) if stored_is_admin is not None else is_admin_user(str(row["email"] or "")),
+        "can_manage_users": (
+            bool(stored_can_manage_users)
+            if stored_can_manage_users is not None
+            else True
+        ),
+        "site_scope": str(row["site_scope"] or "primary"),
+    }
 
 
 def delete_session(session_id: str) -> None:
@@ -317,6 +367,28 @@ def is_admin_user(email: str) -> bool:
     return email.lower() in admins
 
 
+def session_is_admin(session: dict[str, Any] | None) -> bool:
+    if not session:
+        return False
+    if str(session.get("auth_provider") or "entra").strip().lower() != "atlassian":
+        return is_admin_user(str(session.get("email") or ""))
+    stored = session.get("is_admin")
+    if stored is not None:
+        return bool(stored)
+    return is_admin_user(str(session.get("email") or ""))
+
+
+def session_can_manage_users(session: dict[str, Any] | None) -> bool:
+    if not session:
+        return False
+    if str(session.get("auth_provider") or "entra").strip().lower() != "atlassian":
+        return True
+    stored = session.get("can_manage_users")
+    if stored is not None:
+        return bool(stored)
+    return True
+
+
 def require_admin(request: Request) -> dict[str, Any]:
     """FastAPI dependency: require admin role. Raises 403 if not admin."""
     from fastapi import HTTPException as _HTTPException
@@ -324,8 +396,21 @@ def require_admin(request: Request) -> dict[str, Any]:
     session = get_session(sid) if sid else None
     if not session:
         raise _HTTPException(status_code=401, detail="Not authenticated")
-    if not is_admin_user(session["email"]):
+    if not session_is_admin(session):
         raise _HTTPException(status_code=403, detail="Admin access required")
+    return session
+
+
+def require_can_manage_users(request: Request) -> dict[str, Any]:
+    """FastAPI dependency: require user-management capability."""
+    from fastapi import HTTPException as _HTTPException
+
+    sid = request.cookies.get("session_id", "")
+    session = get_session(sid) if sid else None
+    if not session:
+        raise _HTTPException(status_code=401, detail="Not authenticated")
+    if not session_can_manage_users(session):
+        raise _HTTPException(status_code=403, detail="User administration access required")
     return session
 
 
@@ -345,8 +430,8 @@ def session_to_public_user(session: dict[str, Any]) -> dict[str, Any]:
     return {
         "email": session["email"],
         "name": session["name"],
-        "is_admin": is_admin_user(session["email"]),
-        "can_manage_users": True,
+        "is_admin": session_is_admin(session),
+        "can_manage_users": session_can_manage_users(session),
         "jira_auth": get_atlassian_connection_status(session["email"]),
     }
 
@@ -378,7 +463,7 @@ if ATLASSIAN_CLIENT_ID and ATLASSIAN_CLIENT_SECRET:
         access_token_url="https://auth.atlassian.com/oauth/token",
         client_kwargs={
             "scope": (
-                "offline_access read:jira-user read:jira-work write:jira-work "
+                "openid profile email offline_access read:jira-user read:jira-work write:jira-work "
                 "read:servicedesk-request write:servicedesk-request"
             ),
             "token_endpoint_auth_method": "client_secret_post",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -453,3 +454,190 @@ class TestAuthMiddleware:
         assert stub.redirect_uri == "https://it-app.movedocs.com/api/auth/atlassian/callback"
         assert stub.kwargs["audience"] == "api.atlassian.com"
         assert stub.kwargs["prompt"] == "consent"
+
+    def test_primary_and_oasis_login_redirect_to_atlassian(self, auth_client, monkeypatch):
+        import routes_auth
+
+        class _StubAtlassianClient:
+            def __init__(self):
+                self.redirect_uri = ""
+                self.kwargs = {}
+
+            async def authorize_redirect(self, request, redirect_uri, **kwargs):
+                self.redirect_uri = redirect_uri
+                self.kwargs = kwargs
+                return RedirectResponse(url="https://auth.atlassian.com/mock")
+
+        stub = _StubAtlassianClient()
+        monkeypatch.setattr(routes_auth, "atlassian_oauth_configured", lambda: True)
+        monkeypatch.setattr(
+            routes_auth.oauth,
+            "create_client",
+            lambda name: stub if name == "atlassian" else None,
+        )
+
+        primary = auth_client.get("/api/auth/login", headers={"host": "it-app.movedocs.com"}, follow_redirects=False)
+        assert primary.status_code == 307
+        assert stub.redirect_uri == "https://it-app.movedocs.com/api/auth/callback"
+        assert stub.kwargs["audience"] == "api.atlassian.com"
+
+        oasis = auth_client.get("/api/auth/login", headers={"host": "oasisdev.movedocs.com"}, follow_redirects=False)
+        assert oasis.status_code == 307
+        assert stub.redirect_uri == "https://oasisdev.movedocs.com/api/auth/callback"
+
+    def test_azure_login_redirects_to_entra(self, auth_client, monkeypatch):
+        import routes_auth
+
+        class _StubEntraClient:
+            def __init__(self):
+                self.redirect_uri = ""
+
+            async def authorize_redirect(self, request, redirect_uri, **kwargs):
+                self.redirect_uri = redirect_uri
+                return RedirectResponse(url="https://login.microsoftonline.com/mock")
+
+        stub = _StubEntraClient()
+        monkeypatch.setattr(
+            routes_auth.oauth,
+            "create_client",
+            lambda name: stub if name == "entra" else None,
+        )
+
+        resp = auth_client.get("/api/auth/login", headers={"host": "azure.movedocs.com"}, follow_redirects=False)
+
+        assert resp.status_code == 307
+        assert stub.redirect_uri == "https://azure.movedocs.com/api/auth/callback"
+
+    def test_atlassian_primary_callback_creates_scoped_session(self, auth_client, monkeypatch):
+        import routes_auth
+        from auth import get_atlassian_connection, get_session
+
+        monkeypatch.setattr(
+            routes_auth,
+            "_complete_atlassian_oauth",
+            AsyncMock(
+                return_value={
+                    "email": "oasis.user@example.com",
+                    "name": "Oasis User",
+                    "account_id": "acct-123",
+                    "cloud_id": "cloud-1",
+                    "site_url": "https://keyjira.atlassian.net",
+                    "scope": "openid profile email",
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "expires_at": datetime.now(timezone.utc),
+                }
+            ),
+        )
+        monkeypatch.setattr(
+            routes_auth,
+            "_resolve_atlassian_group_access",
+            lambda account_id: {
+                "allowed": True,
+                "is_admin": False,
+                "access_groups": ["jira-servicemanagement-users-keyjira"],
+                "admin_groups": [],
+            },
+        )
+
+        resp = auth_client.get("/api/auth/callback", headers={"host": "oasisdev.movedocs.com"}, follow_redirects=False)
+
+        assert resp.status_code == 307
+        sid = resp.cookies.get("session_id")
+        assert sid
+        session = get_session(sid)
+        assert session is not None
+        assert session["email"] == "oasis.user@example.com"
+        assert session["auth_provider"] == "atlassian"
+        assert session["site_scope"] == "oasisdev"
+        assert session["is_admin"] is False
+        assert session["can_manage_users"] is False
+        connection = get_atlassian_connection("oasis.user@example.com")
+        assert connection is not None
+        assert connection["site_url"] == "https://keyjira.atlassian.net"
+
+    def test_atlassian_primary_callback_denies_user_outside_access_groups(self, auth_client, monkeypatch):
+        import routes_auth
+
+        monkeypatch.setattr(
+            routes_auth,
+            "_complete_atlassian_oauth",
+            AsyncMock(
+                return_value={
+                    "email": "blocked@example.com",
+                    "name": "Blocked User",
+                    "account_id": "acct-blocked",
+                    "cloud_id": "cloud-1",
+                    "site_url": "https://keyjira.atlassian.net",
+                    "scope": "openid profile email",
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "expires_at": datetime.now(timezone.utc),
+                }
+            ),
+        )
+        monkeypatch.setattr(
+            routes_auth,
+            "_resolve_atlassian_group_access",
+            lambda account_id: {"allowed": False, "is_admin": False, "access_groups": [], "admin_groups": []},
+        )
+
+        resp = auth_client.get("/api/auth/callback", headers={"host": "it-app.movedocs.com"}, follow_redirects=False)
+
+        assert resp.status_code == 403
+        assert "not authorized" in resp.text
+
+    def test_auth_me_uses_session_flags_and_connected_jira_identity(self, auth_client):
+        from auth import create_session, save_atlassian_connection
+
+        save_atlassian_connection(
+            email="oasis.user@example.com",
+            atlassian_account_id="acct-123",
+            atlassian_account_name="Oasis User",
+            cloud_id="cloud-1",
+            site_url="https://keyjira.atlassian.net",
+            scope="openid profile email",
+            access_token="access-token",
+            refresh_token="refresh-token",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        sid = create_session(
+            "oasis.user@example.com",
+            "Oasis User",
+            auth_provider="atlassian",
+            is_admin=False,
+            can_manage_users=False,
+            site_scope="oasisdev",
+        )
+        auth_client.cookies.set("session_id", sid)
+
+        resp = auth_client.get("/api/auth/me", headers={"host": "oasisdev.movedocs.com"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["is_admin"] is False
+        assert data["can_manage_users"] is False
+        assert data["jira_auth"]["connected"] is True
+        assert data["jira_auth"]["account_name"] == "Oasis User"
+
+    def test_logout_uses_provider_specific_behavior(self, auth_client):
+        from auth import create_session
+
+        sid = create_session("test@example.com", "Test User")
+        auth_client.cookies.set("session_id", sid)
+        azure = auth_client.post("/api/auth/logout", headers={"host": "azure.movedocs.com"})
+        assert azure.status_code == 200
+        assert "redirect" in azure.json()
+
+        sid = create_session(
+            "oasis.user@example.com",
+            "Oasis User",
+            auth_provider="atlassian",
+            is_admin=False,
+            can_manage_users=False,
+            site_scope="oasisdev",
+        )
+        auth_client.cookies.set("session_id", sid)
+        oasis = auth_client.post("/api/auth/logout", headers={"host": "oasisdev.movedocs.com"})
+        assert oasis.status_code == 200
+        assert "redirect" not in oasis.json()

@@ -79,6 +79,10 @@ function previewButtonLabel(attachment: TicketAttachment): string {
   return "Preview";
 }
 
+function isIframePreviewKind(kind: TicketAttachment["preview_kind"]): boolean {
+  return kind === "pdf" || kind === "office";
+}
+
 function chipClass(color: "slate" | "blue" | "amber" | "green") {
   const classes = {
     slate: "bg-slate-100 text-slate-700",
@@ -271,6 +275,9 @@ export default function TicketWorkbenchDrawer({
       try {
         if (!previewAttachment.preview_available || !previewAttachment.preview_url) {
           throw new Error("Preview is not available for this attachment.");
+        }
+        if (isIframePreviewKind(previewAttachment.preview_kind)) {
+          return;
         }
         if (previewAttachment.preview_kind === "text") {
           const text = await api.fetchAttachmentPreviewText(previewAttachment.preview_url);
@@ -1171,6 +1178,20 @@ export default function TicketWorkbenchDrawer({
                         >
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="min-w-0 flex-1">
+                              {attachment.preview_kind === "image" && attachment.preview_available && attachment.preview_url ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewAttachment(attachment)}
+                                  className="mb-3 block overflow-hidden rounded-xl border border-slate-200 bg-slate-50 hover:border-blue-200 hover:bg-blue-50"
+                                >
+                                  <img
+                                    src={attachment.thumbnail_url || attachment.preview_url}
+                                    alt={attachment.display_name}
+                                    loading="lazy"
+                                    className="max-h-64 w-full object-contain"
+                                  />
+                                </button>
+                              ) : null}
                               <div className="truncate text-sm font-medium text-slate-800">
                                 {attachment.display_name}
                               </div>
@@ -1438,10 +1459,10 @@ export default function TicketWorkbenchDrawer({
                     className="max-h-[72vh] max-w-full rounded-lg object-contain"
                   />
                 </div>
-              ) : previewObjectUrl ? (
+              ) : isIframePreviewKind(previewAttachment.preview_kind) && previewAttachment.preview_url ? (
                 <iframe
                   title={`${previewAttachment.display_name} preview`}
-                  src={previewObjectUrl}
+                  src={previewAttachment.preview_url}
                   className="h-[72vh] w-full rounded-xl border border-slate-200 bg-white"
                 />
               ) : (

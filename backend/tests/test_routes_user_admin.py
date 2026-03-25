@@ -3,6 +3,8 @@ from __future__ import annotations
 from io import BytesIO
 from unittest.mock import MagicMock
 
+import sqlite3
+
 from openpyxl import load_workbook
 
 
@@ -140,6 +142,27 @@ def test_user_admin_capabilities_require_auth(monkeypatch):
     resp = client.get("/api/user-admin/capabilities", headers={"host": "it-app.movedocs.com"})
 
     assert resp.status_code == 401
+
+
+def test_user_admin_capabilities_require_manage_users(test_client):
+    from auth import _DB_PATH, create_session
+
+    sid = create_session(
+        "viewer@example.com",
+        "Viewer User",
+        auth_provider="atlassian",
+        is_admin=False,
+        can_manage_users=False,
+        site_scope="primary",
+    )
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute("DELETE FROM sessions WHERE email = ?", ("test@example.com",))
+        conn.commit()
+    test_client.cookies.set("session_id", sid)
+
+    resp = test_client.get("/api/user-admin/capabilities", headers={"host": "it-app.movedocs.com"})
+
+    assert resp.status_code == 403
 
 
 def test_create_and_poll_user_admin_job(test_client, monkeypatch):

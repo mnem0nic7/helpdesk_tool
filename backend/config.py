@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Literal
 from dotenv import load_dotenv
 
 # Load .env from the backend directory
@@ -28,6 +29,13 @@ def _env_custom_field_id(name: str) -> str:
 
 def _env_csv(name: str) -> list[str]:
     return [part.strip() for part in os.getenv(name, "").split(",") if part.strip()]
+
+
+def _env_auth_provider(name: str, default: str) -> str:
+    raw = os.getenv(name, default).strip().lower()
+    if raw in {"entra", "atlassian"}:
+        return raw
+    return default
 
 
 JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID: str = _env_custom_field_id(
@@ -65,6 +73,9 @@ DATA_DIR: str = os.getenv("DATA_DIR", "/app/data")
 PRIMARY_APP_HOST: str = os.getenv("PRIMARY_APP_HOST", "it-app.movedocs.com")
 OASISDEV_APP_HOST: str = os.getenv("OASISDEV_APP_HOST", "oasisdev.movedocs.com")
 AZURE_APP_HOST: str = os.getenv("AZURE_APP_HOST", "azure.movedocs.com")
+PRIMARY_AUTH_PROVIDER: str = _env_auth_provider("PRIMARY_AUTH_PROVIDER", "atlassian")
+OASISDEV_AUTH_PROVIDER: str = _env_auth_provider("OASISDEV_AUTH_PROVIDER", "atlassian")
+AZURE_AUTH_PROVIDER: str = _env_auth_provider("AZURE_AUTH_PROVIDER", "entra")
 
 # AI provider API keys
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
@@ -84,6 +95,25 @@ ATLASSIAN_ALLOWED_SITE_URL: str = (
     os.getenv("ATLASSIAN_ALLOWED_SITE_URL", JIRA_BASE_URL).strip().rstrip("/") or JIRA_BASE_URL
 )
 ATLASSIAN_TOKEN_ENCRYPTION_KEY: str = os.getenv("ATLASSIAN_TOKEN_ENCRYPTION_KEY", "").strip()
+ATLASSIAN_ACCESS_GROUPS: list[str] = _env_csv("ATLASSIAN_ACCESS_GROUPS") or [
+    "jira-servicemanagement-users-keyjira",
+    "MoveDocs Service Desk Agents",
+]
+ATLASSIAN_ADMIN_GROUPS: list[str] = _env_csv("ATLASSIAN_ADMIN_GROUPS") or [
+    "MoveDocs Service Desk Agents",
+]
+
+
+AuthProvider = Literal["entra", "atlassian"]
+
+
+def get_auth_provider_for_scope(scope: str) -> AuthProvider:
+    normalized = (scope or "").strip().lower()
+    if normalized == "azure":
+        return AZURE_AUTH_PROVIDER  # type: ignore[return-value]
+    if normalized == "oasisdev":
+        return OASISDEV_AUTH_PROVIDER  # type: ignore[return-value]
+    return PRIMARY_AUTH_PROVIDER  # type: ignore[return-value]
 
 
 def _is_test_runtime() -> bool:

@@ -47,6 +47,24 @@ def test_serialize_attachment_aliases_generated_numeric_name():
     assert payload["converted_preview_url"].endswith("/preview-converted")
 
 
+def test_serialize_attachment_aliases_long_machine_upload_name():
+    payload = attachment_service.serialize_attachment(
+        "OIT-19355",
+        {
+            "id": "9010",
+            "filename": "-osiocc_occv2_site_occ.osidigital.com_uploads_etr_attachments_9260297081774461152.xlsx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "size": 20480,
+            "created": "2026-03-25T17:53:21+00:00",
+            "author": {"displayName": "Alice Admin"},
+        },
+    )
+
+    assert payload["raw_filename"].startswith("-osiocc_occv2_site_occ.osidigital.com_uploads")
+    assert payload["display_name"] == "OIT-19355 - Office Document - 2026-03-25 17-53.xlsx"
+    assert payload["preview_kind"] == "office"
+
+
 def test_ensure_office_preview_pdf_uses_cache(tmp_path, monkeypatch):
     attachment = {
         "id": "9003",

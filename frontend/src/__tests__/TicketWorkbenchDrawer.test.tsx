@@ -283,6 +283,7 @@ describe("TicketWorkbenchDrawer", () => {
 
     expect(screen.getByText("OIT-1 - Image - 2026-03-03 10-14.png")).toBeInTheDocument();
     expect(screen.getByText("Jira file: 10875238511763560924.png")).toBeInTheDocument();
+    expect(screen.getByAltText("OIT-1 - Image - 2026-03-03 10-14.png")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
 
@@ -290,7 +291,49 @@ describe("TicketWorkbenchDrawer", () => {
     await waitFor(() => {
       expect(mockApi.fetchAttachmentPreviewBlob).toHaveBeenCalledWith("/api/tickets/OIT-1/attachments/att-1/preview");
     });
-    expect(screen.getByAltText("OIT-1 - Image - 2026-03-03 10-14.png")).toBeInTheDocument();
+    expect(screen.getAllByAltText("OIT-1 - Image - 2026-03-03 10-14.png").length).toBeGreaterThan(0);
+  });
+
+  it("renders office previews from the same-origin preview URL instead of a blob iframe", async () => {
+    mockApi.getTicket.mockResolvedValue({
+      ...ticketDetail,
+      attachments: [
+        {
+          id: "att-2",
+          filename: "10875238511763560924.xlsx",
+          raw_filename: "10875238511763560924.xlsx",
+          display_name: "OIT-1 - Office Document - 2026-03-03 10-14.xlsx",
+          extension: ".xlsx",
+          mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          size: 20480,
+          created: "2026-03-03T17:14:00Z",
+          author: "Ada Lovelace",
+          content_url: "/api/tickets/OIT-1/attachments/att-2/download",
+          download_url: "/api/tickets/OIT-1/attachments/att-2/download",
+          preview_url: "/api/tickets/OIT-1/attachments/att-2/preview-converted",
+          converted_preview_url: "/api/tickets/OIT-1/attachments/att-2/preview-converted",
+          preview_kind: "office",
+          preview_available: true,
+          thumbnail_url: "",
+        },
+      ],
+    });
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Attachments");
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview Document" }));
+
+    const iframe = await screen.findByTitle("OIT-1 - Office Document - 2026-03-03 10-14.xlsx preview");
+    expect(iframe).toHaveAttribute("src", "/api/tickets/OIT-1/attachments/att-2/preview-converted");
+    expect(mockApi.fetchAttachmentPreviewBlob).not.toHaveBeenCalled();
   });
 
   it("lets the user manually change the reporter before saving", async () => {

@@ -41,6 +41,8 @@ _TEXT_EXTENSIONS = {
     ".yml",
 }
 _GENERATED_STEM_RE = re.compile(r"^(?:\d{10,}|[0-9a-f]{24,}|[0-9_-]{14,})$", re.IGNORECASE)
+_MACHINE_TOKEN_RE = re.compile(r"(?:^|[_\-.])(upload|uploads|attachment|attachments)(?:[_\-.]|$)", re.IGNORECASE)
+_DOMAIN_LIKE_RE = re.compile(r"[a-z0-9-]+\.[a-z]{2,}", re.IGNORECASE)
 _MAX_OFFICE_PREVIEW_BYTES = 25 * 1024 * 1024
 _CONVERSION_TIMEOUT_SECONDS = 90
 _CACHE_TTL = timedelta(days=7)
@@ -69,6 +71,14 @@ def is_generated_attachment_name(filename: str) -> bool:
     if not stem:
         return True
     if _GENERATED_STEM_RE.fullmatch(stem):
+        return True
+    if _MACHINE_TOKEN_RE.search(stem) and len(stem) >= 20:
+        return True
+    if _DOMAIN_LIKE_RE.search(stem) and sum(stem.count(sep) for sep in ("_", "-", ".")) >= 4:
+        return True
+    if re.search(r"\d{8,}$", stem) and len(stem) >= 20:
+        return True
+    if len(stem) >= 40 and sum(stem.count(sep) for sep in ("_", "-", ".")) >= 4 and " " not in stem:
         return True
     return bool(len(stem) >= 14 and not re.search(r"[a-z]", stem))
 
