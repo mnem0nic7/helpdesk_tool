@@ -13,6 +13,42 @@ JIRA_EMAIL: str = os.getenv("JIRA_EMAIL", "")
 JIRA_API_TOKEN: str = os.getenv("JIRA_API_TOKEN", "")
 JIRA_BASE_URL: str = os.getenv("JIRA_BASE_URL", "").rstrip("/")
 JIRA_PROJECT: str = os.getenv("JIRA_PROJECT", "OIT")
+
+
+def _env_custom_field_id(name: str) -> str:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("customfield_"):
+        return raw
+    if raw.isdigit():
+        return f"customfield_{raw}"
+    return raw
+
+
+def _env_csv(name: str) -> list[str]:
+    return [part.strip() for part in os.getenv(name, "").split(",") if part.strip()]
+
+
+JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID: str = _env_custom_field_id(
+    "JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID"
+)
+JIRA_FOLLOWUP_PUBLIC_AGENT_TOUCH_COUNT_FIELD_ID: str = _env_custom_field_id(
+    "JIRA_FOLLOWUP_PUBLIC_AGENT_TOUCH_COUNT_FIELD_ID"
+)
+JIRA_FOLLOWUP_STATUS_FIELD_ID: str = _env_custom_field_id("JIRA_FOLLOWUP_STATUS_FIELD_ID")
+JIRA_FOLLOWUP_BREACHED_AT_FIELD_ID: str = _env_custom_field_id("JIRA_FOLLOWUP_BREACHED_AT_FIELD_ID")
+JIRA_FOLLOWUP_AGENT_GROUPS: list[str] = _env_csv("JIRA_FOLLOWUP_AGENT_GROUPS")
+JIRA_FOLLOWUP_CUSTOM_FIELD_IDS: list[str] = [
+    field_id
+    for field_id in (
+        JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID,
+        JIRA_FOLLOWUP_PUBLIC_AGENT_TOUCH_COUNT_FIELD_ID,
+        JIRA_FOLLOWUP_STATUS_FIELD_ID,
+        JIRA_FOLLOWUP_BREACHED_AT_FIELD_ID,
+    )
+    if field_id
+]
 AZURE_FINOPS_RECOMMENDATION_JIRA_PROJECT: str = (
     os.getenv("AZURE_FINOPS_RECOMMENDATION_JIRA_PROJECT", JIRA_PROJECT).strip() or JIRA_PROJECT
 )
@@ -40,6 +76,14 @@ ENTRA_CLIENT_ID: str = os.getenv("ENTRA_CLIENT_ID", "")
 ENTRA_CLIENT_SECRET: str = os.getenv("ENTRA_CLIENT_SECRET", "")
 ALLOWED_USERS: str = os.getenv("ALLOWED_USERS", "")  # comma-separated emails, empty = all
 ADMIN_USERS: str = os.getenv("ADMIN_USERS", "")  # comma-separated emails for write operations, empty = all authenticated
+
+# Atlassian OAuth for user-on-behalf-of Jira writes
+ATLASSIAN_CLIENT_ID: str = os.getenv("ATLASSIAN_CLIENT_ID", "").strip()
+ATLASSIAN_CLIENT_SECRET: str = os.getenv("ATLASSIAN_CLIENT_SECRET", "").strip()
+ATLASSIAN_ALLOWED_SITE_URL: str = (
+    os.getenv("ATLASSIAN_ALLOWED_SITE_URL", JIRA_BASE_URL).strip().rstrip("/") or JIRA_BASE_URL
+)
+ATLASSIAN_TOKEN_ENCRYPTION_KEY: str = os.getenv("ATLASSIAN_TOKEN_ENCRYPTION_KEY", "").strip()
 
 
 def _is_test_runtime() -> bool:

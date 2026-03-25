@@ -785,11 +785,20 @@ export interface CacheStatus {
 }
 
 /** Current user info from /api/auth/me. */
+export interface JiraAuthStatus {
+  connected: boolean;
+  mode: string;
+  site_url: string;
+  account_name: string;
+  configured: boolean;
+}
+
 export interface UserInfo {
   email: string;
   name: string;
   is_admin: boolean;
   can_manage_users: boolean;
+  jira_auth?: JiraAuthStatus;
 }
 
 export interface AzureDatasetStatus {
@@ -2201,6 +2210,18 @@ export const api = {
       }
       return null;
     }
+  },
+
+  getAtlassianConnectUrl(returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`): string {
+    return `/api/auth/atlassian/connect?return_to=${encodeURIComponent(returnTo)}`;
+  },
+
+  getAtlassianStatus(): Promise<JiraAuthStatus> {
+    return fetchJSON<JiraAuthStatus>("/api/auth/atlassian/status");
+  },
+
+  disconnectAtlassian(): Promise<{ disconnected: boolean }> {
+    return postJSON<{ disconnected: boolean }>("/api/auth/atlassian/disconnect", {});
   },
 
   /** Log out the current user. */

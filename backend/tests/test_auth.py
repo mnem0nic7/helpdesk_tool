@@ -389,6 +389,8 @@ class TestAuthMiddleware:
         assert data["name"] == "Test User"
         assert data["is_admin"] is True
         assert data["can_manage_users"] is True
+        assert data["jira_auth"]["connected"] is False
+        assert data["jira_auth"]["mode"] == "fallback_it_app"
 
     def test_logout_clears_session(self, auth_client):
         from auth import create_session, get_session

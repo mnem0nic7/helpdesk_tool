@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import secrets
 import sqlite3
@@ -9,11 +11,18 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
+import requests
 from starlette.requests import Request
 
 from authlib.integrations.starlette_client import OAuth
+from cryptography.fernet import Fernet
 
 from config import (
+    APP_SECRET_KEY,
+    ATLASSIAN_ALLOWED_SITE_URL,
+    ATLASSIAN_CLIENT_ID,
+    ATLASSIAN_CLIENT_SECRET,
+    ATLASSIAN_TOKEN_ENCRYPTION_KEY,
     DATA_DIR,
     ENTRA_TENANT_ID,
     ENTRA_CLIENT_ID,
@@ -43,6 +52,20 @@ def _init_session_db() -> None:
                 email      TEXT NOT NULL,
                 name       TEXT NOT NULL,
                 expires_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS atlassian_connections (
+                email                    TEXT PRIMARY KEY,
+                atlassian_account_id     TEXT NOT NULL,
+                atlassian_account_name   TEXT NOT NULL,
+                cloud_id                 TEXT NOT NULL,
+                site_url                 TEXT NOT NULL,
+                scope                    TEXT NOT NULL,
+                access_token_encrypted   TEXT NOT NULL,
+                refresh_token_encrypted  TEXT NOT NULL,
+                expires_at               TEXT NOT NULL,
+                updated_at               TEXT NOT NULL
             )
         """)
 
@@ -103,6 +126,176 @@ def delete_session(session_id: str) -> None:
         conn.execute("DELETE FROM sessions WHERE sid = ?", (session_id,))
 
 
+def _token_cipher() -> Fernet:
+    raw_key = ATLASSIAN_TOKEN_ENCRYPTION_KEY.strip()
+    if raw_key:
+        key_bytes = raw_key.encode("utf-8")
+    else:
+        digest = hashlib.sha256(APP_SECRET_KEY.encode("utf-8")).digest()
+        key_bytes = base64.urlsafe_b64encode(digest)
+    return Fernet(key_bytes)
+
+
+def _encrypt_token(value: str) -> str:
+    return _token_cipher().encrypt(value.encode("utf-8")).decode("utf-8")
+
+
+def _decrypt_token(value: str) -> str:
+    return _token_cipher().decrypt(value.encode("utf-8")).decode("utf-8")
+
+
+def _normalize_site_url(url: str) -> str:
+    return str(url or "").strip().rstrip("/").lower()
+
+
+def get_atlassian_connection(email: str) -> dict[str, Any] | None:
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT email, atlassian_account_id, atlassian_account_name, cloud_id, site_url,
+                   scope, access_token_encrypted, refresh_token_encrypted, expires_at, updated_at
+            FROM atlassian_connections
+            WHERE email = ?
+            """,
+            (email.lower(),),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "email": row["email"],
+        "atlassian_account_id": row["atlassian_account_id"],
+        "atlassian_account_name": row["atlassian_account_name"],
+        "cloud_id": row["cloud_id"],
+        "site_url": row["site_url"],
+        "scope": row["scope"],
+        "access_token": _decrypt_token(row["access_token_encrypted"]),
+        "refresh_token": _decrypt_token(row["refresh_token_encrypted"]),
+        "expires_at": datetime.fromisoformat(row["expires_at"]),
+        "updated_at": datetime.fromisoformat(row["updated_at"]),
+    }
+
+
+def save_atlassian_connection(
+    *,
+    email: str,
+    atlassian_account_id: str,
+    atlassian_account_name: str,
+    cloud_id: str,
+    site_url: str,
+    scope: str,
+    access_token: str,
+    refresh_token: str,
+    expires_at: datetime,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO atlassian_connections (
+                email, atlassian_account_id, atlassian_account_name, cloud_id, site_url,
+                scope, access_token_encrypted, refresh_token_encrypted, expires_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                atlassian_account_id=excluded.atlassian_account_id,
+                atlassian_account_name=excluded.atlassian_account_name,
+                cloud_id=excluded.cloud_id,
+                site_url=excluded.site_url,
+                scope=excluded.scope,
+                access_token_encrypted=excluded.access_token_encrypted,
+                refresh_token_encrypted=excluded.refresh_token_encrypted,
+                expires_at=excluded.expires_at,
+                updated_at=excluded.updated_at
+            """,
+            (
+                email.lower(),
+                atlassian_account_id,
+                atlassian_account_name,
+                cloud_id,
+                site_url.rstrip("/"),
+                scope,
+                _encrypt_token(access_token),
+                _encrypt_token(refresh_token),
+                expires_at.isoformat(),
+                now,
+            ),
+        )
+
+
+def delete_atlassian_connection(email: str) -> None:
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute("DELETE FROM atlassian_connections WHERE email = ?", (email.lower(),))
+
+
+def atlassian_oauth_configured() -> bool:
+    return bool(ATLASSIAN_CLIENT_ID and ATLASSIAN_CLIENT_SECRET)
+
+
+def get_atlassian_connection_status(email: str) -> dict[str, Any]:
+    connection = get_atlassian_connection(email)
+    connected = connection is not None
+    return {
+        "connected": connected,
+        "mode": "jira_user" if connected else "fallback_it_app",
+        "site_url": (connection or {}).get("site_url", ""),
+        "account_name": (connection or {}).get("atlassian_account_name", ""),
+        "configured": atlassian_oauth_configured(),
+    }
+
+
+def _refresh_atlassian_access_token(connection: dict[str, Any]) -> dict[str, Any] | None:
+    if not atlassian_oauth_configured():
+        return None
+    refresh_token = str(connection.get("refresh_token") or "").strip()
+    if not refresh_token:
+        return None
+    resp = requests.post(
+        "https://auth.atlassian.com/oauth/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": ATLASSIAN_CLIENT_ID,
+            "client_secret": ATLASSIAN_CLIENT_SECRET,
+            "refresh_token": refresh_token,
+        },
+        timeout=(10, 30),
+    )
+    if not resp.ok:
+        logger.warning("Failed to refresh Atlassian token for %s: %s", connection.get("email"), resp.text[:500])
+        delete_atlassian_connection(str(connection.get("email") or ""))
+        return None
+    payload = resp.json()
+    access_token = str(payload.get("access_token") or "").strip()
+    new_refresh_token = str(payload.get("refresh_token") or refresh_token).strip()
+    expires_in = int(payload.get("expires_in") or 3600)
+    if not access_token:
+        delete_atlassian_connection(str(connection.get("email") or ""))
+        return None
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(expires_in - 60, 60))
+    save_atlassian_connection(
+        email=str(connection.get("email") or ""),
+        atlassian_account_id=str(connection.get("atlassian_account_id") or ""),
+        atlassian_account_name=str(connection.get("atlassian_account_name") or ""),
+        cloud_id=str(connection.get("cloud_id") or ""),
+        site_url=str(connection.get("site_url") or ""),
+        scope=str(payload.get("scope") or connection.get("scope") or ""),
+        access_token=access_token,
+        refresh_token=new_refresh_token,
+        expires_at=expires_at,
+    )
+    refreshed = get_atlassian_connection(str(connection.get("email") or ""))
+    return refreshed
+
+
+def get_valid_atlassian_connection(email: str) -> dict[str, Any] | None:
+    connection = get_atlassian_connection(email)
+    if not connection:
+        return None
+    expires_at = connection.get("expires_at")
+    if isinstance(expires_at, datetime) and expires_at > datetime.now(timezone.utc) + timedelta(minutes=2):
+        return connection
+    return _refresh_atlassian_access_token(connection)
+
+
 # ---------------------------------------------------------------------------
 # User whitelist
 # ---------------------------------------------------------------------------
@@ -154,6 +347,7 @@ def session_to_public_user(session: dict[str, Any]) -> dict[str, Any]:
         "name": session["name"],
         "is_admin": is_admin_user(session["email"]),
         "can_manage_users": True,
+        "jira_auth": get_atlassian_connection_status(session["email"]),
     }
 
 
@@ -173,4 +367,20 @@ if ENTRA_TENANT_ID and ENTRA_CLIENT_ID:
             ".well-known/openid-configuration"
         ),
         client_kwargs={"scope": "openid email profile"},
+    )
+
+if ATLASSIAN_CLIENT_ID and ATLASSIAN_CLIENT_SECRET:
+    oauth.register(
+        name="atlassian",
+        client_id=ATLASSIAN_CLIENT_ID,
+        client_secret=ATLASSIAN_CLIENT_SECRET,
+        authorize_url="https://auth.atlassian.com/authorize",
+        access_token_url="https://auth.atlassian.com/oauth/token",
+        client_kwargs={
+            "scope": (
+                "offline_access read:jira-user read:jira-work write:jira-work "
+                "read:servicedesk-request write:servicedesk-request"
+            ),
+            "token_endpoint_auth_method": "client_secret_post",
+        },
     )

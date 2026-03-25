@@ -22,6 +22,7 @@ const { mockApi } = vi.hoisted(() => ({
     updateTicket: vi.fn(),
     transitionTicket: vi.fn(),
     addTicketComment: vi.fn(),
+    getMe: vi.fn(),
   },
 }));
 
@@ -208,6 +209,12 @@ describe("AILogPage", () => {
     mockApi.getPriorities.mockResolvedValue([{ id: "1", name: "High" }]);
     mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Hardware", description: "" }]);
     mockApi.getTransitions.mockResolvedValue([]);
+    mockApi.getMe.mockResolvedValue({
+      email: "test@example.com",
+      name: "Test User",
+      is_admin: true,
+      jira_auth: { connected: false, mode: "fallback_it_app", site_url: "", account_name: "", configured: true },
+    });
   });
 
   afterEach(() => {

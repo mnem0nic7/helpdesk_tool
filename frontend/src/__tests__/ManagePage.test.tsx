@@ -18,6 +18,7 @@ const { mockApi } = vi.hoisted(() => ({
     transitionTicket: vi.fn(),
     addTicketComment: vi.fn(),
     refreshCacheIncremental: vi.fn(),
+    getMe: vi.fn(),
   },
 }));
 
@@ -108,6 +109,12 @@ describe("ManagePage", () => {
     mockApi.getTransitions.mockResolvedValue([]);
     mockApi.transitionTicket.mockResolvedValue(ticketDetail);
     mockApi.refreshCacheIncremental.mockResolvedValue(undefined);
+    mockApi.getMe.mockResolvedValue({
+      email: "test@example.com",
+      name: "Test User",
+      is_admin: true,
+      jira_auth: { connected: false, mode: "fallback_it_app", site_url: "", account_name: "", configured: true },
+    });
   });
 
   afterEach(() => {

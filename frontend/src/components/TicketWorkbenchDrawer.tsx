@@ -2,6 +2,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEve
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
+import JiraWriteIdentityNotice from "./JiraWriteIdentityNotice.tsx";
 import type {
   Assignee,
   PriorityOption,
@@ -190,6 +191,12 @@ export default function TicketWorkbenchDrawer({
     queryFn: () => api.getTechnicianScores({ key: ticketKey ?? "" }),
     enabled: !!ticketKey,
     staleTime: 5 * 60 * 1000,
+  });
+  const { data: me } = useQuery({
+    queryKey: ["me", "ticket-jira-write"],
+    queryFn: () => api.getMe(),
+    staleTime: 60_000,
+    enabled: !!ticketKey,
   });
 
   useEffect(() => {
@@ -648,6 +655,10 @@ export default function TicketWorkbenchDrawer({
                   </h3>
                   <span className="text-xs text-slate-500">All changes write directly to Jira</span>
                 </div>
+                <JiraWriteIdentityNotice
+                  jiraAuth={me?.jira_auth}
+                  className="mt-3"
+                />
 
                 <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-12">
                   <label className="block xl:col-span-2">
@@ -901,6 +912,10 @@ export default function TicketWorkbenchDrawer({
                 <div className="space-y-4">
                   <div className="rounded-xl border border-slate-200 p-3">
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Add Comment</h3>
+                    <JiraWriteIdentityNotice
+                      jiraAuth={me?.jira_auth}
+                      className="mt-3"
+                    />
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
                         type="button"

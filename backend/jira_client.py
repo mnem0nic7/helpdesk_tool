@@ -10,7 +10,7 @@ from typing import Any
 import requests
 from requests.auth import HTTPBasicAuth
 
-from config import JIRA_EMAIL, JIRA_API_TOKEN, JIRA_BASE_URL
+from config import JIRA_API_TOKEN, JIRA_BASE_URL, JIRA_EMAIL, JIRA_FOLLOWUP_CUSTOM_FIELD_IDS
 from request_type import extract_request_type_name_from_fields, has_request_type
 
 # Validate Jira issue keys to prevent path traversal / SSRF
@@ -66,6 +66,9 @@ FIELDS: list[str] = [
     "issuelinks",
     "statuscategorychangedate",
 ]
+for _followup_field_id in JIRA_FOLLOWUP_CUSTOM_FIELD_IDS:
+    if _followup_field_id not in FIELDS:
+        FIELDS.append(_followup_field_id)
 
 
 class JiraClient:
@@ -79,17 +82,31 @@ class JiraClient:
         base_url: str = JIRA_BASE_URL,
         email: str = JIRA_EMAIL,
         token: str = JIRA_API_TOKEN,
+        *,
+        bearer_token: str = "",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
-        self.session.auth = HTTPBasicAuth(email, token)
         self.session.headers.update(
             {
                 "Accept": "application/json",
                 "Content-Type": "application/json",
             }
         )
+        if bearer_token:
+            self.session.headers["Authorization"] = f"Bearer {bearer_token}"
+        else:
+            self.session.auth = HTTPBasicAuth(email, token)
         self._thread_local = threading.local()
+
+    @classmethod
+    def for_atlassian_oauth(cls, *, cloud_id: str, access_token: str) -> "JiraClient":
+        return cls(
+            base_url=f"https://api.atlassian.com/ex/jira/{cloud_id}",
+            email="",
+            token="",
+            bearer_token=access_token,
+        )
 
     def _get_thread_session(self) -> requests.Session:
         """Return a per-thread session for concurrent Jira access.
@@ -458,6 +475,13 @@ class JiraClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_myself(self) -> dict[str, Any]:
+        """GET /rest/api/3/myself for the current authenticated Jira identity."""
+        url = f"{self.base_url}/rest/api/3/myself"
+        resp = self.session.get(url, timeout=self._TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+
     def get_transitions(self, key: str) -> list[dict[str, Any]]:
         """GET /rest/api/3/issue/{key}/transitions"""
         validate_jira_key(key)
@@ -634,6 +658,29 @@ class JiraClient:
         resp = self.session.get(url, params=params, timeout=self._TIMEOUT)
         resp.raise_for_status()
         return resp.json()
+
+    def get_group_members(self, group_name: str) -> list[dict[str, Any]]:
+        """GET /rest/api/3/group/member with pagination."""
+        name = str(group_name or "").strip()
+        if not name:
+            return []
+        url = f"{self.base_url}/rest/api/3/group/member"
+        members: list[dict[str, Any]] = []
+        start_at = 0
+        while True:
+            resp = self.session.get(
+                url,
+                params={"groupname": name, "startAt": start_at, "maxResults": 50},
+                timeout=self._TIMEOUT,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            values = data.get("values") or []
+            members.extend(values)
+            if data.get("isLast") or start_at + len(values) >= int(data.get("total") or 0):
+                break
+            start_at += len(values)
+        return members
 
     def search_users(self, query: str, max_results: int = 20) -> list[dict[str, Any]]:
         """GET /rest/api/3/user/search?query=... for broad user lookup."""

@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
 from auth import require_admin
 from jira_client import JiraClient
+from jira_write_service import add_fallback_internal_audit_note, get_jira_write_context, prepend_fallback_actor_line
 from issue_cache import cache
 from models import (
     BulkAssignRequest,
@@ -63,10 +64,18 @@ async def bulk_status(req: BulkStatusRequest, _admin: dict = Depends(require_adm
 
     for key in allowed_keys:
         try:
-            _client.transition_issue(key, req.transition_id)
+            ctx = get_jira_write_context(_admin, shared_client=_client)
+            ctx.client.transition_issue(key, req.transition_id)
             success.append(key)
             if transition_name:
                 cache.update_cached_field(key, "status", transition_name)
+            if ctx.is_fallback:
+                add_fallback_internal_audit_note(
+                    key,
+                    action_summary=f"Bulk status change to {transition_name or req.transition_id}",
+                    session=_admin,
+                    shared_client=_client,
+                )
         except Exception as exc:
             logger.exception("Bulk status transition failed for %s via %s", key, req.transition_id)
             failed.append({"key": key, "error": str(exc)})
@@ -104,13 +113,21 @@ async def bulk_assign(req: BulkAssignRequest, _admin: dict = Depends(require_adm
 
     for key in allowed_keys:
         try:
-            _client.assign_issue(key, req.account_id)
+            ctx = get_jira_write_context(_admin, shared_client=_client)
+            ctx.client.assign_issue(key, req.account_id)
             success.append(key)
             cache.update_cached_field(
                 key,
                 "assignee",
                 {"displayName": display_name, "accountId": req.account_id},
             )
+            if ctx.is_fallback:
+                add_fallback_internal_audit_note(
+                    key,
+                    action_summary=f"Bulk assignee change to {display_name or req.account_id or 'Unassigned'}",
+                    session=_admin,
+                    shared_client=_client,
+                )
         except Exception as exc:
             logger.exception("Bulk assign failed for %s to %s", key, req.account_id)
             failed.append({"key": key, "error": str(exc)})
@@ -129,9 +146,17 @@ async def bulk_priority(req: BulkPriorityRequest, _admin: dict = Depends(require
 
     for key in allowed_keys:
         try:
-            _client.update_priority(key, req.priority)
+            ctx = get_jira_write_context(_admin, shared_client=_client)
+            ctx.client.update_priority(key, req.priority)
             success.append(key)
             cache.update_cached_field(key, "priority", req.priority)
+            if ctx.is_fallback:
+                add_fallback_internal_audit_note(
+                    key,
+                    action_summary=f"Bulk priority change to {req.priority}",
+                    session=_admin,
+                    shared_client=_client,
+                )
         except Exception as exc:
             logger.exception("Bulk priority update failed for %s to %s", key, req.priority)
             failed.append({"key": key, "error": str(exc)})
@@ -150,7 +175,11 @@ async def bulk_comment(req: BulkCommentRequest, _admin: dict = Depends(require_a
 
     for key in allowed_keys:
         try:
-            _client.add_comment(key, req.comment)
+            ctx = get_jira_write_context(_admin, shared_client=_client)
+            comment_text = req.comment
+            if ctx.is_fallback:
+                comment_text = prepend_fallback_actor_line(comment_text, _admin)
+            ctx.client.add_comment(key, comment_text)
             success.append(key)
             # Bump updated timestamp in cache
             cache.update_cached_field(key, "updated", "")

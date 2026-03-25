@@ -11,6 +11,11 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
+from config import (
+    JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID,
+    JIRA_FOLLOWUP_PUBLIC_AGENT_TOUCH_COUNT_FIELD_ID,
+    JIRA_FOLLOWUP_STATUS_FIELD_ID,
+)
 from request_type import extract_request_type_id_from_fields, extract_request_type_name_from_fields
 
 
@@ -867,6 +872,7 @@ def issue_to_row(
 
     touch_compliance = _response_followup_compliance(
         fields,
+        sla_first_response_status=sla_fr["status"],
         reporter_account_id=reporter_id,
         created_dt=created_dt,
         resolved_dt=resolved_dt,
@@ -913,6 +919,8 @@ def issue_to_row(
         "daily_followup_status": touch_compliance["daily_followup_status"],
         "last_support_touch_date": touch_compliance["last_support_touch_date"],
         "support_touch_count": touch_compliance["support_touch_count"],
+        "followup_authoritative": touch_compliance["used_authoritative_followup"],
+        "first_response_authoritative": touch_compliance["used_authoritative_first_response"],
     }
     if include_comment_meta:
         row["comment_count"] = _comment_count(fields)
@@ -994,6 +1002,17 @@ def _all_comments_text(fields: dict[str, Any]) -> str:
     return "\n---\n".join(parts)
 
 
+def _comment_text(comment: dict[str, Any]) -> str:
+    body_obj = comment.get("body")
+    if isinstance(body_obj, str):
+        return body_obj
+    if isinstance(body_obj, dict):
+        texts: list[str] = []
+        _walk_adf(body_obj, texts)
+        return " ".join(texts)
+    return ""
+
+
 def _comment_events(fields: dict[str, Any]) -> list[dict[str, Any]]:
     comment_obj = fields.get("comment", {})
     comments = comment_obj.get("comments", []) if isinstance(comment_obj, dict) else []
@@ -1009,15 +1028,71 @@ def _comment_events(fields: dict[str, Any]) -> list[dict[str, Any]]:
                 "created_raw": created_raw,
                 "created_dt": created_dt,
                 "author_account_id": author.get("accountId", "") or "",
+                "body_text": _comment_text(comment),
             }
         )
     events.sort(key=lambda event: event["created_dt"])
     return events
 
 
+def _followup_field_value(fields: dict[str, Any], field_id: str) -> Any:
+    if not field_id:
+        return None
+    return fields.get(field_id)
+
+
+def _followup_status_value(raw: Any) -> str:
+    if isinstance(raw, dict):
+        return str(raw.get("value") or raw.get("name") or raw.get("label") or "").strip()
+    return str(raw or "").strip()
+
+
+def _followup_count_value(raw: Any) -> int:
+    if raw in (None, ""):
+        return 0
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalized_first_response_status(raw_status: str, *, created_dt: datetime | None, now: datetime, resolved_dt: datetime | None) -> str:
+    status = str(raw_status or "").strip()
+    if status in {"Met", "BREACHED", "Running"}:
+        return status
+    if status == "Paused":
+        return "Running"
+    if not created_dt:
+        return "(none)"
+    response_deadline = created_dt + timedelta(hours=2)
+    if resolved_dt is None and now <= response_deadline:
+        return "Running"
+    return "BREACHED"
+
+
+def _authoritative_followup(fields: dict[str, Any]) -> dict[str, Any]:
+    status = _followup_status_value(_followup_field_value(fields, JIRA_FOLLOWUP_STATUS_FIELD_ID))
+    last_touch_raw = str(_followup_field_value(fields, JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID) or "").strip()
+    touch_count = _followup_count_value(_followup_field_value(fields, JIRA_FOLLOWUP_PUBLIC_AGENT_TOUCH_COUNT_FIELD_ID))
+    if status not in {"Running", "Met", "BREACHED"}:
+        return {
+            "available": False,
+            "daily_followup_status": "",
+            "last_support_touch_date": last_touch_raw,
+            "support_touch_count": touch_count,
+        }
+    return {
+        "available": True,
+        "daily_followup_status": status,
+        "last_support_touch_date": last_touch_raw,
+        "support_touch_count": touch_count,
+    }
+
+
 def _response_followup_compliance(
     fields: dict[str, Any],
     *,
+    sla_first_response_status: str,
     reporter_account_id: str,
     created_dt: datetime | None,
     resolved_dt: datetime | None,
@@ -1030,44 +1105,56 @@ def _response_followup_compliance(
             "daily_followup_status": "(none)",
             "last_support_touch_date": "",
             "support_touch_count": 0,
+            "used_authoritative_followup": False,
+            "used_authoritative_first_response": False,
         }
 
-    support_events = [
-        event
-        for event in _comment_events(fields)
-        if not reporter_account_id or event["author_account_id"] != reporter_account_id
-    ]
-    first_touch = support_events[0]["created_dt"] if support_events else None
-    last_touch_raw = support_events[-1]["created_raw"] if support_events else ""
     is_open = resolved_dt is None
-    response_deadline = created_dt + timedelta(hours=2)
-    cadence_deadline_seconds = 24 * 3600
+    authoritative = _authoritative_followup(fields)
+    first_response_status = _normalized_first_response_status(
+        sla_first_response_status,
+        created_dt=created_dt,
+        now=now,
+        resolved_dt=resolved_dt,
+    )
+    used_authoritative_first_response = bool(str(sla_first_response_status or "").strip())
 
-    if first_touch and first_touch <= response_deadline:
-        first_response_status = "Met"
-    elif is_open and now <= response_deadline:
-        first_response_status = "Running"
+    if authoritative["available"]:
+        daily_followup_status = authoritative["daily_followup_status"]
+        last_touch_raw = authoritative["last_support_touch_date"]
+        touch_count = authoritative["support_touch_count"]
+        used_authoritative_followup = True
     else:
-        first_response_status = "BREACHED"
-
-    daily_followup_status = "Running" if is_open else "BREACHED"
-    if support_events:
-        cadence_breached = False
-        previous_touch = support_events[0]["created_dt"]
-        for event in support_events[1:]:
-            if (event["created_dt"] - previous_touch).total_seconds() > cadence_deadline_seconds:
+        support_events = [
+            event
+            for event in _comment_events(fields)
+            if (
+                (not reporter_account_id or event["author_account_id"] != reporter_account_id)
+                and "[movedocs fallback audit]" not in str(event["body_text"] or "").lower()
+            )
+        ]
+        last_touch_raw = support_events[-1]["created_raw"] if support_events else ""
+        touch_count = len(support_events)
+        cadence_deadline_seconds = 24 * 3600
+        daily_followup_status = "Running" if is_open else "BREACHED"
+        if support_events:
+            cadence_breached = False
+            previous_touch = support_events[0]["created_dt"]
+            for event in support_events[1:]:
+                if (event["created_dt"] - previous_touch).total_seconds() > cadence_deadline_seconds:
+                    cadence_breached = True
+                    break
+                previous_touch = event["created_dt"]
+            end_dt = now if is_open else resolved_dt
+            if end_dt and (end_dt - previous_touch).total_seconds() > cadence_deadline_seconds:
                 cadence_breached = True
-                break
-            previous_touch = event["created_dt"]
-        end_dt = now if is_open else resolved_dt
-        if end_dt and (end_dt - previous_touch).total_seconds() > cadence_deadline_seconds:
-            cadence_breached = True
-        if cadence_breached:
-            daily_followup_status = "BREACHED"
-        else:
-            daily_followup_status = "Running" if is_open else "Met"
-    elif first_response_status == "Running":
-        daily_followup_status = "Running"
+            if cadence_breached:
+                daily_followup_status = "BREACHED"
+            else:
+                daily_followup_status = "Running" if is_open else "Met"
+        elif first_response_status == "Running":
+            daily_followup_status = "Running"
+        used_authoritative_followup = False
 
     if first_response_status == "BREACHED" or daily_followup_status == "BREACHED":
         overall_status = "BREACHED"
@@ -1081,7 +1168,9 @@ def _response_followup_compliance(
         "first_response_status": first_response_status,
         "daily_followup_status": daily_followup_status,
         "last_support_touch_date": last_touch_raw,
-        "support_touch_count": len(support_events),
+        "support_touch_count": touch_count,
+        "used_authoritative_followup": used_authoritative_followup,
+        "used_authoritative_first_response": used_authoritative_first_response,
     }
 
 

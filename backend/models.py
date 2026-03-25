@@ -121,12 +121,24 @@ class TicketRow(BaseModel):
     daily_followup_status: str = ""
     last_support_touch_date: str = ""
     support_touch_count: int = 0
+    followup_authoritative: bool = False
+    first_response_authoritative: bool = False
     # Additional fields
     labels: list[str] = Field(default_factory=list)
     components: list[str] = Field(default_factory=list)
     work_category: str = ""
     organizations: list[str] = Field(default_factory=list)
     attachment_count: int = 0
+
+
+class JiraAuthStatus(BaseModel):
+    """Current Jira write identity linkage for the signed-in MoveDocs user."""
+
+    connected: bool = False
+    mode: str = "fallback_it_app"
+    site_url: str = ""
+    account_name: str = ""
+    configured: bool = False
 
 
 # ---------------------------------------------------------------------------

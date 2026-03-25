@@ -341,6 +341,7 @@ class TestIssueToRow:
                 "created": "2026-03-02T08:00:00+00:00",
                 "updated": "2026-03-03T05:00:00+00:00",
                 "resolutiondate": "2026-03-03T05:00:00+00:00",
+                "customfield_11266": {"completedCycles": [{"breached": False}]},
                 "comment": {
                     "total": 3,
                     "comments": [
@@ -417,6 +418,7 @@ class TestIssueToRow:
                 "created": "2026-03-01T08:00:00+00:00",
                 "updated": "2026-03-03T14:00:00+00:00",
                 "resolutiondate": "2026-03-03T14:00:00+00:00",
+                "customfield_11266": {"completedCycles": [{"breached": False}]},
                 "comment": {
                     "total": 2,
                     "comments": [
@@ -464,3 +466,76 @@ class TestIssueToRow:
         assert row["daily_followup_status"] == "Running"
         assert row["response_followup_status"] == "Running"
         assert row["support_touch_count"] == 0
+
+    def test_response_followup_ignores_internal_movedocs_fallback_audit_notes(self, freeze_time):
+        issue = {
+            "key": "OIT-704A",
+            "fields": {
+                "summary": "Audit note should not count",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-03T05:00:00+00:00",
+                "resolutiondate": "2026-03-03T05:00:00+00:00",
+                "customfield_11266": {"completedCycles": [{"breached": False}]},
+                "comment": {
+                    "total": 1,
+                    "comments": [
+                        {
+                            "created": "2026-03-02T09:00:00+00:00",
+                            "updated": "2026-03-02T09:00:00+00:00",
+                            "author": {"displayName": "it-app", "accountId": "acc-it-app"},
+                            "body": "[MoveDocs fallback audit]\n[MoveDocs fallback actor: Test User <test@example.com>]\n\nAction: updated priority",
+                        },
+                    ],
+                },
+            },
+        }
+
+        row = issue_to_row(issue)
+
+        assert row["support_touch_count"] == 0
+        assert row["daily_followup_status"] == "BREACHED"
+
+    def test_response_followup_prefers_authoritative_followup_fields_when_present(self, freeze_time, monkeypatch):
+        import metrics
+
+        monkeypatch.setattr(metrics, "JIRA_FOLLOWUP_STATUS_FIELD_ID", "customfield_20001")
+        monkeypatch.setattr(metrics, "JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID", "customfield_20002")
+        monkeypatch.setattr(metrics, "JIRA_FOLLOWUP_PUBLIC_AGENT_TOUCH_COUNT_FIELD_ID", "customfield_20003")
+
+        issue = {
+            "key": "OIT-705",
+            "fields": {
+                "summary": "Authoritative public touch fields",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-03T05:00:00+00:00",
+                "resolutiondate": "2026-03-03T05:00:00+00:00",
+                "customfield_11266": {"completedCycles": [{"breached": False}]},
+                "customfield_20001": {"value": "Met"},
+                "customfield_20002": "2026-03-02T22:00:00+00:00",
+                "customfield_20003": 2,
+                "comment": {
+                    "total": 0,
+                    "comments": [],
+                },
+            },
+        }
+
+        row = issue_to_row(issue)
+
+        assert row["first_response_2h_status"] == "Met"
+        assert row["daily_followup_status"] == "Met"
+        assert row["response_followup_status"] == "Met"
+        assert row["last_support_touch_date"] == "2026-03-02T22:00:00+00:00"
+        assert row["support_touch_count"] == 2
+        assert row["first_response_authoritative"] is True
+        assert row["followup_authoritative"] is True

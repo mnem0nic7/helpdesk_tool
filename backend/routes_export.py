@@ -82,6 +82,26 @@ def _write_master_report_workbook_file(
     builder.build_master_report(path=path, templates=templates)
 
 
+def _apply_runtime_template_readiness(
+    templates: list[ReportTemplate],
+    *,
+    site_scope: str,
+) -> list[ReportTemplate]:
+    if not templates:
+        return []
+    builder = ReportWorkbookBuilder(
+        all_issues=get_scoped_issues(include_excluded_on_primary=True),
+        site_scope=site_scope,
+        today=_today_utc(),
+        enable_changelog_fetch=False,
+    )
+    adjusted: list[ReportTemplate] = []
+    for template in templates:
+        runtime_readiness = builder.runtime_template_readiness(template)
+        adjusted.append(template.model_copy(update={"readiness": runtime_readiness}))
+    return adjusted
+
+
 # ---------------------------------------------------------------------------
 # Column metadata — maps TicketRow field keys to human-readable labels
 # ---------------------------------------------------------------------------
@@ -115,8 +135,8 @@ FIELD_META: dict[str, dict[str, str]] = {
     "response_followup_status": {"label": "Response + Follow-Up", "description": "Overall 2-hour response and daily follow-up compliance status"},
     "first_response_2h_status": {"label": "Response <=2h", "description": "Whether the first non-requester response landed within 2 hours"},
     "daily_followup_status": {"label": "Daily Follow-Up", "description": "Whether the ticket received at least one non-requester follow-up every 24 hours until resolution"},
-    "last_support_touch_date": {"label": "Last Support Touch", "description": "Most recent non-requester comment or note timestamp"},
-    "support_touch_count": {"label": "Support Touches", "description": "Number of non-requester comments or notes on the ticket"},
+    "last_support_touch_date": {"label": "Last Public Agent Touch", "description": "Most recent public comment from a configured OIT Jira agent"},
+    "support_touch_count": {"label": "Public Agent Touch Count", "description": "Number of public comments from configured OIT Jira agents on the ticket"},
     "labels": {"label": "Labels", "description": "Issue labels"},
     "components": {"label": "Components", "description": "Issue components"},
     "organizations": {"label": "Organizations", "description": "Customer organizations"},
@@ -204,8 +224,8 @@ _COLUMNS: list[tuple[str, str]] = [
     ("Response + Follow-Up", "response_followup_status"),
     ("Response <=2h", "first_response_2h_status"),
     ("Daily Follow-Up", "daily_followup_status"),
-    ("Last Support Touch", "last_support_touch_date"),
-    ("Support Touches", "support_touch_count"),
+    ("Last Public Agent Touch", "last_support_touch_date"),
+    ("Public Agent Touch Count", "support_touch_count"),
     ("Excluded", "excluded"),
 ]
 
@@ -1118,7 +1138,9 @@ async def list_report_templates(
     _session: dict[str, Any] = Depends(require_authenticated_user),
 ) -> list[ReportTemplate]:
     """Return saved report templates for the current site scope."""
-    return report_template_store.list_templates(get_current_site_scope())
+    site_scope = get_current_site_scope()
+    templates = report_template_store.list_templates(site_scope)
+    return _apply_runtime_template_readiness(templates, site_scope=site_scope)
 
 
 @router.get("/report/templates/insights", response_model=list[ReportTemplateInsight])

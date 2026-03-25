@@ -10,10 +10,12 @@ import {
   type AzureRecommendationCreateTicketResponse,
   type AzureRecommendationRunSafeScriptResponse,
   type AzureRecommendationSendAlertResponse,
+  type JiraAuthStatus,
 } from "../lib/api.ts";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import AzureSavingsHighlightsSection, { formatAzureCurrency } from "../components/AzureSavingsHighlightsSection.tsx";
+import JiraWriteIdentityNotice from "../components/JiraWriteIdentityNotice.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
@@ -166,6 +168,7 @@ function OpportunityDrawer({
   workflowBusy,
   workflowError,
   onClose,
+  jiraAuth,
 }: {
   opportunity: AzureRecommendation | null;
   actionContract: AzureRecommendationActionContract | null;
@@ -185,6 +188,7 @@ function OpportunityDrawer({
   workflowBusy: boolean;
   workflowError: string;
   onClose: () => void;
+  jiraAuth?: JiraAuthStatus;
 }) {
   const [note, setNote] = useState("");
   const [actionState, setActionState] = useState("none");
@@ -394,6 +398,7 @@ function OpportunityDrawer({
               <div className="mt-1 text-sm text-slate-600">
                 Use the configured defaults or override the project, issue type, and summary before creating a linked Jira ticket.
               </div>
+              <JiraWriteIdentityNotice jiraAuth={jiraAuth} className="mt-3" returnTo="/azure/savings" />
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <input
                   value={ticketProjectKey}
@@ -1299,6 +1304,7 @@ export default function AzureSavingsPage() {
           setSelectedOpportunityId("");
           setWorkflowError("");
         }}
+        jiraAuth={meQuery.data?.jira_auth}
       />
     </div>
   );

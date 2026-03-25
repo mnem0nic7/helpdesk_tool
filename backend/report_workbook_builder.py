@@ -104,8 +104,8 @@ _FIELD_LABELS: dict[str, str] = {
     "response_followup_status": "Response + Follow-Up",
     "first_response_2h_status": "Response <=2h",
     "daily_followup_status": "Daily Follow-Up",
-    "last_support_touch_date": "Last Support Touch",
-    "support_touch_count": "Support Touches",
+    "last_support_touch_date": "Last Public Agent Touch",
+    "support_touch_count": "Public Agent Touch Count",
     "labels": "Labels",
     "components": "Components",
     "organizations": "Organizations",
@@ -162,6 +162,8 @@ class ReportIssueFact:
     sla_response_status: str
     sla_resolution_status: str
     comment_count: int
+    followup_authoritative: bool = False
+    first_response_authoritative: bool = False
     labels_lower: list[str] = field(default_factory=list)
     components_lower: list[str] = field(default_factory=list)
     first_resolved_dt: datetime | None = None
@@ -453,7 +455,9 @@ def _template_readiness(template: ReportTemplate, *, facts: Sequence[ReportIssue
     if report_kind == "fcr":
         return "proxy"
     if report_kind == "follow_up":
-        return "proxy"
+        missing_followup = any(not fact.followup_authoritative for fact in facts)
+        missing_first_response = any(not fact.first_response_authoritative for fact in facts)
+        return "proxy" if missing_followup or missing_first_response else "ready"
     if report_kind == "first_response":
         missing_first_response = any(fact.first_response_hours is None for fact in facts)
         return "proxy" if missing_first_response else (template.readiness or "custom")
@@ -527,6 +531,8 @@ class ReportWorkbookBuilder:
                     sla_response_status=str(row.get("sla_first_response_status") or ""),
                     sla_resolution_status=str(row.get("sla_resolution_status") or ""),
                     comment_count=int(row.get("comment_count") or 0),
+                    followup_authoritative=bool(row.get("followup_authoritative")),
+                    first_response_authoritative=bool(row.get("first_response_authoritative")),
                     labels_lower=labels_lower,
                     components_lower=components_lower,
                 )
@@ -549,6 +555,8 @@ class ReportWorkbookBuilder:
                 sla_response_status=str(row.get("sla_first_response_status") or ""),
                 sla_resolution_status=str(row.get("sla_resolution_status") or ""),
                 comment_count=int(row.get("comment_count") or 0),
+                followup_authoritative=bool(row.get("followup_authoritative")),
+                first_response_authoritative=bool(row.get("first_response_authoritative")),
                 labels_lower=labels_lower,
                 components_lower=components_lower,
                 is_escalated=marker_escalated,
@@ -574,6 +582,13 @@ class ReportWorkbookBuilder:
             for key in (str(issue.get("key") or "") for issue in self._issues_for_config(config))
             if key in self._facts_by_key
         ]
+
+    def runtime_template_readiness(self, template: ReportTemplate) -> str:
+        """Return the best current readiness for a saved template."""
+        report_kind = _report_kind(template.name, template.config)
+        if report_kind not in {"follow_up", "first_response"}:
+            return template.readiness or "custom"
+        return _template_readiness(template, facts=self._facts_for_config(template.config))
 
     def _facts_for_window(
         self,
@@ -2560,15 +2575,27 @@ class ReportWorkbookBuilder:
                     )
                 )
         if report_kind == "follow_up" or "daily follow-up" in name or "daily follow up" in name:
-            gaps.append(
-                TemplateGap(
-                    report_name,
-                    "All",
-                    "proxy",
-                    "This report treats non-requester comments as support touches for the 2-hour response and daily follow-up checks.",
-                    "Add explicit support-touch tracking or public/internal touch markers to make this compliance metric authoritative.",
+            missing_followup = sum(1 for fact in facts if not fact.followup_authoritative)
+            missing_first_response = sum(1 for fact in facts if not fact.first_response_authoritative)
+            if missing_followup or missing_first_response:
+                limitation_parts: list[str] = []
+                if missing_followup:
+                    limitation_parts.append(
+                        f"{missing_followup} tickets are missing authoritative Daily Public Follow-Up fields"
+                    )
+                if missing_first_response:
+                    limitation_parts.append(
+                        f"{missing_first_response} tickets are missing Jira first-response SLA status"
+                    )
+                gaps.append(
+                    TemplateGap(
+                        report_name,
+                        "All",
+                        "proxy",
+                        "; ".join(limitation_parts) + ". Proxy fallback is being used for those tickets.",
+                        "Populate Jira public-agent touch fields via Automation and confirm the first-response SLA timer is available for all relevant requests.",
+                    )
                 )
-            )
         if report_kind == "escalation" or "escalation" in name:
             gaps.append(
                 TemplateGap(

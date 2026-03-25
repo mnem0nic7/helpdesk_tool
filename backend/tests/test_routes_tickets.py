@@ -722,7 +722,13 @@ class TestTicketDetailAndActions:
         )
 
         assert resp.status_code == 200
-        assert calls == [("OIT-123", "Please retry now.", True)]
+        assert calls == [
+            (
+                "OIT-123",
+                "[MoveDocs fallback actor: Test User <test@example.com>]\n\nPlease retry now.",
+                True,
+            )
+        ]
         assert ("OIT-123", "updated", "") in [c.args for c in mock_cache.update_cached_field.call_args_list]
         mock_cache.upsert_issue.assert_called_once_with(issue)
         assert resp.json()["comments"][-1]["body"] == "Please retry now."

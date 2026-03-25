@@ -27,6 +27,7 @@ from azure_cost_exports import azure_cost_export_service
 from azure_finops import azure_finops_service
 from azure_vm_export_jobs import azure_vm_export_jobs
 from azure_alert_engine import send_recommendation_teams_alert
+from jira_write_service import append_fallback_actor_block, get_jira_write_context
 from config import (
     AZURE_APP_HOST,
     AZURE_FINOPS_RECOMMENDATION_JIRA_ISSUE_TYPE,
@@ -1483,7 +1484,10 @@ async def create_recommendation_ticket(
     ]
 
     try:
-        created_issue = _jira_client.create_issue(
+        ctx = get_jira_write_context(session, shared_client=_jira_client)
+        if ctx.is_fallback:
+            description = append_fallback_actor_block(description, session)
+        created_issue = ctx.client.create_issue(
             project_key=project_key,
             issue_type=issue_type,
             summary=summary,

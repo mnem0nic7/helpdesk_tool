@@ -13,6 +13,7 @@ const { mockApi } = vi.hoisted(() => ({
     getRequestTypes: vi.fn(),
     getTransitions: vi.fn(),
     getTechnicianScores: vi.fn(),
+    getMe: vi.fn(),
     syncTicketReporter: vi.fn(),
     updateTicket: vi.fn(),
     transitionTicket: vi.fn(),
@@ -128,6 +129,12 @@ describe("TicketWorkbenchDrawer", () => {
     mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Hardware", description: "" }]);
     mockApi.getTransitions.mockResolvedValue([]);
     mockApi.getTechnicianScores.mockResolvedValue([]);
+    mockApi.getMe.mockResolvedValue({
+      email: "test@example.com",
+      name: "Test User",
+      is_admin: true,
+      jira_auth: { connected: false, mode: "fallback_it_app", site_url: "", account_name: "", configured: true },
+    });
     mockApi.syncTicketReporter.mockResolvedValue({
       updated: false,
       message: "Reporter already matches Grace Hopper.",

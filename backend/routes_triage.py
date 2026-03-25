@@ -12,6 +12,7 @@ from auth import get_session
 from config import TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES
 from issue_cache import cache
 from jira_client import JiraClient
+from jira_write_service import add_fallback_internal_audit_note, get_jira_write_context, prepend_fallback_actor_line
 from metrics import _is_open, issue_to_row
 from models import TriageAnalyzeRequest, TriageApplyRequest, TriageFieldAction, TriageDismissRequest
 from site_context import get_current_site_scope, get_scoped_issues, key_is_visible_in_scope
@@ -390,7 +391,7 @@ async def analyze(req: TriageAnalyzeRequest) -> list[dict[str, Any]]:
 
 
 @router.post("/apply")
-async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
+async def apply_suggestion(req: TriageApplyRequest, request: Request) -> dict[str, Any]:
     """Apply accepted suggestions to a ticket via Jira API."""
     _ensure_ticket_visible(req.key)
     suggestion = store.get(req.key)
@@ -399,6 +400,10 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
 
     applied: list[str] = []
     errors: list[dict[str, str]] = []
+    sid = request.cookies.get("session_id", "")
+    session = get_session(sid) if sid else None
+    ctx = get_jira_write_context(session, shared_client=_client)
+    audit_lines: list[str] = []
 
     # Index suggestions by field
     by_field = {s.field: s for s in suggestion.suggestions}
@@ -415,9 +420,10 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
                 if s.suggested_value not in valid:
                     errors.append({"field": field_name, "error": f"Invalid priority '{s.suggested_value}'. Valid: {', '.join(sorted(valid))}"})
                     continue
-                _client.update_priority(req.key, s.suggested_value)
+                ctx.client.update_priority(req.key, s.suggested_value)
                 cache.update_cached_field(req.key, "priority", s.suggested_value)
                 applied.append(field_name)
+                audit_lines.append(f"AI applied priority -> {s.suggested_value}")
 
             elif field_name == "assignee":
                 from config import JIRA_PROJECT
@@ -428,26 +434,28 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
                         account_id = u.get("accountId")
                         break
                 if account_id:
-                    _client.assign_issue(req.key, account_id)
+                    ctx.client.assign_issue(req.key, account_id)
                     cache.update_cached_field(
                         req.key,
                         "assignee",
                         {"displayName": s.suggested_value, "accountId": account_id},
                     )
                     applied.append(field_name)
+                    audit_lines.append(f"AI applied assignee -> {s.suggested_value}")
                 else:
                     errors.append({"field": field_name, "error": f"Could not find user: {s.suggested_value}"})
 
             elif field_name == "reporter":
                 account_id = _client.find_user_account_id(s.suggested_value)
                 if account_id:
-                    _client.update_reporter(req.key, account_id)
+                    ctx.client.update_reporter(req.key, account_id)
                     cache.update_cached_field(
                         req.key,
                         "reporter",
                         {"displayName": s.suggested_value, "accountId": account_id},
                     )
                     applied.append(field_name)
+                    audit_lines.append(f"AI applied reporter -> {s.suggested_value}")
                 else:
                     errors.append({"field": field_name, "error": f"Could not find reporter: {s.suggested_value}"})
 
@@ -459,9 +467,10 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
                         transition_id = t.get("id")
                         break
                 if transition_id:
-                    _client.transition_issue(req.key, transition_id)
+                    ctx.client.transition_issue(req.key, transition_id)
                     cache.update_cached_field(req.key, "status", s.suggested_value)
                     applied.append(field_name)
+                    audit_lines.append(f"AI applied status -> {s.suggested_value}")
                 else:
                     errors.append({
                         "field": field_name,
@@ -472,14 +481,18 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
                 from ai_client import get_request_type_id
                 rt_id = get_request_type_id(s.suggested_value)
                 if rt_id:
-                    _client.set_request_type(req.key, rt_id)
+                    ctx.client.set_request_type(req.key, rt_id)
                     cache.update_cached_field(req.key, "request_type", s.suggested_value)
                     applied.append(field_name)
+                    audit_lines.append(f"AI applied request type -> {s.suggested_value}")
                 else:
                     errors.append({"field": field_name, "error": f"Unknown request type: {s.suggested_value}"})
 
             elif field_name == "comment":
-                _client.add_comment(req.key, f"[AI-Suggestion] {s.suggested_value}")
+                comment_text = f"[AI-Suggestion] {s.suggested_value}"
+                if ctx.is_fallback:
+                    comment_text = prepend_fallback_actor_line(comment_text, session)
+                ctx.client.add_comment(req.key, comment_text)
                 applied.append(field_name)
 
             else:
@@ -491,6 +504,13 @@ async def apply_suggestion(req: TriageApplyRequest) -> dict[str, Any]:
     # Only delete suggestion if at least one field was successfully applied
     if applied:
         store.delete(req.key)
+        if ctx.is_fallback and audit_lines:
+            add_fallback_internal_audit_note(
+                req.key,
+                action_summary="; ".join(audit_lines),
+                session=session,
+                shared_client=_client,
+            )
 
     return {"key": req.key, "applied": applied, "errors": errors}
 
@@ -512,6 +532,7 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
     sid = request.cookies.get("session_id", "")
     session = get_session(sid) if sid else None
     approved_by = session["email"] if session else None
+    ctx = get_jira_write_context(session, shared_client=_client)
 
     # Apply the field to Jira
     try:
@@ -523,7 +544,7 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
                     status_code=400,
                     detail=f"Invalid priority '{s.suggested_value}'. Valid: {', '.join(sorted(valid))}",
                 )
-            _client.update_priority(req.key, s.suggested_value)
+            ctx.client.update_priority(req.key, s.suggested_value)
             cache.update_cached_field(req.key, "priority", s.suggested_value)
 
         elif req.field == "assignee":
@@ -536,7 +557,7 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
                     break
             if not account_id:
                 raise HTTPException(status_code=400, detail=f"Could not find user: {s.suggested_value}")
-            _client.assign_issue(req.key, account_id)
+            ctx.client.assign_issue(req.key, account_id)
             cache.update_cached_field(
                 req.key,
                 "assignee",
@@ -547,7 +568,7 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
             account_id = _client.find_user_account_id(s.suggested_value)
             if not account_id:
                 raise HTTPException(status_code=400, detail=f"Could not find reporter: {s.suggested_value}")
-            _client.update_reporter(req.key, account_id)
+            ctx.client.update_reporter(req.key, account_id)
             cache.update_cached_field(
                 req.key,
                 "reporter",
@@ -566,7 +587,7 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
                     status_code=400,
                     detail=f"No transition to '{s.suggested_value}' available",
                 )
-            _client.transition_issue(req.key, transition_id)
+            ctx.client.transition_issue(req.key, transition_id)
             cache.update_cached_field(req.key, "status", s.suggested_value)
 
         elif req.field == "request_type":
@@ -574,11 +595,14 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
             rt_id = get_request_type_id(s.suggested_value)
             if not rt_id:
                 raise HTTPException(status_code=400, detail=f"Unknown request type: {s.suggested_value}")
-            _client.set_request_type(req.key, rt_id)
+            ctx.client.set_request_type(req.key, rt_id)
             cache.update_cached_field(req.key, "request_type", s.suggested_value)
 
         elif req.field == "comment":
-            _client.add_comment(req.key, f"[AI-Suggestion] {s.suggested_value}")
+            comment_text = f"[AI-Suggestion] {s.suggested_value}"
+            if ctx.is_fallback:
+                comment_text = prepend_fallback_actor_line(comment_text, session)
+            ctx.client.add_comment(req.key, comment_text)
 
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported field: {req.field}")
@@ -603,6 +627,13 @@ async def apply_single_field(req: TriageFieldAction, request: Request) -> dict[s
 
     # Remove the field from the stored suggestion (deletes row if none left)
     remaining = store.remove_field(req.key, req.field)
+    if ctx.is_fallback and req.field != "comment":
+        add_fallback_internal_audit_note(
+            req.key,
+            action_summary=f"AI applied {req.field} -> {s.suggested_value}",
+            session=session,
+            shared_client=_client,
+        )
 
     return {
         "key": req.key,

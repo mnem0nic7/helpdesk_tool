@@ -54,7 +54,7 @@ _SEED_TEMPLATES: list[dict[str, Any]] = [
         "name": "2-Hour Response & Daily Follow-Up",
         "category": "Operational",
         "description": "Track whether tickets receive an initial support response within 2 hours and at least one support follow-up every 24 hours until resolution.",
-        "notes": "Proxy. This report treats non-requester comments as support touches. It does not yet distinguish public vs internal notes or non-comment workflow touches.",
+        "notes": "Tracks Jira first-response SLA plus Daily Public Follow-Up status. Readiness becomes ready when the Jira public-agent touch fields are populated for the evaluated tickets.",
         "readiness": "proxy",
         "include_in_master_export": False,
         "config": {

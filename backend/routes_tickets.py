@@ -14,6 +14,7 @@ from auth import require_admin
 from config import JIRA_BASE_URL, JIRA_PROJECT
 from issue_cache import cache
 from jira_client import JiraClient, validate_jira_key
+from jira_write_service import add_fallback_internal_audit_note, get_jira_write_context, prepend_fallback_actor_line
 from metrics import _is_open, issue_to_row
 from models import TicketCommentRequest, TicketRefreshRequest, TicketTransitionRequest, TicketUpdateRequest
 from request_type import extract_request_type_name_from_fields
@@ -31,6 +32,7 @@ def _sync_reporter_from_ticket_text(
     issue: dict[str, Any],
     *,
     source: str = "Reporter sync",
+    session: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
     """Update Jira reporter when the ticket text explicitly names a creator.
 
@@ -81,12 +83,20 @@ def _sync_reporter_from_ticket_text(
             )
             logger.info("%s: refreshed cached reporter display name for %s -> %s", source, key, reporter_hint)
             return True, f"Reporter updated to {reporter_hint}."
-        _client.update_reporter(key, account_id)
+        ctx = get_jira_write_context(session, shared_client=_client)
+        ctx.client.update_reporter(key, account_id)
         cache.update_cached_field(
             key,
             "reporter",
             {"displayName": reporter_hint, "accountId": account_id},
         )
+        if ctx.is_fallback:
+            add_fallback_internal_audit_note(
+                key,
+                action_summary=f"Reporter updated to {reporter_hint} via {source}",
+                session=session,
+                shared_client=_client,
+            )
         logger.info(
             "%s: updated %s reporter %s -> %s",
             source,
@@ -646,7 +656,7 @@ async def sync_ticket_reporter(
 
     try:
         issue = _client.get_issue(key)
-        updated, message = _sync_reporter_from_ticket_text(issue, source="Update reporter button")
+        updated, message = _sync_reporter_from_ticket_text(issue, source="Update reporter button", session=_admin)
         detail = _load_ticket_detail(key) if updated else _load_ticket_detail(key, issue=issue)
         return {
             "detail": detail,
@@ -678,52 +688,64 @@ async def update_ticket(
         raise HTTPException(status_code=400, detail="No updates requested")
 
     try:
+        ctx = get_jira_write_context(_admin, shared_client=_client)
+        audit_lines: list[str] = []
         if "summary" in fields:
             if body.summary is None or not body.summary.strip():
                 raise HTTPException(status_code=400, detail="summary cannot be empty")
-            _client.update_summary(key, body.summary.strip())
-            cache.update_cached_field(key, "summary", body.summary.strip())
+            summary = body.summary.strip()
+            ctx.client.update_summary(key, summary)
+            cache.update_cached_field(key, "summary", summary)
+            audit_lines.append(f"Summary updated to {summary!r}")
 
         if "description" in fields:
-            _client.update_description(key, body.description or "")
-            cache.update_cached_field(key, "description", body.description or "")
+            description = body.description or ""
+            ctx.client.update_description(key, description)
+            cache.update_cached_field(key, "description", description)
+            audit_lines.append("Description updated")
 
         if "priority" in fields:
             if not body.priority:
                 raise HTTPException(status_code=400, detail="priority cannot be empty")
-            _client.update_priority(key, body.priority)
+            ctx.client.update_priority(key, body.priority)
             cache.update_cached_field(key, "priority", body.priority)
+            audit_lines.append(f"Priority updated to {body.priority}")
 
         if "assignee_account_id" in fields:
             account_id = body.assignee_account_id or None
-            _client.assign_issue(key, account_id)
+            ctx.client.assign_issue(key, account_id)
+            assignee_name = _get_assignable_display_name(account_id)
             cache.update_cached_field(
                 key,
                 "assignee",
                 {
-                    "displayName": _get_assignable_display_name(account_id),
+                    "displayName": assignee_name,
                     "accountId": account_id or "",
                 },
             )
+            audit_lines.append(f"Assignee updated to {assignee_name or 'Unassigned'}")
 
         if "reporter_account_id" in fields:
             account_id = body.reporter_account_id or None
             if not account_id:
                 raise HTTPException(status_code=400, detail="reporter_account_id cannot be empty")
-            _client.update_reporter(key, account_id)
+            reporter_name = body.reporter_display_name or _get_user_display_name(account_id)
+            ctx.client.update_reporter(key, account_id)
             cache.update_cached_field(
                 key,
                 "reporter",
                 {
-                    "displayName": (body.reporter_display_name or _get_user_display_name(account_id)),
+                    "displayName": reporter_name,
                     "accountId": account_id,
                 },
             )
+            audit_lines.append(f"Reporter updated to {reporter_name or account_id}")
 
         if "request_type_id" in fields:
             if not body.request_type_id:
                 raise HTTPException(status_code=400, detail="request_type_id cannot be empty")
-            _client.set_request_type(key, body.request_type_id)
+            ctx.client.set_request_type(key, body.request_type_id)
+            audit_lines.append(f"Request type updated to {body.request_type_id}")
 
         if "components" in fields:
             component_names = []
@@ -731,11 +753,22 @@ async def update_ticket(
                 name = str(component).strip()
                 if name and name not in component_names:
                     component_names.append(name)
-            _client.update_components(key, component_names)
+            ctx.client.update_components(key, component_names)
+            audit_lines.append(
+                f"Components updated to {', '.join(component_names) if component_names else '(none)'}"
+            )
 
         if "work_category" in fields:
             work_category = (body.work_category or "").strip() or None
-            _client.update_work_category(key, work_category)
+            ctx.client.update_work_category(key, work_category)
+            audit_lines.append(f"Work category updated to {work_category or '(blank)'}")
+        if ctx.is_fallback and audit_lines:
+            add_fallback_internal_audit_note(
+                key,
+                action_summary="; ".join(audit_lines),
+                session=_admin,
+                shared_client=_client,
+            )
     except HTTPException:
         raise
     except Exception as exc:
@@ -765,9 +798,17 @@ async def transition_ticket(
             if transition.get("id") == body.transition_id:
                 transition_name = (transition.get("to") or {}).get("name", transition.get("name", ""))
                 break
-        _client.transition_issue(key, body.transition_id)
+        ctx = get_jira_write_context(_admin, shared_client=_client)
+        ctx.client.transition_issue(key, body.transition_id)
         if transition_name:
             cache.update_cached_field(key, "status", transition_name)
+        if ctx.is_fallback:
+            add_fallback_internal_audit_note(
+                key,
+                action_summary=f"Status changed to {transition_name or body.transition_id}",
+                session=_admin,
+                shared_client=_client,
+            )
         return _load_ticket_detail(key)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
@@ -788,7 +829,11 @@ async def comment_ticket(
     try:
         validate_jira_key(key)
         _ensure_ticket_visible(key)
-        _client.add_request_comment(key, body.comment.strip(), public=body.public)
+        ctx = get_jira_write_context(_admin, shared_client=_client)
+        comment_text = body.comment.strip()
+        if ctx.is_fallback:
+            comment_text = prepend_fallback_actor_line(comment_text, _admin)
+        ctx.client.add_request_comment(key, comment_text, public=body.public)
         cache.update_cached_field(key, "updated", "")
         return _load_ticket_detail(key)
     except ValueError:
@@ -820,13 +865,15 @@ async def remove_oasisdev_label(
         new_labels = [lbl for lbl in current_labels if "oasisdev" not in lbl.lower()]
 
         # Write updates to Jira
-        _client.update_issue_fields(key, {"labels": new_labels})
-        _client.add_request_comment(
-            key,
+        ctx = get_jira_write_context(_admin, shared_client=_client)
+        ctx.client.update_issue_fields(key, {"labels": new_labels})
+        note_text = (
             "This ticket has been reviewed and confirmed to be unrelated to OasisDev. "
-            "The oasisdev label has been removed.",
-            public=False,
+            "The oasisdev label has been removed."
         )
+        if ctx.is_fallback:
+            note_text = prepend_fallback_actor_line(note_text, _admin)
+        ctx.client.add_request_comment(key, note_text, public=False)
 
         # Keep cache coherent
         cache.update_cached_labels(key, new_labels)

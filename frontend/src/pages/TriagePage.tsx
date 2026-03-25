@@ -15,6 +15,7 @@ import TicketFilters, {
 } from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
+import JiraWriteIdentityNotice from "../components/JiraWriteIdentityNotice.tsx";
 import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
 
 // ---------------------------------------------------------------------------
@@ -233,6 +234,11 @@ export default function TriagePage() {
   const queryClient = useQueryClient();
   const { ticketKey, buildTicketHref, closeTicket } = useTicketDrawerNavigation();
   const [openTicket, setOpenTicket] = useState<TicketRow | null>(null);
+  const meQuery = useQuery({
+    queryKey: ["me", "triage-jira-write"],
+    queryFn: () => api.getMe(),
+    staleTime: 60_000,
+  });
 
   // Model selection
   const { data: models, isLoading: modelsLoading } = useQuery({
@@ -655,6 +661,8 @@ export default function TriagePage() {
 
       {/* Filters */}
       <TicketFilters filters={filters} onFilterChange={handleFilterChange} />
+
+      <JiraWriteIdentityNotice jiraAuth={meQuery.data?.jira_auth} />
 
       {/* Two-column layout: tickets left, review right */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">

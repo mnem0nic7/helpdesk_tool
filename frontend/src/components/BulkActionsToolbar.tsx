@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import { logClientError } from "../lib/errorLogging.ts";
 import type { Transition, Assignee, BulkResult } from "../lib/api.ts";
 import ConfirmModal from "./ConfirmModal.tsx";
 import type { BulkActionResult } from "./ConfirmModal.tsx";
+import JiraWriteIdentityNotice from "./JiraWriteIdentityNotice.tsx";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -24,6 +26,12 @@ export default function BulkActionsToolbar({
   selectedKeys,
   onActionComplete,
 }: BulkActionsToolbarProps) {
+  const { data: me } = useQuery({
+    queryKey: ["me", "bulk-jira-write"],
+    queryFn: () => api.getMe(),
+    staleTime: 60_000,
+    enabled: selectedKeys.length > 0,
+  });
   const [activeAction, setActiveAction] = useState<ActionType>(null);
 
   // Form values
@@ -281,6 +289,8 @@ export default function BulkActionsToolbar({
             </button>
           </div>
         </div>
+
+        <JiraWriteIdentityNotice jiraAuth={me?.jira_auth} className="mt-3" />
 
         {/* Action form */}
         {activeAction && (

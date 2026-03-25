@@ -190,7 +190,7 @@ class TestReportPreview:
                 "components": [],
                 "customfield_10010": {"requestType": {"name": "Laptop"}},
                 "customfield_11239": "Service requests",
-                "customfield_11266": None,
+                "customfield_11266": {"completedCycles": [{"breached": False}]},
                 "customfield_11264": None,
                 "customfield_10700": [],
                 "attachment": [],
@@ -461,6 +461,49 @@ class TestReportTemplates:
         assert followup["readiness"] == "proxy"
         assert followup["include_in_master_export"] is False
         assert followup["config"]["group_by"] == "response_followup_status"
+
+    def test_followup_template_becomes_ready_when_authoritative_fields_are_populated(self, test_client, mock_cache, monkeypatch):
+        import metrics
+
+        monkeypatch.setattr(metrics, "JIRA_FOLLOWUP_STATUS_FIELD_ID", "customfield_20001")
+        monkeypatch.setattr(metrics, "JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID", "customfield_20002")
+        monkeypatch.setattr(metrics, "JIRA_FOLLOWUP_PUBLIC_AGENT_TOUCH_COUNT_FIELD_ID", "customfield_20003")
+
+        issue = {
+            "key": "OIT-779",
+            "fields": {
+                "summary": "Authoritative follow-up coverage",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "High"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": {"name": "Done"},
+                "created": "2026-03-23T08:00:00+00:00",
+                "updated": "2026-03-23T12:00:00+00:00",
+                "resolutiondate": "2026-03-23T12:00:00+00:00",
+                "labels": [],
+                "components": [],
+                "customfield_10010": {"requestType": {"name": "Laptop"}},
+                "customfield_11239": "Service requests",
+                "customfield_11266": {"completedCycles": [{"breached": False}]},
+                "customfield_11264": None,
+                "customfield_20001": {"value": "Met"},
+                "customfield_20002": "2026-03-23T10:00:00+00:00",
+                "customfield_20003": 1,
+                "customfield_10700": [],
+                "attachment": [],
+                "comment": {"total": 0, "comments": []},
+            },
+        }
+        mock_cache.get_all_issues.return_value = [issue]
+        mock_cache.get_filtered_issues.return_value = [issue]
+
+        resp = test_client.get("/api/report/templates")
+
+        assert resp.status_code == 200
+        followup = next(row for row in resp.json() if row["name"] == "2-Hour Response & Daily Follow-Up")
+        assert followup["readiness"] == "ready"
 
     def test_create_update_and_delete_custom_template(self, test_client):
         create_resp = test_client.post(
