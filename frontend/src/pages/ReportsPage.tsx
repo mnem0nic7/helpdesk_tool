@@ -949,7 +949,7 @@ export default function ReportsPage() {
       include_in_master_export: templateIncludeInMasterExport,
       config,
     };
-    if (selectedTemplate && !selectedTemplate.is_seed) {
+    if (selectedTemplate) {
       updateTemplateMutation.mutate({ templateId: selectedTemplate.id, body });
       return;
     }
@@ -958,7 +958,7 @@ export default function ReportsPage() {
 
   function handleDeleteTemplate(templateOverride?: ReportTemplate | null) {
     const templateToDelete = templateOverride ?? selectedTemplate;
-    if (!templateToDelete || templateToDelete.is_seed) {
+    if (!templateToDelete) {
       return;
     }
     if (!window.confirm(`Delete the saved template "${templateToDelete.name}"?`)) {
@@ -1435,9 +1435,6 @@ export default function ReportsPage() {
                         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${readinessClass}`}>
                           {template.readiness === "gap" ? "Needs data" : template.readiness === "proxy" ? "Proxy" : template.readiness === "ready" ? "Ready" : "Custom"}
                         </span>
-                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600 ring-1 ring-gray-200">
-                          {template.is_seed ? "Seeded" : "Saved"}
-                        </span>
                         <span
                           className={[
                             "rounded-full px-2 py-0.5 text-[10px] font-medium ring-1",
@@ -1503,24 +1500,22 @@ export default function ReportsPage() {
                           />
                           Include in master export
                         </label>
-                        <div className="text-[11px] text-gray-400">
+                      <div className="text-[11px] text-gray-400">
                         {template.created_by_name
                           ? `Saved by ${template.created_by_name}`
                           : insight
                             ? `Windowed by ${insight.window_field_label.toLowerCase()} date`
-                            : "System template"}
+                            : "System"}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        {!template.is_seed && (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteTemplate(template)}
-                            className="rounded-md border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50"
-                          >
-                            Delete
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTemplate(template)}
+                          className="rounded-md border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50"
+                        >
+                          Delete
+                        </button>
                         <button
                           type="button"
                           onClick={() => handleLoadTemplate(template)}
@@ -1631,7 +1626,7 @@ export default function ReportsPage() {
                   <>
                     Editing{" "}
                     <span className="font-semibold text-gray-800">{selectedTemplate.name}</span>
-                    {selectedTemplate.is_seed ? " (seed templates are read-only, so saving will create a new copy)." : "."}
+                    .
                   </>
                 ) : (
                   "Saving now will create a new reusable template from the current builder state."
@@ -1645,7 +1640,7 @@ export default function ReportsPage() {
                   disabled={templateBusy}
                   className="rounded-md bg-slate-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {templateBusy ? "Saving..." : selectedTemplate && !selectedTemplate.is_seed ? "Update Template" : "Save Template"}
+                  {templateBusy ? "Saving..." : selectedTemplate ? "Update Template" : "Save Template"}
                 </button>
                 <button
                   type="button"
@@ -1657,7 +1652,7 @@ export default function ReportsPage() {
                 <button
                   type="button"
                   onClick={() => handleDeleteTemplate()}
-                  disabled={!selectedTemplate || selectedTemplate.is_seed || templateBusy}
+                  disabled={!selectedTemplate || templateBusy}
                   className="rounded-md border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Delete Template

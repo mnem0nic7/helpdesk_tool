@@ -9,6 +9,8 @@ from datetime import date, timedelta
 import pytest
 from openpyxl import load_workbook
 
+from report_template_store import ReportTemplateStore
+
 
 def _make_workload_issue(
     *,
@@ -625,18 +627,19 @@ class TestReportTemplates:
         assert list_resp.status_code == 200
         assert all(row["id"] != created["id"] for row in list_resp.json())
 
-    def test_seed_templates_are_read_only(self, test_client):
+    def test_seed_templates_can_be_updated_and_deleted(self, test_client):
         list_resp = test_client.get("/api/report/templates")
         assert list_resp.status_code == 200
-        seed_id = next(row["id"] for row in list_resp.json() if row["is_seed"])
+        seed_template = next(row for row in list_resp.json() if row["is_seed"])
+        seed_id = seed_template["id"]
 
         update_resp = test_client.put(
             f"/api/report/templates/{seed_id}",
             json={
-                "name": "Cannot Update",
-                "description": "",
-                "category": "",
-                "notes": "",
+                "name": "Updated Starter Template",
+                "description": "Editable now.",
+                "category": "Executive",
+                "notes": "Updated by test.",
                 "config": {
                     "filters": {},
                     "columns": ["key"],
@@ -647,10 +650,28 @@ class TestReportTemplates:
                 },
             },
         )
-        assert update_resp.status_code == 403
+        assert update_resp.status_code == 200
+        updated = update_resp.json()
+        assert updated["id"] == seed_id
+        assert updated["name"] == "Updated Starter Template"
+        assert updated["description"] == "Editable now."
 
         delete_resp = test_client.delete(f"/api/report/templates/{seed_id}")
-        assert delete_resp.status_code == 403
+        assert delete_resp.status_code == 200
+        assert delete_resp.json() == {"deleted": True}
+
+        list_after_delete = test_client.get("/api/report/templates")
+        assert list_after_delete.status_code == 200
+        assert all(row["id"] != seed_id for row in list_after_delete.json())
+
+    def test_deleted_seed_template_is_not_recreated_on_store_restart(self, tmp_path):
+        store = ReportTemplateStore(str(tmp_path / "report_templates.db"))
+        initial_seed = next(template for template in store.list_templates("primary") if template.is_seed)
+
+        store.delete_template(initial_seed.id, "primary")
+
+        reloaded_store = ReportTemplateStore(str(tmp_path / "report_templates.db"))
+        assert all(template.id != initial_seed.id for template in reloaded_store.list_templates("primary"))
 
     def test_master_workbook_export_includes_index_and_seeded_reports(self, test_client):
         resp = test_client.get("/api/report/templates/master.xlsx")

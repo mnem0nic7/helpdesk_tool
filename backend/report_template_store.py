@@ -359,6 +359,14 @@ class ReportTemplateStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS deleted_seed_keys (
+                    seed_key TEXT PRIMARY KEY,
+                    deleted_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_report_templates_scope
                 ON report_templates(site_scope, category, name)
                 """
@@ -383,48 +391,49 @@ class ReportTemplateStore:
     def _sync_seed_templates(self) -> None:
         now = _utcnow()
         with self._conn() as conn:
+            deleted_seed_keys = {
+                str(row[0])
+                for row in conn.execute("SELECT seed_key FROM deleted_seed_keys").fetchall()
+            }
             for template in _SEED_TEMPLATES:
-                config_json = json.dumps(template["config"], sort_keys=True)
+                seed_key = str(template["seed_key"])
+                if seed_key in deleted_seed_keys:
+                    continue
                 existing = conn.execute(
                     "SELECT id, created_at FROM report_templates WHERE seed_key = ?",
-                    (template["seed_key"],),
+                    (seed_key,),
                 ).fetchone()
-                template_id = existing["id"] if existing else template["seed_key"]
-                created_at = existing["created_at"] if existing else now
-                conn.execute(
-                    """
-                    INSERT INTO report_templates (
-                        id, seed_key, site_scope, name, description, category, notes,
-                        readiness, is_seed, include_in_master_export, config_json, created_by_email, created_by_name,
-                        updated_by_email, updated_by_name, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '', 'System', '', 'System', ?, ?)
-                    ON CONFLICT(seed_key) DO UPDATE SET
-                        site_scope = excluded.site_scope,
-                        name = excluded.name,
-                        description = excluded.description,
-                        category = excluded.category,
-                        notes = excluded.notes,
-                        readiness = excluded.readiness,
-                        is_seed = 1,
-                        config_json = excluded.config_json,
-                        updated_by_name = 'System',
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        template_id,
-                        template["seed_key"],
-                        template["site_scope"],
-                        template["name"],
-                        template["description"],
-                        template["category"],
-                        template["notes"],
-                        template["readiness"],
-                        1 if template.get("include_in_master_export", True) else 0,
-                        config_json,
-                        created_at,
-                        now,
-                    ),
-                )
+                if existing is not None:
+                    continue
+                config_json = json.dumps(template["config"], sort_keys=True)
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO report_templates (
+                            id, seed_key, site_scope, name, description, category, notes,
+                            readiness, is_seed, include_in_master_export, config_json, created_by_email, created_by_name,
+                            updated_by_email, updated_by_name, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '', 'System', '', 'System', ?, ?)
+                        """,
+                        (
+                            seed_key,
+                            seed_key,
+                            template["site_scope"],
+                            template["name"],
+                            template["description"],
+                            template["category"],
+                            template["notes"],
+                            template["readiness"],
+                            1 if template.get("include_in_master_export", True) else 0,
+                            config_json,
+                            now,
+                            now,
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    # If a user already created a template with the same site/name, keep
+                    # their version and skip the built-in insert.
+                    continue
 
     def list_templates(self, site_scope: str) -> list[ReportTemplate]:
         with self._conn() as conn:
@@ -433,7 +442,7 @@ class ReportTemplateStore:
                 SELECT *
                 FROM report_templates
                 WHERE site_scope = ?
-                ORDER BY is_seed DESC, category ASC, name ASC
+                ORDER BY category ASC, name ASC
                 """,
                 (site_scope,),
             ).fetchall()
@@ -518,8 +527,6 @@ class ReportTemplateStore:
         existing = self.get_template(template_id, site_scope)
         if existing is None:
             raise KeyError("Template not found")
-        if existing.is_seed:
-            raise PermissionError("Seed templates are read-only")
         normalized_name = name.strip()
         if not normalized_name:
             raise ValueError("Template name is required")
@@ -561,12 +568,23 @@ class ReportTemplateStore:
         return updated
 
     def delete_template(self, template_id: str, site_scope: str) -> None:
-        existing = self.get_template(template_id, site_scope)
-        if existing is None:
-            raise KeyError("Template not found")
-        if existing.is_seed:
-            raise PermissionError("Seed templates are read-only")
         with self._conn() as conn:
+            existing = conn.execute(
+                "SELECT seed_key FROM report_templates WHERE id = ? AND site_scope = ?",
+                (template_id, site_scope),
+            ).fetchone()
+            if existing is None:
+                raise KeyError("Template not found")
+            seed_key = str(existing["seed_key"] or "").strip()
+            if seed_key:
+                conn.execute(
+                    """
+                    INSERT INTO deleted_seed_keys (seed_key, deleted_at)
+                    VALUES (?, ?)
+                    ON CONFLICT(seed_key) DO UPDATE SET deleted_at = excluded.deleted_at
+                    """,
+                    (seed_key, _utcnow()),
+                )
             conn.execute(
                 "DELETE FROM report_templates WHERE id = ? AND site_scope = ?",
                 (template_id, site_scope),
