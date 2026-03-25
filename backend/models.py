@@ -115,6 +115,12 @@ class TicketRow(BaseModel):
     sla_resolution_status: str = ""
     sla_resolution_breach_time: str = ""
     sla_resolution_remaining_millis: Optional[int] = None
+    # Response/follow-up compliance proxy
+    response_followup_status: str = ""
+    first_response_2h_status: str = ""
+    daily_followup_status: str = ""
+    last_support_touch_date: str = ""
+    support_touch_count: int = 0
     # Additional fields
     labels: list[str] = Field(default_factory=list)
     components: list[str] = Field(default_factory=list)

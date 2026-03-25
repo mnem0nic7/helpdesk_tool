@@ -172,6 +172,58 @@ class TestReportPreview:
         assert row["last_comment_author"] == "Taylor Resolver"
         assert row["last_comment_date"] == "2026-03-02T12:00:00+00:00"
 
+    def test_grouped_preview_supports_response_followup_compliance(self, test_client, mock_cache):
+        issue = {
+            "key": "OIT-778",
+            "fields": {
+                "summary": "Needs a prompt response",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "High"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": {"name": "Done"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-02T12:00:00+00:00",
+                "resolutiondate": "2026-03-02T12:00:00+00:00",
+                "labels": [],
+                "components": [],
+                "customfield_10010": {"requestType": {"name": "Laptop"}},
+                "customfield_11239": "Service requests",
+                "customfield_11266": None,
+                "customfield_11264": None,
+                "customfield_10700": [],
+                "attachment": [],
+                "comment": {
+                    "total": 1,
+                    "comments": [
+                        {
+                            "created": "2026-03-02T09:00:00+00:00",
+                            "updated": "2026-03-02T09:00:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                        },
+                    ],
+                },
+            },
+        }
+        mock_cache.get_all_issues.return_value = [issue]
+        mock_cache.get_filtered_issues.return_value = [issue]
+
+        resp = test_client.post("/api/report/preview", json={
+            "filters": {},
+            "columns": [],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": "response_followup_status",
+            "include_excluded": False,
+        })
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["grouped"] is True
+        assert payload["rows"][0]["group"] == "Met"
+        assert payload["rows"][0]["count"] == 1
+
 
 class TestReportExport:
     """POST /api/report/export"""
@@ -312,7 +364,7 @@ class TestReportExport:
         thirty_day = workbook["30 Day"]
         assert seven_day["B1"].value == "Mean Time to Resolution"
         assert seven_day["B3"].value == "Created"
-        assert seven_day["H13"].value == "Δ vs Prior Period"
+        assert seven_day["H13"].value == "Δ Count vs Prior"
         assert seven_day["D13"].value == "Avg TTR (h)"
         assert seven_day["E13"].value == "Median TTR (h)"
         assert seven_day["F13"].value == "P95 TTR (h)"
@@ -401,9 +453,14 @@ class TestReportTemplates:
     def test_list_includes_seeded_primary_templates(self, test_client):
         resp = test_client.get("/api/report/templates")
         assert resp.status_code == 200
-        names = {row["name"] for row in resp.json()}
+        rows = resp.json()
+        names = {row["name"] for row in rows}
         assert "First Response Time" in names
         assert "Customer Satisfaction (CSAT)" in names
+        followup = next(row for row in rows if row["name"] == "2-Hour Response & Daily Follow-Up")
+        assert followup["readiness"] == "proxy"
+        assert followup["include_in_master_export"] is False
+        assert followup["config"]["group_by"] == "response_followup_status"
 
     def test_create_update_and_delete_custom_template(self, test_client):
         create_resp = test_client.post(

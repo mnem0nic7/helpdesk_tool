@@ -59,6 +59,11 @@ const FIELD_META: Record<string, FieldInfo> = {
   attachment_count:          { label: "Attachments",       description: "Number of attachments",              category: "metrics" },
   sla_first_response_status: { label: "SLA Response",      description: "First-response SLA status",          category: "sla" },
   sla_resolution_status:     { label: "SLA Resolution",    description: "Resolution SLA status",              category: "sla" },
+  response_followup_status:  { label: "Response + Follow-Up", description: "Overall 2-hour response and daily follow-up status", category: "sla" },
+  first_response_2h_status:  { label: "Response <=2h",     description: "Whether the first support touch landed within 2 hours", category: "sla" },
+  daily_followup_status:     { label: "Daily Follow-Up",   description: "Whether support touched the ticket at least once every 24 hours", category: "sla" },
+  last_support_touch_date:   { label: "Last Support Touch", description: "Most recent non-requester support touch timestamp", category: "dates" },
+  support_touch_count:       { label: "Support Touches",   description: "Number of non-requester support touches", category: "metrics" },
 };
 
 const COLUMN_CATEGORIES: { key: string; label: string; icon: string }[] = [
@@ -83,6 +88,7 @@ const GROUPABLE_FIELDS = [
   "status", "status_category", "priority", "assignee", "reporter",
   "issue_type", "resolution", "request_type", "work_category", "excluded",
   "sla_first_response_status", "sla_resolution_status",
+  "response_followup_status", "first_response_2h_status", "daily_followup_status",
 ];
 
 // ---------------------------------------------------------------------------

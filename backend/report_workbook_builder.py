@@ -63,6 +63,11 @@ _DETAIL_WIDTH_DEFAULTS: dict[str, int] = {
     "excluded": 10,
     "sla_first_response_status": 18,
     "sla_resolution_status": 18,
+    "response_followup_status": 22,
+    "first_response_2h_status": 16,
+    "daily_followup_status": 18,
+    "last_support_touch_date": 22,
+    "support_touch_count": 12,
     "labels": 30,
     "components": 25,
     "organizations": 30,
@@ -96,6 +101,11 @@ _FIELD_LABELS: dict[str, str] = {
     "excluded": "Excluded",
     "sla_first_response_status": "SLA Response",
     "sla_resolution_status": "SLA Resolution",
+    "response_followup_status": "Response + Follow-Up",
+    "first_response_2h_status": "Response <=2h",
+    "daily_followup_status": "Daily Follow-Up",
+    "last_support_touch_date": "Last Support Touch",
+    "support_touch_count": "Support Touches",
     "labels": "Labels",
     "components": "Components",
     "organizations": "Organizations",
@@ -386,6 +396,8 @@ def _report_kind(report_name: str, config: ReportConfig) -> str:
     name = report_name.strip().lower()
     if "backlog" in name:
         return "backlog"
+    if "daily follow-up" in name or "daily follow up" in name or "response & daily follow-up" in name:
+        return "follow_up"
     if "first response" in name:
         return "first_response"
     if "first contact" in name:
@@ -408,6 +420,8 @@ def _report_kind(report_name: str, config: ReportConfig) -> str:
         return "first_response"
     if config.group_by == "sla_resolution_status":
         return "sla"
+    if config.group_by == "response_followup_status":
+        return "follow_up"
     if config.group_by == "assignee":
         return "utilization"
     return "generic"
@@ -431,18 +445,21 @@ def _is_master_changelog_skip_error(message: str) -> bool:
 
 def _template_readiness(template: ReportTemplate, *, facts: Sequence[ReportIssueFact]) -> str:
     name = template.name.strip().lower()
+    report_kind = _report_kind(template.name, template.config)
     changelog_available = any(fact.changelog_loaded and not fact.changelog_error for fact in facts)
     changelog_skipped = any(_is_master_changelog_skip_error(fact.changelog_error) for fact in facts)
-    if "csat" in name:
+    if report_kind == "csat" or "csat" in name:
         return "gap"
-    if "first contact" in name:
+    if report_kind == "fcr":
         return "proxy"
-    if "first response" in name:
+    if report_kind == "follow_up":
+        return "proxy"
+    if report_kind == "first_response":
         missing_first_response = any(fact.first_response_hours is None for fact in facts)
         return "proxy" if missing_first_response else (template.readiness or "custom")
-    if "escalation" in name:
+    if report_kind == "escalation":
         return "proxy" if changelog_available or changelog_skipped else "gap"
-    if "reopen" in name:
+    if report_kind == "reopen":
         return "proxy" if changelog_available or changelog_skipped else "gap"
     return template.readiness or "custom"
 
@@ -1218,11 +1235,16 @@ class ReportWorkbookBuilder:
             )
 
         metric_row = None
-        if report_kind in {"sla", "first_response"}:
+        if report_kind in {"sla", "first_response", "follow_up"}:
             metric_row = total_row + 1
             label_range = _range_ref(data_first_row, 0, data_last_row, 0, absolute=True) if row_count else ""
             count_values = _range_ref(data_first_row, 1, data_last_row, 1, absolute=True) if row_count else ""
-            metric_label = "SLA Compliance %" if report_kind == "sla" else "First Response SLA Met %"
+            if report_kind == "sla":
+                metric_label = "SLA Compliance %"
+            elif report_kind == "first_response":
+                metric_label = "First Response SLA Met %"
+            else:
+                metric_label = "Response + Follow-Up Compliance %"
             cached_metric = 0.0
             met_row = next((row for row in rows if str(row["group"]).strip().lower() == "met"), None)
             if met_row and total_count:
@@ -1389,7 +1411,7 @@ class ReportWorkbookBuilder:
     ) -> None:
         if last_row < first_row:
             return
-        if report_kind == "sla":
+        if report_kind in {"sla", "follow_up"}:
             worksheet.conditional_format(first_row, 0, last_row, last_col, {
                 "type": "formula",
                 "criteria": f'=$A{first_row + 1}="BREACHED"',
@@ -2513,6 +2535,10 @@ class ReportWorkbookBuilder:
         facts: Sequence[ReportIssueFact],
     ) -> list[TemplateGap]:
         name = report_name.strip().lower()
+        report_kind = _report_kind(
+            template.name if template is not None else report_name,
+            template.config if template is not None else ReportConfig(),
+        )
         gaps: list[TemplateGap] = []
         template_readiness = "proxy"
         if template is not None:
@@ -2521,7 +2547,7 @@ class ReportWorkbookBuilder:
                 limitation = template.notes or "This report relies on partial source data."
                 recommendation = "Review the configured Jira fields or workflow history to improve readiness."
                 gaps.append(TemplateGap(template.name, "All", template_readiness, limitation, recommendation))
-        if "first response" in name:
+        if report_kind == "first_response" or "first response" in name:
             missing = sum(1 for fact in facts if fact.first_response_hours is None)
             if missing:
                 gaps.append(
@@ -2533,7 +2559,17 @@ class ReportWorkbookBuilder:
                         "Ensure the Jira first-response SLA timer is populated for all relevant requests.",
                     )
                 )
-        if "escalation" in name:
+        if report_kind == "follow_up" or "daily follow-up" in name or "daily follow up" in name:
+            gaps.append(
+                TemplateGap(
+                    report_name,
+                    "All",
+                    "proxy",
+                    "This report treats non-requester comments as support touches for the 2-hour response and daily follow-up checks.",
+                    "Add explicit support-touch tracking or public/internal touch markers to make this compliance metric authoritative.",
+                )
+            )
+        if report_kind == "escalation" or "escalation" in name:
             gaps.append(
                 TemplateGap(
                     report_name,
@@ -2543,7 +2579,7 @@ class ReportWorkbookBuilder:
                     "Add explicit Jira escalation markers or workflow transitions to move this metric from proxy to ready.",
                 )
             )
-        if "first contact" in name:
+        if report_kind == "fcr" or "first contact" in name:
             gaps.append(
                 TemplateGap(
                     report_name,
@@ -2553,7 +2589,7 @@ class ReportWorkbookBuilder:
                     "Add contact-cycle data or explicit one-touch markers to make FCR authoritative.",
                 )
             )
-        if "csat" in name:
+        if report_kind == "csat" or "csat" in name:
             gaps.append(
                 TemplateGap(
                     report_name,
@@ -2936,7 +2972,7 @@ class ReportWorkbookBuilder:
             "Median TTR (h)",
             "P95 TTR (h)",
             "P99 TTR (h)",
-            "Δ vs Prior Period",
+            "Δ Count vs Prior",
         ]
         column_map = {
             "group": 0,
@@ -2991,12 +3027,24 @@ class ReportWorkbookBuilder:
             "criteria": f"=${xl_col_to_name(5)}{header_row + 2}>(${xl_col_to_name(3)}{header_row + 2}*3)",
             "format": formats["high_variance"],
         })
-        worksheet.conditional_format(header_row + 1, 0, header_row + max(1, len(rows)), 0, {
-            "type": "text",
-            "criteria": "containing",
-            "value": "BREACHED",
-            "format": formats["breached_text"],
-        })
+        if report_kind in {"sla", "follow_up"}:
+            worksheet.conditional_format(header_row + 1, 0, header_row + max(1, len(rows)), len(headers) - 1, {
+                "type": "formula",
+                "criteria": f'=$A{header_row + 2}="BREACHED"',
+                "format": formats["row_red"],
+            })
+            worksheet.conditional_format(header_row + 1, 0, header_row + max(1, len(rows)), len(headers) - 1, {
+                "type": "formula",
+                "criteria": f'=$A{header_row + 2}="Running"',
+                "format": formats["row_yellow"],
+            })
+        else:
+            worksheet.conditional_format(header_row + 1, 0, header_row + max(1, len(rows)), 0, {
+                "type": "text",
+                "criteria": "containing",
+                "value": "BREACHED",
+                "format": formats["breached_text"],
+            })
         return ChartTableInfo(
             header_row=header_row,
             first_data_row=header_row + 1,
@@ -3054,7 +3102,7 @@ class ReportWorkbookBuilder:
         if table_info.last_data_row <= table_info.first_data_row:
             return
         lower_name = report_name.strip().lower()
-        if "sla compliance" in lower_name:
+        if report_kind == "sla" or "sla compliance" in lower_name:
             chart = workbook.add_chart({"type": "doughnut"})
             chart.add_series({
                 "name": report_name,
@@ -3062,7 +3110,7 @@ class ReportWorkbookBuilder:
                 "values": [worksheet.name, table_info.first_data_row, table_info.column_map["count"], table_info.last_data_row, table_info.column_map["count"]],
             })
             chart.set_title({"name": "SLA Compliance"})
-        elif "first response" in lower_name:
+        elif report_kind == "first_response" or "first response" in lower_name:
             chart = workbook.add_chart({"type": "doughnut"})
             chart.add_series({
                 "name": report_name,
@@ -3070,7 +3118,15 @@ class ReportWorkbookBuilder:
                 "values": [worksheet.name, table_info.first_data_row, table_info.column_map["count"], table_info.last_data_row, table_info.column_map["count"]],
             })
             chart.set_title({"name": "First Response SLA"})
-        elif "ticket volume" in lower_name:
+        elif report_kind == "follow_up" or "daily follow-up" in lower_name or "daily follow up" in lower_name:
+            chart = workbook.add_chart({"type": "doughnut"})
+            chart.add_series({
+                "name": report_name,
+                "categories": [worksheet.name, table_info.first_data_row, 0, table_info.last_data_row, 0],
+                "values": [worksheet.name, table_info.first_data_row, table_info.column_map["count"], table_info.last_data_row, table_info.column_map["count"]],
+            })
+            chart.set_title({"name": "2-Hour Response + Daily Follow-Up"})
+        elif report_kind == "ticket_volume" or "ticket volume" in lower_name:
             chart = workbook.add_chart({"type": "bar"})
             chart.add_series({
                 "name": "Count",
@@ -3078,7 +3134,7 @@ class ReportWorkbookBuilder:
                 "values": [worksheet.name, table_info.first_data_row, table_info.column_map["count"], table_info.last_data_row, table_info.column_map["count"]],
             })
             chart.set_title({"name": "Ticket Volume by Category"})
-        elif "escalation" in lower_name:
+        elif report_kind == "escalation" or "escalation" in lower_name:
             chart = workbook.add_chart({"type": "column"})
             values_col = table_info.column_map.get("escalation_rate", table_info.column_map["count"])
             chart.add_series({

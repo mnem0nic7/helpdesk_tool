@@ -576,3 +576,41 @@ def test_master_workbook_chart_xml_uses_dashed_secondary_mttr_axis(tmp_path: Pat
 
     assert "MTTR P95 (hours)" in chart_xml
     assert "dash" in chart_xml
+
+
+def test_followup_template_readiness_and_gaps_do_not_depend_on_report_name():
+    builder = ReportWorkbookBuilder(
+        all_issues=[_make_issue(key="OIT-FU-1", created="2026-03-20T00:00:00+00:00")],
+        site_scope="primary",
+        today=date(2026, 3, 24),
+        enable_changelog_fetch=False,
+    )
+    template = ReportTemplate(
+        id="tpl-followup",
+        site_scope="primary",
+        name="Ticket Touch Discipline",
+        description="",
+        category="Operational",
+        notes="Proxy touch review.",
+        readiness="proxy",
+        is_seed=True,
+        include_in_master_export=False,
+        created_at="2026-03-24T00:00:00+00:00",
+        updated_at="2026-03-24T00:00:00+00:00",
+        created_by_email="",
+        created_by_name="",
+        updated_by_email="",
+        updated_by_name="",
+        config=ReportConfig(group_by="response_followup_status", sort_field="created"),
+    )
+
+    facts = list(builder._facts_by_key.values())
+    assert _template_readiness(template, facts=facts) == "proxy"
+
+    gaps = builder._build_data_gaps(
+        template=template,
+        report_name=template.name,
+        facts=facts,
+    )
+
+    assert any("support touches" in gap.limitation.lower() for gap in gaps)

@@ -49,6 +49,37 @@ _SEED_TEMPLATES: list[dict[str, Any]] = [
         },
     },
     {
+        "seed_key": "primary-response-followup-compliance",
+        "site_scope": "primary",
+        "name": "2-Hour Response & Daily Follow-Up",
+        "category": "Operational",
+        "description": "Track whether tickets receive an initial support response within 2 hours and at least one support follow-up every 24 hours until resolution.",
+        "notes": "Proxy. This report treats non-requester comments as support touches. It does not yet distinguish public vs internal notes or non-comment workflow touches.",
+        "readiness": "proxy",
+        "include_in_master_export": False,
+        "config": {
+            "filters": {},
+            "columns": [
+                "key",
+                "summary",
+                "priority",
+                "assignee",
+                "status",
+                "created",
+                "resolved",
+                "response_followup_status",
+                "first_response_2h_status",
+                "daily_followup_status",
+                "last_support_touch_date",
+                "support_touch_count",
+            ],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": "response_followup_status",
+            "include_excluded": False,
+        },
+    },
+    {
         "seed_key": "primary-mttr",
         "site_scope": "primary",
         "name": "Mean Time to Resolution",
@@ -366,7 +397,7 @@ class ReportTemplateStore:
                         id, seed_key, site_scope, name, description, category, notes,
                         readiness, is_seed, include_in_master_export, config_json, created_by_email, created_by_name,
                         updated_by_email, updated_by_name, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, '', 'System', '', 'System', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '', 'System', '', 'System', ?, ?)
                     ON CONFLICT(seed_key) DO UPDATE SET
                         site_scope = excluded.site_scope,
                         name = excluded.name,
@@ -388,6 +419,7 @@ class ReportTemplateStore:
                         template["category"],
                         template["notes"],
                         template["readiness"],
+                        1 if template.get("include_in_master_export", True) else 0,
                         config_json,
                         created_at,
                         now,

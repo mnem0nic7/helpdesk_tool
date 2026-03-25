@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import statistics
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
 from request_type import extract_request_type_id_from_fields, extract_request_type_name_from_fields
@@ -865,6 +865,14 @@ def issue_to_row(
     attachments = fields.get("attachment") or []
     attachment_count: int = len(attachments) if isinstance(attachments, list) else 0
 
+    touch_compliance = _response_followup_compliance(
+        fields,
+        reporter_account_id=reporter_id,
+        created_dt=created_dt,
+        resolved_dt=resolved_dt,
+        now=now,
+    )
+
     row = {
         "key": issue.get("key", ""),
         "summary": fields.get("summary", ""),
@@ -900,6 +908,11 @@ def issue_to_row(
         "work_category": work_category,
         "organizations": organizations,
         "attachment_count": attachment_count,
+        "response_followup_status": touch_compliance["overall_status"],
+        "first_response_2h_status": touch_compliance["first_response_status"],
+        "daily_followup_status": touch_compliance["daily_followup_status"],
+        "last_support_touch_date": touch_compliance["last_support_touch_date"],
+        "support_touch_count": touch_compliance["support_touch_count"],
     }
     if include_comment_meta:
         row["comment_count"] = _comment_count(fields)
@@ -979,6 +992,97 @@ def _all_comments_text(fields: dict[str, Any]) -> str:
             body = ""
         parts.append(f"[{author} | {date}] {body}")
     return "\n---\n".join(parts)
+
+
+def _comment_events(fields: dict[str, Any]) -> list[dict[str, Any]]:
+    comment_obj = fields.get("comment", {})
+    comments = comment_obj.get("comments", []) if isinstance(comment_obj, dict) else []
+    events: list[dict[str, Any]] = []
+    for comment in comments:
+        created_raw = comment.get("created") or comment.get("updated") or ""
+        created_dt = parse_dt(created_raw)
+        if not created_dt:
+            continue
+        author = comment.get("author") or {}
+        events.append(
+            {
+                "created_raw": created_raw,
+                "created_dt": created_dt,
+                "author_account_id": author.get("accountId", "") or "",
+            }
+        )
+    events.sort(key=lambda event: event["created_dt"])
+    return events
+
+
+def _response_followup_compliance(
+    fields: dict[str, Any],
+    *,
+    reporter_account_id: str,
+    created_dt: datetime | None,
+    resolved_dt: datetime | None,
+    now: datetime,
+) -> dict[str, Any]:
+    if not created_dt:
+        return {
+            "overall_status": "(none)",
+            "first_response_status": "(none)",
+            "daily_followup_status": "(none)",
+            "last_support_touch_date": "",
+            "support_touch_count": 0,
+        }
+
+    support_events = [
+        event
+        for event in _comment_events(fields)
+        if not reporter_account_id or event["author_account_id"] != reporter_account_id
+    ]
+    first_touch = support_events[0]["created_dt"] if support_events else None
+    last_touch_raw = support_events[-1]["created_raw"] if support_events else ""
+    is_open = resolved_dt is None
+    response_deadline = created_dt + timedelta(hours=2)
+    cadence_deadline_seconds = 24 * 3600
+
+    if first_touch and first_touch <= response_deadline:
+        first_response_status = "Met"
+    elif is_open and now <= response_deadline:
+        first_response_status = "Running"
+    else:
+        first_response_status = "BREACHED"
+
+    daily_followup_status = "Running" if is_open else "BREACHED"
+    if support_events:
+        cadence_breached = False
+        previous_touch = support_events[0]["created_dt"]
+        for event in support_events[1:]:
+            if (event["created_dt"] - previous_touch).total_seconds() > cadence_deadline_seconds:
+                cadence_breached = True
+                break
+            previous_touch = event["created_dt"]
+        end_dt = now if is_open else resolved_dt
+        if end_dt and (end_dt - previous_touch).total_seconds() > cadence_deadline_seconds:
+            cadence_breached = True
+        if cadence_breached:
+            daily_followup_status = "BREACHED"
+        else:
+            daily_followup_status = "Running" if is_open else "Met"
+    elif first_response_status == "Running":
+        daily_followup_status = "Running"
+
+    if first_response_status == "BREACHED" or daily_followup_status == "BREACHED":
+        overall_status = "BREACHED"
+    elif is_open:
+        overall_status = "Running"
+    else:
+        overall_status = "Met"
+
+    return {
+        "overall_status": overall_status,
+        "first_response_status": first_response_status,
+        "daily_followup_status": daily_followup_status,
+        "last_support_touch_date": last_touch_raw,
+        "support_touch_count": len(support_events),
+    }
 
 
 def _walk_adf(node: dict[str, Any], texts: list[str]) -> None:

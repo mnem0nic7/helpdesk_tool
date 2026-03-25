@@ -244,6 +244,12 @@ export interface TicketRow {
   sla_resolution_status: string;
   sla_resolution_breach_time: string;
   sla_resolution_remaining_millis: number | null;
+  // Response/follow-up compliance proxy
+  response_followup_status: string;
+  first_response_2h_status: string;
+  daily_followup_status: string;
+  last_support_touch_date: string;
+  support_touch_count: number;
   // Additional fields
   labels: string[];
   components: string[];

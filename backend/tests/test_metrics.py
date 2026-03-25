@@ -327,3 +327,140 @@ class TestIssueToRow:
         row = issue_to_row(issue)
         assert row["request_type"] == "Business Application Support"
         assert row["request_type_id"] == "123"
+
+    def test_response_followup_marks_ticket_met_when_response_and_cadence_hold(self, freeze_time):
+        issue = {
+            "key": "OIT-701",
+            "fields": {
+                "summary": "Cadence met",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-03T05:00:00+00:00",
+                "resolutiondate": "2026-03-03T05:00:00+00:00",
+                "comment": {
+                    "total": 3,
+                    "comments": [
+                        {
+                            "created": "2026-03-02T08:30:00+00:00",
+                            "updated": "2026-03-02T08:30:00+00:00",
+                            "author": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                        },
+                        {
+                            "created": "2026-03-02T09:00:00+00:00",
+                            "updated": "2026-03-02T09:00:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                        },
+                        {
+                            "created": "2026-03-02T22:00:00+00:00",
+                            "updated": "2026-03-02T22:00:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                        },
+                    ],
+                },
+            },
+        }
+
+        row = issue_to_row(issue)
+
+        assert row["response_followup_status"] == "Met"
+        assert row["first_response_2h_status"] == "Met"
+        assert row["daily_followup_status"] == "Met"
+        assert row["last_support_touch_date"] == "2026-03-02T22:00:00+00:00"
+        assert row["support_touch_count"] == 2
+
+    def test_response_followup_breaches_when_first_response_misses_two_hours(self, freeze_time):
+        issue = {
+            "key": "OIT-702",
+            "fields": {
+                "summary": "Late first response",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "High"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-02T14:00:00+00:00",
+                "resolutiondate": "2026-03-02T14:00:00+00:00",
+                "comment": {
+                    "total": 1,
+                    "comments": [
+                        {
+                            "created": "2026-03-02T11:30:00+00:00",
+                            "updated": "2026-03-02T11:30:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                        },
+                    ],
+                },
+            },
+        }
+
+        row = issue_to_row(issue)
+
+        assert row["first_response_2h_status"] == "BREACHED"
+        assert row["daily_followup_status"] == "Met"
+        assert row["response_followup_status"] == "BREACHED"
+
+    def test_response_followup_breaches_when_daily_touch_gap_exceeds_24_hours(self, freeze_time):
+        issue = {
+            "key": "OIT-703",
+            "fields": {
+                "summary": "Follow-up gap",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-03-01T08:00:00+00:00",
+                "updated": "2026-03-03T14:00:00+00:00",
+                "resolutiondate": "2026-03-03T14:00:00+00:00",
+                "comment": {
+                    "total": 2,
+                    "comments": [
+                        {
+                            "created": "2026-03-01T09:00:00+00:00",
+                            "updated": "2026-03-01T09:00:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                        },
+                        {
+                            "created": "2026-03-02T12:30:00+00:00",
+                            "updated": "2026-03-02T12:30:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                        },
+                    ],
+                },
+            },
+        }
+
+        row = issue_to_row(issue)
+
+        assert row["first_response_2h_status"] == "Met"
+        assert row["daily_followup_status"] == "BREACHED"
+        assert row["response_followup_status"] == "BREACHED"
+
+    def test_response_followup_stays_running_for_open_ticket_inside_response_window(self, freeze_time):
+        issue = {
+            "key": "OIT-704",
+            "fields": {
+                "summary": "Awaiting first touch",
+                "status": {"name": "In Progress", "statusCategory": {"name": "In Progress"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-03-04T11:15:00+00:00",
+                "updated": "2026-03-04T11:15:00+00:00",
+                "resolutiondate": None,
+                "comment": {"total": 0, "comments": []},
+            },
+        }
+
+        row = issue_to_row(issue)
+
+        assert row["first_response_2h_status"] == "Running"
+        assert row["daily_followup_status"] == "Running"
+        assert row["response_followup_status"] == "Running"
+        assert row["support_touch_count"] == 0
