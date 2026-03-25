@@ -731,6 +731,35 @@ class IssueCache:
         except Exception:
             logger.exception("Follow-up authority sync failed during Jira cache refresh")
 
+    def _backfill_recent_followup_authority_from_cache(self, *, recent_days: int = 35) -> int:
+        """Populate local authoritative follow-up fields for recent/open cached issues.
+
+        Warm startups can restore a fresh SQLite cache and skip the initial
+        incremental Jira refresh, which means recent tickets may not yet have
+        the local public-comment follow-up fields. This one-time bootstrap pass
+        closes that gap without waiting for those tickets to change again.
+        """
+        with self._lock:
+            candidates = list(self._all_issues.values())
+        if not candidates:
+            return 0
+
+        self._sync_followup_authority_best_effort(candidates, recent_days=recent_days)
+
+        changed_issues = [
+            issue
+            for issue in candidates
+            if str((issue.get("fields") or {}).get("_movedocs_followup_status") or "").strip()
+            in {"Running", "Met", "BREACHED"}
+        ]
+        if changed_issues:
+            self._upsert_to_db(changed_issues)
+            logger.info(
+                "Cache: bootstrapped local follow-up authority for %d cached issues",
+                len(changed_issues),
+            )
+        return len(changed_issues)
+
     def enrich_missing_request_types(self) -> int:
         """Enrich all cached issues that are missing request type data.
 
@@ -1093,6 +1122,7 @@ class IssueCache:
             # _full_fetch() sets _init_event in its finally block.
             logger.info("Cache: cold start — full Jira fetch required (this takes a while)")
             await loop.run_in_executor(None, self._full_fetch)
+        await loop.run_in_executor(None, self._backfill_recent_followup_authority_from_cache)
         await self._refresh_loop()
 
     async def stop_background_refresh(self) -> None:

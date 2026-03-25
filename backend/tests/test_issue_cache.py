@@ -147,3 +147,39 @@ def test_auto_triage_status_marks_existing_old_tickets_processed_once(tmp_path, 
 
     assert second_status["pending_keys"] == ["OIT-101", "OIT-102"]
     assert triage_store.store.get_auto_triaged_keys() == {"OIT-100"}
+
+
+def test_followup_bootstrap_backfills_cached_recent_issues(tmp_path):
+    cache = IssueCache(str(tmp_path / "issues.db"))
+    cache._initialized = True
+
+    recent_issue = _issue(
+        "OIT-200",
+        "Recent ticket",
+        created=(datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+    )
+    old_issue = _issue(
+        "OIT-201",
+        "Old ticket",
+        created=(datetime.now(timezone.utc) - timedelta(days=60)).isoformat(),
+    )
+
+    cache._all_issues = {
+        recent_issue["key"]: recent_issue,
+        old_issue["key"]: old_issue,
+    }
+    cache._issues = dict(cache._all_issues)
+
+    def _fake_followup_sync(issues, *, force=False, recent_days=35):
+        del force, recent_days
+        for issue in issues:
+            if issue["key"] == "OIT-200":
+                issue.setdefault("fields", {})["_movedocs_followup_status"] = "Running"
+
+    cache._sync_followup_authority_best_effort = _fake_followup_sync
+
+    changed = cache._backfill_recent_followup_authority_from_cache()
+
+    assert changed == 1
+    assert cache._all_issues["OIT-200"]["fields"]["_movedocs_followup_status"] == "Running"
+    assert "_movedocs_followup_status" not in cache._all_issues["OIT-201"]["fields"]
