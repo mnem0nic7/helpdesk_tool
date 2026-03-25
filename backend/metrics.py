@@ -1034,10 +1034,57 @@ def _comment_events(fields: dict[str, Any]) -> list[dict[str, Any]]:
                 "created_dt": created_dt,
                 "author_account_id": author.get("accountId", "") or "",
                 "body_text": _comment_text(comment),
+                "is_public": _comment_is_public(comment),
             }
         )
     events.sort(key=lambda event: event["created_dt"])
     return events
+
+
+def _comment_is_public(comment: dict[str, Any]) -> bool:
+    raw_public = comment.get("public")
+    if isinstance(raw_public, bool):
+        return raw_public
+    if isinstance(raw_public, dict):
+        for key in ("value", "public", "isPublic"):
+            value = raw_public.get(key)
+            if isinstance(value, bool):
+                return value
+    return bool(comment.get("jsdPublic", False))
+
+
+def _comment_payload_is_complete(fields: dict[str, Any]) -> bool:
+    comment_obj = fields.get("comment")
+    if not isinstance(comment_obj, dict):
+        return False
+    comments = comment_obj.get("comments")
+    if not isinstance(comments, list):
+        return False
+    raw_total = comment_obj.get("total")
+    try:
+        total = int(raw_total) if raw_total is not None else len(comments)
+    except (TypeError, ValueError):
+        total = len(comments)
+    return total <= len(comments)
+
+
+def _authoritative_public_support_events(
+    fields: dict[str, Any],
+    *,
+    reporter_account_id: str,
+) -> tuple[list[dict[str, Any]], bool]:
+    if not _comment_payload_is_complete(fields):
+        return [], False
+    support_events = [
+        event
+        for event in _comment_events(fields)
+        if (
+            event.get("is_public")
+            and (not reporter_account_id or event["author_account_id"] != reporter_account_id)
+            and "[movedocs fallback audit]" not in str(event["body_text"] or "").lower()
+        )
+    ]
+    return support_events, True
 
 
 def _followup_field_value(fields: dict[str, Any], field_id: str) -> Any:
@@ -1120,6 +1167,12 @@ def _response_followup_compliance(
 
     is_open = resolved_dt is None
     authoritative = _authoritative_followup(fields)
+    authoritative_public_events, authoritative_public_comments_available = (
+        _authoritative_public_support_events(
+            fields,
+            reporter_account_id=reporter_account_id,
+        )
+    )
     first_response_status = _normalized_first_response_status(
         sla_first_response_status,
         created_dt=created_dt,
@@ -1127,6 +1180,16 @@ def _response_followup_compliance(
         resolved_dt=resolved_dt,
     )
     used_authoritative_first_response = bool(str(sla_first_response_status or "").strip())
+    if not used_authoritative_first_response and authoritative_public_comments_available:
+        response_deadline = created_dt + timedelta(hours=2)
+        if authoritative_public_events:
+            first_touch_dt = authoritative_public_events[0]["created_dt"]
+            first_response_status = "Met" if first_touch_dt <= response_deadline else "BREACHED"
+        elif is_open and now <= response_deadline:
+            first_response_status = "Running"
+        else:
+            first_response_status = "BREACHED"
+        used_authoritative_first_response = True
 
     if authoritative["available"]:
         daily_followup_status = authoritative["daily_followup_status"]

@@ -568,6 +568,60 @@ class TestReportTemplates:
         followup = next(row for row in resp.json() if row["name"] == "2-Hour Response & Daily Follow-Up")
         assert followup["readiness"] == "ready"
 
+    def test_followup_template_becomes_ready_with_public_comment_first_response_fallback(self, test_client, mock_cache):
+        issue = {
+            "key": "MSD-10117",
+            "fields": {
+                "summary": "Public agent reply exists but Jira SLA timer is blank",
+                "status": {"name": "In Progress", "statusCategory": {"name": "In Progress"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": None,
+                "created": "2026-03-23T08:00:00+00:00",
+                "updated": "2026-03-23T09:00:00+00:00",
+                "resolutiondate": None,
+                "labels": [],
+                "components": [],
+                "customfield_10010": {"requestType": {"name": "Laptop"}},
+                "customfield_11239": "Service requests",
+                "customfield_11266": {
+                    "id": "2",
+                    "name": "Time to first response",
+                    "_links": {"self": "https://keyjira.atlassian.net/rest/servicedeskapi/request/123/sla/2"},
+                    "completedCycles": [],
+                    "slaDisplayFormat": "NEW_SLA_FORMAT",
+                },
+                "customfield_11264": None,
+                "_movedocs_followup_status": "Running",
+                "_movedocs_followup_last_touch_at": "2026-03-23T08:45:00+00:00",
+                "_movedocs_followup_touch_count": 1,
+                "customfield_10700": [],
+                "attachment": [],
+                "comment": {
+                    "total": 1,
+                    "comments": [
+                        {
+                            "created": "2026-03-23T08:45:00+00:00",
+                            "updated": "2026-03-23T08:45:00+00:00",
+                            "author": {"displayName": "OSIJIRAOCC", "accountId": "acc-occ"},
+                            "jsdPublic": True,
+                            "body": "Initial public response",
+                        },
+                    ],
+                },
+            },
+        }
+        mock_cache.get_all_issues.return_value = [issue]
+        mock_cache.get_filtered_issues.return_value = [issue]
+
+        resp = test_client.get("/api/report/templates")
+
+        assert resp.status_code == 200
+        followup = next(row for row in resp.json() if row["name"] == "2-Hour Response & Daily Follow-Up")
+        assert followup["readiness"] == "ready"
+
     def test_create_update_and_delete_custom_template(self, test_client):
         create_resp = test_client.post(
             "/api/report/templates",

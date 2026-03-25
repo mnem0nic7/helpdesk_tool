@@ -573,3 +573,55 @@ class TestIssueToRow:
         assert row["support_touch_count"] == 2
         assert row["first_response_authoritative"] is True
         assert row["followup_authoritative"] is True
+
+    def test_response_followup_uses_public_comment_timeline_when_first_response_sla_is_blank(self, freeze_time):
+        issue = {
+            "key": "MSD-10117",
+            "fields": {
+                "summary": "Authoritative public reply with blank SLA timer",
+                "status": {"name": "In Progress", "statusCategory": {"name": "In Progress"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-02T12:00:00+00:00",
+                "resolutiondate": None,
+                "customfield_11266": {
+                    "id": "2",
+                    "name": "Time to first response",
+                    "_links": {"self": "https://keyjira.atlassian.net/rest/servicedeskapi/request/123/sla/2"},
+                    "completedCycles": [],
+                    "slaDisplayFormat": "NEW_SLA_FORMAT",
+                },
+                "_movedocs_followup_status": "Running",
+                "_movedocs_followup_last_touch_at": "2026-03-02T08:45:00+00:00",
+                "_movedocs_followup_touch_count": 1,
+                "comment": {
+                    "total": 2,
+                    "comments": [
+                        {
+                            "created": "2026-03-02T08:45:00+00:00",
+                            "updated": "2026-03-02T08:45:00+00:00",
+                            "author": {"displayName": "OSIJIRAOCC", "accountId": "acc-occ"},
+                            "jsdPublic": True,
+                            "body": "Initial public response",
+                        },
+                        {
+                            "created": "2026-03-02T09:30:00+00:00",
+                            "updated": "2026-03-02T09:30:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                            "jsdPublic": False,
+                            "body": "Internal note",
+                        },
+                    ],
+                },
+            },
+        }
+
+        row = issue_to_row(issue)
+
+        assert row["first_response_2h_status"] == "Met"
+        assert row["first_response_authoritative"] is True
+        assert row["daily_followup_status"] == "Running"
+        assert row["followup_authoritative"] is True
