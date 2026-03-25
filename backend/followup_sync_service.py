@@ -71,13 +71,40 @@ class FollowUpSyncService:
             and source == LOCAL_FOLLOWUP_SOURCE_VALUE
         )
 
+    @staticmethod
+    def _cached_comment_payload(issue: dict[str, Any]) -> list[dict[str, Any]] | None:
+        fields = issue.get("fields") or {}
+        if "comment" not in fields:
+            return None
+        comment_obj = fields.get("comment") or {}
+        comments = comment_obj.get("comments") or []
+        total = int(comment_obj.get("total") or len(comments))
+        if total > len(comments):
+            return None
+        normalized: list[dict[str, Any]] = []
+        for comment in comments:
+            if not isinstance(comment, dict):
+                return None
+            if "public" in comment:
+                is_public = bool(comment.get("public"))
+            elif "jsdPublic" in comment:
+                is_public = bool(comment.get("jsdPublic"))
+            else:
+                return None
+            normalized_comment = dict(comment)
+            normalized_comment["public"] = is_public
+            normalized.append(normalized_comment)
+        return normalized
+
     def reconcile_issue(self, issue: dict[str, Any], *, force: bool = False) -> bool:
         key = str(issue.get("key") or "").strip()
         if not key:
             return False
         if not force and self._already_synced_for_current_issue(issue):
             return False
-        comments = self._jira_client().get_request_comments(key)
+        comments = self._cached_comment_payload(issue)
+        if comments is None:
+            comments = self._jira_client().get_request_comments(key)
         computed = compute_followup_from_public_agent_comments(
             issue,
             comments,

@@ -64,3 +64,48 @@ def test_reconcile_issues_skips_old_closed_tickets_without_force():
 
     assert changed == 0
     assert "_movedocs_followup_status" not in issue["fields"]
+
+
+def test_reconcile_issue_uses_cached_complete_comment_payload_without_jira_fetch():
+    class _NoFetchClient(_FakeClient):
+        def get_request_comments(self, key: str) -> list[dict]:  # pragma: no cover - should not be called
+            raise AssertionError(f"Unexpected Jira fetch for {key}")
+
+    client = _NoFetchClient()
+    client.group_members_by_name = {
+        "jira-servicemanagement-users-keyjira": [{"accountId": "agent-1"}],
+        "MoveDocs Service Desk Agents": [],
+    }
+    service = FollowUpSyncService(client=client)  # type: ignore[arg-type]
+    issue = {
+        "key": "OIT-102",
+        "fields": {
+            "created": "2026-03-24T09:00:00+00:00",
+            "updated": "2026-03-24T19:00:00+00:00",
+            "resolutiondate": "2026-03-24T19:00:00+00:00",
+            "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+            "comment": {
+                "total": 2,
+                "comments": [
+                    {
+                        "id": "1",
+                        "created": "2026-03-24T10:00:00+00:00",
+                        "jsdPublic": True,
+                        "author": {"accountId": "agent-1"},
+                    },
+                    {
+                        "id": "2",
+                        "created": "2026-03-24T18:00:00+00:00",
+                        "jsdPublic": True,
+                        "author": {"accountId": "agent-1"},
+                    },
+                ],
+            },
+        },
+    }
+
+    changed = service.reconcile_issue(issue, force=True)
+
+    assert changed is True
+    assert issue["fields"]["_movedocs_followup_status"] == "Met"
+    assert issue["fields"]["_movedocs_followup_touch_count"] == 2
