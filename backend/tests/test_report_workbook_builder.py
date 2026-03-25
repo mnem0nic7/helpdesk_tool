@@ -200,6 +200,49 @@ def test_trend_rows_count_escalations_by_event_day_not_last_update_day():
     assert trend_rows["2026-03-06"]["escalation_count"] == 0
 
 
+def test_master_changelog_prefetch_is_skipped_for_large_exports(monkeypatch):
+    builder = ReportWorkbookBuilder(
+        all_issues=[
+            _make_issue(
+                key=f"OIT-ESC-{idx}",
+                created="2026-03-05T00:00:00+00:00",
+                updated="2026-03-23T00:00:00+00:00",
+                resolved="2026-03-23T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+            )
+            for idx in range(300)
+        ],
+        site_scope="primary",
+        today=date(2026, 3, 24),
+        enable_changelog_fetch=True,
+    )
+    templates = [
+        _make_template(
+            id="tpl-escalation",
+            name="Escalation Rate",
+            category="Operational",
+            group_by="assignee",
+            sort_field="updated",
+            readiness="proxy",
+        ),
+    ]
+    called = False
+
+    def _unexpected_fetch(_: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(builder, "ensure_changelogs", _unexpected_fetch)
+
+    builder._prepare_master_changelogs(templates)
+
+    assert called is False
+    fact = builder._facts_by_key["OIT-ESC-0"]
+    assert fact.changelog_loaded is True
+    assert "Skipped Jira changelog fetch for large master export" in fact.changelog_error
+
+
 def test_template_readiness_marks_first_response_as_proxy_when_elapsed_is_missing():
     builder = ReportWorkbookBuilder(
         all_issues=[_make_issue(key="OIT-301", created="2026-03-20T00:00:00+00:00")],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import statistics
@@ -20,6 +21,8 @@ from models import ReportConfig, ReportTemplate
 from routes_tickets import _match
 from site_context import issue_matches_scope
 
+logger = logging.getLogger(__name__)
+
 _REPORT_WINDOW_LABELS: dict[str, str] = {
     "created": "Created",
     "updated": "Updated",
@@ -30,6 +33,8 @@ _WINDOW_EXPORT_SPECS: list[tuple[str, int]] = [
     ("7 Day", 7),
     ("30 Day", 30),
 ]
+
+_MASTER_CHANGELOG_PREFETCH_LIMIT = 250
 
 _DETAIL_WIDTH_DEFAULTS: dict[str, int] = {
     "key": 12,
@@ -415,6 +420,10 @@ def _metric_values_for_kind(report_kind: str, facts: Sequence[ReportIssueFact]) 
     return [fact.ttr_hours for fact in facts if fact.ttr_hours is not None]
 
 
+def _report_kind_requires_changelog(report_kind: str) -> bool:
+    return report_kind in {"escalation", "reopen"}
+
+
 def _template_readiness(template: ReportTemplate, *, facts: Sequence[ReportIssueFact]) -> str:
     name = template.name.strip().lower()
     changelog_available = any(fact.changelog_loaded and not fact.changelog_error for fact in facts)
@@ -584,6 +593,9 @@ class ReportWorkbookBuilder:
         target: set[str] = set()
         for template in templates:
             config = template.config if isinstance(template.config, ReportConfig) else ReportConfig()
+            report_kind = _report_kind(template.name, config)
+            if not _report_kind_requires_changelog(report_kind):
+                continue
             facts = self._facts_for_config(config)
             window_field = _date_field_for_report_window_config(config, report_name=template.name)
             for _, days in _WINDOW_EXPORT_SPECS:
@@ -595,12 +607,6 @@ class ReportWorkbookBuilder:
                         continue
                     if current_start <= issue_day <= current_end or prior_start <= issue_day <= prior_end:
                         target.add(fact.key)
-        for fact in self._facts_by_key.values():
-            if any(
-                dt and dt.date() >= self.today - timedelta(days=29)
-                for dt in (fact.created_dt, fact.updated_dt, fact.resolved_dt)
-            ):
-                target.add(fact.key)
         return target
 
     def _apply_changelog(self, fact: ReportIssueFact, histories: Sequence[dict[str, Any]]) -> None:
@@ -673,6 +679,23 @@ class ReportWorkbookBuilder:
                 except Exception as exc:  # pragma: no cover - defensive network fallback
                     fact.changelog_loaded = True
                     fact.changelog_error = str(exc)
+
+    def _prepare_master_changelogs(self, templates: Sequence[ReportTemplate]) -> None:
+        keys = self._changelog_target_keys_for_master(templates)
+        if len(keys) > _MASTER_CHANGELOG_PREFETCH_LIMIT:
+            message = (
+                f"Skipped Jira changelog fetch for large master export "
+                f"({len(keys)} issues exceeds {_MASTER_CHANGELOG_PREFETCH_LIMIT} issue limit)"
+            )
+            logger.warning(message)
+            for key in keys:
+                fact = self._facts_by_key.get(key)
+                if not fact:
+                    continue
+                fact.changelog_loaded = True
+                fact.changelog_error = message
+            return
+        self.ensure_changelogs(keys)
 
     def build_single_report(
         self,
@@ -1469,7 +1492,7 @@ class ReportWorkbookBuilder:
 
     def _build_master_report_legacy(self, *, path: str, templates: Sequence[ReportTemplate]) -> None:
         included_templates = [template for template in templates if template.include_in_master_export]
-        self.ensure_changelogs(self._changelog_target_keys_for_master(included_templates))
+        self._prepare_master_changelogs(included_templates)
         workbook = xlsxwriter.Workbook(
             path,
             {
@@ -1554,7 +1577,7 @@ class ReportWorkbookBuilder:
 
     def _build_master_report_primary(self, *, path: str, templates: Sequence[ReportTemplate]) -> None:
         included_templates = [template for template in templates if template.include_in_master_export]
-        self.ensure_changelogs(self._changelog_target_keys_for_master(included_templates))
+        self._prepare_master_changelogs(included_templates)
         workbook = xlsxwriter.Workbook(
             path,
             {
