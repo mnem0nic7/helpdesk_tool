@@ -214,6 +214,7 @@ export default function TicketFilters({
                    focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
       >
         <option value="">All Assignees</option>
+        <option value="unassigned">Unassigned</option>
         {sortedAssignees.map((a: Assignee) => (
           <option key={a.account_id} value={a.display_name}>
             {a.display_name}

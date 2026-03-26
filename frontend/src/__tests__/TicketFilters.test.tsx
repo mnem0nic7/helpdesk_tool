@@ -42,6 +42,8 @@ describe("TicketFilters", () => {
     expect(screen.getByDisplayValue("All Types")).toBeInTheDocument();
     expect(screen.getByDisplayValue("All Tags")).toBeInTheDocument();
     expect(screen.getByDisplayValue("All Libra Support")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("All Assignees")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Unassigned" })).toBeInTheDocument();
     expect(screen.getByText("Open Only")).toBeInTheDocument();
     expect(screen.getByText("Stale Only")).toBeInTheDocument();
   });
@@ -85,6 +87,15 @@ describe("TicketFilters", () => {
     fireEvent.change(select, { target: { value: "[System] Change" } });
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ issue_type: "[System] Change" })
+    );
+  });
+
+  it("fires callback on assignee change to unassigned", () => {
+    const { onChange } = renderFilters();
+    const select = screen.getByDisplayValue("All Assignees");
+    fireEvent.change(select, { target: { value: "unassigned" } });
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ assignee: "unassigned" })
     );
   });
 
