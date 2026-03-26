@@ -352,7 +352,7 @@ wait_for_backend_role() {
     for _ in $(seq 1 "$attempts"); do
         local payload
         payload="$(backend_local_get_json "$service" "/api/health/ready" 2>/dev/null || true)"
-        if [[ -n "$payload" ]] && python3 - "$expected_role" <<'PY' <<<"$payload"
+        if [[ -n "$payload" ]] && python3 -c '
 import json
 import sys
 
@@ -361,7 +361,7 @@ payload = json.load(sys.stdin)
 runtime = payload.get("runtime") or {}
 ok = payload.get("status") == "ready" and runtime.get("role") == expected
 raise SystemExit(0 if ok else 1)
-PY
+' "$expected_role" <<<"$payload"
         then
             echo ">>> ${service} is ${expected_role} and ready"
             return 0
