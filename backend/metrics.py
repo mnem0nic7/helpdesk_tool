@@ -97,6 +97,19 @@ _TTR_BUCKETS: list[tuple[float, str]] = [
 
 IssueScope = Literal["primary", "oasisdev", "all"]
 _TRACKED_PROJECT_KEY_SET = frozenset(TRACKED_JIRA_PROJECT_KEYS)
+_PRIMARY_AGE_EXCLUDED_STATUS_SCOPES: frozenset[str] = frozenset({"primary"})
+_PRIMARY_STALE_EXCLUDED_STATUS_NAMES: frozenset[str] = frozenset({
+    "waiting for customer",
+    "pending",
+})
+_ONBOARDING_OFFBOARDING_MARKERS: tuple[str, ...] = (
+    "onboard",
+    "onboarding",
+    "offboard",
+    "offboarding",
+)
+LIBRA_SUPPORT_LABEL = "libra_support"
+LibraSupportFilter = Literal["all", "libra_support", "non_libra_support"]
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +339,67 @@ def _is_open(issue: dict[str, Any]) -> bool:
     return bucket != "Terminal"
 
 
+def _issue_request_type(issue: dict[str, Any]) -> str:
+    return extract_request_type_name_from_fields(issue.get("fields", {}))
+
+
+def _issue_work_category(issue: dict[str, Any]) -> str:
+    fields = issue.get("fields", {})
+    return str(fields.get("customfield_11239") or "").strip()
+
+
+def _has_oasisdev_marker(issue: dict[str, Any]) -> bool:
+    fields = issue.get("fields", {})
+    labels: list[str] = fields.get("labels") or []
+    if any("oasisdev" in str(label).lower() for label in labels):
+        return True
+    summary = str(fields.get("summary") or "")
+    return "oasisdev" in summary.lower()
+
+
+def _is_libra_support_ticket(issue: dict[str, Any]) -> bool:
+    fields = issue.get("fields", {})
+    labels: list[str] = fields.get("labels") or []
+    return any(str(label).strip().lower() == LIBRA_SUPPORT_LABEL for label in labels)
+
+
+def matches_libra_support_filter(issue: dict[str, Any], filter_value: str | None) -> bool:
+    normalized = str(filter_value or "").strip().lower()
+    if not normalized or normalized == "all":
+        return True
+    is_libra_support = _is_libra_support_ticket(issue)
+    if normalized == "libra_support":
+        return is_libra_support
+    if normalized == "non_libra_support":
+        return not is_libra_support
+    return True
+
+
+def _is_onboarding_or_offboarding_ticket(issue: dict[str, Any]) -> bool:
+    texts = (
+        _issue_request_type(issue).lower(),
+        _issue_work_category(issue).lower(),
+    )
+    return any(marker in text for text in texts for marker in _ONBOARDING_OFFBOARDING_MARKERS)
+
+
+def is_excluded_from_open_age(issue: dict[str, Any], scope: IssueScope = "primary") -> bool:
+    if scope not in _PRIMARY_AGE_EXCLUDED_STATUS_SCOPES:
+        return False
+    return _has_oasisdev_marker(issue)
+
+
+def is_excluded_from_stale(issue: dict[str, Any], scope: IssueScope = "primary") -> bool:
+    if scope != "primary":
+        return False
+    status_name, _, _ = _extract_status(issue)
+    if status_name.strip().lower() in _PRIMARY_STALE_EXCLUDED_STATUS_NAMES:
+        return True
+    if _has_oasisdev_marker(issue):
+        return True
+    return _is_onboarding_or_offboarding_ticket(issue)
+
+
 # ---------------------------------------------------------------------------
 # Computation functions
 # ---------------------------------------------------------------------------
@@ -362,7 +436,7 @@ def compute_headline_metrics(
         if _is_open(iss):
             open_issues.append(iss)
             # Stale check
-            if updated:
+            if updated and not is_excluded_from_stale(iss, scope=scope):
                 days_since = (now - updated).total_seconds() / 86400.0
                 if days_since >= _STALE_DAYS:
                     stale_count += 1
@@ -556,6 +630,8 @@ def compute_age_buckets(
 
     for iss in included:
         if not _is_open(iss):
+            continue
+        if is_excluded_from_open_age(iss, scope=scope):
             continue
         fields = iss.get("fields", {})
         created = parse_dt(fields.get("created"))

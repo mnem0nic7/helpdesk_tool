@@ -15,6 +15,10 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_name_key(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
 class RequestorSyncStore:
     """SQLite-backed storage for requestor directory mirrors and sync history."""
 
@@ -53,6 +57,7 @@ class RequestorSyncStore:
                     canonical_email TEXT NOT NULL DEFAULT '',
                     jira_account_id TEXT NOT NULL DEFAULT '',
                     jira_display_name TEXT NOT NULL DEFAULT '',
+                    match_source TEXT NOT NULL DEFAULT '',
                     sync_status TEXT NOT NULL DEFAULT '',
                     message TEXT NOT NULL DEFAULT '',
                     first_seen_at TEXT NOT NULL,
@@ -70,6 +75,15 @@ class RequestorSyncStore:
                     ON jira_requestor_links (sync_status, last_seen_at DESC);
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(jira_requestor_links)").fetchall()
+            }
+            if "match_source" not in columns:
+                conn.execute(
+                    "ALTER TABLE jira_requestor_links ADD COLUMN match_source TEXT NOT NULL DEFAULT ''"
+                )
+            conn.commit()
 
     def replace_directory_emails(self, entries: list[dict[str, str]]) -> None:
         timestamp = _utcnow_iso()
@@ -123,6 +137,21 @@ class RequestorSyncStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_directory_matches_by_display_name(self, display_name: str) -> list[dict[str, Any]]:
+        normalized = _normalize_name_key(display_name)
+        if not normalized:
+            return []
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT email_key, entra_user_id, display_name, canonical_email, account_class, source_kind, updated_at
+                FROM directory_emails
+                WHERE display_name <> ''
+                ORDER BY canonical_email ASC, display_name ASC, entra_user_id ASC, source_kind ASC
+                """
+            ).fetchall()
+        return [dict(row) for row in rows if _normalize_name_key(row["display_name"]) == normalized]
+
     def upsert_requestor_link(
         self,
         *,
@@ -134,6 +163,7 @@ class RequestorSyncStore:
         canonical_email: str = "",
         jira_account_id: str = "",
         jira_display_name: str = "",
+        match_source: str = "",
         sync_status: str,
         message: str,
     ) -> None:
@@ -155,11 +185,12 @@ class RequestorSyncStore:
                         canonical_email,
                         jira_account_id,
                         jira_display_name,
+                        match_source,
                         sync_status,
                         message,
                         first_seen_at,
                         last_seen_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(email_key, ticket_key) DO UPDATE SET
                         extracted_email=excluded.extracted_email,
                         directory_user_id=excluded.directory_user_id,
@@ -167,6 +198,7 @@ class RequestorSyncStore:
                         canonical_email=excluded.canonical_email,
                         jira_account_id=excluded.jira_account_id,
                         jira_display_name=excluded.jira_display_name,
+                        match_source=excluded.match_source,
                         sync_status=excluded.sync_status,
                         message=excluded.message,
                         last_seen_at=excluded.last_seen_at
@@ -180,6 +212,7 @@ class RequestorSyncStore:
                         str(canonical_email or "").strip().lower(),
                         str(jira_account_id or "").strip(),
                         str(jira_display_name or "").strip(),
+                        str(match_source or "").strip(),
                         str(sync_status or "").strip(),
                         str(message or "").strip(),
                         now,

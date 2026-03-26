@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../lib/api.ts";
-import type { AssigneeStats, MetricsQueryParams } from "../lib/api.ts";
+import type { AssigneeStats, LibraSupportFilterMode, MetricsQueryParams } from "../lib/api.ts";
 import MetricCard from "../components/MetricCard.tsx";
 import DateRangeSelector from "../components/DateRangeSelector.tsx";
 import type { DateRange } from "../components/DateRangeSelector.tsx";
@@ -149,6 +149,7 @@ function AssigneesTable({ rows, onRowClick }: AssigneesTableProps) {
 
 export default function DashboardPage() {
   const branding = getSiteBranding();
+  const showLibraSupportFilter = branding.scope === "primary";
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -157,10 +158,12 @@ export default function DashboardPage() {
     date_from: searchParams.get("date_from") ?? undefined,
     date_to: searchParams.get("date_to") ?? undefined,
   };
+  const libraSupport = (searchParams.get("libra_support") as LibraSupportFilterMode | null) ?? "all";
 
   const metricsParams: MetricsQueryParams = {
     date_from: dateRange.date_from,
     date_to: dateRange.date_to,
+    ...(showLibraSupportFilter && libraSupport !== "all" ? { libra_support: libraSupport } : {}),
   };
 
   const { data, isLoading, isError, error } = useQuery({
@@ -175,9 +178,25 @@ export default function DashboardPage() {
       const params = new URLSearchParams();
       if (range.date_from) params.set("date_from", range.date_from);
       if (range.date_to) params.set("date_to", range.date_to);
+      if (showLibraSupportFilter && libraSupport !== "all") {
+        params.set("libra_support", libraSupport);
+      }
       setSearchParams(params, { replace: true });
     },
-    [setSearchParams]
+    [libraSupport, setSearchParams, showLibraSupportFilter]
+  );
+
+  const handleLibraSupportChange = useCallback(
+    (nextValue: LibraSupportFilterMode) => {
+      const params = new URLSearchParams(searchParams);
+      if (nextValue === "all") {
+        params.delete("libra_support");
+      } else {
+        params.set("libra_support", nextValue);
+      }
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams]
   );
 
   // Navigate to /tickets with filters pre-populated
@@ -185,11 +204,18 @@ export default function DashboardPage() {
     (filters: Record<string, string>) => {
       const params = new URLSearchParams(filters);
       // Carry date range as created_after/created_before
-      if (dateRange.date_from) params.set("created_after", dateRange.date_from);
-      if (dateRange.date_to) params.set("created_before", dateRange.date_to);
+      if (dateRange.date_from && !params.has("created_after")) {
+        params.set("created_after", dateRange.date_from);
+      }
+      if (dateRange.date_to && !params.has("created_before")) {
+        params.set("created_before", dateRange.date_to);
+      }
+      if (showLibraSupportFilter && libraSupport !== "all") {
+        params.set("libra_support", libraSupport);
+      }
       navigate(`/tickets?${params.toString()}`);
     },
-    [navigate, dateRange]
+    [navigate, dateRange, libraSupport, showLibraSupportFilter]
   );
 
   if (isLoading) {
@@ -239,7 +265,20 @@ export default function DashboardPage() {
             Overview of {branding.appName} metrics and KPIs
           </p>
         </div>
-        <DateRangeSelector value={dateRange} onChange={handleDateRangeChange} />
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          {showLibraSupportFilter ? (
+            <select
+              value={libraSupport}
+              onChange={(e) => handleLibraSupportChange(e.target.value as LibraSupportFilterMode)}
+              className="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              <option value="all">All Libra Support</option>
+              <option value="libra_support">Libra Support</option>
+              <option value="non_libra_support">Non Libra Support</option>
+            </select>
+          ) : null}
+          <DateRangeSelector value={dateRange} onChange={handleDateRangeChange} />
+        </div>
       </div>
 
       {/* Headline metric cards */}
@@ -297,9 +336,7 @@ export default function DashboardPage() {
         <AgingPieChart
           data={age_buckets}
           onSliceClick={(bucket) => {
-            const dateFilters = ageBucketToDateFilters(bucket);
-            const params = new URLSearchParams({ open_only: "true", ...dateFilters });
-            navigate(`/tickets?${params.toString()}`);
+            drillDown({ open_only: "true", ...ageBucketToDateFilters(bucket) });
           }}
         />
         <TTRDistributionChart

@@ -16,7 +16,6 @@ const { mockApi } = vi.hoisted(() => ({
     getMe: vi.fn(),
     fetchAttachmentPreviewBlob: vi.fn(),
     fetchAttachmentPreviewText: vi.fn(),
-    syncTicketReporter: vi.fn(),
     syncTicketRequestor: vi.fn(),
     updateTicket: vi.fn(),
     transitionTicket: vi.fn(),
@@ -86,6 +85,7 @@ const ticketDetail = {
     jira_account_id: "",
     jira_status: "match_pending",
     message: "Exact Office 365 directory match found.",
+    match_source: "reporter_email",
   },
   raw_issue: {},
 };
@@ -158,11 +158,6 @@ describe("TicketWorkbenchDrawer", () => {
       is_admin: true,
       jira_auth: { connected: false, mode: "fallback_it_app", site_url: "", account_name: "", configured: true },
     });
-    mockApi.syncTicketReporter.mockResolvedValue({
-      updated: false,
-      message: "Reporter already matches Grace Hopper.",
-      detail: ticketDetail,
-    });
     mockApi.syncTicketRequestor.mockResolvedValue({
       updated: true,
       message: "Reporter synced to Grace Hopper.",
@@ -173,6 +168,7 @@ describe("TicketWorkbenchDrawer", () => {
           jira_account_id: "acct-grace",
           jira_status: "updated_reporter",
           message: "Reporter synced to Grace Hopper.",
+          match_source: "reporter_email",
         },
       },
     });
@@ -517,20 +513,7 @@ describe("TicketWorkbenchDrawer", () => {
     expect(screen.getByRole("combobox", { name: /request type/i })).toHaveDisplayValue("Hardware");
   });
 
-  it("updates the reporter from the OCC creator line with one click", async () => {
-    mockApi.syncTicketReporter.mockResolvedValue({
-      updated: true,
-      message: "Reporter updated to Raza Abidi.",
-      detail: {
-        ...ticketDetail,
-        ticket: {
-          ...ticketRow,
-          reporter: "Raza Abidi",
-          reporter_account_id: "acct-raza",
-        },
-      },
-    });
-
+  it("does not render the legacy update reporter button", async () => {
     render(
       <TicketWorkbenchDrawer
         ticketKey="OIT-1"
@@ -540,14 +523,7 @@ describe("TicketWorkbenchDrawer", () => {
     );
 
     await screen.findByText("Ticket Actions");
-
-    fireEvent.click(screen.getByRole("button", { name: "Update Reporter" }));
-
-    await waitFor(() => {
-      expect(mockApi.syncTicketReporter).toHaveBeenCalledWith("OIT-1");
-    });
-
-    expect(await screen.findByText("Reporter updated to Raza Abidi.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Update Reporter" })).not.toBeInTheDocument();
   });
 
   it("shows the technician QA scorecard at the bottom of the drawer", async () => {

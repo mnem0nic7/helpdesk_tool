@@ -38,6 +38,47 @@ def _env_auth_provider(name: str, default: str) -> str:
     return default
 
 
+_REQUESTOR_OCC_NAME_DOMAIN_PRIORITY_DEFAULT = [
+    "librasolutionsgroup.com",
+    "oasisfinancial.com",
+    "probateadvance.com",
+    "movedocs.com",
+    "mdunderwriting.com",
+    "oasislegal.com",
+    "atticusbilling.com",
+    "medchex.org",
+    "medicallegalsolutions.net",
+    "medlienlegal.com",
+    "medport.com",
+    "myoasis.com",
+    "omni-healthcare.com",
+    "omniglofin.com",
+    "omnihealthcare.org",
+    "peak-fundinggroup.com",
+    "accidentmeds.com",
+    "benefitresource.com",
+    "canyonmedicalbilling.com",
+    "chirocapital.com",
+    "chirocapital.net",
+    "cliqfund.com",
+    "encytemanagement.com",
+    "globalrecservices.com",
+    "glofin.com",
+    "grsfunding.com",
+    "injuryfinance.com",
+    "injuryfinance.net",
+    "injuryfinance.us",
+    "injuryfinance.us.com",
+    "keyhealth.net",
+    "radnetpiservicing.com",
+    "relieffunding.com",
+    "syndeocare.com",
+    "thetriosolution.com",
+    "thetriosolutions.com",
+    "oasisfinanciallytn.onmicrosoft.com",
+]
+
+
 TRACKED_JIRA_PROJECT_KEYS: list[str] = [
     key.strip().upper()
     for key in (_env_csv("TRACKED_JIRA_PROJECT_KEYS") or [JIRA_PROJECT])
@@ -112,6 +153,11 @@ ATLASSIAN_ADMIN_GROUPS: list[str] = _env_csv("ATLASSIAN_ADMIN_GROUPS") or [
 TOOLS_ALLOWED_IDENTIFIERS: list[str] = _env_csv("TOOLS_ALLOWED_IDENTIFIERS") or [
     "gallison",
     "wberry",
+]
+REQUESTOR_OCC_NAME_DOMAIN_PRIORITY: list[str] = [
+    domain.lower()
+    for domain in (_env_csv("REQUESTOR_OCC_NAME_DOMAIN_PRIORITY") or _REQUESTOR_OCC_NAME_DOMAIN_PRIORITY_DEFAULT)
+    if domain.strip()
 ]
 
 

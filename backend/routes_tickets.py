@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
@@ -19,17 +19,17 @@ from attachment_service import (
     preview_kind_for_attachment,
     serialize_attachment,
 )
-from ai_client import _extract_reporter_hint_from_text, extract_adf_text
+from ai_client import extract_adf_text
 from auth import require_admin
 from config import JIRA_BASE_URL, JIRA_PROJECT
 from issue_cache import cache
 from jira_client import JiraClient, validate_jira_key
 from jira_write_service import add_fallback_internal_audit_note, get_jira_write_context, prepend_fallback_actor_line
-from metrics import _is_open, issue_to_row
+from metrics import _is_open, is_excluded_from_stale, issue_to_row, matches_libra_support_filter
 from models import TicketCommentRequest, TicketRefreshRequest, TicketTransitionRequest, TicketUpdateRequest
 from requestor_sync_service import requestor_sync_service
 from request_type import extract_request_type_name_from_fields
-from site_context import get_scoped_issues, key_is_visible_in_scope
+from site_context import get_current_site_scope, get_scoped_issues, key_is_visible_in_scope
 
 logger = logging.getLogger(__name__)
 
@@ -37,88 +37,6 @@ router = APIRouter(prefix="/api")
 
 _client = JiraClient()
 _STALE_DAYS = 1
-
-
-def _sync_reporter_from_ticket_text(
-    issue: dict[str, Any],
-    *,
-    source: str = "Reporter sync",
-    session: dict[str, Any] | None = None,
-) -> tuple[bool, str]:
-    """Update Jira reporter when the ticket text explicitly names a creator.
-
-    This is used by live refresh flows so cached list views can reconcile
-    integration-created tickets back to the real reporter without waiting for
-    background auto-triage.
-    """
-    key = issue.get("key", "")
-    if not key:
-        return False, "Ticket key missing."
-
-    fields = issue.get("fields", {})
-    description = extract_adf_text(fields.get("description"))
-    reporter_hint = _extract_reporter_hint_from_text(description)
-    if not reporter_hint:
-        return False, "Ticket description does not contain a recognizable 'OCC Ticket Created By' line."
-
-    reporter_obj = fields.get("reporter") or {}
-    current_name = (
-        reporter_obj.get("displayName", "").strip()
-        if isinstance(reporter_obj, dict)
-        else ""
-    )
-    current_account_id = (
-        reporter_obj.get("accountId", "").strip()
-        if isinstance(reporter_obj, dict)
-        else ""
-    )
-    if current_name.lower() == reporter_hint.lower():
-        return False, f"Reporter already matches {reporter_hint}."
-
-    try:
-        account_id = _client.find_user_account_id(reporter_hint)
-        if not account_id:
-            logger.info(
-                "%s: leaving %s reporter as '%s' because '%s' did not resolve to one Jira user",
-                source,
-                key,
-                current_name or "(blank)",
-                reporter_hint,
-            )
-            return False, f"Could not find an exact Jira user for {reporter_hint}."
-        if account_id == current_account_id:
-            cache.update_cached_field(
-                key,
-                "reporter",
-                {"displayName": reporter_hint, "accountId": account_id},
-            )
-            logger.info("%s: refreshed cached reporter display name for %s -> %s", source, key, reporter_hint)
-            return True, f"Reporter updated to {reporter_hint}."
-        ctx = get_jira_write_context(session, shared_client=_client)
-        ctx.client.update_reporter(key, account_id)
-        cache.update_cached_field(
-            key,
-            "reporter",
-            {"displayName": reporter_hint, "accountId": account_id},
-        )
-        if ctx.is_fallback:
-            add_fallback_internal_audit_note(
-                key,
-                action_summary=f"Reporter updated to {reporter_hint} via {source}",
-                session=session,
-                shared_client=_client,
-            )
-        logger.info(
-            "%s: updated %s reporter %s -> %s",
-            source,
-            key,
-            current_name or "(blank)",
-            reporter_hint,
-        )
-        return True, f"Reporter updated to {reporter_hint}."
-    except Exception:
-        logger.exception("%s: failed to update reporter for %s", source, key)
-        return False, "Failed to update reporter from ticket description."
 
 
 def _match(issue: dict[str, Any], **filters: Any) -> bool:
@@ -157,6 +75,9 @@ def _match(issue: dict[str, Any], **filters: Any) -> bool:
         if not any(str(label).lower() == target for label in labels):
             return False
 
+    if not matches_libra_support_filter(issue, filters.get("libra_support")):
+        return False
+
     if filters.get("search"):
         term = filters["search"].lower()
         summary = (fields.get("summary") or "").lower()
@@ -178,6 +99,8 @@ def _match(issue: dict[str, Any], **filters: Any) -> bool:
         return False
 
     if filters.get("stale_only"):
+        if is_excluded_from_stale(issue, scope=get_current_site_scope()):
+            return False
         updated_str = fields.get("updated", "")
         if not updated_str:
             return False
@@ -402,6 +325,7 @@ async def list_tickets(
     assignee: Optional[str] = Query(None),
     issue_type: Optional[str] = Query(None),
     label: Optional[str] = Query(None),
+    libra_support: Optional[Literal["all", "libra_support", "non_libra_support"]] = Query(None),
     search: Optional[str] = Query(None),
     open_only: bool = Query(False),
     stale_only: bool = Query(False),
@@ -419,6 +343,7 @@ async def list_tickets(
         "assignee": assignee,
         "issue_type": issue_type,
         "label": label,
+        "libra_support": libra_support,
         "search": search,
         "open_only": open_only,
         "stale_only": stale_only,
@@ -643,7 +568,9 @@ async def refresh_visible_tickets(body: TicketRefreshRequest) -> dict[str, Any]:
     refreshed_keys = [issue.get("key", "") for issue in refreshed_issues if issue.get("key")]
     refreshed_key_set = set(refreshed_keys)
     for issue in refreshed_issues:
-        _sync_reporter_from_ticket_text(issue, source="Refresh visible")
+        result = requestor_sync_service.maybe_reconcile_issue(issue)
+        if result.get("updated"):
+            cache.upsert_issue(issue)
 
     return {
         "requested_count": len(requested_keys),
@@ -674,7 +601,8 @@ async def sync_ticket_reporter(
     key: str,
     _admin: dict = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Update reporter from an OCC Ticket Created By line in the description."""
+    """Compatibility endpoint for unified requestor reconciliation."""
+    del _admin
     try:
         validate_jira_key(key)
         _ensure_ticket_visible(key)
@@ -684,19 +612,10 @@ async def sync_ticket_reporter(
     try:
         issue = _client.get_issue(key)
         requestor_result = requestor_sync_service.reconcile_issue(issue, force=True)
-        if requestor_result["requestor_identity"]["jira_status"] != "no_email_extracted":
-            detail = _load_ticket_detail(key, issue=issue)
-            return {
-                "detail": detail,
-                "updated": bool(requestor_result["updated"]),
-                "message": requestor_result["message"],
-            }
-        updated, message = _sync_reporter_from_ticket_text(issue, source="Update reporter button", session=_admin)
-        detail = _load_ticket_detail(key) if updated else _load_ticket_detail(key, issue=issue)
         return {
-            "detail": detail,
-            "updated": updated,
-            "message": message,
+            "detail": _load_ticket_detail(key, issue=issue),
+            "updated": bool(requestor_result["updated"]),
+            "message": requestor_result["message"],
         }
     except HTTPException:
         raise

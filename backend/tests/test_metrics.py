@@ -8,6 +8,7 @@ from metrics import (
     parse_dt,
     percentile,
     is_excluded,
+    matches_libra_support_filter,
     map_status_bucket,
     _is_open,
     extract_sla_status,
@@ -219,6 +220,98 @@ class TestComputeHeadlineMetrics:
         assert result["total_tickets"] == 0
         assert result["median_ttr_hours"] is None
 
+    def test_stale_count_excludes_waiting_for_customer_and_pending_on_primary(self, freeze_time):
+        waiting = {
+            "key": "OIT-701",
+            "fields": {
+                "summary": "Waiting on requester",
+                "status": {"name": "Waiting For Customer", "statusCategory": {"name": "In Progress"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-20T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": [],
+            },
+        }
+        pending = {
+            "key": "OIT-702",
+            "fields": {
+                "summary": "Pending vendor action",
+                "status": {"name": "Pending", "statusCategory": {"name": "In Progress"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-20T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": [],
+            },
+        }
+        result = compute_headline_metrics([waiting, pending], scope="primary")
+        assert result["open_backlog"] == 2
+        assert result["stale_count"] == 0
+
+    def test_stale_count_keeps_waiting_for_customer_on_oasisdev_scope(self, freeze_time):
+        waiting = {
+            "key": "OIT-708",
+            "fields": {
+                "summary": "Waiting on requester",
+                "status": {"name": "Waiting For Customer", "statusCategory": {"name": "In Progress"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-20T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": ["oasisdev"],
+            },
+        }
+        result = compute_headline_metrics([waiting], scope="oasisdev")
+        assert result["open_backlog"] == 1
+        assert result["stale_count"] == 1
+
+    def test_stale_count_excludes_onboarding_and_offboarding_categories_on_primary(self, freeze_time):
+        onboarding = {
+            "key": "OIT-703",
+            "fields": {
+                "summary": "New hire laptop setup",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-20T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": [],
+                "customfield_10010": {"requestType": {"name": "Onboard new employees"}},
+            },
+        }
+        offboarding = {
+            "key": "OIT-704",
+            "fields": {
+                "summary": "Disable terminated user",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-20T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": [],
+                "customfield_11239": "Offboarding",
+            },
+        }
+        result = compute_headline_metrics([onboarding, offboarding], scope="primary")
+        assert result["open_backlog"] == 2
+        assert result["stale_count"] == 0
+
 
 # ===== compute_monthly_volumes =====
 
@@ -247,6 +340,68 @@ class TestComputeAgeBuckets:
         total_open = sum(r["count"] for r in result)
         assert total_open == 2
         assert buckets.get("30+d", 0) == 2
+
+    def test_age_buckets_exclude_oasisdev_but_keep_libra_support_on_primary(self, freeze_time):
+        libra_issue = {
+            "key": "OIT-705",
+            "fields": {
+                "summary": "Libra inbound support ticket",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-20T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": ["Libra_Support"],
+            },
+        }
+        oasisdev_issue = {
+            "key": "OIT-706",
+            "fields": {
+                "summary": "oasisdev test ticket",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-20T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": ["oasisdev"],
+            },
+        }
+        normal_issue = {
+            "key": "OIT-707",
+            "fields": {
+                "summary": "Normal production ticket",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-20T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": [],
+            },
+        }
+        result = compute_age_buckets([libra_issue, oasisdev_issue, normal_issue], scope="primary")
+        assert sum(row["count"] for row in result) == 2
+
+    def test_matches_libra_support_filter(self):
+        libra_issue = {"fields": {"labels": ["Libra_Support", "vip"]}}
+        normal_issue = {"fields": {"labels": ["vip"]}}
+        unlabeled_issue = {"fields": {"labels": []}}
+
+        assert matches_libra_support_filter(libra_issue, None) is True
+        assert matches_libra_support_filter(libra_issue, "all") is True
+        assert matches_libra_support_filter(libra_issue, "libra_support") is True
+        assert matches_libra_support_filter(libra_issue, "non_libra_support") is False
+        assert matches_libra_support_filter(normal_issue, "libra_support") is False
+        assert matches_libra_support_filter(normal_issue, "non_libra_support") is True
+        assert matches_libra_support_filter(unlabeled_issue, "non_libra_support") is True
 
 
 # ===== compute_ttr_distribution =====

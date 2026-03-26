@@ -148,6 +148,7 @@ function requestorStatusTone(
     case "match_pending":
       return "blue";
     case "ambiguous_directory_match":
+    case "ambiguous_name_match":
     case "jira_conflict":
       return "amber";
     default:
@@ -165,6 +166,8 @@ function requestorStatusLabel(status: string): string {
       return "Not In O365";
     case "ambiguous_directory_match":
       return "Directory Conflict";
+    case "ambiguous_name_match":
+      return "Ambiguous Name";
     case "jira_conflict":
       return "Jira Conflict";
     case "updated_reporter":
@@ -175,6 +178,8 @@ function requestorStatusLabel(status: string): string {
       return "Already Synced";
     case "sync_failed":
       return "Sync Failed";
+    case "no_name_match":
+      return "No Name Match";
     default:
       return status || "Unknown";
   }
@@ -573,20 +578,6 @@ export default function TicketWorkbenchDrawer({
     },
   });
 
-  const syncReporterMutation = useMutation({
-    mutationFn: () => {
-      if (!ticketKey) {
-        throw new Error("No ticket selected");
-      }
-      return api.syncTicketReporter(ticketKey);
-    },
-    onSuccess: (result) => handleUpdated(result.detail, result.message),
-    onError: (error) => {
-      setErrorText(error instanceof Error ? error.message : "Failed to update reporter");
-      setFeedback(null);
-    },
-  });
-
   const syncRequestorMutation = useMutation({
     mutationFn: () => {
       if (!ticketKey) {
@@ -862,7 +853,7 @@ export default function TicketWorkbenchDrawer({
                     >
                       Reporter
                     </label>
-                    <div className="mt-1 flex flex-col gap-2 xl:flex-row xl:items-start">
+                    <div className="mt-1 flex flex-col gap-2">
                       <input
                         id="ticket-reporter-input"
                         aria-label="Reporter"
@@ -881,19 +872,11 @@ export default function TicketWorkbenchDrawer({
                         placeholder="Search Jira users by name or email"
                         className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                       />
-                      <button
-                        type="button"
-                        onClick={() => syncReporterMutation.mutate()}
-                        disabled={syncReporterMutation.isPending}
-                        className="shrink-0 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {syncReporterMutation.isPending ? "Updating..." : "Update Reporter"}
-                      </button>
                     </div>
                     <div className="mt-1 text-xs text-slate-500">
                       {showReporterMatches
                         ? "Pick the correct Jira user below before saving."
-                        : "Use this when you need to manually change the reporter."}
+                        : "Search for the correct Jira user here when automatic requestor matching leaves the reporter unchanged."}
                     </div>
                     {showReporterMatches && (
                       <select
@@ -925,7 +908,7 @@ export default function TicketWorkbenchDrawer({
                       </select>
                     )}
                     <div className="mt-1 text-xs text-slate-500">
-                      Uses the saved description line like "OCC Ticket Created By: Jane Doe".
+                      Automatic matching uses the saved description line like "OCC Ticket Created By: Jane Doe".
                     </div>
 
                     {requestorIdentity ? (
@@ -941,6 +924,9 @@ export default function TicketWorkbenchDrawer({
                               </span>
                               {requestorIdentity.directory_match ? (
                                 <span className={chipClass("blue")}>Office 365 Match</span>
+                              ) : null}
+                              {requestorIdentity.match_source === "occ_creator_name" ? (
+                                <span className={chipClass("green")}>Matched From OCC Name</span>
                               ) : null}
                             </div>
                           </div>
@@ -960,6 +946,10 @@ export default function TicketWorkbenchDrawer({
                             <span className="font-medium text-slate-700">Extracted email:</span>{" "}
                             {requestorIdentity.extracted_email || "None"}
                           </div>
+                          {requestorIdentity.jira_status === "no_name_match" ||
+                          requestorIdentity.jira_status === "ambiguous_name_match" ? (
+                            <div>Reporter was left unchanged. Use the reporter search above to set it manually.</div>
+                          ) : null}
                           <div>{requestorIdentity.message || "No requestor reconciliation status yet."}</div>
                         </div>
                       </div>

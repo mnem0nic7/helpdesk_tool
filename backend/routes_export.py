@@ -42,6 +42,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
+
+def _calculation_scoped_issues(*, include_excluded_on_primary: bool = False) -> list[dict[str, Any]]:
+    """Return issues eligible for report/chart calculations on the active host.
+
+    On the primary host, OasisDev tickets stay out of calculations even when a
+    caller asks to include excluded tickets.
+    """
+    scope = get_current_site_scope()
+    if scope == "primary":
+        return get_scoped_issues(include_excluded_on_primary=False)
+    return get_scoped_issues(include_excluded_on_primary=include_excluded_on_primary)
+
 def _write_single_report_workbook_file(
     *,
     path: str,
@@ -91,7 +103,7 @@ def _apply_runtime_template_readiness(
     if not templates:
         return []
     builder = ReportWorkbookBuilder(
-        all_issues=get_scoped_issues(include_excluded_on_primary=True),
+        all_issues=_calculation_scoped_issues(include_excluded_on_primary=True),
         site_scope=site_scope,
         today=_today_utc(),
         enable_changelog_fetch=False,
@@ -247,7 +259,7 @@ def _issues_matching_config(
     issues: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return scoped Jira issues that match the report config filters."""
-    source_issues = issues if issues is not None else get_scoped_issues(include_excluded_on_primary=config.include_excluded)
+    source_issues = issues if issues is not None else _calculation_scoped_issues(include_excluded_on_primary=config.include_excluded)
     source_issues = [iss for iss in source_issues if JiraClient.is_tracked_issue(iss)]
     filters = config.filters.model_dump(exclude_none=True)
     for k in ("open_only", "stale_only"):
@@ -495,7 +507,7 @@ def _build_master_report_workbook(
         view_type = _report_view_type(config)
         window_field = _date_field_for_report_window(template)
         window_field_label = _REPORT_WINDOW_LABELS.get(window_field, "Created")
-        base_issues = get_scoped_issues(include_excluded_on_primary=config.include_excluded)
+        base_issues = _calculation_scoped_issues(include_excluded_on_primary=config.include_excluded)
 
         for window_label, window_days in _WINDOW_EXPORT_SPECS:
             rows, window_start, window_end = _windowed_rows_for_report(
@@ -1112,7 +1124,7 @@ async def report_export(config: ReportConfig, template_id: str | None = None) ->
     tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
     tmp_path = tmp.name
     tmp.close()
-    all_issues = get_scoped_issues(include_excluded_on_primary=True)
+    all_issues = _calculation_scoped_issues(include_excluded_on_primary=True)
     today = _today_utc()
     await asyncio.to_thread(
         _write_single_report_workbook_file,
@@ -1157,7 +1169,7 @@ async def list_report_template_insights(
     return [
         _build_template_insight(
             template,
-            get_scoped_issues(include_excluded_on_primary=template.config.include_excluded),
+            _calculation_scoped_issues(include_excluded_on_primary=template.config.include_excluded),
             today=today,
         )
         for template in templates
@@ -1178,7 +1190,7 @@ async def export_master_report_workbook(
     tmp_path = tmp.name
     tmp.close()
     site_scope = get_current_site_scope()
-    all_issues = get_scoped_issues(include_excluded_on_primary=True)
+    all_issues = _calculation_scoped_issues(include_excluded_on_primary=True)
     today = _today_utc()
     await asyncio.to_thread(
         _write_master_report_workbook_file,
@@ -1398,7 +1410,7 @@ async def export_excel() -> FileResponse:
     logger.info("Starting Excel export from cache")
 
     # Read from the current site scope.
-    issues = get_scoped_issues(include_excluded_on_primary=True)
+    issues = _calculation_scoped_issues(include_excluded_on_primary=True)
     logger.info("Export: %d issues from cache", len(issues))
 
     # Create workbook

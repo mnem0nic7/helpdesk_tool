@@ -272,6 +272,7 @@ export default function TriagePage() {
     ...(filters.priority ? { priority: filters.priority } : {}),
     ...(filters.issue_type ? { issue_type: filters.issue_type } : {}),
     ...(filters.label ? { label: filters.label } : {}),
+    ...(filters.libra_support !== "all" ? { libra_support: filters.libra_support } : {}),
     ...(filters.assignee ? { assignee: filters.assignee } : {}),
     ...(filters.open_only ? { open_only: true } : {}),
     ...(filters.stale_only ? { stale_only: true } : {}),

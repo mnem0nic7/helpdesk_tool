@@ -425,6 +425,7 @@ export interface RequestorIdentity {
   jira_account_id: string;
   jira_status: string;
   message: string;
+  match_source?: string;
 }
 
 export interface TicketDetail {
@@ -454,6 +455,11 @@ export interface TicketUpdatePayload {
   work_category?: string;
 }
 
+export type LibraSupportFilterMode =
+  | "all"
+  | "libra_support"
+  | "non_libra_support";
+
 /** Filters for the report builder. */
 export interface ReportFilters {
   status?: string;
@@ -461,6 +467,7 @@ export interface ReportFilters {
   assignee?: string;
   issue_type?: string;
   label?: string;
+  libra_support?: LibraSupportFilterMode;
   search?: string;
   open_only?: boolean;
   stale_only?: boolean;
@@ -2211,6 +2218,7 @@ export interface TicketQueryParams {
   assignee?: string;
   issue_type?: string;
   label?: string;
+  libra_support?: LibraSupportFilterMode;
   search?: string;
   open_only?: boolean;
   stale_only?: boolean;
@@ -2223,6 +2231,7 @@ export interface TicketQueryParams {
 export interface MetricsQueryParams {
   date_from?: string;
   date_to?: string;
+  libra_support?: LibraSupportFilterMode;
 }
 
 export interface SLAMetricsQueryParams extends MetricsQueryParams {

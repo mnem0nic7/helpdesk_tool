@@ -23,6 +23,7 @@ function filtersFromParams(sp: URLSearchParams): TicketFilterValues {
     priority: sp.get("priority") ?? "",
     issue_type: sp.get("issue_type") ?? "",
     label: sp.get("label") ?? "",
+    libra_support: (sp.get("libra_support") as TicketFilterValues["libra_support"]) ?? "all",
     open_only: sp.get("open_only") !== "false",
     stale_only: sp.get("stale_only") === "true",
     created_after: sp.get("created_after") ?? "",
@@ -111,6 +112,7 @@ export default function TicketsPage() {
     ...(filters.priority ? { priority: filters.priority } : {}),
     ...(filters.issue_type ? { issue_type: filters.issue_type } : {}),
     ...(filters.label ? { label: filters.label } : {}),
+    ...(filters.libra_support !== "all" ? { libra_support: filters.libra_support } : {}),
     ...(filters.open_only ? { open_only: true } : {}),
     ...(filters.stale_only ? { stale_only: true } : {}),
     ...(filters.created_after ? { created_after: filters.created_after } : {}),
@@ -130,7 +132,18 @@ export default function TicketsPage() {
   const matchedCount = data?.matched_count ?? tickets.length;
   const totalCount = data?.total_count;
   const hasMore = page * PAGE_SIZE < matchedCount;
-  const hasFilters = !!(filters.search || filters.status || filters.priority || filters.issue_type || filters.label || filters.stale_only || filters.assignee || filters.created_after || filters.created_before);
+  const hasFilters = !!(
+    filters.search ||
+    filters.status ||
+    filters.priority ||
+    filters.issue_type ||
+    filters.label ||
+    filters.libra_support !== "all" ||
+    filters.stale_only ||
+    filters.assignee ||
+    filters.created_after ||
+    filters.created_before
+  );
 
   const refreshVisibleMutation = useMutation({
     mutationFn: (keys: string[]) => api.refreshVisibleTickets(keys),

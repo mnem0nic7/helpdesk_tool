@@ -40,15 +40,17 @@ class FakeJiraClient:
         self.created_customers: list[tuple[str, str]] = []
         self.service_desk_adds: list[tuple[str, list[str]]] = []
         self.reporter_updates: list[tuple[str, str]] = []
+        self.search_user_rows: list[dict] = []
+        self.customer_rows: list[dict] = []
 
     def get_service_desk_id_for_project(self, project_key: str) -> str:
         return "desk-1"
 
     def search_users(self, query: str, max_results: int = 50) -> list[dict]:
-        return []
+        return self.search_user_rows
 
     def get_service_desk_customers(self, service_desk_id: str, *, query: str = "") -> list[dict]:
-        return []
+        return self.customer_rows
 
     def create_customer(self, *, email: str, display_name: str, strict_conflict_status_code: bool = False) -> dict:
         self.created_customers.append((email, display_name))
@@ -171,3 +173,156 @@ def test_reconcile_issue_creates_customer_and_updates_reporter(tmp_path):
     assert client.reporter_updates == [("OIT-123", "acct-grace")]
     assert issue["fields"]["reporter"]["displayName"] == "Grace Hopper"
     assert issue["fields"]["reporter"]["emailAddress"] == "grace.hopper@example.com"
+
+
+def test_reconcile_issue_matches_occ_creator_name_to_single_entra_user(tmp_path):
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    client = FakeJiraClient()
+    service = RequestorSyncService(store=store, client=client)
+
+    service.refresh_directory_emails(
+        [
+            {
+                "id": "user-1",
+                "display_name": "Wayne Berry",
+                "mail": "wayne.berry@librasolutionsgroup.com",
+                "primary_mail": "wayne.berry@librasolutionsgroup.com",
+                "principal_name": "wayne.berry@librasolutionsgroup.com",
+                "email_aliases": ["wayne.berry@keyhealth.net"],
+                "account_class": "user",
+            }
+        ]
+    )
+    issue = _issue("OCC Ticket Created By: Wayne Berry | OCC Ticket ID: LIBRA-SR-1")
+
+    result = service.reconcile_issue(issue, force=True)
+
+    assert result["updated"] is True
+    assert result["requestor_identity"]["match_source"] == "occ_creator_name"
+    assert result["requestor_identity"]["jira_status"] == "created_jira_customer"
+    assert client.created_customers == [("wayne.berry@librasolutionsgroup.com", "Wayne Berry")]
+    assert client.reporter_updates == [("OIT-123", "acct-grace")]
+    assert issue["fields"]["reporter"]["emailAddress"] == "wayne.berry@librasolutionsgroup.com"
+
+
+def test_reconcile_issue_uses_domain_priority_for_occ_name_matches(tmp_path):
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    client = FakeJiraClient()
+    service = RequestorSyncService(store=store, client=client)
+
+    service.refresh_directory_emails(
+        [
+            {
+                "id": "user-1",
+                "display_name": "Wayne Berry",
+                "mail": "wayne.berry@keyhealth.net",
+                "primary_mail": "wayne.berry@keyhealth.net",
+                "principal_name": "wayne.berry@keyhealth.net",
+                "email_aliases": [],
+                "account_class": "user",
+            },
+            {
+                "id": "user-2",
+                "display_name": "Wayne Berry",
+                "mail": "wayne.berry@librasolutionsgroup.com",
+                "primary_mail": "wayne.berry@librasolutionsgroup.com",
+                "principal_name": "wayne.berry@librasolutionsgroup.com",
+                "email_aliases": [],
+                "account_class": "user",
+            },
+        ]
+    )
+    issue = _issue("OCC Ticket Created By: Wayne Berry | OCC Ticket ID: LIBRA-SR-1")
+
+    result = service.reconcile_issue(issue, force=True)
+
+    assert result["updated"] is True
+    assert client.created_customers == [("wayne.berry@librasolutionsgroup.com", "Wayne Berry")]
+    assert result["message"].startswith("Matched from OCC creator name")
+
+
+def test_reconcile_issue_leaves_reporter_when_occ_name_has_no_directory_match(tmp_path):
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    service = RequestorSyncService(store=store, client=FakeJiraClient())
+
+    issue = _issue("OCC Ticket Created By: Wayne Berry | OCC Ticket ID: LIBRA-SR-1")
+    result = service.reconcile_issue(issue, force=True)
+
+    assert result["updated"] is False
+    assert result["requestor_identity"]["jira_status"] == "no_name_match"
+    assert result["requestor_identity"]["match_source"] == "occ_creator_name"
+    assert "left unchanged" in result["message"]
+
+
+def test_reconcile_issue_leaves_reporter_when_occ_name_remains_ambiguous(tmp_path):
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    service = RequestorSyncService(store=store, client=FakeJiraClient())
+
+    service.refresh_directory_emails(
+        [
+            {
+                "id": "user-1",
+                "display_name": "Wayne Berry",
+                "mail": "wayne.berry@librasolutionsgroup.com",
+                "primary_mail": "wayne.berry@librasolutionsgroup.com",
+                "principal_name": "wayne.berry@librasolutionsgroup.com",
+                "email_aliases": [],
+                "account_class": "user",
+            },
+            {
+                "id": "user-2",
+                "display_name": "Wayne Berry",
+                "mail": "wayne.alt@librasolutionsgroup.com",
+                "primary_mail": "wayne.alt@librasolutionsgroup.com",
+                "principal_name": "wayne.alt@librasolutionsgroup.com",
+                "email_aliases": [],
+                "account_class": "user",
+            },
+        ]
+    )
+    issue = _issue("OCC Ticket Created By: Wayne Berry | OCC Ticket ID: LIBRA-SR-1")
+
+    result = service.reconcile_issue(issue, force=True)
+
+    assert result["updated"] is False
+    assert result["requestor_identity"]["jira_status"] == "ambiguous_name_match"
+    assert result["requestor_identity"]["match_source"] == "occ_creator_name"
+    assert "Use the reporter search" in result["message"]
+
+
+def test_reconcile_issue_prefers_extracted_email_over_occ_creator_name(tmp_path):
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    client = FakeJiraClient()
+    service = RequestorSyncService(store=store, client=client)
+
+    service.refresh_directory_emails(
+        [
+            {
+                "id": "user-1",
+                "display_name": "Grace Hopper",
+                "mail": "grace.hopper@example.com",
+                "primary_mail": "grace.hopper@example.com",
+                "principal_name": "grace.hopper@example.com",
+                "email_aliases": [],
+                "account_class": "user",
+            },
+            {
+                "id": "user-2",
+                "display_name": "Wayne Berry",
+                "mail": "wayne.berry@librasolutionsgroup.com",
+                "primary_mail": "wayne.berry@librasolutionsgroup.com",
+                "principal_name": "wayne.berry@librasolutionsgroup.com",
+                "email_aliases": [],
+                "account_class": "user",
+            },
+        ]
+    )
+    issue = _issue(
+        "Reporter Email: grace.hopper@example.com | OCC Ticket Created By: Wayne Berry | OCC Ticket ID: LIBRA-SR-1"
+    )
+
+    result = service.reconcile_issue(issue, force=True)
+
+    assert result["updated"] is True
+    assert result["requestor_identity"]["match_source"] == "reporter_email"
+    assert client.created_customers == [("grace.hopper@example.com", "Grace Hopper")]

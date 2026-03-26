@@ -292,6 +292,7 @@ function filtersToApi(f: TicketFilterValues): ReportFilters {
     assignee: f.assignee || undefined,
     issue_type: f.issue_type || undefined,
     label: f.label || undefined,
+    libra_support: f.libra_support !== "all" ? f.libra_support : undefined,
     search: f.search || undefined,
     open_only: f.open_only || undefined,
     stale_only: f.stale_only || undefined,

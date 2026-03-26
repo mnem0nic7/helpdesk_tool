@@ -23,10 +23,13 @@ def _issue(
     updated: str = "2026-03-01T10:00:00+00:00",
     status_category: str = "To Do",
     labels: list[str] | None = None,
+    description: str | None = None,
+    request_type: str | None = None,
+    work_category: str | None = None,
 ) -> dict[str, Any]:
     """Build a minimal issue for _match testing."""
     assignee_obj = {"displayName": assignee} if assignee else None
-    return {
+    issue = {
         "key": key,
         "fields": {
             "summary": summary,
@@ -37,9 +40,15 @@ def _issue(
             "created": created,
             "updated": updated,
             "labels": labels or [],
-            "description": None,
+            "description": description,
         },
     }
+
+    if request_type:
+        issue["fields"]["customfield_10010"] = {"requestType": {"name": request_type}}
+    if work_category:
+        issue["fields"]["customfield_11239"] = work_category
+    return issue
 
 
 class TestMatch:
@@ -85,6 +94,27 @@ class TestMatch:
     def test_label_mismatch(self):
         assert _match(_issue(labels=["vip", "network"]), label="security") is False
 
+    def test_libra_support_match(self):
+        assert _match(_issue(labels=["Libra_Support", "vip"]), libra_support="libra_support") is True
+
+    def test_non_libra_support_match(self):
+        assert _match(_issue(labels=["vip", "network"]), libra_support="non_libra_support") is True
+
+    def test_non_libra_support_excludes_labeled_ticket(self):
+        assert _match(_issue(labels=["Libra_Support"]), libra_support="non_libra_support") is False
+
+    def test_label_and_libra_support_combine(self):
+        assert _match(
+            _issue(labels=["Libra_Support", "vip"]),
+            label="vip",
+            libra_support="libra_support",
+        ) is True
+        assert _match(
+            _issue(labels=["Libra_Support", "vip"]),
+            label="network",
+            libra_support="libra_support",
+        ) is False
+
     def test_open_only(self):
         assert _match(_issue(status_category="To Do"), open_only=True) is True
 
@@ -96,6 +126,44 @@ class TestMatch:
             _issue(
                 status="Resolved",
                 status_category="Done",
+                updated="2026-02-01T10:00:00+00:00",
+            ),
+            stale_only=True,
+        ) is False
+
+    def test_stale_only_excludes_waiting_for_customer(self):
+        assert _match(
+            _issue(
+                status="Waiting For Customer",
+                status_category="In Progress",
+                updated="2026-02-01T10:00:00+00:00",
+            ),
+            stale_only=True,
+        ) is False
+
+    def test_stale_only_excludes_pending(self):
+        assert _match(
+            _issue(
+                status="Pending",
+                status_category="In Progress",
+                updated="2026-02-01T10:00:00+00:00",
+            ),
+            stale_only=True,
+        ) is False
+
+    def test_stale_only_excludes_onboarding_and_offboarding_categories(self):
+        assert _match(
+            _issue(
+                status="Open",
+                request_type="Onboard new employees",
+                updated="2026-02-01T10:00:00+00:00",
+            ),
+            stale_only=True,
+        ) is False
+        assert _match(
+            _issue(
+                status="Open",
+                work_category="Offboarding",
                 updated="2026-02-01T10:00:00+00:00",
             ),
             stale_only=True,
@@ -156,6 +224,17 @@ class TestTicketsEndpoint:
         assert resp.status_code == 200
         tickets = resp.json()["tickets"]
         assert len(tickets) == 0  # sample cache data has no non-excluded vip labels
+
+    def test_list_with_libra_support_filter(self, test_client, mock_cache):
+        libra_issue = _issue(key="OIT-L1", labels=["Libra_Support"])
+        normal_issue = _issue(key="OIT-N1", labels=["vip"])
+        mock_cache.get_all_issues.return_value = [libra_issue, normal_issue]
+        mock_cache.get_filtered_issues.return_value = [libra_issue, normal_issue]
+
+        resp = test_client.get("/api/tickets?libra_support=libra_support")
+        assert resp.status_code == 200
+        tickets = resp.json()["tickets"]
+        assert [ticket["key"] for ticket in tickets] == ["OIT-L1"]
 
     def test_filter_options_include_labels(self, test_client, monkeypatch):
         import issue_cache
@@ -247,32 +326,35 @@ class TestTicketsEndpoint:
         }
         mock_cache.refresh_issue_keys.assert_called_once_with(["OIT-123"])
 
-    def test_refresh_visible_tickets_updates_reporter_from_ticket_text(self, test_client, mock_cache, monkeypatch):
+    def test_refresh_visible_tickets_runs_requestor_reconciliation(self, test_client, mock_cache, monkeypatch):
         import routes_tickets
 
         issue = _detail_issue()
-        issue["fields"]["reporter"] = {"displayName": "OSIJIRAOCC", "accountId": "acct-occ"}
-        issue["fields"]["description"] = _adf("OCC Ticket Created By: Raza Abidi |\n*Caution* External email.")
         mock_cache.refresh_issue_keys.return_value = [issue]
         monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
-
-        updated: list[tuple[str, str]] = []
-        monkeypatch.setattr(routes_tickets._client, "find_user_account_id", lambda name: "acct-raza")
+        seen_keys: list[str] = []
         monkeypatch.setattr(
-            routes_tickets._client,
-            "update_reporter",
-            lambda key, account_id: updated.append((key, account_id)),
+            routes_tickets.requestor_sync_service,
+            "maybe_reconcile_issue",
+            lambda refreshed_issue: seen_keys.append(refreshed_issue["key"]) or {
+                "updated": True,
+                "message": "Matched from OCC creator name and synced reporter to Raza Abidi.",
+                "requestor_identity": {
+                    "extracted_email": "raza@example.com",
+                    "directory_match": True,
+                    "jira_account_id": "acct-raza",
+                    "jira_status": "updated_reporter",
+                    "message": "Matched from OCC creator name and synced reporter to Raza Abidi.",
+                    "match_source": "occ_creator_name",
+                },
+            },
         )
 
         resp = test_client.post("/api/tickets/refresh-visible", json={"keys": ["OIT-123"]})
 
         assert resp.status_code == 200
-        assert updated == [("OIT-123", "acct-raza")]
-        mock_cache.update_cached_field.assert_called_with(
-            "OIT-123",
-            "reporter",
-            {"displayName": "Raza Abidi", "accountId": "acct-raza"},
-        )
+        assert seen_keys == ["OIT-123"]
+        mock_cache.upsert_issue.assert_called_once_with(issue)
 
     def test_refresh_visible_tickets_rejects_invalid_keys(self, test_client):
         resp = test_client.post("/api/tickets/refresh-visible", json={"keys": ["not-a-jira-key"]})
@@ -599,7 +681,7 @@ class TestTicketDetailAndActions:
             {"account_id": "acct-2", "display_name": "Raza Abidi", "email_address": "raza@example.com"},
         ]
 
-    def test_sync_ticket_reporter_updates_from_occ_created_by_line(self, test_client, mock_cache, monkeypatch):
+    def test_sync_ticket_reporter_delegates_to_unified_requestor_sync(self, test_client, mock_cache, monkeypatch):
         import routes_tickets
 
         issue_before = _detail_issue()
@@ -612,7 +694,6 @@ class TestTicketDetailAndActions:
         issue_after["fields"]["description"] = issue_before["fields"]["description"]
 
         issues = [issue_before, issue_after]
-        updated: list[tuple[str, str]] = []
 
         monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
         monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issues.pop(0))
@@ -620,37 +701,29 @@ class TestTicketDetailAndActions:
         monkeypatch.setattr(
             routes_tickets.requestor_sync_service,
             "reconcile_issue",
-            lambda issue, force=False: {
-                "updated": False,
-                "message": "No requestor email was extracted from this ticket.",
-                "requestor_identity": {
-                    "extracted_email": "",
-                    "directory_match": False,
-                    "jira_account_id": "",
-                    "jira_status": "no_email_extracted",
-                    "message": "No requestor email was extracted from this ticket.",
+            lambda issue, force=False: (
+                issue["fields"].__setitem__("reporter", {"displayName": "Raza Abidi", "accountId": "acct-raza"}),
+                {
+                    "updated": True,
+                    "message": "Matched from OCC creator name and synced reporter to Raza Abidi.",
+                    "requestor_identity": {
+                        "extracted_email": "raza@librasolutionsgroup.com",
+                        "directory_match": True,
+                        "jira_account_id": "acct-raza",
+                        "jira_status": "updated_reporter",
+                        "message": "Matched from OCC creator name and synced reporter to Raza Abidi.",
+                        "match_source": "occ_creator_name",
+                    },
                 },
-            },
-        )
-        monkeypatch.setattr(routes_tickets._client, "find_user_account_id", lambda name: "acct-raza")
-        monkeypatch.setattr(
-            routes_tickets._client,
-            "update_reporter",
-            lambda key, account_id: updated.append((key, account_id)),
+            )[1],
         )
 
         resp = test_client.post("/api/tickets/OIT-123/sync-reporter")
 
         assert resp.status_code == 200
-        assert updated == [("OIT-123", "acct-raza")]
         assert resp.json()["updated"] is True
-        assert resp.json()["message"] == "Reporter updated to Raza Abidi."
+        assert resp.json()["message"] == "Matched from OCC creator name and synced reporter to Raza Abidi."
         assert resp.json()["detail"]["ticket"]["reporter"] == "Raza Abidi"
-        mock_cache.update_cached_field.assert_called_with(
-            "OIT-123",
-            "reporter",
-            {"displayName": "Raza Abidi", "accountId": "acct-raza"},
-        )
         mock_cache.upsert_issue.assert_called_once_with(issue_after)
 
     def test_sync_ticket_reporter_uses_requestor_sync_when_email_path_exists(self, test_client, monkeypatch):
@@ -673,6 +746,7 @@ class TestTicketDetailAndActions:
                     "jira_account_id": "acct-grace",
                     "jira_status": "updated_reporter",
                     "message": "Reporter synced to Grace Hopper.",
+                    "match_source": "reporter_email",
                 },
             },
         )
@@ -688,6 +762,7 @@ class TestTicketDetailAndActions:
                     "jira_account_id": "acct-grace",
                     "jira_status": "updated_reporter",
                     "message": "Reporter synced to Grace Hopper.",
+                    "match_source": "reporter_email",
                 },
             },
         )
@@ -718,6 +793,7 @@ class TestTicketDetailAndActions:
                     "jira_account_id": "acct-grace",
                     "jira_status": "created_jira_customer",
                     "message": "Created Jira customer and synced reporter to Grace Hopper.",
+                    "match_source": "reporter_email",
                 },
             },
         )
@@ -733,6 +809,7 @@ class TestTicketDetailAndActions:
                     "jira_account_id": "acct-grace",
                     "jira_status": "created_jira_customer",
                     "message": "Created Jira customer and synced reporter to Grace Hopper.",
+                    "match_source": "reporter_email",
                 },
             },
         )

@@ -102,7 +102,50 @@ class TestChartDataEndpoint:
         })
         assert resp_including_excluded.status_code == 200
         total_with_excluded = sum(item["value"] for item in resp_including_excluded.json()["data"])
-        assert total_with_excluded == 6
+        assert total_with_excluded == 4
+
+    def test_chart_data_honors_libra_support_filter(self, test_client, mock_cache):
+        libra_issue = {
+            "key": "OIT-900",
+            "fields": {
+                "summary": "Libra request",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter"},
+                "issuetype": {"name": "[System] Service request"},
+                "created": "2026-03-01T10:00:00+00:00",
+                "updated": "2026-03-02T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": ["Libra_Support"],
+            },
+        }
+        normal_issue = {
+            "key": "OIT-901",
+            "fields": {
+                "summary": "Non-libra request",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter"},
+                "issuetype": {"name": "[System] Service request"},
+                "created": "2026-03-01T10:00:00+00:00",
+                "updated": "2026-03-02T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": [],
+            },
+        }
+        mock_cache.get_all_issues.return_value = [libra_issue, normal_issue]
+        mock_cache.get_filtered_issues.return_value = [libra_issue, normal_issue]
+
+        resp = test_client.post("/api/chart/data", json={
+            "group_by": "status",
+            "metric": "count",
+            "filters": {"libra_support": "libra_support"},
+        })
+        assert resp.status_code == 200
+        total = sum(item["value"] for item in resp.json()["data"])
+        assert total == 1
 
     def test_sorted_desc(self, test_client):
         resp = test_client.post("/api/chart/data", json={

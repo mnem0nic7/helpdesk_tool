@@ -289,6 +289,82 @@ class TestReportPreview:
         keys = [row["key"] for row in resp.json()["rows"]]
         assert keys == ["OIT-779"]
 
+    def test_preview_honors_libra_support_filter(self, test_client, mock_cache):
+        libra_issue = _make_workload_issue(
+            key="OIT-LIBRA-1",
+            summary="Libra support ticket",
+            status="Open",
+            status_category="To Do",
+            assignee="Taylor Ops",
+            created="2026-03-02T08:00:00+00:00",
+            updated="2026-03-02T12:00:00+00:00",
+            oasisdev=False,
+        )
+        libra_issue["fields"]["labels"] = ["Libra_Support"]
+        normal_issue = _make_workload_issue(
+            key="OIT-LIBRA-2",
+            summary="Standard ticket",
+            status="Open",
+            status_category="To Do",
+            assignee="Taylor Ops",
+            created="2026-03-02T08:00:00+00:00",
+            updated="2026-03-02T12:00:00+00:00",
+            oasisdev=False,
+        )
+        normal_issue["fields"]["labels"] = []
+        mock_cache.get_all_issues.return_value = [libra_issue, normal_issue]
+        mock_cache.get_filtered_issues.return_value = [libra_issue, normal_issue]
+
+        resp = test_client.post("/api/report/preview", json={
+            "filters": {"libra_support": "libra_support"},
+            "columns": ["key", "summary"],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": False,
+        })
+
+        assert resp.status_code == 200
+        keys = [row["key"] for row in resp.json()["rows"]]
+        assert keys == ["OIT-LIBRA-1"]
+
+    def test_preview_primary_include_excluded_still_ignores_oasisdev(self, test_client, mock_cache):
+        primary_issue = _make_workload_issue(
+            key="OIT-PRIMARY-1",
+            summary="Primary scoped ticket",
+            status="Open",
+            status_category="To Do",
+            assignee="Taylor Ops",
+            created="2026-03-02T08:00:00+00:00",
+            updated="2026-03-02T12:00:00+00:00",
+            oasisdev=False,
+        )
+        oasis_issue = _make_workload_issue(
+            key="OIT-OASIS-1",
+            summary="OasisDev excluded ticket",
+            status="Open",
+            status_category="To Do",
+            assignee="Taylor Ops",
+            created="2026-03-02T08:00:00+00:00",
+            updated="2026-03-02T12:00:00+00:00",
+            oasisdev=True,
+        )
+        mock_cache.get_all_issues.return_value = [primary_issue, oasis_issue]
+        mock_cache.get_filtered_issues.return_value = [primary_issue, oasis_issue]
+
+        resp = test_client.post("/api/report/preview", json={
+            "filters": {},
+            "columns": ["key", "summary"],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": True,
+        })
+
+        assert resp.status_code == 200
+        keys = [row["key"] for row in resp.json()["rows"]]
+        assert keys == ["OIT-PRIMARY-1"]
+
 
 class TestReportExport:
     """POST /api/report/export"""

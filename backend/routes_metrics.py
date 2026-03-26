@@ -21,6 +21,7 @@ from metrics import (
     compute_sla_summary,
     extract_sla_status,
     issue_to_row,
+    matches_libra_support_filter,
 )
 from site_context import get_current_site_scope, get_scoped_issues
 
@@ -66,6 +67,7 @@ def _filter_by_date(
 async def get_metrics(
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    libra_support: Optional[str] = Query(None),
 ) -> dict[str, Any]:
     """Return all dashboard metrics computed from the full OIT issue set."""
     scope = get_current_site_scope()
@@ -88,14 +90,18 @@ async def get_metrics(
 
     # Pre-filter once rather than letting each compute function filter independently
     filtered, excluded_count = _filter_issues(issues, scope=scope)
+    filtered = [
+        issue for issue in filtered
+        if matches_libra_support_filter(issue, libra_support)
+    ]
 
     return {
-        "headline": compute_headline_metrics(filtered, excluded_count=excluded_count, scope="all"),
-        "weekly_volumes": compute_weekly_volumes(filtered, span_days=span_days, scope="all"),
-        "age_buckets": compute_age_buckets(filtered, span_days=span_days, scope="all"),
-        "ttr_distribution": compute_ttr_distribution(filtered, span_days=span_days, scope="all"),
-        "priority_counts": compute_priority_counts(filtered, scope="all"),
-        "assignee_stats": compute_assignee_stats(filtered, scope="all"),
+        "headline": compute_headline_metrics(filtered, excluded_count=excluded_count, scope=scope),
+        "weekly_volumes": compute_weekly_volumes(filtered, span_days=span_days, scope=scope),
+        "age_buckets": compute_age_buckets(filtered, span_days=span_days, scope=scope),
+        "ttr_distribution": compute_ttr_distribution(filtered, span_days=span_days, scope=scope),
+        "priority_counts": compute_priority_counts(filtered, scope=scope),
+        "assignee_stats": compute_assignee_stats(filtered, scope=scope),
     }
 
 

@@ -154,6 +154,7 @@ class ReportFilters(BaseModel):
     assignee: Optional[str] = None
     issue_type: Optional[str] = None
     label: Optional[str] = None
+    libra_support: Optional[Literal["all", "libra_support", "non_libra_support"]] = None
     search: Optional[str] = None
     open_only: bool = False
     stale_only: bool = False

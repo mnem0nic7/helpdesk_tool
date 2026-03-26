@@ -102,6 +102,81 @@ class TestMetricsEndpoint:
         assert headline["total_tickets"] == 4
         assert headline["excluded_count"] == 3
 
+    def test_metrics_libra_support_filter_on_primary(self, test_client, mock_cache):
+        libra_issue = {
+            "key": "OIT-710",
+            "fields": {
+                "summary": "Libra inbound support ticket",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter One"},
+                "issuetype": {"name": "[System] Service request"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-20T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": ["Libra_Support"],
+                "customfield_11266": None,
+                "customfield_11264": None,
+                "customfield_11267": None,
+                "customfield_11268": None,
+            },
+        }
+        normal_issue = {
+            "key": "OIT-711",
+            "fields": {
+                "summary": "Normal production ticket",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter One"},
+                "issuetype": {"name": "[System] Service request"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-20T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": [],
+                "customfield_11266": None,
+                "customfield_11264": None,
+                "customfield_11267": None,
+                "customfield_11268": None,
+            },
+        }
+        oasisdev_issue = {
+            "key": "OIT-712",
+            "fields": {
+                "summary": "Oasis dev issue",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Agent"},
+                "reporter": {"displayName": "Reporter One"},
+                "issuetype": {"name": "[System] Service request"},
+                "created": "2026-02-01T10:00:00+00:00",
+                "updated": "2026-02-20T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": ["oasisdev"],
+                "customfield_11266": None,
+                "customfield_11264": None,
+                "customfield_11267": None,
+                "customfield_11268": None,
+            },
+        }
+        mock_cache.get_all_issues.return_value = [libra_issue, normal_issue, oasisdev_issue]
+
+        resp = test_client.get("/api/metrics?libra_support=libra_support")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["headline"]["total_tickets"] == 1
+        assert data["headline"]["open_backlog"] == 1
+        assert data["headline"]["stale_count"] == 1
+        assert sum(item["count"] for item in data["age_buckets"]) == 1
+
+        resp_non_libra = test_client.get("/api/metrics?libra_support=non_libra_support")
+        assert resp_non_libra.status_code == 200
+        non_libra = resp_non_libra.json()
+        assert non_libra["headline"]["total_tickets"] == 1
+        assert sum(item["count"] for item in non_libra["age_buckets"]) == 1
+
 
 class TestSLAEndpoints:
     """GET /api/sla/summary and /api/sla/breaches"""

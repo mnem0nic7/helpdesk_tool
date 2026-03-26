@@ -1,7 +1,8 @@
 import { startTransition, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { Assignee } from "../lib/api.ts";
+import type { Assignee, LibraSupportFilterMode } from "../lib/api.ts";
+import { getSiteBranding } from "../lib/siteContext.ts";
 
 export interface TicketFilterValues {
   search: string;
@@ -9,6 +10,7 @@ export interface TicketFilterValues {
   priority: string;
   issue_type: string;
   label: string;
+  libra_support: LibraSupportFilterMode;
   open_only: boolean;
   stale_only: boolean;
   created_after: string;
@@ -22,6 +24,7 @@ export const emptyFilters: TicketFilterValues = {
   priority: "",
   issue_type: "",
   label: "",
+  libra_support: "all",
   open_only: true,
   stale_only: false,
   created_after: "",
@@ -52,6 +55,8 @@ export default function TicketFilters({
   filters,
   onFilterChange,
 }: TicketFiltersProps) {
+  const site = getSiteBranding();
+  const showLibraSupportFilter = site.scope === "primary";
   const [searchInput, setSearchInput] = useState(filters.search);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -185,6 +190,20 @@ export default function TicketFilters({
           </option>
         ))}
       </select>
+
+      {showLibraSupportFilter ? (
+        <select
+          value={filters.libra_support}
+          onChange={(e) => handleChange("libra_support", e.target.value as LibraSupportFilterMode)}
+          className="h-9 w-full rounded-md border border-gray-300 bg-white px-3 text-sm
+                     text-gray-700 shadow-sm
+                     focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        >
+          <option value="all">All Libra Support</option>
+          <option value="libra_support">Libra Support</option>
+          <option value="non_libra_support">Non Libra Support</option>
+        </select>
+      ) : null}
 
       {/* Assignee dropdown */}
       <select

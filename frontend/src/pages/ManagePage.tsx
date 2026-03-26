@@ -80,6 +80,7 @@ export default function ManagePage() {
     ...(filters.priority ? { priority: filters.priority } : {}),
     ...(filters.issue_type ? { issue_type: filters.issue_type } : {}),
     ...(filters.label ? { label: filters.label } : {}),
+    ...(filters.libra_support !== "all" ? { libra_support: filters.libra_support } : {}),
     ...(filters.open_only ? { open_only: true } : {}),
     ...(filters.stale_only ? { stale_only: true } : {}),
     ...(filters.created_after ? { created_after: filters.created_after } : {}),
