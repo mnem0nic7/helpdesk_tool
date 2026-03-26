@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+from dataclasses import asdict
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -12,7 +13,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,6 +51,7 @@ from report_ai_summary_service import report_ai_summary_service
 from user_admin_jobs import user_admin_jobs
 from user_exit_workflows import user_exit_workflows
 from knowledge_base import kb_store
+from runtime_control import runtime_role_manager
 from site_context import (
     get_current_site_scope,
     get_site_scope_from_request,
@@ -129,6 +131,34 @@ async def _start_deferred_services(app: FastAPI) -> None:
         logger.exception("Failed to start AI work scheduler")
 
 
+async def _start_leader_services(app: FastAPI) -> None:
+    if bool(getattr(app.state, "leader_services_running", False)):
+        return
+    if not bool(getattr(app.state, "kb_seed_started", False)):
+        _register_app_task(app, asyncio.create_task(_seed_knowledge_base(app)))
+        app.state.kb_seed_started = True
+    await cache.start_background_refresh(load_only=False)
+    await azure_cache.start_background_refresh(load_only=False)
+    await _start_deferred_services(app)
+    app.state.leader_services_running = True
+
+
+async def _stop_leader_services(app: FastAPI) -> None:
+    if not bool(getattr(app.state, "leader_services_running", False)):
+        return
+    await stop_azure_alert_loop()
+    await user_exit_workflows.stop_worker()
+    await user_admin_jobs.stop_worker()
+    await report_ai_summary_service.stop_worker()
+    await onedrive_copy_jobs.stop_worker()
+    await ai_work_scheduler.stop_worker()
+    await azure_vm_export_jobs.stop_worker()
+    await azure_cost_export_service.stop()
+    await azure_cache.stop_background_refresh()
+    await cache.stop_background_refresh()
+    app.state.leader_services_running = False
+
+
 async def _seed_knowledge_base(app: FastAPI) -> None:
     _set_kb_seed_status(
         app,
@@ -169,6 +199,7 @@ def _build_readiness_payload(app: FastAPI) -> dict[str, Any]:
     issue_status = cache.status()
     azure_status = azure_cache.status()
     kb_status = _get_kb_seed_status(app)
+    runtime_status = runtime_role_manager.status()
 
     issue_ready = bool(issue_status.get("initialized"))
     issue_message = "Issue cache ready"
@@ -189,6 +220,7 @@ def _build_readiness_payload(app: FastAPI) -> dict[str, Any]:
     return {
         "status": "ready" if issue_ready else "warming",
         "site_scope": scope,
+        "runtime": asdict(runtime_status),
         "components": {
             "issue_cache": {
                 "ready": issue_ready,
@@ -213,19 +245,21 @@ async def lifespan(app: FastAPI):
     """Start background cache refresh on startup, stop on shutdown."""
     app.state.background_tasks = set()
     app.state.kb_seed_status = _default_kb_seed_status()
-    _register_app_task(app, asyncio.create_task(_seed_knowledge_base(app)))
-    await cache.start_background_refresh()
-    await azure_cache.start_background_refresh()
-    _register_app_task(app, asyncio.create_task(_start_deferred_services(app)))
+    app.state.kb_seed_started = False
+    app.state.leader_services_running = False
+    runtime_state = await runtime_role_manager.bootstrap()
+    if runtime_state.role == "leader":
+        await _start_leader_services(app)
+    else:
+        await cache.start_background_refresh(load_only=True)
+        await azure_cache.start_background_refresh(load_only=True)
+    await runtime_role_manager.start(
+        start_leader_cb=lambda: _start_leader_services(app),
+        stop_leader_cb=lambda: _stop_leader_services(app),
+    )
     yield
-    await stop_azure_alert_loop()
-    await user_exit_workflows.stop_worker()
-    await user_admin_jobs.stop_worker()
-    await report_ai_summary_service.stop_worker()
-    await onedrive_copy_jobs.stop_worker()
-    await ai_work_scheduler.stop_worker()
-    await azure_vm_export_jobs.stop_worker()
-    await azure_cost_export_service.stop()
+    await runtime_role_manager.stop()
+    await _stop_leader_services(app)
     await azure_cache.stop_background_refresh()
     await cache.stop_background_refresh()
     background_tasks = list(getattr(app.state, "background_tasks", set()))
@@ -263,7 +297,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path.rstrip("/")
         # Only protect /api/* paths (let frontend assets through)
-        if path.startswith("/api") and path not in _PUBLIC_PATHS and not path.startswith("/api/user-exit/agent/"):
+        if (
+            path.startswith("/api")
+            and path not in _PUBLIC_PATHS
+            and not path.startswith("/api/user-exit/agent/")
+            and not path.startswith("/api/internal/runtime/")
+        ):
             sid = request.cookies.get("session_id")
             if not sid or not get_session(sid):
                 return JSONResponse(
@@ -370,7 +409,7 @@ app.include_router(user_exit_router)
 @app.get("/api/health")
 async def health() -> dict:
     scope = get_current_site_scope()
-    return {"status": "ok", "site_scope": scope}
+    return {"status": "ok", "site_scope": scope, "runtime": asdict(runtime_role_manager.status())}
 
 
 @app.get("/api/health/ready")
@@ -378,6 +417,39 @@ async def health_ready(request: Request) -> JSONResponse:
     payload = _build_readiness_payload(request.app)
     status_code = 200 if payload["status"] == "ready" else 503
     return JSONResponse(status_code=status_code, content=payload)
+
+
+def _require_deploy_control_secret(x_deploy_control_secret: str | None) -> None:
+    from config import DEPLOY_CONTROL_SECRET
+
+    if not DEPLOY_CONTROL_SECRET:
+        raise HTTPException(status_code=503, detail="Deploy control secret is not configured")
+    provided = str(x_deploy_control_secret or "").strip()
+    if provided != DEPLOY_CONTROL_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid deploy control secret")
+
+
+@app.get("/api/internal/runtime/status")
+async def runtime_status(x_deploy_control_secret: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_deploy_control_secret(x_deploy_control_secret)
+    return {"runtime": asdict(runtime_role_manager.status())}
+
+
+@app.post("/api/internal/runtime/promote")
+async def promote_runtime(x_deploy_control_secret: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_deploy_control_secret(x_deploy_control_secret)
+    state = await runtime_role_manager.request_promotion()
+    return {"runtime": asdict(state)}
+
+
+@app.post("/api/internal/runtime/demote")
+async def demote_runtime(x_deploy_control_secret: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_deploy_control_secret(x_deploy_control_secret)
+    try:
+        state = await runtime_role_manager.demote()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"runtime": asdict(state)}
 
 
 # ---------------------------------------------------------------------------

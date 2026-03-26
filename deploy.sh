@@ -8,11 +8,14 @@ export COMPOSE_DOCKER_CLI_BUILD=1
 
 STATE_DIR=".deploy-state"
 STATE_FILE="${STATE_DIR}/last_deployed_sha"
+ACTIVE_COLOR_FILE="${STATE_DIR}/active_color"
+ACTIVE_UPSTREAMS_FILE="${STATE_DIR}/active_upstreams.caddy"
 PRIMARY_PUBLIC_HOST="it-app.movedocs.com"
 PRIMARY_PUBLIC_BASE_URL="https://${PRIMARY_PUBLIC_HOST}"
 
 MODE="auto"
 BUILD_FLAGS=()
+CHANGED_FILES=""
 
 usage() {
     cat <<'EOF'
@@ -20,6 +23,10 @@ Usage: ./deploy.sh [--backend | --frontend | --full] [--no-cache]
 
 Default behavior auto-detects deploy scope from files changed since the last
 successful deploy SHA in .deploy-state/last_deployed_sha.
+
+Blue-green deploy notes:
+- backend/frontend deploys always build and switch the full inactive app color
+- the previous color stays online until the next deploy for instant rollback
 EOF
 }
 
@@ -47,7 +54,7 @@ for arg in "$@"; do
     esac
 done
 
-echo "=== OIT Helpdesk Dashboard — Deploy ==="
+echo "=== OIT Helpdesk Dashboard — Blue-Green Deploy ==="
 
 if [[ ! -f backend/.env ]]; then
     echo "ERROR: backend/.env not found."
@@ -68,6 +75,7 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 CURRENT_SHA="$(git rev-parse HEAD)"
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
 
 dedupe_lines() {
     awk 'NF && !seen[$0]++'
@@ -100,6 +108,7 @@ classify_mode() {
                 frontend_changed=1
                 ;;
             deploy.sh)
+                full_changed=1
                 ;;
             docker-compose.yml|Caddyfile|Dockerfile.caddy|.dockerignore)
                 full_changed=1
@@ -144,31 +153,220 @@ if [[ "$MODE" == "auto" ]]; then
     fi
 fi
 
-BACKEND_REQUIRED=0
-FRONTEND_REQUIRED=0
-FULL_STACK=0
+APP_REQUIRED=1
+VERIFY_OLLAMA=1
+CADDY_IMAGE_REQUIRED=0
 
-case "$MODE" in
-    backend)
-        BACKEND_REQUIRED=1
-        ;;
-    frontend)
-        FRONTEND_REQUIRED=1
-        ;;
-    mixed)
-        BACKEND_REQUIRED=1
-        FRONTEND_REQUIRED=1
-        ;;
-    full)
-        BACKEND_REQUIRED=1
-        FRONTEND_REQUIRED=1
-        FULL_STACK=1
-        ;;
-    *)
-        echo "ERROR: unsupported deploy mode '$MODE'"
-        exit 1
-        ;;
-esac
+if [[ "$MODE" == "full" ]]; then
+    if [[ -z "$CHANGED_FILES" ]]; then
+        CADDY_IMAGE_REQUIRED=1
+    elif printf '%s\n' "$CHANGED_FILES" | grep -qx 'Dockerfile.caddy'; then
+        CADDY_IMAGE_REQUIRED=1
+    fi
+fi
+
+ensure_state_dir() {
+    mkdir -p "$STATE_DIR"
+}
+
+is_valid_color() {
+    [[ "$1" == "blue" || "$1" == "green" ]]
+}
+
+read_active_color() {
+    local color="blue"
+    if [[ -f "$ACTIVE_COLOR_FILE" ]]; then
+        color="$(tr -d '[:space:]' < "$ACTIVE_COLOR_FILE")"
+    fi
+    if ! is_valid_color "$color"; then
+        color="blue"
+    fi
+    printf '%s\n' "$color"
+}
+
+write_active_color() {
+    local color="$1"
+    ensure_state_dir
+    printf '%s\n' "$color" > "$ACTIVE_COLOR_FILE"
+}
+
+other_color() {
+    if [[ "$1" == "blue" ]]; then
+        printf 'green\n'
+    else
+        printf 'blue\n'
+    fi
+}
+
+backend_service_for_color() {
+    printf 'backend_%s\n' "$1"
+}
+
+frontend_service_for_color() {
+    printf 'frontend_%s\n' "$1"
+}
+
+render_active_upstreams() {
+    local color="$1"
+    local backend_service frontend_service
+    backend_service="$(backend_service_for_color "$color")"
+    frontend_service="$(frontend_service_for_color "$color")"
+    ensure_state_dir
+    cat > "$ACTIVE_UPSTREAMS_FILE" <<EOF
+(active_upstreams) {
+	@api path /api/*
+	reverse_proxy @api ${backend_service}:8000 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-Proto {http.request.scheme}
+	}
+
+	reverse_proxy ${frontend_service}:80 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-Proto {http.request.scheme}
+	}
+}
+EOF
+}
+
+ensure_active_upstreams_file() {
+    ensure_state_dir
+    local color
+    color="$(read_active_color)"
+    if [[ ! -f "$ACTIVE_UPSTREAMS_FILE" ]]; then
+        render_active_upstreams "$color"
+    fi
+}
+
+read_env_var() {
+    local name="$1"
+    python3 - "$name" backend/.env <<'PY'
+import sys
+from pathlib import Path
+
+target = sys.argv[1]
+path = Path(sys.argv[2])
+if not path.exists():
+    sys.exit(0)
+
+for raw in path.read_text().splitlines():
+    line = raw.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    if key.strip() != target:
+        continue
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    print(value)
+    break
+PY
+}
+
+DEPLOY_CONTROL_SECRET="$(read_env_var DEPLOY_CONTROL_SECRET)"
+if [[ -z "$DEPLOY_CONTROL_SECRET" ]]; then
+    echo "ERROR: DEPLOY_CONTROL_SECRET must be set in backend/.env for blue-green deploy control."
+    exit 1
+fi
+
+service_container_id() {
+    docker compose ps -q "$1" 2>/dev/null | head -n1
+}
+
+service_is_running() {
+    [[ -n "$(service_container_id "$1")" ]]
+}
+
+service_ip() {
+    local service="$1"
+    local container_id
+    container_id="$(service_container_id "$service")"
+    if [[ -z "$container_id" ]]; then
+        return 1
+    fi
+    docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_id"
+}
+
+wait_for_container_http() {
+    local service="$1"
+    local port="$2"
+    local path="$3"
+    local label="$4"
+    local attempts="${5:-120}"
+
+    echo ">>> Waiting for ${label}..."
+    for _ in $(seq 1 "$attempts"); do
+        local ip
+        ip="$(service_ip "$service" 2>/dev/null || true)"
+        if [[ -n "$ip" ]] && curl -fsS --connect-timeout 2 --max-time 10 "http://${ip}:${port}${path}" >/dev/null 2>&1; then
+            echo ">>> ${label} is ready"
+            return 0
+        fi
+        printf "."
+        sleep 1
+    done
+    echo ""
+    echo "ERROR: Timed out waiting for ${label}"
+    return 1
+}
+
+wait_for_backend_role() {
+    local service="$1"
+    local expected_role="$2"
+    local attempts="${3:-120}"
+
+    echo ">>> Waiting for ${service} to become ${expected_role}..."
+    for _ in $(seq 1 "$attempts"); do
+        local ip payload
+        ip="$(service_ip "$service" 2>/dev/null || true)"
+        if [[ -n "$ip" ]]; then
+            payload="$(curl -fsS --connect-timeout 2 --max-time 10 "http://${ip}:8000/api/health/ready" 2>/dev/null || true)"
+            if [[ -n "$payload" ]] && python3 - "$expected_role" <<'PY' <<<"$payload"
+import json
+import sys
+
+expected = sys.argv[1]
+payload = json.load(sys.stdin)
+runtime = payload.get("runtime") or {}
+ok = payload.get("status") == "ready" and runtime.get("role") == expected
+raise SystemExit(0 if ok else 1)
+PY
+            then
+                echo ">>> ${service} is ${expected_role} and ready"
+                return 0
+            fi
+        fi
+        printf "."
+        sleep 1
+    done
+    echo ""
+    echo "ERROR: Timed out waiting for ${service} to become ${expected_role}"
+    return 1
+}
+
+post_internal_runtime() {
+    local service="$1"
+    local action="$2"
+    local ip
+    ip="$(service_ip "$service")"
+    curl -fsS --connect-timeout 3 --max-time 30 \
+        -X POST \
+        -H "X-Deploy-Control-Secret: ${DEPLOY_CONTROL_SECRET}" \
+        "http://${ip}:8000/api/internal/runtime/${action}"
+}
+
+reload_caddy() {
+    docker compose up -d caddy >/dev/null
+    docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+}
+
+switch_traffic_to_color() {
+    local color="$1"
+    render_active_upstreams "$color"
+    reload_caddy
+}
 
 check_host_ollama() {
     echo ">>> Checking Ollama on the host..."
@@ -180,8 +378,9 @@ check_host_ollama() {
 }
 
 verify_backend_ollama() {
-    echo ">>> Verifying backend container can reach Ollama..."
-    if ! docker compose exec -T backend python3 - <<'PY'
+    local service="$1"
+    echo ">>> Verifying ${service} can reach Ollama..."
+    if ! docker compose exec -T "$service" python3 - <<'PY'
 import json
 import sys
 import urllib.request
@@ -192,6 +391,7 @@ from config import (
     OLLAMA_BASE_URL,
     OLLAMA_FAST_MODEL,
     OLLAMA_MODEL,
+    REPORT_AI_SUMMARY_MODEL,
     TECHNICIAN_SCORE_MODEL,
 )
 
@@ -204,6 +404,7 @@ models_to_check = {
         AUTO_TRIAGE_MODEL,
         TECHNICIAN_SCORE_MODEL,
         AZURE_ALERT_RULE_MODEL,
+        REPORT_AI_SUMMARY_MODEL,
     )
     if candidate and candidate.strip()
 }
@@ -225,38 +426,16 @@ except Exception as exc:
     print(f"Failed to reach Ollama from backend container at {url}: {exc}")
     sys.exit(1)
 
-print(f"Ollama reachable from backend container at {url}")
 models = {entry.get("model") or entry.get("name") for entry in payload.get("models") or []}
-print(f"Available Ollama models: {sorted(m for m in models if m)}")
 missing = sorted(model for model in models_to_check if model not in models)
 if missing:
     print(f"Configured Ollama model(s) missing on the host: {missing}")
     sys.exit(1)
 PY
     then
-        echo "ERROR: Backend container cannot reach Ollama."
-        echo "  Check docker networking, OLLAMA_BASE_URL, and that the configured model is pulled."
+        echo "ERROR: ${service} cannot reach Ollama."
         exit 1
     fi
-}
-
-wait_for_http() {
-    local url="$1"
-    local label="$2"
-    local attempts="${3:-120}"
-
-    echo ">>> Waiting for ${label}..."
-    for _ in $(seq 1 "$attempts"); do
-        if curl -fsS "$url" >/dev/null 2>&1; then
-            echo ">>> ${label} is ready"
-            return 0
-        fi
-        printf "."
-        sleep 1
-    done
-    echo ""
-    echo "ERROR: Timed out waiting for ${label} (${url})"
-    return 1
 }
 
 curl_public_local() {
@@ -269,7 +448,6 @@ wait_for_public_https() {
     local path="$1"
     local label="$2"
     local attempts="${3:-120}"
-
     local url="${PRIMARY_PUBLIC_BASE_URL}${path}"
 
     echo ">>> Waiting for ${label}..."
@@ -302,66 +480,192 @@ build_services() {
     docker compose build "${BUILD_FLAGS[@]}" "$@"
 }
 
-restart_services() {
-    docker compose up -d --remove-orphans "$@"
+start_services() {
+    docker compose up -d "$@"
 }
 
-restart_services_no_deps() {
-    docker compose up -d --no-deps --remove-orphans "$@"
+cleanup_legacy_single_services() {
+    local service container_ids
+    for service in backend frontend; do
+        container_ids="$(docker ps -aq \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" \
+            --filter "label=com.docker.compose.service=${service}")"
+        if [[ -n "$container_ids" ]]; then
+            echo ">>> Removing legacy single-color container(s) for ${service}..."
+            docker rm -f $container_ids >/dev/null || true
+        fi
+    done
 }
 
-if [[ "$BACKEND_REQUIRED" == "1" ]]; then
+legacy_service_is_running() {
+    local service="$1"
+    local container_ids
+    container_ids="$(docker ps -q \
+        --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" \
+        --filter "label=com.docker.compose.service=${service}")"
+    [[ -n "$container_ids" ]]
+}
+
+prepare_runtime_state_for_bootstrap() {
+    local service="$1"
+    docker compose run --rm --no-deps -T "$service" python3 - <<'PY'
+import os
+import sqlite3
+from pathlib import Path
+
+data_dir = Path(os.environ.get("DATA_DIR", "") or "/app/data")
+db_path = data_dir / "runtime_state.db"
+db_path.parent.mkdir(parents=True, exist_ok=True)
+conn = sqlite3.connect(str(db_path))
+try:
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_leader_state (
+            singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+            desired_leader_color TEXT NOT NULL DEFAULT '',
+            lease_owner_color TEXT NOT NULL DEFAULT '',
+            lease_expires_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO runtime_leader_state (
+            singleton_id, desired_leader_color, lease_owner_color, lease_expires_at, updated_at
+        ) VALUES (1, 'legacy', '', '', datetime('now'))
+        ON CONFLICT(singleton_id) DO UPDATE SET
+            desired_leader_color = 'legacy',
+            lease_owner_color = '',
+            lease_expires_at = '',
+            updated_at = datetime('now')
+        """
+    )
+    conn.commit()
+finally:
+    conn.close()
+PY
+}
+
+rollback_to_previous_color() {
+    local previous_color="$1"
+    local failed_color="$2"
+    if [[ -z "$previous_color" ]]; then
+        return 0
+    fi
+    echo ">>> Rolling back traffic to ${previous_color}..."
+    post_internal_runtime "$(backend_service_for_color "$previous_color")" promote >/dev/null || true
+    post_internal_runtime "$(backend_service_for_color "$failed_color")" demote >/dev/null || true
+    wait_for_backend_role "$(backend_service_for_color "$previous_color")" leader 60 || true
+    switch_traffic_to_color "$previous_color"
+}
+
+ensure_state_dir
+ensure_active_upstreams_file
+
+ACTIVE_COLOR=""
+TARGET_COLOR=""
+BOOTSTRAP_DEPLOY=0
+if [[ -f "$ACTIVE_COLOR_FILE" ]]; then
+    ACTIVE_COLOR="$(read_active_color)"
+    TARGET_COLOR="$(other_color "$ACTIVE_COLOR")"
+else
+    BOOTSTRAP_DEPLOY=1
+    TARGET_COLOR="blue"
+fi
+
+TARGET_BACKEND_SERVICE="$(backend_service_for_color "$TARGET_COLOR")"
+TARGET_FRONTEND_SERVICE="$(frontend_service_for_color "$TARGET_COLOR")"
+PREVIOUS_BACKEND_SERVICE=""
+if [[ -n "$ACTIVE_COLOR" ]]; then
+    PREVIOUS_BACKEND_SERVICE="$(backend_service_for_color "$ACTIVE_COLOR")"
+fi
+
+if [[ "$VERIFY_OLLAMA" == "1" ]]; then
     check_host_ollama
 fi
 
-case "$MODE" in
-    backend)
-        echo ">>> Building backend image..."
-        build_services backend
-        echo ">>> Restarting backend only..."
-        restart_services_no_deps backend
-        ;;
-    frontend)
-        echo ">>> Building frontend image..."
-        build_services frontend
-        echo ">>> Restarting frontend only..."
-        restart_services_no_deps frontend
-        ;;
-    mixed)
-        echo ">>> Building backend and frontend images..."
-        build_services backend frontend
-        echo ">>> Restarting frontend, then backend..."
-        restart_services_no_deps frontend
-        restart_services_no_deps backend
-        ;;
-    full)
-        echo ">>> Building caddy, backend, and frontend images..."
-        build_services caddy backend frontend
-        echo ">>> Restarting full stack..."
-        restart_services caddy backend frontend
-        ;;
-esac
-
-if [[ "$BACKEND_REQUIRED" == "1" ]]; then
-    verify_backend_ollama
-    wait_for_public_https "/api/health" "API liveness"
-    print_readiness
+if [[ "$CADDY_IMAGE_REQUIRED" == "1" ]]; then
+    echo ">>> Building caddy image..."
+    build_services caddy
 fi
 
-if [[ "$FRONTEND_REQUIRED" == "1" || "$FULL_STACK" == "1" ]]; then
-    wait_for_public_https "/" "frontend shell"
+echo ">>> Building inactive app color (${TARGET_COLOR})..."
+build_services "$TARGET_BACKEND_SERVICE" "$TARGET_FRONTEND_SERVICE"
+
+if [[ "$BOOTSTRAP_DEPLOY" == "1" ]] && legacy_service_is_running backend; then
+    echo ">>> Preparing runtime state for migration from the legacy single backend..."
+    prepare_runtime_state_for_bootstrap "$TARGET_BACKEND_SERVICE"
 fi
+
+echo ">>> Starting inactive app color (${TARGET_COLOR})..."
+start_services "$TARGET_BACKEND_SERVICE" "$TARGET_FRONTEND_SERVICE"
+
+if ! service_is_running caddy; then
+    echo ">>> Starting Caddy..."
+    start_services caddy
+fi
+
+wait_for_container_http "$TARGET_BACKEND_SERVICE" 8000 "/api/health" "${TARGET_BACKEND_SERVICE} API liveness"
+verify_backend_ollama "$TARGET_BACKEND_SERVICE"
+
+if [[ "$BOOTSTRAP_DEPLOY" == "0" ]]; then
+    wait_for_backend_role "$TARGET_BACKEND_SERVICE" follower
+fi
+
+wait_for_container_http "$TARGET_FRONTEND_SERVICE" 80 "/" "${TARGET_FRONTEND_SERVICE} shell"
+
+echo ">>> Promoting ${TARGET_BACKEND_SERVICE} to leader..."
+post_internal_runtime "$TARGET_BACKEND_SERVICE" promote >/dev/null
+if [[ -n "$PREVIOUS_BACKEND_SERVICE" ]]; then
+    echo ">>> Handing leadership off from ${PREVIOUS_BACKEND_SERVICE}..."
+    post_internal_runtime "$PREVIOUS_BACKEND_SERVICE" demote >/dev/null || true
+elif [[ "$BOOTSTRAP_DEPLOY" == "1" ]] && legacy_service_is_running backend; then
+    echo ">>> Legacy backend remains online until cutover completes."
+fi
+wait_for_backend_role "$TARGET_BACKEND_SERVICE" leader
+
+echo ">>> Switching public traffic to ${TARGET_COLOR}..."
+switch_traffic_to_color "$TARGET_COLOR"
+
+if ! wait_for_public_https "/api/health" "API liveness after cutover" 60; then
+    echo "ERROR: Public API health failed after cutover."
+    rollback_to_previous_color "$ACTIVE_COLOR" "$TARGET_COLOR"
+    exit 1
+fi
+
+if ! wait_for_public_https "/" "frontend shell after cutover" 60; then
+    echo "ERROR: Public frontend failed after cutover."
+    rollback_to_previous_color "$ACTIVE_COLOR" "$TARGET_COLOR"
+    exit 1
+fi
+
+print_readiness
+
+if [[ -n "$PREVIOUS_BACKEND_SERVICE" ]]; then
+    echo ">>> Demoting previous backend color (${ACTIVE_COLOR}) to follower..."
+    post_internal_runtime "$PREVIOUS_BACKEND_SERVICE" demote >/dev/null || true
+fi
+
+write_active_color "$TARGET_COLOR"
+cleanup_legacy_single_services
 
 mkdir -p "$STATE_DIR"
 printf '%s\n' "$CURRENT_SHA" > "$STATE_FILE"
 
 echo ""
 echo "=== DEPLOYED SUCCESSFULLY ==="
-echo "  Mode:      $MODE"
-echo "  Dashboard: https://it-app.movedocs.com"
-echo "  OasisDev:  https://oasisdev.movedocs.com"
-echo "  Azure:     https://azure.movedocs.com"
-echo "  Health:    https://it-app.movedocs.com/api/health"
-echo "  Ready:     https://it-app.movedocs.com/api/health/ready"
+echo "  Mode:                $MODE"
+echo "  Active app color:    $TARGET_COLOR"
+if [[ -n "$ACTIVE_COLOR" ]]; then
+    echo "  Previous app color:  $ACTIVE_COLOR"
+fi
+echo "  Dashboard:           https://it-app.movedocs.com"
+echo "  OasisDev:            https://oasisdev.movedocs.com"
+echo "  Azure:               https://azure.movedocs.com"
+echo "  Health:              https://it-app.movedocs.com/api/health"
+echo "  Ready:               https://it-app.movedocs.com/api/health/ready"
 echo ""
 docker compose ps

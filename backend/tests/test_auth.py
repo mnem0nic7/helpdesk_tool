@@ -124,6 +124,7 @@ class TestAuthMiddleware:
         import routes_azure
         import routes_user_admin
         import azure_cache as azure_cache_module
+        import runtime_control as runtime_control_module
         import user_admin_jobs as user_admin_jobs_module
         import user_admin_providers as user_admin_providers_module
 
@@ -268,6 +269,35 @@ class TestAuthMiddleware:
         mock_kb_store = MagicMock()
         mock_kb_store.ensure_seed_articles.return_value = 0
         monkeypatch.setattr(main, "kb_store", mock_kb_store)
+        mock_runtime_role_manager = MagicMock()
+        mock_runtime_role_manager.bootstrap = AsyncMock(
+            return_value=runtime_control_module.RuntimeState(
+                color="blue",
+                role="leader",
+                desired_leader_color="blue",
+                lease_owner_color="blue",
+                lease_expires_at="2026-03-26T00:30:00+00:00",
+                bluegreen_enabled=True,
+                leader_ready=True,
+            )
+        )
+        mock_runtime_role_manager.start = AsyncMock()
+        mock_runtime_role_manager.stop = AsyncMock()
+        mock_runtime_role_manager.status.return_value = runtime_control_module.RuntimeState(
+            color="blue",
+            role="leader",
+            desired_leader_color="blue",
+            lease_owner_color="blue",
+            lease_expires_at="2026-03-26T00:30:00+00:00",
+            bluegreen_enabled=True,
+            leader_ready=True,
+        )
+        mock_runtime_role_manager.request_promotion = AsyncMock(
+            return_value=mock_runtime_role_manager.status.return_value
+        )
+        mock_runtime_role_manager.promote = AsyncMock(return_value=mock_runtime_role_manager.status.return_value)
+        mock_runtime_role_manager.demote = AsyncMock(return_value=mock_runtime_role_manager.status.return_value)
+        monkeypatch.setattr(main, "runtime_role_manager", mock_runtime_role_manager)
         from starlette.testclient import TestClient
         return TestClient(main.app)
 
@@ -276,6 +306,7 @@ class TestAuthMiddleware:
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
         assert resp.json()["site_scope"] == "primary"
+        assert resp.json()["runtime"]["role"] == "leader"
 
     def test_health_uses_oasisdev_host_scope(self, auth_client):
         resp = auth_client.get("/api/health", headers={"host": "oasisdev.movedocs.com"})
@@ -297,6 +328,36 @@ class TestAuthMiddleware:
         )
         assert resp.status_code == 200
         assert resp.json()["site_scope"] == "oasisdev"
+
+    def test_internal_runtime_status_requires_secret(self, auth_client):
+        resp = auth_client.get("/api/internal/runtime/status")
+        assert resp.status_code == 503
+
+    def test_internal_runtime_promote_returns_runtime_payload(self, auth_client, monkeypatch):
+        import config
+        import main
+        import runtime_control as runtime_control_module
+
+        monkeypatch.setattr(config, "DEPLOY_CONTROL_SECRET", "deploy-secret")
+        promoted_state = runtime_control_module.RuntimeState(
+            color="green",
+            role="leader",
+            desired_leader_color="green",
+            lease_owner_color="green",
+            lease_expires_at="2026-03-26T00:30:00+00:00",
+            bluegreen_enabled=True,
+            leader_ready=True,
+        )
+        main.runtime_role_manager.request_promotion = AsyncMock(return_value=promoted_state)
+
+        resp = auth_client.post(
+            "/api/internal/runtime/promote",
+            headers={"x-deploy-control-secret": "deploy-secret"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["runtime"]["color"] == "green"
+        assert resp.json()["runtime"]["role"] == "leader"
 
     def test_auth_login_is_not_blocked_by_middleware(self, auth_client):
         resp = auth_client.get("/api/auth/login", follow_redirects=False)

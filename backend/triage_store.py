@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from config import DATA_DIR
 from models import TechnicianScore, TriageResult
+from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,7 @@ class TriageStore:
         self._init_db()
 
     def _init_db(self) -> None:
-        with sqlite3.connect(self._db_path) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+        with connect_sqlite(self._db_path, row_factory=None) as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS metadata "
                 "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
@@ -72,7 +72,7 @@ class TriageStore:
             )
 
     def _conn(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path)
+        return connect_sqlite(self._db_path, row_factory=None)
 
     def get(self, key: str) -> TriageResult | None:
         with self._conn() as conn:

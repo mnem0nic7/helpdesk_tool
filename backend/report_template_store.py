@@ -11,6 +11,7 @@ from typing import Any
 
 from config import DATA_DIR
 from models import ReportConfig, ReportTemplate
+from sqlite_utils import connect_sqlite
 
 
 def _utcnow() -> str:
@@ -326,9 +327,7 @@ class ReportTemplateStore:
         self._sync_seed_templates()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_sqlite(self._db_path)
 
     def _init_db(self) -> None:
         with self._conn() as conn:

@@ -16,6 +16,7 @@ from typing import Any
 from azure_cache import azure_cache
 from config import DATA_DIR
 from models import UserAdminActionType
+from sqlite_utils import connect_sqlite
 from user_admin_providers import UserAdminProviderError, user_admin_providers
 
 logger = logging.getLogger(__name__)
@@ -58,9 +59,7 @@ class UserAdminJobManager:
         self._requeue_running_jobs()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_sqlite(self._db_path)
 
     def _init_db(self) -> None:
         with self._conn() as conn:

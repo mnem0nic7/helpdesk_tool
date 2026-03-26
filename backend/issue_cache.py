@@ -17,6 +17,7 @@ from ai_background_worker import background_ai_worker
 from jira_client import JiraClient
 from request_type import extract_request_type_name_from_fields, has_request_type
 from site_context import SiteScope, filter_issues_for_scope
+from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,9 @@ class IssueCache:
         # _ensure_initialized() uses this to decide whether to wait for the
         # background task or load synchronously (test / standalone usage).
         self._start_background_called = False
+
+    def _conn(self) -> sqlite3.Connection:
+        return connect_sqlite(self._db_path, row_factory=None)
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -315,7 +319,7 @@ class IssueCache:
             in_all = key in self._all_issues
             self._all_issues.pop(key, None)
             self._issues.pop(key, None)
-        with sqlite3.connect(self._db_path) as conn:
+        with self._conn() as conn:
             conn.execute("DELETE FROM issues WHERE key = ?", (key,))
         if in_all:
             logger.info("Cache: evicted issue %s", key)
@@ -381,7 +385,7 @@ class IssueCache:
                 for key in missing_keys:
                     self._all_issues.pop(key, None)
                     self._issues.pop(key, None)
-            with sqlite3.connect(self._db_path) as conn:
+            with self._conn() as conn:
                 conn.executemany("DELETE FROM issues WHERE key = ?", [(k,) for k in missing_keys])
 
         if not refreshed_issues:
@@ -410,8 +414,7 @@ class IssueCache:
 
     def _init_db(self) -> None:
         """Create the SQLite tables if they don't exist."""
-        with sqlite3.connect(self._db_path) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+        with self._conn() as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS issues "
                 "(key TEXT PRIMARY KEY, data TEXT, excluded INTEGER)"
@@ -425,7 +428,7 @@ class IssueCache:
         """Write _last_refresh timestamp to the metadata table."""
         if not self._last_refresh:
             return
-        with sqlite3.connect(self._db_path) as conn:
+        with self._conn() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_refresh', ?)",
                 (self._last_refresh.isoformat(),),
@@ -434,7 +437,7 @@ class IssueCache:
     def _restore_last_refresh(self) -> None:
         """Read the persisted last_refresh timestamp from the metadata table."""
         try:
-            with sqlite3.connect(self._db_path) as conn:
+            with self._conn() as conn:
                 row = conn.execute(
                     "SELECT value FROM metadata WHERE key = 'last_refresh'"
                 ).fetchone()
@@ -445,7 +448,7 @@ class IssueCache:
 
     def _load_from_db(self) -> bool:
         """Populate in-memory dicts from SQLite. Returns True if rows existed."""
-        with sqlite3.connect(self._db_path) as conn:
+        with self._conn() as conn:
             rows = conn.execute("SELECT key, data, excluded FROM issues").fetchall()
         if not rows:
             return False
@@ -465,7 +468,7 @@ class IssueCache:
             self._issues = new_filtered
             self._initialized = True
         if dropped_keys:
-            with sqlite3.connect(self._db_path) as conn:
+            with self._conn() as conn:
                 conn.executemany("DELETE FROM issues WHERE key = ?", [(key,) for key in dropped_keys])
             logger.info(
                 "Cache: dropped %d non-tracked issues from SQLite restore: %s",
@@ -484,7 +487,7 @@ class IssueCache:
 
     def _save_all_to_db(self) -> None:
         """Replace entire DB contents with current in-memory state."""
-        with sqlite3.connect(self._db_path) as conn:
+        with self._conn() as conn:
             conn.execute("DELETE FROM issues")
             conn.executemany(
                 "INSERT INTO issues (key, data, excluded) VALUES (?, ?, ?)",
@@ -497,7 +500,7 @@ class IssueCache:
 
     def _upsert_to_db(self, issues: list[dict[str, Any]]) -> None:
         """Upsert a batch of issues into SQLite."""
-        with sqlite3.connect(self._db_path) as conn:
+        with self._conn() as conn:
             conn.executemany(
                 "INSERT OR REPLACE INTO issues (key, data, excluded) VALUES (?, ?, ?)",
                 [
@@ -523,7 +526,7 @@ class IssueCache:
                 self._all_issues.pop(key, None)
                 self._issues.pop(key, None)
         if dropped_keys:
-            with sqlite3.connect(self._db_path) as conn:
+            with self._conn() as conn:
                 conn.executemany("DELETE FROM issues WHERE key = ?", [(key,) for key in dropped_keys])
             logger.info(
                 "Cache: pruned %d non-tracked issues: %s",
@@ -1144,7 +1147,7 @@ class IssueCache:
     # Background task lifecycle
     # ------------------------------------------------------------------
 
-    async def start_background_refresh(self) -> None:
+    async def start_background_refresh(self, *, load_only: bool = False) -> None:
         """Start the background init + periodic refresh loop.
 
         SQLite loading runs inside the task (via run_in_executor) so uvicorn
@@ -1153,7 +1156,19 @@ class IssueCache:
         as _load_from_db() (or _full_fetch() for a cold start) finishes.
         """
         self._start_background_called = True
-        self._bg_task = asyncio.create_task(self._init_and_refresh_loop())
+        target = self._init_only_loop if load_only else self._init_and_refresh_loop
+        self._bg_task = asyncio.create_task(target())
+
+    async def _init_only_loop(self) -> None:
+        """Load shared cache state without starting the periodic refresh loop."""
+        loop = asyncio.get_running_loop()
+        loaded = await loop.run_in_executor(None, self._load_from_db)
+        if loaded:
+            self._init_event.set()
+        else:
+            logger.info("Cache: follower cold start — full Jira fetch required")
+            await loop.run_in_executor(None, self._full_fetch)
+        await loop.run_in_executor(None, self._backfill_recent_followup_authority_from_cache)
 
     async def _init_and_refresh_loop(self) -> None:
         """Load from SQLite then run the periodic refresh loop."""

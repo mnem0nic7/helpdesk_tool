@@ -31,6 +31,7 @@ from config import (
     AZURE_VM_EXPORT_SHARED_MAX_RUNTIME_SECONDS,
     DATA_DIR,
 )
+from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -146,9 +147,7 @@ class AzureCache:
         self._load_from_db()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_sqlite(self._db_path)
 
     def _init_db(self) -> None:
         with self._conn() as conn:
@@ -235,10 +234,12 @@ class AzureCache:
         self._dataset_state[dataset_key]["item_count"] = self._dataset_item_count(dataset_key)
         self._persist_dataset_status(dataset_key, updated_at, error)
 
-    async def start_background_refresh(self) -> None:
+    async def start_background_refresh(self, *, load_only: bool = False) -> None:
         if self._bg_task and not self._bg_task.done():
             return
         self._start_called = True
+        if load_only:
+            return
         loop = asyncio.get_running_loop()
         self._bg_task = loop.create_task(self._background_loop())
 

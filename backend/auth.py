@@ -16,6 +16,7 @@ from starlette.requests import Request
 
 from authlib.integrations.starlette_client import OAuth
 from cryptography.fernet import Fernet
+from sqlite_utils import connect_sqlite
 
 from config import (
     APP_SECRET_KEY,
@@ -44,9 +45,13 @@ _last_cleanup: datetime = datetime.now(timezone.utc)
 _CLEANUP_INTERVAL = timedelta(minutes=30)
 
 
+def _session_conn() -> sqlite3.Connection:
+    return connect_sqlite(_DB_PATH)
+
+
 def _init_session_db() -> None:
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(_DB_PATH) as conn:
+    with _session_conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 sid        TEXT PRIMARY KEY,
@@ -116,7 +121,7 @@ def create_session(
     expires_at = (datetime.now(timezone.utc) + _SESSION_TTL).isoformat()
     resolved_is_admin = is_admin_user(email) if is_admin is None else bool(is_admin)
     resolved_can_manage_users = resolved_is_admin if can_manage_users is None else bool(can_manage_users)
-    with sqlite3.connect(_DB_PATH) as conn:
+    with _session_conn() as conn:
         conn.execute(
             """
             INSERT INTO sessions (
@@ -162,7 +167,7 @@ def _cleanup_expired() -> None:
     if now - _last_cleanup < _CLEANUP_INTERVAL:
         return
     _last_cleanup = now
-    with sqlite3.connect(_DB_PATH) as conn:
+    with _session_conn() as conn:
         cur = conn.execute(
             "DELETE FROM sessions WHERE expires_at < ?",
             (now.isoformat(),),
@@ -174,8 +179,7 @@ def _cleanup_expired() -> None:
 def get_session(session_id: str) -> dict[str, Any] | None:
     """Return session data if valid and not expired, else None."""
     _cleanup_expired()
-    with sqlite3.connect(_DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
+    with _session_conn() as conn:
         row = conn.execute(
             """
             SELECT email, name, expires_at, auth_provider, is_admin, can_manage_users, site_scope
@@ -209,7 +213,7 @@ def get_session(session_id: str) -> dict[str, Any] | None:
 
 def delete_session(session_id: str) -> None:
     """Remove a session."""
-    with sqlite3.connect(_DB_PATH) as conn:
+    with _session_conn() as conn:
         conn.execute("DELETE FROM sessions WHERE sid = ?", (session_id,))
 
 
@@ -236,8 +240,7 @@ def _normalize_site_url(url: str) -> str:
 
 
 def get_atlassian_connection(email: str) -> dict[str, Any] | None:
-    with sqlite3.connect(_DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
+    with _session_conn() as conn:
         row = conn.execute(
             """
             SELECT email, atlassian_account_id, atlassian_account_name, cloud_id, site_url,
@@ -276,7 +279,7 @@ def save_atlassian_connection(
     expires_at: datetime,
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(_DB_PATH) as conn:
+    with _session_conn() as conn:
         conn.execute(
             """
             INSERT INTO atlassian_connections (
@@ -310,7 +313,7 @@ def save_atlassian_connection(
 
 
 def delete_atlassian_connection(email: str) -> None:
-    with sqlite3.connect(_DB_PATH) as conn:
+    with _session_conn() as conn:
         conn.execute("DELETE FROM atlassian_connections WHERE email = ?", (email.lower(),))
 
 
@@ -491,8 +494,7 @@ def require_tools_access(request: Request) -> dict[str, Any]:
 
 
 def list_login_audit(*, limit: int = 100) -> list[dict[str, Any]]:
-    with sqlite3.connect(_DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
+    with _session_conn() as conn:
         rows = conn.execute(
             """
             SELECT event_id, email, name, auth_provider, site_scope, source_ip, user_agent, created_at

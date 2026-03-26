@@ -154,6 +154,16 @@ TOOLS_ALLOWED_IDENTIFIERS: list[str] = _env_csv("TOOLS_ALLOWED_IDENTIFIERS") or 
     "gallison",
     "wberry",
 ]
+APP_RUNTIME_BLUEGREEN_ENABLED: bool = os.getenv("APP_RUNTIME_BLUEGREEN_ENABLED", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+APP_RUNTIME_COLOR: str = os.getenv("APP_RUNTIME_COLOR", "single").strip().lower() or "single"
+APP_RUNTIME_LEASE_SECONDS: int = int(os.getenv("APP_RUNTIME_LEASE_SECONDS", "30"))
+APP_RUNTIME_HEARTBEAT_SECONDS: int = int(os.getenv("APP_RUNTIME_HEARTBEAT_SECONDS", "5"))
+DEPLOY_CONTROL_SECRET: str = os.getenv("DEPLOY_CONTROL_SECRET", "").strip()
 REQUESTOR_OCC_NAME_DOMAIN_PRIORITY: list[str] = [
     domain.lower()
     for domain in (_env_csv("REQUESTOR_OCC_NAME_DOMAIN_PRIORITY") or _REQUESTOR_OCC_NAME_DOMAIN_PRIORITY_DEFAULT)

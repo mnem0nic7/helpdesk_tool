@@ -224,6 +224,7 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     import user_admin_providers as user_admin_providers_module
     import user_exit_workflows as user_exit_workflows_module
     import report_ai_summary_service as report_ai_summary_service_module
+    import runtime_control as runtime_control_module
 
     for mod in [issue_cache, routes_metrics, routes_tickets, routes_chart, routes_export, routes_cache, routes_triage]:
         monkeypatch.setattr(mod, "cache", mock_cache)
@@ -489,6 +490,63 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     monkeypatch.setattr(main, "kb_store", mock_kb_store)
     monkeypatch.setattr(main, "onedrive_copy_jobs", mock_onedrive_copy_jobs)
     monkeypatch.setattr(main, "report_ai_summary_service", mock_report_ai_summary_service)
+    mock_runtime_role_manager = MagicMock()
+    mock_runtime_role_manager.bootstrap = AsyncMock(
+        return_value=runtime_control_module.RuntimeState(
+            color="blue",
+            role="leader",
+            desired_leader_color="blue",
+            lease_owner_color="blue",
+            lease_expires_at="2026-03-26T00:30:00+00:00",
+            bluegreen_enabled=True,
+            leader_ready=True,
+        )
+    )
+    mock_runtime_role_manager.start = AsyncMock()
+    mock_runtime_role_manager.stop = AsyncMock()
+    mock_runtime_role_manager.request_promotion = AsyncMock(
+        return_value=runtime_control_module.RuntimeState(
+            color="blue",
+            role="leader",
+            desired_leader_color="blue",
+            lease_owner_color="blue",
+            lease_expires_at="2026-03-26T00:30:00+00:00",
+            bluegreen_enabled=True,
+            leader_ready=True,
+        )
+    )
+    mock_runtime_role_manager.promote = AsyncMock(
+        return_value=runtime_control_module.RuntimeState(
+            color="blue",
+            role="leader",
+            desired_leader_color="blue",
+            lease_owner_color="blue",
+            lease_expires_at="2026-03-26T00:30:00+00:00",
+            bluegreen_enabled=True,
+            leader_ready=True,
+        )
+    )
+    mock_runtime_role_manager.demote = AsyncMock(
+        return_value=runtime_control_module.RuntimeState(
+            color="blue",
+            role="follower",
+            desired_leader_color="green",
+            lease_owner_color="green",
+            lease_expires_at="2026-03-26T00:30:00+00:00",
+            bluegreen_enabled=True,
+            leader_ready=False,
+        )
+    )
+    mock_runtime_role_manager.status.return_value = runtime_control_module.RuntimeState(
+        color="blue",
+        role="leader",
+        desired_leader_color="blue",
+        lease_owner_color="blue",
+        lease_expires_at="2026-03-26T00:30:00+00:00",
+        bluegreen_enabled=True,
+        leader_ready=True,
+    )
+    monkeypatch.setattr(main, "runtime_role_manager", mock_runtime_role_manager)
     app = main.app
     from starlette.testclient import TestClient
     from auth import create_session

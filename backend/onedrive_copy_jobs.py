@@ -21,6 +21,7 @@ from config import (
     ONEDRIVE_COPY_MAX_RETRIES,
     ONEDRIVE_COPY_RETRY_DELAY_BASE_SECONDS,
 )
+from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +69,7 @@ class OneDriveCopyJobManager:
         self._cleanup_expired_jobs()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_sqlite(self._db_path)
 
     def _init_db(self) -> None:
         with self._conn() as conn:

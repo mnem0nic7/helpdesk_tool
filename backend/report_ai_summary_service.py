@@ -27,6 +27,7 @@ from models import (
 from report_template_store import report_template_store
 from report_workbook_builder import ReportWorkbookBuilder, resolve_report_window_spec
 from site_context import filter_issues_for_scope
+from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +112,7 @@ class ReportAISummaryService:
 
     def _connect(self) -> sqlite3.Connection:
         _ensure_data_dir()
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_sqlite(self._db_path)
 
     def _init_db(self) -> None:
         with self._connect() as conn:

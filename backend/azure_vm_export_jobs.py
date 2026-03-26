@@ -20,6 +20,7 @@ from azure_cache import azure_cache
 from config import AZURE_VM_EXPORT_RETENTION_DAYS, DATA_DIR
 from email_service import send_email
 from site_context import get_site_origin
+from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +57,7 @@ class AzureVMExportJobManager:
         self._cleanup_expired_files()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_sqlite(self._db_path)
 
     def _init_db(self) -> None:
         with self._conn() as conn:

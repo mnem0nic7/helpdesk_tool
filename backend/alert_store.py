@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from config import DATA_DIR
+from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +24,12 @@ class AlertStore:
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
+        conn = connect_sqlite(self._db_path)
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def _init_db(self) -> None:
         with self._conn() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS alert_rules (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

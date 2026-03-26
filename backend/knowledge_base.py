@@ -14,6 +14,7 @@ from pathlib import Path
 
 from config import DATA_DIR
 from models import KnowledgeBaseArticle, KnowledgeBaseArticleUpsertRequest
+from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -163,11 +164,10 @@ class KnowledgeBaseStore:
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path)
+        return connect_sqlite(self._db_path, row_factory=None)
 
     def _init_db(self) -> None:
         with self._conn() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS kb_articles (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1,3 +1,9 @@
+{
+	admin 0.0.0.0:2019
+}
+
+import /etc/caddy/active_upstreams.caddy
+
 it-app.movedocs.com, oasisdev.movedocs.com, azure.movedocs.com {
 	tls {
 		issuer acme {
@@ -9,16 +15,8 @@ it-app.movedocs.com, oasisdev.movedocs.com, azure.movedocs.com {
 		issuer internal
 	}
 
-	@api path /api/*
-	reverse_proxy @api 172.19.0.10:8000 {
-		header_up Host {http.request.host}
-		header_up X-Forwarded-Host {http.request.host}
-		header_up X-Forwarded-Proto {http.request.scheme}
-	}
+	@internal path /api/internal/*
+	respond @internal 404
 
-	reverse_proxy 172.19.0.11:80 {
-		header_up Host {http.request.host}
-		header_up X-Forwarded-Host {http.request.host}
-		header_up X-Forwarded-Proto {http.request.scheme}
-	}
+	import active_upstreams
 }

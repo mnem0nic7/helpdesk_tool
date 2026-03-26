@@ -17,6 +17,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sqlite_utils import connect_sqlite
+
 _ALLOWED_PARSE_STATUSES = {"discovered", "staged", "parsed", "quarantined", "failed"}
 
 logger = logging.getLogger(__name__)
@@ -116,9 +118,7 @@ class AzureExportStore:
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_sqlite(self._db_path)
 
     def _init_db(self) -> None:
         with self._conn() as conn:

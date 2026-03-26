@@ -1,3 +1,35 @@
+x-backend-common: &backend-common
+  build:
+    context: .
+    dockerfile: Dockerfile.backend
+  expose:
+    - "8000"
+  env_file:
+    - backend/.env
+  environment: &backend-env
+    DATA_DIR: /app/data
+    KB_ARTICLE_ARCHIVE: /app/private/OIT_KB_Articles.zip
+    OLLAMA_BASE_URL: http://host.docker.internal:11434
+    APP_RUNTIME_BLUEGREEN_ENABLED: "1"
+  volumes:
+    - cache_data:/app/data
+    - ./private:/app/private:ro
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  networks:
+    - app_net
+  restart: unless-stopped
+
+x-frontend-common: &frontend-common
+  build:
+    context: .
+    dockerfile: Dockerfile.frontend
+  expose:
+    - "80"
+  networks:
+    - app_net
+  restart: unless-stopped
+
 services:
   caddy:
     build:
@@ -9,54 +41,34 @@ services:
     environment:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
     networks:
-      app_net:
+      - app_net
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./.deploy-state/active_upstreams.caddy:/etc/caddy/active_upstreams.caddy:ro
       - caddy_data:/data
       - caddy_config:/config
-    depends_on:
-      - backend
-      - frontend
     restart: unless-stopped
 
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
-    expose:
-      - "8000"
-    env_file:
-      - backend/.env
+  backend_blue:
+    <<: *backend-common
     environment:
-      - DATA_DIR=/app/data
-      - KB_ARTICLE_ARCHIVE=/app/private/OIT_KB_Articles.zip
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-    volumes:
-      - cache_data:/app/data
-      - ./private:/app/private:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks:
-      app_net:
-        ipv4_address: 172.19.0.10
-    restart: unless-stopped
+      <<: *backend-env
+      APP_RUNTIME_COLOR: blue
 
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    expose:
-      - "80"
-    networks:
-      app_net:
-        ipv4_address: 172.19.0.11
-    restart: unless-stopped
+  backend_green:
+    <<: *backend-common
+    environment:
+      <<: *backend-env
+      APP_RUNTIME_COLOR: green
+
+  frontend_blue:
+    <<: *frontend-common
+
+  frontend_green:
+    <<: *frontend-common
 
 networks:
   app_net:
-    ipam:
-      config:
-        - subnet: 172.19.0.0/24
 
 volumes:
   cache_data:

@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Generator
 
+from sqlite_utils import connect_sqlite
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -20,8 +22,7 @@ class AzureAlertStore:
 
     @contextmanager
     def _conn(self) -> Generator[sqlite3.Connection, None, None]:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
+        conn = connect_sqlite(self._db_path)
         conn.execute("PRAGMA foreign_keys = ON")
         try:
             yield conn
