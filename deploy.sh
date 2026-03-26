@@ -289,6 +289,39 @@ service_ip() {
     docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_id"
 }
 
+service_local_http_ok() {
+    local service="$1"
+    local port="$2"
+    local path="$3"
+    if [[ "$service" == backend_* ]]; then
+        docker compose exec -T "$service" python3 - "$port" "$path" <<'PY' >/dev/null 2>&1
+import sys
+import urllib.request
+
+port = sys.argv[1]
+path = sys.argv[2]
+with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as response:
+    if response.status < 200 or response.status >= 400:
+        raise SystemExit(1)
+PY
+        return $?
+    fi
+    docker compose exec -T "$service" sh -lc "wget -q -O /dev/null http://127.0.0.1:${port}${path}" >/dev/null 2>&1
+}
+
+backend_local_get_json() {
+    local service="$1"
+    local path="$2"
+    docker compose exec -T "$service" python3 - "$path" <<'PY'
+import sys
+import urllib.request
+
+path = sys.argv[1]
+with urllib.request.urlopen(f"http://127.0.0.1:8000{path}", timeout=10) as response:
+    print(response.read().decode("utf-8", "ignore"))
+PY
+}
+
 wait_for_container_http() {
     local service="$1"
     local port="$2"
@@ -298,9 +331,7 @@ wait_for_container_http() {
 
     echo ">>> Waiting for ${label}..."
     for _ in $(seq 1 "$attempts"); do
-        local ip
-        ip="$(service_ip "$service" 2>/dev/null || true)"
-        if [[ -n "$ip" ]] && curl -fsS --connect-timeout 2 --max-time 10 "http://${ip}:${port}${path}" >/dev/null 2>&1; then
+        if service_local_http_ok "$service" "$port" "$path"; then
             echo ">>> ${label} is ready"
             return 0
         fi
@@ -319,11 +350,9 @@ wait_for_backend_role() {
 
     echo ">>> Waiting for ${service} to become ${expected_role}..."
     for _ in $(seq 1 "$attempts"); do
-        local ip payload
-        ip="$(service_ip "$service" 2>/dev/null || true)"
-        if [[ -n "$ip" ]]; then
-            payload="$(curl -fsS --connect-timeout 2 --max-time 10 "http://${ip}:8000/api/health/ready" 2>/dev/null || true)"
-            if [[ -n "$payload" ]] && python3 - "$expected_role" <<'PY' <<<"$payload"
+        local payload
+        payload="$(backend_local_get_json "$service" "/api/health/ready" 2>/dev/null || true)"
+        if [[ -n "$payload" ]] && python3 - "$expected_role" <<'PY' <<<"$payload"
 import json
 import sys
 
@@ -333,10 +362,9 @@ runtime = payload.get("runtime") or {}
 ok = payload.get("status") == "ready" and runtime.get("role") == expected
 raise SystemExit(0 if ok else 1)
 PY
-            then
-                echo ">>> ${service} is ${expected_role} and ready"
-                return 0
-            fi
+        then
+            echo ">>> ${service} is ${expected_role} and ready"
+            return 0
         fi
         printf "."
         sleep 1
@@ -349,12 +377,21 @@ PY
 post_internal_runtime() {
     local service="$1"
     local action="$2"
-    local ip
-    ip="$(service_ip "$service")"
-    curl -fsS --connect-timeout 3 --max-time 30 \
-        -X POST \
-        -H "X-Deploy-Control-Secret: ${DEPLOY_CONTROL_SECRET}" \
-        "http://${ip}:8000/api/internal/runtime/${action}"
+    docker compose exec -T "$service" python3 - "$action" "$DEPLOY_CONTROL_SECRET" <<'PY'
+import sys
+import urllib.request
+
+action = sys.argv[1]
+secret = sys.argv[2]
+request = urllib.request.Request(
+    f"http://127.0.0.1:8000/api/internal/runtime/{action}",
+    data=b"",
+    method="POST",
+    headers={"X-Deploy-Control-Secret": secret},
+)
+with urllib.request.urlopen(request, timeout=30) as response:
+    print(response.read().decode("utf-8", "ignore"))
+PY
 }
 
 reload_caddy() {
