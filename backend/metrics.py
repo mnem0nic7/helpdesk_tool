@@ -15,6 +15,7 @@ from config import (
     JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID,
     JIRA_FOLLOWUP_PUBLIC_AGENT_TOUCH_COUNT_FIELD_ID,
     JIRA_FOLLOWUP_STATUS_FIELD_ID,
+    TRACKED_JIRA_PROJECT_KEYS,
 )
 from followup_authority import (
     LOCAL_FOLLOWUP_LAST_TOUCH_FIELD,
@@ -95,6 +96,7 @@ _TTR_BUCKETS: list[tuple[float, str]] = [
 ]
 
 IssueScope = Literal["primary", "oasisdev", "all"]
+_TRACKED_PROJECT_KEY_SET = frozenset(TRACKED_JIRA_PROJECT_KEYS)
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +134,14 @@ def is_excluded(issue: dict[str, Any]) -> bool:
     (case-insensitive).
     """
     fields = issue.get("fields", {})
+
+    project_obj = fields.get("project") or {}
+    project_key = str(project_obj.get("key") or "").strip().upper()
+    issue_key = str(issue.get("key") or "").strip().upper()
+    if not project_key and "-" in issue_key:
+        project_key = issue_key.split("-", 1)[0]
+    if project_key and project_key not in _TRACKED_PROJECT_KEY_SET:
+        return True
 
     labels: list[str] = fields.get("labels") or []
     for label in labels:

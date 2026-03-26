@@ -67,6 +67,17 @@ class TestPercentile:
 # ===== is_excluded =====
 
 class TestIsExcluded:
+    def test_excluded_by_non_tracked_key_prefix(self):
+        issue = {"key": "MSD-100", "fields": {"labels": [], "summary": "Moved ticket"}}
+        assert is_excluded(issue) is True
+
+    def test_excluded_by_non_tracked_project_key(self):
+        issue = {
+            "key": "OIT-100",
+            "fields": {"project": {"key": "MD"}, "labels": [], "summary": "Moved ticket"},
+        }
+        assert is_excluded(issue) is True
+
     def test_excluded_by_label(self):
         issue = {"fields": {"labels": ["oasisdev"], "summary": "Normal"}}
         assert is_excluded(issue) is True

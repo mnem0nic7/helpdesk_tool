@@ -226,6 +226,69 @@ class TestReportPreview:
         assert payload["rows"][0]["group"] == "Met"
         assert payload["rows"][0]["count"] == 1
 
+    def test_preview_excludes_non_tracked_moved_tickets(self, test_client, mock_cache):
+        tracked_issue = {
+            "key": "OIT-779",
+            "fields": {
+                "summary": "Tracked ticket",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "High"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": {"name": "Done"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-02T12:00:00+00:00",
+                "resolutiondate": "2026-03-02T12:00:00+00:00",
+                "labels": [],
+                "components": [],
+                "customfield_10010": {"requestType": {"name": "Laptop"}},
+                "customfield_11239": "Service requests",
+                "customfield_11266": None,
+                "customfield_11264": None,
+                "customfield_10700": [],
+                "attachment": [],
+            },
+        }
+        moved_issue = {
+            "key": "MSD-779",
+            "fields": {
+                "summary": "Moved ticket",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "Low"},
+                "assignee": {"displayName": "Moved User", "accountId": "acc-moved"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": {"name": "Done"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-02T12:00:00+00:00",
+                "resolutiondate": "2026-03-02T12:00:00+00:00",
+                "labels": [],
+                "components": [],
+                "customfield_10010": {"requestType": {"name": "Laptop"}},
+                "customfield_11239": "Service requests",
+                "customfield_11266": None,
+                "customfield_11264": None,
+                "customfield_10700": [],
+                "attachment": [],
+            },
+        }
+        mock_cache.get_all_issues.return_value = [tracked_issue, moved_issue]
+        mock_cache.get_filtered_issues.return_value = [tracked_issue, moved_issue]
+
+        resp = test_client.post("/api/report/preview", json={
+            "filters": {},
+            "columns": ["key", "summary"],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": True,
+        })
+
+        assert resp.status_code == 200
+        keys = [row["key"] for row in resp.json()["rows"]]
+        assert keys == ["OIT-779"]
+
 
 class TestReportExport:
     """POST /api/report/export"""

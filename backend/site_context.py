@@ -95,6 +95,8 @@ def issue_matches_scope(issue: dict[str, Any], scope: SiteScope) -> bool:
     """Return True when an issue belongs on the given site."""
     if scope == "azure":
         return False
+    if not JiraClient.is_tracked_issue(issue):
+        return False
     is_oasisdev_issue = JiraClient.is_excluded(issue)
     if scope == "oasisdev":
         return is_oasisdev_issue
@@ -124,7 +126,7 @@ def get_scoped_issues(*, include_excluded_on_primary: bool = False) -> list[dict
     if scope == "azure":
         return []
     if scope == "primary" and include_excluded_on_primary:
-        return all_issues
+        return [issue for issue in all_issues if JiraClient.is_tracked_issue(issue)]
     return filter_issues_for_scope(all_issues, scope)
 
 

@@ -20,6 +20,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
 from issue_cache import cache
+from jira_client import JiraClient
 from metrics import issue_to_row, _extract_description, _all_comments_text
 from metrics import percentile
 from auth import require_authenticated_user
@@ -247,6 +248,7 @@ def _issues_matching_config(
 ) -> list[dict[str, Any]]:
     """Return scoped Jira issues that match the report config filters."""
     source_issues = issues if issues is not None else get_scoped_issues(include_excluded_on_primary=config.include_excluded)
+    source_issues = [iss for iss in source_issues if JiraClient.is_tracked_issue(iss)]
     filters = config.filters.model_dump(exclude_none=True)
     for k in ("open_only", "stale_only"):
         if not filters.get(k):
