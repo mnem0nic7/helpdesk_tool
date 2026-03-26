@@ -730,12 +730,25 @@ async def get_virtual_machines(
 async def get_virtual_desktop_removal_candidates(
     search: str = Query(default=""),
     removal_only: bool = Query(default=False),
+    under_utilized_only: bool = Query(default=False),
+    over_utilized_only: bool = Query(default=False),
 ) -> dict[str, Any]:
     _ensure_azure_site()
     return azure_cache.list_virtual_desktop_removal_candidates(
         search=search,
         removal_only=removal_only,
+        under_utilized_only=under_utilized_only,
+        over_utilized_only=over_utilized_only,
     )
+
+
+@router.get("/virtual-desktops/detail")
+async def get_virtual_desktop_detail(resource_id: str = Query(default="")) -> dict[str, Any]:
+    _ensure_azure_site()
+    detail = azure_cache.get_virtual_desktop_detail(resource_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Virtual desktop was not found in the Azure cache")
+    return detail
 
 
 @router.get("/vms/detail")

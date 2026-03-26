@@ -2167,6 +2167,206 @@ def test_list_virtual_desktop_removal_candidates_excludes_pooled_host_pools(tmp_
     assert payload["desktops"] == []
 
 
+def test_fetch_virtual_desktop_utilization_applies_threshold_rules(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    sample_points = [
+        "2026-03-20T00:00:00+00:00",
+        "2026-03-20T01:00:00+00:00",
+    ]
+
+    def fake_metrics(resource_id, metric_names, *, start_time, end_time, interval):
+        assert interval == "PT1M"
+        metric_name = metric_names[0]
+        if resource_id.endswith("avd-vm-under"):
+            if metric_name == "Percentage CPU":
+                return {
+                    "Percentage CPU": [
+                        {"timestamp": sample_points[0], "value": 42.0},
+                        {"timestamp": sample_points[1], "value": 18.0},
+                    ]
+                }
+            return {
+                "Available Memory Percentage": [
+                    {"timestamp": sample_points[0], "value": 70.0},
+                    {"timestamp": sample_points[1], "value": 55.0},
+                ]
+            }
+        if metric_name == "Percentage CPU":
+            return {
+                "Percentage CPU": [
+                    {"timestamp": sample_points[0], "value": 100.0},
+                    {"timestamp": sample_points[1], "value": 72.0},
+                ]
+            }
+        return {
+            "Available Memory Percentage": [
+                {"timestamp": sample_points[0], "value": 0.0},
+                {"timestamp": sample_points[1], "value": 25.0},
+            ]
+        }
+
+    cache._client.list_resource_metrics = fake_metrics
+
+    under = cache._fetch_virtual_desktop_utilization(
+        "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-under"
+    )
+    over = cache._fetch_virtual_desktop_utilization(
+        "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-over"
+    )
+
+    assert under["status"] == "under_utilized"
+    assert under["under_utilized"] is True
+    assert under["over_utilized"] is False
+    assert under["cpu_max_percent"] == 42.0
+    assert under["memory_max_percent"] == 45.0
+    assert any("below the 50% under-utilization threshold" in reason for reason in under["reasoning"])
+
+    assert over["status"] == "over_utilized"
+    assert over["under_utilized"] is False
+    assert over["over_utilized"] is True
+    assert over["cpu_time_at_full_percent"] == 50.0
+    assert over["memory_time_at_full_percent"] == 50.0
+    assert any("CPU hit 100% utilization" in reason for reason in over["reasoning"])
+
+
+def test_list_virtual_desktop_removal_candidates_filters_under_and_over_utilized(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+    now = datetime.now(timezone.utc)
+    recent_power = (now - timedelta(days=1)).isoformat()
+    recent_login = (now - timedelta(days=1)).isoformat()
+
+    cache._update_snapshots(
+        {
+            "resources": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-under",
+                    "name": "avd-vm-under",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-avd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {},
+                },
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-over",
+                    "name": "avd-vm-over",
+                    "resource_type": "Microsoft.Compute/virtualMachines",
+                    "subscription_id": "sub-1",
+                    "subscription_name": "Prod",
+                    "resource_group": "rg-avd",
+                    "location": "eastus",
+                    "kind": "",
+                    "sku_name": "",
+                    "vm_size": "Standard_D4s_v5",
+                    "state": "PowerState/running",
+                    "tags": {},
+                },
+            ],
+            "users": [
+                {
+                    "id": "user-1",
+                    "display_name": "Ada Lovelace",
+                    "object_type": "user",
+                    "principal_name": "ada@example.com",
+                    "mail": "ada@example.com",
+                    "enabled": True,
+                    "app_id": "",
+                    "extra": {
+                        "is_licensed": "true",
+                        "last_interactive_utc": recent_login,
+                        "last_interactive_local": "recent login",
+                        "last_successful_utc": recent_login,
+                        "last_successful_local": "recent login",
+                    },
+                }
+            ],
+            "vm_run_observations": {
+                "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-under": recent_power,
+                "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-over": recent_power,
+            },
+            "avd_host_pools": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-1",
+                    "name": "hostpool-1",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Direct",
+                    "owner_history_status": "available",
+                }
+            ],
+            "avd_session_hosts": [
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-1/sessionHosts/avd-vm-under.contoso.local",
+                    "name": "hostpool-1/avd-vm-under.contoso.local",
+                    "session_host_name": "avd-vm-under.contoso.local",
+                    "host_pool_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-1",
+                    "host_pool_name": "hostpool-1",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Direct",
+                    "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-under",
+                    "assigned_user": "ada@example.com",
+                },
+                {
+                    "id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-1/sessionHosts/avd-vm-over.contoso.local",
+                    "name": "hostpool-1/avd-vm-over.contoso.local",
+                    "session_host_name": "avd-vm-over.contoso.local",
+                    "host_pool_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hostpool-1",
+                    "host_pool_name": "hostpool-1",
+                    "host_pool_type": "Personal",
+                    "personal_desktop_assignment_type": "Direct",
+                    "vm_resource_id": "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-over",
+                    "assigned_user": "ada@example.com",
+                },
+            ],
+            "avd_owner_history": [],
+            "avd_utilization_summaries": {
+                "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-under": {
+                    "status": "under_utilized",
+                    "under_utilized": True,
+                    "over_utilized": False,
+                    "utilization_data_available": True,
+                    "utilization_fully_evaluable": True,
+                    "cpu_data_available": True,
+                    "memory_data_available": True,
+                    "cpu_max_percent": 38.0,
+                    "cpu_time_at_full_percent": 0.0,
+                    "memory_max_percent": 35.0,
+                    "memory_time_at_full_percent": 0.0,
+                    "reasoning": ["Peak CPU over the last 7 days was 38.0%, below the 50% under-utilization threshold."],
+                    "error": "",
+                },
+                "subscriptions/sub-1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/avd-vm-over": {
+                    "status": "over_utilized",
+                    "under_utilized": False,
+                    "over_utilized": True,
+                    "utilization_data_available": True,
+                    "utilization_fully_evaluable": True,
+                    "cpu_data_available": True,
+                    "memory_data_available": True,
+                    "cpu_max_percent": 100.0,
+                    "cpu_time_at_full_percent": 25.0,
+                    "memory_max_percent": 92.0,
+                    "memory_time_at_full_percent": 0.0,
+                    "reasoning": ["CPU hit 100% utilization and stayed there for 25.0% of sampled time."],
+                    "error": "",
+                },
+            },
+        }
+    )
+
+    under_only = cache.list_virtual_desktop_removal_candidates(under_utilized_only=True)
+    over_only = cache.list_virtual_desktop_removal_candidates(over_utilized_only=True)
+
+    assert under_only["summary"]["under_utilized"] == 1
+    assert under_only["summary"]["over_utilized"] == 1
+    assert [item["name"] for item in under_only["desktops"]] == ["avd-vm-under"]
+    assert [item["name"] for item in over_only["desktops"]] == ["avd-vm-over"]
+
+
 def test_get_storage_summary_filters_tab_searches_server_side(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     cache._update_snapshots(

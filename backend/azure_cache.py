@@ -23,7 +23,10 @@ from config import (
     AZURE_COST_REFRESH_MINUTES,
     AZURE_DIRECTORY_REFRESH_MINUTES,
     AZURE_INVENTORY_REFRESH_MINUTES,
+    AZURE_VIRTUAL_DESKTOP_OVERUTILIZED_THRESHOLD_PERCENT,
     AZURE_VIRTUAL_DESKTOP_REMOVAL_THRESHOLD_DAYS,
+    AZURE_VIRTUAL_DESKTOP_UNDERUTILIZED_THRESHOLD_PERCENT,
+    AZURE_VIRTUAL_DESKTOP_UTILIZATION_LOOKBACK_DAYS,
     AZURE_VM_EXPORT_COST_CHUNK_SIZE,
     AZURE_VM_EXPORT_COST_INTER_CHUNK_DELAY_SECONDS,
     AZURE_VM_EXPORT_MAX_RUNTIME_MINUTES,
@@ -48,6 +51,7 @@ _DATASET_CONFIG: dict[str, dict[str, Any]] = {
             "avd_host_pools",
             "avd_session_hosts",
             "avd_owner_history",
+            "avd_utilization_summaries",
         ],
     },
     "directory": {
@@ -100,6 +104,10 @@ _VIRTUAL_DESKTOP_HOST_POOL_TAG_KEYS = (
 )
 _AVD_CONNECTION_LOG_CATEGORIES = {"connection"}
 _AVD_DIAGNOSTIC_CATEGORY_GROUPS = {"alllogs", "audit"}
+_VIRTUAL_DESKTOP_UTILIZATION_METRIC_INTERVAL = "PT1M"
+_VIRTUAL_DESKTOP_UTILIZATION_CHART_BUCKET_MINUTES = 15
+_VIRTUAL_DESKTOP_CPU_METRIC_NAME = "Percentage CPU"
+_VIRTUAL_DESKTOP_AVAILABLE_MEMORY_METRIC_NAME = "Available Memory Percentage"
 _SHARED_ACCOUNT_MARKERS = (
     "shared",
     "svc",
@@ -381,9 +389,11 @@ class AzureCache:
             previous_avd_host_pools = self._snapshot("avd_host_pools") or []
             previous_avd_session_hosts = self._snapshot("avd_session_hosts") or []
             previous_avd_owner_history = self._snapshot("avd_owner_history") or []
+            previous_avd_utilization_summaries = self._snapshot("avd_utilization_summaries") or {}
             avd_host_pools = previous_avd_host_pools
             avd_session_hosts = previous_avd_session_hosts
             avd_owner_history = previous_avd_owner_history
+            avd_utilization_summaries = previous_avd_utilization_summaries
             try:
                 avd_host_pools, avd_session_hosts, avd_owner_history = self._collect_avd_inventory(
                     list(sub_name_by_id),
@@ -403,6 +413,14 @@ class AzureCache:
                     avd_host_pools = previous_avd_host_pools
                     avd_session_hosts = previous_avd_session_hosts
                     avd_owner_history = previous_avd_owner_history
+            try:
+                avd_utilization_summaries = self._collect_avd_utilization_summaries(resources, avd_session_hosts)
+            except AzureApiError as exc:
+                logger.warning(
+                    "Azure AVD utilization refresh failed; continuing inventory refresh with previous utilization summaries: %s",
+                    exc,
+                )
+                avd_utilization_summaries = previous_avd_utilization_summaries
             self._update_snapshots(
                 {
                     "subscriptions": subscriptions,
@@ -415,6 +433,7 @@ class AzureCache:
                     "avd_host_pools": avd_host_pools,
                     "avd_session_hosts": avd_session_hosts,
                     "avd_owner_history": avd_owner_history,
+                    "avd_utilization_summaries": avd_utilization_summaries,
                 }
             )
             updated_at = datetime.now(timezone.utc).isoformat()
@@ -438,6 +457,306 @@ class AzureCache:
             parsed = parsed.replace(tzinfo=timezone.utc)
         localized = parsed.astimezone(_USER_AUDIT_TIMEZONE)
         return localized.strftime("%Y-%m-%d %I:%M %p %Z")
+
+    @staticmethod
+    def _clamp_percent(value: float) -> float:
+        return max(0.0, min(100.0, value))
+
+    @staticmethod
+    def _virtual_desktop_utilization_unavailable_summary(*, error: str = "") -> dict[str, Any]:
+        return {
+            "lookback_days": max(1, int(AZURE_VIRTUAL_DESKTOP_UTILIZATION_LOOKBACK_DAYS or 7)),
+            "under_threshold_percent": float(AZURE_VIRTUAL_DESKTOP_UNDERUTILIZED_THRESHOLD_PERCENT or 50.0),
+            "over_threshold_percent": float(AZURE_VIRTUAL_DESKTOP_OVERUTILIZED_THRESHOLD_PERCENT or 100.0),
+            "interval": _VIRTUAL_DESKTOP_UTILIZATION_METRIC_INTERVAL,
+            "status": "unavailable",
+            "under_utilized": False,
+            "over_utilized": False,
+            "utilization_data_available": False,
+            "utilization_fully_evaluable": False,
+            "cpu_data_available": False,
+            "memory_data_available": False,
+            "cpu_max_percent": None,
+            "cpu_points_at_full": 0,
+            "cpu_total_points": 0,
+            "cpu_time_at_full_percent": None,
+            "memory_max_percent": None,
+            "memory_points_at_full": 0,
+            "memory_total_points": 0,
+            "memory_time_at_full_percent": None,
+            "reasoning": [],
+            "error": error,
+        }
+
+    @staticmethod
+    def _summarize_percent_series(points: list[dict[str, Any]], *, full_threshold: float) -> dict[str, Any]:
+        values: list[float] = []
+        for point in points:
+            raw_value = point.get("value")
+            try:
+                values.append(float(raw_value))
+            except (TypeError, ValueError):
+                continue
+
+        if not values:
+            return {
+                "max_percent": None,
+                "points_at_full": 0,
+                "total_points": 0,
+                "time_at_full_percent": None,
+            }
+
+        points_at_full = sum(1 for value in values if value >= full_threshold)
+        total_points = len(values)
+        return {
+            "max_percent": round(max(values), 1),
+            "points_at_full": points_at_full,
+            "total_points": total_points,
+            "time_at_full_percent": round(points_at_full / total_points * 100, 1) if total_points else None,
+        }
+
+    def _downsample_percent_series(
+        self,
+        points: list[dict[str, Any]],
+        *,
+        bucket_minutes: int = _VIRTUAL_DESKTOP_UTILIZATION_CHART_BUCKET_MINUTES,
+    ) -> list[dict[str, Any]]:
+        buckets: dict[datetime, list[float]] = defaultdict(list)
+        for point in points:
+            timestamp = self._parse_datetime(point.get("timestamp"))
+            if not timestamp:
+                continue
+            raw_value = point.get("value")
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            normalized = timestamp.astimezone(timezone.utc)
+            bucket = normalized.replace(
+                minute=(normalized.minute // bucket_minutes) * bucket_minutes,
+                second=0,
+                microsecond=0,
+            )
+            buckets[bucket].append(value)
+
+        result: list[dict[str, Any]] = []
+        for bucket_time in sorted(buckets):
+            values = buckets[bucket_time]
+            if not values:
+                continue
+            timestamp = bucket_time.isoformat()
+            result.append(
+                {
+                    "timestamp": timestamp,
+                    "label": self._format_local_datetime_text(timestamp),
+                    "value": round(sum(values) / len(values), 1),
+                }
+            )
+        return result
+
+    def _build_virtual_desktop_utilization_reasoning(self, summary: dict[str, Any]) -> list[str]:
+        lookback_days = int(summary.get("lookback_days") or AZURE_VIRTUAL_DESKTOP_UTILIZATION_LOOKBACK_DAYS or 7)
+        under_threshold = float(
+            summary.get("under_threshold_percent") or AZURE_VIRTUAL_DESKTOP_UNDERUTILIZED_THRESHOLD_PERCENT or 50.0
+        )
+        cpu_max = summary.get("cpu_max_percent")
+        memory_max = summary.get("memory_max_percent")
+        cpu_time_at_full = summary.get("cpu_time_at_full_percent")
+        memory_time_at_full = summary.get("memory_time_at_full_percent")
+        cpu_available = bool(summary.get("cpu_data_available"))
+        memory_available = bool(summary.get("memory_data_available"))
+        under_utilized = bool(summary.get("under_utilized"))
+        over_utilized = bool(summary.get("over_utilized"))
+
+        reasoning: list[str] = []
+        if not cpu_available and not memory_available:
+            reasoning.append(
+                f"No CPU or guest memory utilization metrics were available for this desktop in the last {lookback_days} days."
+            )
+            return reasoning
+
+        if cpu_available and cpu_max is not None:
+            if over_utilized and float(cpu_max) >= float(summary.get("over_threshold_percent") or 100.0):
+                reasoning.append(
+                    f"CPU hit 100% utilization and stayed there for {cpu_time_at_full or 0:.1f}% of sampled time."
+                )
+            elif under_utilized:
+                reasoning.append(
+                    f"Peak CPU over the last {lookback_days} days was {float(cpu_max):.1f}%, below the {under_threshold:.0f}% under-utilization threshold."
+                )
+            else:
+                reasoning.append(f"Peak CPU over the last {lookback_days} days was {float(cpu_max):.1f}%.")
+        else:
+            reasoning.append("CPU metrics were unavailable for this desktop.")
+
+        if memory_available and memory_max is not None:
+            if over_utilized and float(memory_max) >= float(summary.get("over_threshold_percent") or 100.0):
+                reasoning.append(
+                    f"Memory usage hit 100% and stayed there for {memory_time_at_full or 0:.1f}% of sampled time."
+                )
+            elif under_utilized:
+                reasoning.append(
+                    f"Peak memory usage over the last {lookback_days} days was {float(memory_max):.1f}%, below the {under_threshold:.0f}% under-utilization threshold."
+                )
+            else:
+                reasoning.append(f"Peak memory usage over the last {lookback_days} days was {float(memory_max):.1f}%.")
+        else:
+            reasoning.append(
+                "Guest memory metrics were unavailable, so memory-based utilization checks could not be fully evaluated."
+            )
+
+        return reasoning
+
+    def _fetch_virtual_desktop_utilization(
+        self,
+        resource_id: str,
+        *,
+        include_chart: bool = False,
+    ) -> dict[str, Any]:
+        normalized_resource_id = self._normalize_resource_id(resource_id)
+        if not normalized_resource_id:
+            return self._virtual_desktop_utilization_unavailable_summary(error="Desktop resource ID is missing")
+
+        now = datetime.now(timezone.utc)
+        lookback_days = max(1, int(AZURE_VIRTUAL_DESKTOP_UTILIZATION_LOOKBACK_DAYS or 7))
+        under_threshold = float(AZURE_VIRTUAL_DESKTOP_UNDERUTILIZED_THRESHOLD_PERCENT or 50.0)
+        over_threshold = float(AZURE_VIRTUAL_DESKTOP_OVERUTILIZED_THRESHOLD_PERCENT or 100.0)
+        start_time = now - timedelta(days=lookback_days)
+
+        metric_errors: list[str] = []
+        try:
+            cpu_metrics = self._client.list_resource_metrics(
+                resource_id,
+                [_VIRTUAL_DESKTOP_CPU_METRIC_NAME],
+                start_time=start_time,
+                end_time=now,
+                interval=_VIRTUAL_DESKTOP_UTILIZATION_METRIC_INTERVAL,
+            )
+        except AzureApiError as exc:
+            cpu_metrics = {}
+            metric_errors.append(str(exc))
+
+        try:
+            memory_metrics = self._client.list_resource_metrics(
+                resource_id,
+                [_VIRTUAL_DESKTOP_AVAILABLE_MEMORY_METRIC_NAME],
+                start_time=start_time,
+                end_time=now,
+                interval=_VIRTUAL_DESKTOP_UTILIZATION_METRIC_INTERVAL,
+            )
+        except AzureApiError as exc:
+            memory_metrics = {}
+            metric_errors.append(str(exc))
+
+        cpu_points: list[dict[str, Any]] = []
+        for point in cpu_metrics.get(_VIRTUAL_DESKTOP_CPU_METRIC_NAME, []):
+            timestamp = str(point.get("timestamp") or "").strip()
+            raw_value = point.get("value")
+            try:
+                value = round(self._clamp_percent(float(raw_value)), 1)
+            except (TypeError, ValueError):
+                continue
+            cpu_points.append({"timestamp": timestamp, "value": value})
+
+        memory_points: list[dict[str, Any]] = []
+        for point in memory_metrics.get(_VIRTUAL_DESKTOP_AVAILABLE_MEMORY_METRIC_NAME, []):
+            timestamp = str(point.get("timestamp") or "").strip()
+            raw_value = point.get("value")
+            try:
+                available_percent = self._clamp_percent(float(raw_value))
+            except (TypeError, ValueError):
+                continue
+            memory_points.append(
+                {
+                    "timestamp": timestamp,
+                    "value": round(self._clamp_percent(100.0 - available_percent), 1),
+                }
+            )
+
+        cpu_summary = self._summarize_percent_series(cpu_points, full_threshold=over_threshold)
+        memory_summary = self._summarize_percent_series(memory_points, full_threshold=over_threshold)
+        cpu_available = cpu_summary["total_points"] > 0
+        memory_available = memory_summary["total_points"] > 0
+        cpu_max = cpu_summary["max_percent"]
+        memory_max = memory_summary["max_percent"]
+        over_utilized = bool(
+            (cpu_max is not None and float(cpu_max) >= over_threshold)
+            or (memory_max is not None and float(memory_max) >= over_threshold)
+        )
+        under_utilized = bool(
+            cpu_available
+            and memory_available
+            and cpu_max is not None
+            and memory_max is not None
+            and float(cpu_max) < under_threshold
+            and float(memory_max) < under_threshold
+        )
+        if over_utilized:
+            status = "over_utilized"
+        elif under_utilized:
+            status = "under_utilized"
+        elif cpu_available and memory_available:
+            status = "healthy"
+        else:
+            status = "unavailable"
+
+        summary = {
+            "lookback_days": lookback_days,
+            "under_threshold_percent": under_threshold,
+            "over_threshold_percent": over_threshold,
+            "interval": _VIRTUAL_DESKTOP_UTILIZATION_METRIC_INTERVAL,
+            "status": status,
+            "under_utilized": under_utilized,
+            "over_utilized": over_utilized,
+            "utilization_data_available": bool(cpu_available or memory_available),
+            "utilization_fully_evaluable": bool(cpu_available and memory_available),
+            "cpu_data_available": cpu_available,
+            "memory_data_available": memory_available,
+            "cpu_max_percent": cpu_max,
+            "cpu_points_at_full": cpu_summary["points_at_full"],
+            "cpu_total_points": cpu_summary["total_points"],
+            "cpu_time_at_full_percent": cpu_summary["time_at_full_percent"],
+            "memory_max_percent": memory_max,
+            "memory_points_at_full": memory_summary["points_at_full"],
+            "memory_total_points": memory_summary["total_points"],
+            "memory_time_at_full_percent": memory_summary["time_at_full_percent"],
+            "error": "; ".join(metric_errors),
+        }
+        summary["reasoning"] = self._build_virtual_desktop_utilization_reasoning(summary)
+        if include_chart:
+            summary["cpu_series"] = self._downsample_percent_series(cpu_points)
+            summary["memory_series"] = self._downsample_percent_series(memory_points)
+        return summary
+
+    def _collect_avd_utilization_summaries(
+        self,
+        resources: list[dict[str, Any]],
+        session_hosts: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        previous = self._snapshot("avd_utilization_summaries") or {}
+        previous_summaries = previous if isinstance(previous, dict) else {}
+        assignment_by_vm_id = self._build_virtual_desktop_assignment_index(session_hosts, {})
+        summaries: dict[str, dict[str, Any]] = {}
+
+        for item in resources:
+            if not self._is_virtual_desktop_candidate_vm(item, assignment_by_vm_id):
+                continue
+            normalized_vm_id = self._normalize_resource_id(item.get("id"))
+            if not normalized_vm_id:
+                continue
+            try:
+                summaries[normalized_vm_id] = self._fetch_virtual_desktop_utilization(str(item.get("id") or ""))
+            except AzureApiError as exc:
+                logger.warning("Azure utilization metrics lookup failed for desktop %s: %s", normalized_vm_id, exc)
+                fallback = previous_summaries.get(normalized_vm_id)
+                if isinstance(fallback, dict):
+                    fallback_summary = dict(fallback)
+                    fallback_summary["error"] = str(exc)
+                    summaries[normalized_vm_id] = fallback_summary
+                else:
+                    summaries[normalized_vm_id] = self._virtual_desktop_utilization_unavailable_summary(error=str(exc))
+
+        return summaries
 
     @staticmethod
     def _license_sku_map(rows: list[dict[str, Any]]) -> dict[str, str]:
@@ -2508,6 +2827,8 @@ class AzureCache:
         *,
         search: str = "",
         removal_only: bool = False,
+        under_utilized_only: bool = False,
+        over_utilized_only: bool = False,
     ) -> dict[str, Any]:
         threshold_days = max(1, int(AZURE_VIRTUAL_DESKTOP_REMOVAL_THRESHOLD_DAYS or 14))
         now = datetime.now(timezone.utc)
@@ -2519,6 +2840,7 @@ class AzureCache:
         avd_host_pools = self._snapshot("avd_host_pools") or []
         avd_session_hosts = self._snapshot("avd_session_hosts") or []
         avd_owner_history = self._snapshot("avd_owner_history") or []
+        avd_utilization_summaries = self._snapshot("avd_utilization_summaries") or {}
         resource_rows = resources if isinstance(resources, list) else []
         user_rows = users if isinstance(users, list) else []
         host_pool_rows = avd_host_pools if isinstance(avd_host_pools, list) else []
@@ -2684,10 +3006,30 @@ class AzureCache:
             row["mark_account_for_follow_up"] = bool(account_action)
             row["account_action"] = account_action
             row["removal_reasons"] = removal_reasons
+            utilization_summary = {}
+            if isinstance(avd_utilization_summaries, dict):
+                raw_summary = avd_utilization_summaries.get(normalized_vm_id)
+                if isinstance(raw_summary, dict):
+                    utilization_summary = raw_summary
+            row["utilization_status"] = str(utilization_summary.get("status") or "unavailable")
+            row["under_utilized"] = bool(utilization_summary.get("under_utilized"))
+            row["over_utilized"] = bool(utilization_summary.get("over_utilized"))
+            row["utilization_data_available"] = bool(utilization_summary.get("utilization_data_available"))
+            row["utilization_fully_evaluable"] = bool(utilization_summary.get("utilization_fully_evaluable"))
+            row["cpu_data_available"] = bool(utilization_summary.get("cpu_data_available"))
+            row["memory_data_available"] = bool(utilization_summary.get("memory_data_available"))
+            row["cpu_max_percent_7d"] = utilization_summary.get("cpu_max_percent")
+            row["cpu_time_at_full_percent_7d"] = utilization_summary.get("cpu_time_at_full_percent")
+            row["memory_max_percent_7d"] = utilization_summary.get("memory_max_percent")
+            row["memory_time_at_full_percent_7d"] = utilization_summary.get("memory_time_at_full_percent")
+            row["utilization_reasons"] = list(utilization_summary.get("reasoning") or [])
+            row["utilization_error"] = str(utilization_summary.get("error") or "")
             all_rows.append(row)
 
         all_rows.sort(
             key=lambda item: (
+                0 if item.get("over_utilized") else 1,
+                0 if item.get("under_utilized") else 1,
                 0 if item.get("mark_for_removal") else 1,
                 0 if item.get("power_signal_stale") else 1,
                 0 if (item.get("assigned_user_enabled") is False or item.get("assigned_user_licensed") is False) else 1,
@@ -2713,6 +3055,9 @@ class AzureCache:
             "fallback_session_history_assignments": sum(
                 1 for item in all_rows if item.get("assigned_user_source") == "avd_last_session"
             ),
+            "under_utilized": sum(1 for item in all_rows if item.get("under_utilized")),
+            "over_utilized": sum(1 for item in all_rows if item.get("over_utilized")),
+            "utilization_unavailable": sum(1 for item in all_rows if item.get("utilization_status") == "unavailable"),
             "owner_history_unavailable": sum(
                 1
                 for item in all_rows
@@ -2741,10 +3086,20 @@ class AzureCache:
                         str(item.get("assignment_status") or ""),
                         str(item.get("owner_history_status") or ""),
                         str(item.get("account_action") or ""),
+                        str(item.get("utilization_status") or ""),
                         " ".join(item.get("removal_reasons") or []),
+                        " ".join(item.get("utilization_reasons") or []),
                     ]
                 ).lower()
                 if search_lower not in haystack:
+                    continue
+            if under_utilized_only or over_utilized_only:
+                matches_utilization_filter = False
+                if under_utilized_only and item.get("under_utilized"):
+                    matches_utilization_filter = True
+                if over_utilized_only and item.get("over_utilized"):
+                    matches_utilization_filter = True
+                if not matches_utilization_filter:
                     continue
             matched.append(item)
 
@@ -2754,6 +3109,43 @@ class AzureCache:
             "total_count": len(all_rows),
             "summary": summary,
             "generated_at": now.isoformat(),
+        }
+
+    def get_virtual_desktop_detail(self, resource_id: str) -> dict[str, Any] | None:
+        normalized_resource_id = self._normalize_resource_id(resource_id)
+        if not normalized_resource_id:
+            return None
+
+        desktops = self.list_virtual_desktop_removal_candidates().get("desktops") or []
+        desktop = next(
+            (
+                item
+                for item in desktops
+                if self._normalize_resource_id((item or {}).get("id")) == normalized_resource_id
+            ),
+            None,
+        )
+        if not isinstance(desktop, dict):
+            return None
+
+        try:
+            utilization = self._fetch_virtual_desktop_utilization(resource_id, include_chart=True)
+        except AzureApiError as exc:
+            cached_summaries = self._snapshot("avd_utilization_summaries") or {}
+            cached_summary = {}
+            if isinstance(cached_summaries, dict):
+                raw_summary = cached_summaries.get(normalized_resource_id)
+                if isinstance(raw_summary, dict):
+                    cached_summary = dict(raw_summary)
+            utilization = cached_summary or self._virtual_desktop_utilization_unavailable_summary()
+            utilization["error"] = str(exc)
+            utilization.setdefault("reasoning", self._build_virtual_desktop_utilization_reasoning(utilization))
+            utilization["cpu_series"] = []
+            utilization["memory_series"] = []
+
+        return {
+            "desktop": desktop,
+            "utilization": utilization,
         }
 
     def list_directory_objects(self, snapshot_name: str, *, search: str = "") -> list[dict[str, Any]]:
@@ -2804,7 +3196,7 @@ class AzureCache:
         page_definitions = [
             ("page", "overview", "Overview", "Tenant-wide Azure inventory, identity, and cost posture", "/"),
             ("page", "vms", "VMs", "Virtual machine inventory and cost drill-in", "/vms"),
-            ("page", "desktops", "Desktops", "Azure Virtual Desktop cleanup tracker", "/virtual-desktops"),
+            ("page", "desktops", "Desktops", "Azure Virtual Desktop status tracker", "/virtual-desktops"),
             ("page", "compute", "Compute", "RI coverage, idle VMs, and compute optimization", "/compute"),
             ("page", "resources", "Resources", "Cross-subscription resource inventory", "/resources"),
             ("page", "storage", "Storage", "Storage accounts, disks, and snapshots", "/storage"),

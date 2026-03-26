@@ -708,6 +708,64 @@ class AzureClient:
             )
         return settings
 
+    def list_resource_metrics(
+        self,
+        resource_id: str,
+        metric_names: Iterable[str],
+        *,
+        start_time: datetime,
+        end_time: datetime,
+        interval: str = "PT1M",
+    ) -> dict[str, list[dict[str, Any]]]:
+        normalized_resource_id = str(resource_id or "").strip()
+        requested_metric_names = [str(name or "").strip() for name in metric_names if str(name or "").strip()]
+        if not normalized_resource_id or not requested_metric_names:
+            return {}
+
+        payload = self._request(
+            "GET",
+            f"{_arm_resource_url(normalized_resource_id)}/providers/Microsoft.Insights/metrics",
+            scope=_ARM_SCOPE,
+            params={
+                "api-version": "2018-01-01",
+                "metricnames": ",".join(requested_metric_names),
+                "timespan": f"{start_time.astimezone(timezone.utc).isoformat()}/{end_time.astimezone(timezone.utc).isoformat()}",
+                "interval": interval,
+                "aggregation": "Average",
+            },
+        )
+
+        metrics_by_name: dict[str, list[dict[str, Any]]] = {name: [] for name in requested_metric_names}
+        for item in payload.get("value") or []:
+            if not isinstance(item, dict):
+                continue
+            metric_name = str(((item.get("name") or {}) if isinstance(item.get("name"), dict) else {}).get("value") or "")
+            if not metric_name:
+                metric_name = str(item.get("displayDescription") or item.get("name") or "")
+            if metric_name not in metrics_by_name:
+                continue
+
+            metric_points: list[dict[str, Any]] = []
+            for timeseries in item.get("timeseries") or []:
+                if not isinstance(timeseries, dict):
+                    continue
+                for raw_point in timeseries.get("data") or []:
+                    if not isinstance(raw_point, dict):
+                        continue
+                    timestamp = str(raw_point.get("timeStamp") or "").strip()
+                    average = raw_point.get("average")
+                    try:
+                        value = float(average) if average is not None else None
+                    except (TypeError, ValueError):
+                        value = None
+                    if timestamp:
+                        metric_points.append({"timestamp": timestamp, "value": value})
+
+            metric_points.sort(key=lambda point: str(point.get("timestamp") or ""))
+            metrics_by_name[metric_name] = metric_points
+
+        return metrics_by_name
+
     def get_log_analytics_workspace(self, workspace_resource_id: str) -> dict[str, Any]:
         normalized_workspace_id = str(workspace_resource_id or "").strip()
         if not normalized_workspace_id:

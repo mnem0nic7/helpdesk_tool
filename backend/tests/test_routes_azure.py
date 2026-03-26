@@ -1807,6 +1807,21 @@ def test_azure_virtual_desktop_removal_candidates_returns_cached_payload(test_cl
                     "No running signal in 14+ days",
                     "Assigned user is disabled",
                 ],
+                "utilization_status": "under_utilized",
+                "under_utilized": True,
+                "over_utilized": False,
+                "utilization_data_available": True,
+                "utilization_fully_evaluable": True,
+                "cpu_data_available": True,
+                "memory_data_available": True,
+                "cpu_max_percent_7d": 41.0,
+                "cpu_time_at_full_percent_7d": 0.0,
+                "memory_max_percent_7d": 32.5,
+                "memory_time_at_full_percent_7d": 0.0,
+                "utilization_reasons": [
+                    "Peak CPU over the last 7 days was 41.0%, below the 50% under-utilization threshold.",
+                ],
+                "utilization_error": "",
             }
         ],
         "matched_count": 1,
@@ -1823,6 +1838,9 @@ def test_azure_virtual_desktop_removal_candidates_returns_cached_payload(test_cl
             "account_follow_up_count": 1,
             "explicit_avd_assignments": 1,
             "fallback_session_history_assignments": 0,
+            "under_utilized": 1,
+            "over_utilized": 0,
+            "utilization_unavailable": 0,
             "owner_history_unavailable": 0,
         },
         "generated_at": "2026-03-23T00:00:00+00:00",
@@ -1832,14 +1850,129 @@ def test_azure_virtual_desktop_removal_candidates_returns_cached_payload(test_cl
     resp = test_client.get(
         "/api/azure/virtual-desktops/removal-candidates",
         headers={"host": "azure.movedocs.com"},
-        params={"search": "ada", "removal_only": "true"},
+        params={
+            "search": "ada",
+            "removal_only": "true",
+            "under_utilized_only": "true",
+            "over_utilized_only": "false",
+        },
     )
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["summary"]["removal_candidates"] == 1
+    assert body["summary"]["under_utilized"] == 1
     assert body["desktops"][0]["assigned_user_source"] == "avd_assigned"
-    mock_cache.list_virtual_desktop_removal_candidates.assert_called_once_with(search="ada", removal_only=True)
+    mock_cache.list_virtual_desktop_removal_candidates.assert_called_once_with(
+        search="ada",
+        removal_only=True,
+        under_utilized_only=True,
+        over_utilized_only=False,
+    )
+
+
+def test_azure_virtual_desktop_detail_returns_cached_payload(test_client, monkeypatch):
+    import routes_azure
+
+    desktop_id = "/subscriptions/sub-1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-vm-1"
+
+    mock_cache = MagicMock()
+    mock_cache.get_virtual_desktop_detail.return_value = {
+        "desktop": {
+            "id": desktop_id,
+            "name": "avd-vm-1",
+            "resource_type": "Microsoft.Compute/virtualMachines",
+            "subscription_id": "sub-1",
+            "subscription_name": "Prod",
+            "resource_group": "rg-avd",
+            "location": "eastus",
+            "kind": "",
+            "sku_name": "",
+            "vm_size": "Standard_D4s_v5",
+            "state": "PowerState/running",
+            "tags": {},
+            "size": "Standard_D4s_v5",
+            "power_state": "Running",
+            "assigned_user_display_name": "Ada Lovelace",
+            "assigned_user_principal_name": "ada@example.com",
+            "assigned_user_enabled": True,
+            "assigned_user_licensed": True,
+            "assigned_user_last_successful_utc": "2026-03-23T00:00:00+00:00",
+            "assigned_user_last_successful_local": "2026-03-22 05:00 PM PDT",
+            "assignment_source": "avd:assigned-user",
+            "assignment_status": "resolved",
+            "assigned_user_source": "avd_assigned",
+            "assigned_user_source_label": "AVD assigned user",
+            "assigned_user_observed_utc": "",
+            "assigned_user_observed_local": "",
+            "owner_history_status": "available",
+            "host_pool_name": "hostpool-1",
+            "session_host_name": "hostpool-1/avd-vm-1.contoso.local",
+            "last_power_signal_utc": "2026-03-23T00:00:00+00:00",
+            "last_power_signal_local": "2026-03-22 05:00 PM PDT",
+            "days_since_power_signal": 0,
+            "days_since_assigned_user_login": 0,
+            "power_signal_stale": False,
+            "power_signal_pending": False,
+            "user_signin_stale": False,
+            "mark_for_removal": False,
+            "mark_account_for_follow_up": False,
+            "account_action": "",
+            "removal_reasons": [],
+            "utilization_status": "over_utilized",
+            "under_utilized": False,
+            "over_utilized": True,
+            "utilization_data_available": True,
+            "utilization_fully_evaluable": True,
+            "cpu_data_available": True,
+            "memory_data_available": True,
+            "cpu_max_percent_7d": 100.0,
+            "cpu_time_at_full_percent_7d": 12.5,
+            "memory_max_percent_7d": 76.0,
+            "memory_time_at_full_percent_7d": 0.0,
+            "utilization_reasons": ["CPU hit 100% utilization and stayed there for 12.5% of sampled time."],
+            "utilization_error": "",
+        },
+        "utilization": {
+            "lookback_days": 7,
+            "under_threshold_percent": 50.0,
+            "over_threshold_percent": 100.0,
+            "interval": "PT1M",
+            "status": "over_utilized",
+            "under_utilized": False,
+            "over_utilized": True,
+            "utilization_data_available": True,
+            "utilization_fully_evaluable": True,
+            "cpu_data_available": True,
+            "memory_data_available": True,
+            "cpu_max_percent": 100.0,
+            "cpu_points_at_full": 42,
+            "cpu_total_points": 336,
+            "cpu_time_at_full_percent": 12.5,
+            "memory_max_percent": 76.0,
+            "memory_points_at_full": 0,
+            "memory_total_points": 336,
+            "memory_time_at_full_percent": 0.0,
+            "reasoning": ["CPU hit 100% utilization and stayed there for 12.5% of sampled time."],
+            "error": "",
+            "cpu_series": [{"timestamp": "2026-03-23T00:00:00+00:00", "label": "2026-03-22 05:00 PM PDT", "value": 100.0}],
+            "memory_series": [{"timestamp": "2026-03-23T00:00:00+00:00", "label": "2026-03-22 05:00 PM PDT", "value": 76.0}],
+        },
+    }
+    monkeypatch.setattr(routes_azure, "azure_cache", mock_cache)
+
+    resp = test_client.get(
+        "/api/azure/virtual-desktops/detail",
+        headers={"host": "azure.movedocs.com"},
+        params={"resource_id": desktop_id},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["desktop"]["id"] == desktop_id
+    assert body["utilization"]["over_utilized"] is True
+    assert body["utilization"]["cpu_series"][0]["value"] == 100.0
+    mock_cache.get_virtual_desktop_detail.assert_called_once_with(desktop_id)
 
 
 def test_azure_vm_detail_returns_cached_vm_drilldown(test_client, monkeypatch):

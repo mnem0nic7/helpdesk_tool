@@ -1,7 +1,18 @@
 import { useDeferredValue, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { api, type AzureVirtualDesktopRow } from "../lib/api.ts";
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { api, type AzureVirtualDesktopDetailResponse, type AzureVirtualDesktopRow } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
@@ -216,6 +227,41 @@ function reasonBadges(reasons: string[]) {
   );
 }
 
+function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return `${value.toFixed(1)}%`;
+}
+
+function utilizationStatusTone(status: AzureVirtualDesktopRow["utilization_status"]) {
+  switch (status) {
+    case "over_utilized":
+      return "red";
+    case "under_utilized":
+      return "amber";
+    case "healthy":
+      return "emerald";
+    default:
+      return "slate";
+  }
+}
+
+function utilizationStatusLabel(status: AzureVirtualDesktopRow["utilization_status"]) {
+  switch (status) {
+    case "over_utilized":
+      return "Over utilized";
+    case "under_utilized":
+      return "Under utilized";
+    case "healthy":
+      return "Within range";
+    default:
+      return "Utilization unavailable";
+  }
+}
+
+function utilizationStatusBadge(row: AzureVirtualDesktopRow) {
+  return statusBadge(utilizationStatusLabel(row.utilization_status), utilizationStatusTone(row.utilization_status));
+}
+
 function DetailField({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -230,6 +276,76 @@ function AVDDetailStatCard({ label, value, tone = "text-slate-900" }: { label: s
     <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
       <div className={`mt-1 text-lg font-semibold ${tone}`}>{value}</div>
+    </div>
+  );
+}
+
+function AVDUtilizationChart({ detail }: { detail: AzureVirtualDesktopDetailResponse["utilization"] }) {
+  const merged = useMemo(() => {
+    const cpuSeries = detail.cpu_series ?? [];
+    const memorySeries = detail.memory_series ?? [];
+    const byTimestamp = new Map<string, { label: string; cpu: number | null; memory: number | null }>();
+    for (const point of cpuSeries) {
+      byTimestamp.set(point.timestamp, {
+        label: point.label,
+        cpu: point.value,
+        memory: byTimestamp.get(point.timestamp)?.memory ?? null,
+      });
+    }
+    for (const point of memorySeries) {
+      const current = byTimestamp.get(point.timestamp);
+      byTimestamp.set(point.timestamp, {
+        label: point.label,
+        cpu: current?.cpu ?? null,
+        memory: point.value,
+      });
+    }
+    return Array.from(byTimestamp.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([timestamp, value]) => ({
+        timestamp,
+        label: value.label,
+        cpu: value.cpu,
+        memory: value.memory,
+      }));
+  }, [detail.cpu_series, detail.memory_series]);
+
+  if (merged.length === 0) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+        No utilization chart points are available for the selected time window.
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-80">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={merged}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+          <XAxis dataKey="label" minTickGap={48} tick={{ fontSize: 11 }} />
+          <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} unit="%" />
+          <Tooltip
+            formatter={(value) => {
+              const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+              return Number.isFinite(numeric) ? formatPercent(numeric) : "—";
+            }}
+          />
+          <Legend />
+          <ReferenceLine y={50} stroke="#f59e0b" strokeDasharray="4 4" />
+          <ReferenceLine y={100} stroke="#dc2626" strokeDasharray="4 4" />
+          <Line type="monotone" dataKey="cpu" name="CPU %" stroke="#2563eb" strokeWidth={2} dot={false} connectNulls />
+          <Line
+            type="monotone"
+            dataKey="memory"
+            name="Memory Usage %"
+            stroke="#dc2626"
+            strokeWidth={2}
+            dot={false}
+            connectNulls
+          />
+        </LineChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -274,12 +390,21 @@ async function copyText(text: string) {
 }
 
 function AzureVirtualDesktopDetailDrawer({
-  desktop,
+  detail,
+  initialDesktop,
+  isUtilizationEnabled,
+  isUtilizationLoading,
+  utilizationError,
   onClose,
 }: {
-  desktop: AzureVirtualDesktopRow;
+  detail?: AzureVirtualDesktopDetailResponse;
+  initialDesktop: AzureVirtualDesktopRow;
+  isUtilizationEnabled: boolean;
+  isUtilizationLoading: boolean;
+  utilizationError?: Error | null;
   onClose: () => void;
 }) {
+  const desktop = detail?.desktop ?? initialDesktop;
   const [drawerWidth, setDrawerWidth] = useState(() => clampAVDDrawerWidth(DEFAULT_AVD_DRAWER_WIDTH));
   const [isResizing, setIsResizing] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -392,6 +517,7 @@ function AzureVirtualDesktopDetailDrawer({
               <h2 className="mt-1 truncate text-2xl font-bold text-slate-900">{desktop.name || desktop.id}</h2>
               <div className="mt-2 flex flex-wrap gap-1">
                 {statusBadge(cleanupDecisionLabel(desktop), desktop.mark_for_removal ? "red" : "emerald")}
+                {utilizationStatusBadge(desktop)}
                 {assignmentBadge(desktop.assignment_status)}
                 {assignedUserSourceBadge(desktop)}
               </div>
@@ -438,6 +564,19 @@ function AzureVirtualDesktopDetailDrawer({
                 tone={cleanupDecisionTone(desktop)}
               />
               <AVDDetailStatCard
+                label="Utilization Status"
+                value={utilizationStatusLabel(desktop.utilization_status)}
+                tone={
+                  desktop.utilization_status === "over_utilized"
+                    ? "text-red-700"
+                    : desktop.utilization_status === "under_utilized"
+                      ? "text-amber-700"
+                      : desktop.utilization_status === "healthy"
+                        ? "text-emerald-700"
+                        : "text-slate-500"
+                }
+              />
+              <AVDDetailStatCard
                 label="Last Running Signal"
                 value={powerSignalLabel(desktop)}
                 tone={desktop.power_signal_stale ? "text-amber-700" : "text-slate-900"}
@@ -453,6 +592,83 @@ function AzureVirtualDesktopDetailDrawer({
                 tone={desktop.account_action ? "text-amber-700" : "text-slate-900"}
               />
             </section>
+
+            {isUtilizationEnabled ? (
+              <section className="rounded-2xl border border-slate-200 p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-900">Utilization Recommendation</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Seven-day CPU and guest-memory trend used to classify this desktop as over or under utilized.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {utilizationStatusBadge(desktop)}
+                  </div>
+                </div>
+
+                {isUtilizationLoading ? (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                    Loading utilization metrics...
+                  </div>
+                ) : null}
+
+                {utilizationError ? (
+                  <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    Failed to load utilization detail: {utilizationError.message}
+                  </div>
+                ) : null}
+
+                {!isUtilizationLoading && !utilizationError && detail ? (
+                  <div className="mt-4 space-y-5">
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <AVDDetailStatCard
+                        label="Peak CPU"
+                        value={formatPercent(detail.utilization.cpu_max_percent)}
+                        tone={detail.utilization.over_utilized && (detail.utilization.cpu_max_percent ?? 0) >= 100 ? "text-red-700" : "text-slate-900"}
+                      />
+                      <AVDDetailStatCard
+                        label="Peak Memory Usage"
+                        value={formatPercent(detail.utilization.memory_max_percent)}
+                        tone={detail.utilization.over_utilized && (detail.utilization.memory_max_percent ?? 0) >= 100 ? "text-red-700" : "text-slate-900"}
+                      />
+                      <AVDDetailStatCard
+                        label="CPU Time At 100%"
+                        value={formatPercent(detail.utilization.cpu_time_at_full_percent)}
+                        tone={(detail.utilization.cpu_time_at_full_percent ?? 0) > 0 ? "text-red-700" : "text-slate-900"}
+                      />
+                      <AVDDetailStatCard
+                        label="Memory Time At 100%"
+                        value={formatPercent(detail.utilization.memory_time_at_full_percent)}
+                        tone={(detail.utilization.memory_time_at_full_percent ?? 0) > 0 ? "text-red-700" : "text-slate-900"}
+                      />
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Recommendation Reasoning</h4>
+                      <div className="mt-3 space-y-2 text-sm text-slate-700">
+                        {(detail.utilization.reasoning ?? []).map((reason) => (
+                          <p key={reason}>{reason}</p>
+                        ))}
+                        {detail.utilization.error ? (
+                          <p className="text-amber-700">{detail.utilization.error}</p>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-500">7-Day Utilization Trend</h4>
+                        <span className="text-xs text-slate-400">15-minute chart buckets</span>
+                      </div>
+                      <div className="mt-4">
+                        <AVDUtilizationChart detail={detail.utilization} />
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
 
             <section className="rounded-2xl border border-slate-200 p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -534,10 +750,35 @@ function AzureVirtualDesktopDetailDrawer({
                   label="Account Follow-Up"
                   value={desktop.mark_account_for_follow_up ? "Recommended" : "Not needed"}
                 />
+                <DetailField
+                  label="Peak CPU Over 7 Days"
+                  value={formatPercent(desktop.cpu_max_percent_7d)}
+                />
+                <DetailField
+                  label="Peak Memory Usage Over 7 Days"
+                  value={formatPercent(desktop.memory_max_percent_7d)}
+                />
               </div>
               <div className="mt-4">
                 <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Reasons</div>
                 <div className="mt-2">{reasonBadges(desktop.removal_reasons)}</div>
+              </div>
+              <div className="mt-4">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Utilization Signals</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {desktop.utilization_reasons.length > 0 ? (
+                    desktop.utilization_reasons.map((reason) => (
+                      <span
+                        key={reason}
+                        className="inline-block rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700"
+                      >
+                        {reason}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-xs text-slate-400">No utilization recommendation loaded</span>
+                  )}
+                </div>
               </div>
             </section>
 
@@ -563,24 +804,34 @@ function AzureVirtualDesktopDetailDrawer({
 
 export default function AzureVirtualDesktopsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [search, setSearch] = useState(() => searchParams.get("search") || "");
-  const [removalOnly, setRemovalOnly] = useState(false);
+  const search = searchParams.get("search") || "";
+  const removalOnly = searchParams.get("removalOnly") === "1";
+  const underUtilizedOnly = searchParams.get("underUtilized") === "1";
+  const overUtilizedOnly = searchParams.get("overUtilized") === "1";
+  const selectedDesktopId = searchParams.get("desktopId") || "";
   const [pendingPowerOnly, setPendingPowerOnly] = useState(false);
-  const [selectedDesktop, setSelectedDesktop] = useState<AzureVirtualDesktopRow | null>(null);
   const [selectedDesktopIds, setSelectedDesktopIds] = useState<string[]>([]);
   const deferredSearch = useDeferredValue(search.trim());
   const { sortKey, sortDir, toggleSort } = useTableSort<DesktopSortKey>("power_signal", "desc");
+  const isUtilizationFocused = underUtilizedOnly || overUtilizedOnly;
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["azure", "virtual-desktops", "cleanup", deferredSearch, removalOnly],
+    queryKey: ["azure", "virtual-desktops", "status", deferredSearch, removalOnly, underUtilizedOnly, overUtilizedOnly],
     queryFn: () =>
       api.getAzureVirtualDesktopRemovalCandidates({
         search: deferredSearch,
         removal_only: removalOnly,
+        under_utilized_only: underUtilizedOnly,
+        over_utilized_only: overUtilizedOnly,
       }),
   });
+  const desktopDetailQuery = useQuery({
+    queryKey: ["azure", "virtual-desktops", "detail", selectedDesktopId],
+    queryFn: () => api.getAzureVirtualDesktopDetail(selectedDesktopId),
+    enabled: !!selectedDesktopId && isUtilizationFocused,
+  });
 
-  const rows = data?.desktops ?? [];
+  const rows = useMemo(() => data?.desktops ?? [], [data?.desktops]);
   const filteredRows = useMemo(
     () => (pendingPowerOnly ? rows.filter((row) => row.power_signal_pending) : rows),
     [pendingPowerOnly, rows],
@@ -594,36 +845,24 @@ export default function AzureVirtualDesktopsPage() {
     if (key === "subscription") return row.subscription_name || row.subscription_id;
     return (row as unknown as Record<string, string | number | null>)[key] ?? "";
   });
-  const scroll = useInfiniteScrollCount(sorted.length, 50, `${deferredSearch}|${removalOnly}|${pendingPowerOnly}|${sortKey}|${sortDir}`);
-  const visible = sorted.slice(0, scroll.visibleCount);
-  const activeDesktop = selectedDesktop ? sorted.find((row) => row.id === selectedDesktop.id) ?? selectedDesktop : null;
-  const selectedRows = useMemo(
-    () => sorted.filter((row) => selectedDesktopIds.includes(row.id)),
-    [selectedDesktopIds, sorted],
+  const { hasMore, sentinelRef, visibleCount } = useInfiniteScrollCount(
+    sorted.length,
+    50,
+    `${deferredSearch}|${removalOnly}|${underUtilizedOnly}|${overUtilizedOnly}|${pendingPowerOnly}|${sortKey}|${sortDir}`,
   );
+  const visible = sorted.slice(0, visibleCount);
+  const activeDesktop = selectedDesktopId
+    ? sorted.find((row) => row.id === selectedDesktopId) || rows.find((row) => row.id === selectedDesktopId) || null
+    : null;
+  const selectedRows = sorted.filter((row) => selectedDesktopIds.includes(row.id));
 
-  useEffect(() => {
-    const routeSearch = searchParams.get("search") || "";
-    setSearch((current) => (current === routeSearch ? current : routeSearch));
-  }, [searchParams]);
-
-  useEffect(() => {
-    const desktopId = searchParams.get("desktopId");
-    if (!desktopId) {
-      setSelectedDesktop((current) => (current ? null : current));
-      return;
-    }
-    const matched = sorted.find((row) => row.id === desktopId) || rows.find((row) => row.id === desktopId);
-    if (matched && selectedDesktop?.id !== matched.id) {
-      setSelectedDesktop(matched);
-    }
-  }, [rows, searchParams, selectedDesktop?.id, sorted]);
-
-  useEffect(() => {
-    setSelectedDesktopIds((current) => current.filter((id) => rows.some((row) => row.id === id)));
-  }, [rows]);
-
-  function updateRouteParams(next: { search?: string | null; desktopId?: string | null }) {
+  function updateRouteParams(next: {
+    search?: string | null;
+    desktopId?: string | null;
+    removalOnly?: boolean;
+    underUtilized?: boolean;
+    overUtilized?: boolean;
+  }) {
     const params = new URLSearchParams(searchParams);
     if (next.search !== undefined) {
       const value = next.search?.trim();
@@ -633,6 +872,18 @@ export default function AzureVirtualDesktopsPage() {
     if (next.desktopId !== undefined) {
       if (next.desktopId) params.set("desktopId", next.desktopId);
       else params.delete("desktopId");
+    }
+    if (next.removalOnly !== undefined) {
+      if (next.removalOnly) params.set("removalOnly", "1");
+      else params.delete("removalOnly");
+    }
+    if (next.underUtilized !== undefined) {
+      if (next.underUtilized) params.set("underUtilized", "1");
+      else params.delete("underUtilized");
+    }
+    if (next.overUtilized !== undefined) {
+      if (next.overUtilized) params.set("overUtilized", "1");
+      else params.delete("overUtilized");
     }
     setSearchParams(params, { replace: true });
   }
@@ -648,7 +899,7 @@ export default function AzureVirtualDesktopsPage() {
       <div className="flex min-h-[40vh] items-center justify-center">
         <div className="flex items-center gap-3 text-sm text-slate-500">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
-          <span>Loading desktop cleanup tracker...</span>
+          <span>Loading desktop status tracker...</span>
         </div>
       </div>
     );
@@ -657,7 +908,7 @@ export default function AzureVirtualDesktopsPage() {
   if (isError) {
     return (
       <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-red-700 shadow-sm">
-        <h1 className="text-lg font-semibold text-red-900">Desktop cleanup tracker unavailable</h1>
+        <h1 className="text-lg font-semibold text-red-900">Desktop status tracker unavailable</h1>
         <p className="mt-2 text-sm">{error instanceof Error ? error.message : "Unknown error"}</p>
       </div>
     );
@@ -668,17 +919,18 @@ export default function AzureVirtualDesktopsPage() {
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
-            <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Azure Virtual Desktop Cleanup</h1>
+            <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Azure Virtual Desktop Status</h1>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Track personal AVD desktops that should be removed when they have gone inactive, their assigned user is
-              disabled or unlicensed, or the resolved user has not signed in recently. Owner resolution uses Azure
-              Virtual Desktop assignment first, then falls back to the most recent successful AVD session user.
+              Track personal AVD desktops for cleanup and utilization signals. This view keeps the current ownership and
+              stale-activity checks, and now also flags desktops that look over or under utilized from the last seven
+              days of CPU and guest-memory telemetry.
             </p>
           </div>
           <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
             <div className="font-semibold">Signal note</div>
             <div className="mt-1 max-w-sm text-sky-800">
-              Power activity currently uses the last time this app observed the VM in a <span className="font-semibold">Running</span> state.
+              Power activity still uses the last time this app observed the VM in a <span className="font-semibold">Running</span> state.
+              Utilization recommendations use seven days of CPU plus guest-memory metrics when they are available.
             </div>
           </div>
         </div>
@@ -686,6 +938,28 @@ export default function AzureVirtualDesktopsPage() {
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
         <StatCard label="Tracked Desktops" value={(summary?.tracked_desktops ?? 0).toLocaleString()} />
+        <StatCard
+          label="Over Utilized"
+          value={(summary?.over_utilized ?? 0).toLocaleString()}
+          tone="text-red-700"
+          helper="Click to focus on desktops that hit 100% CPU or memory usage"
+          active={overUtilizedOnly}
+          onClick={() => {
+            const next = !overUtilizedOnly;
+            updateRouteParams({ overUtilized: next, desktopId: null });
+          }}
+        />
+        <StatCard
+          label="Under Utilized"
+          value={(summary?.under_utilized ?? 0).toLocaleString()}
+          tone="text-amber-700"
+          helper="Click to focus on desktops that stayed below 50% CPU and memory usage"
+          active={underUtilizedOnly}
+          onClick={() => {
+            const next = !underUtilizedOnly;
+            updateRouteParams({ underUtilized: next, desktopId: null });
+          }}
+        />
         <StatCard
           label="Removal Candidates"
           value={(summary?.removal_candidates ?? 0).toLocaleString()}
@@ -702,8 +976,8 @@ export default function AzureVirtualDesktopsPage() {
           tone="text-amber-700"
         />
         <StatCard
-          label="Owner History Unavailable"
-          value={(summary?.owner_history_unavailable ?? 0).toLocaleString()}
+          label="Utilization Unavailable"
+          value={(summary?.utilization_unavailable ?? 0).toLocaleString()}
           tone="text-slate-700"
         />
         <StatCard
@@ -729,9 +1003,10 @@ export default function AzureVirtualDesktopsPage() {
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Removal Tracker</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Status Tracker</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Threshold: {summary?.threshold_days ?? 14} days. Search by desktop, user, host pool, reason, or action.
+              Cleanup threshold: {summary?.threshold_days ?? 14} days. Search by desktop, user, host pool, reason, action,
+              or utilization signal.
             </p>
           </div>
         </div>
@@ -739,22 +1014,36 @@ export default function AzureVirtualDesktopsPage() {
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <input
             className="min-w-[18rem] flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm placeholder-slate-400 focus:border-blue-500 focus:outline-none"
-            placeholder="Search desktop, assigned user, host pool, or reason..."
+            placeholder="Search desktop, assigned user, host pool, reason, or utilization..."
             value={search}
-            onChange={(event) => {
-              const value = event.target.value;
-              setSearch(value);
-              updateRouteParams({ search: value, desktopId: null });
-            }}
+            onChange={(event) => updateRouteParams({ search: event.target.value, desktopId: null })}
           />
           <label className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
             <input
               type="checkbox"
               className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
               checked={removalOnly}
-              onChange={(event) => setRemovalOnly(event.target.checked)}
+              onChange={(event) => updateRouteParams({ removalOnly: event.target.checked, desktopId: null })}
             />
             Removal only
+          </label>
+          <label className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              checked={underUtilizedOnly}
+              onChange={(event) => updateRouteParams({ underUtilized: event.target.checked, desktopId: null })}
+            />
+            Under utilized
+          </label>
+          <label className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              checked={overUtilizedOnly}
+              onChange={(event) => updateRouteParams({ overUtilized: event.target.checked, desktopId: null })}
+            />
+            Over utilized
           </label>
           <button
             type="button"
@@ -810,7 +1099,7 @@ export default function AzureVirtualDesktopsPage() {
 
         {visible.length === 0 ? (
           <p className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-6 text-center text-sm font-medium text-emerald-700">
-            No desktops match the current cleanup filters.
+            No desktops match the current status filters.
           </p>
         ) : (
           <div className="mt-4 overflow-auto rounded-2xl border border-slate-200">
@@ -862,6 +1151,7 @@ export default function AzureVirtualDesktopsPage() {
                     sortDir={sortDir}
                     onSort={toggleSort}
                   />
+                  <th className="px-4 py-3">Utilization</th>
                   <th className="px-4 py-3">Reasons</th>
                   <th className="px-4 py-3">Account Action</th>
                   <SortHeader
@@ -885,13 +1175,11 @@ export default function AzureVirtualDesktopsPage() {
                       activeDesktop?.id === desktop.id ? "bg-sky-50" : "",
                     ].join(" ")}
                     onClick={() => {
-                      setSelectedDesktop(desktop);
                       updateRouteParams({ desktopId: desktop.id });
                     }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        setSelectedDesktop(desktop);
                         updateRouteParams({ desktopId: desktop.id });
                       }
                     }}
@@ -962,6 +1250,15 @@ export default function AzureVirtualDesktopsPage() {
                         );
                       })()}
                     </td>
+                    <td className="px-4 py-3 align-top">
+                      <div className="flex flex-wrap gap-1">
+                        {utilizationStatusBadge(desktop)}
+                      </div>
+                      <div className="mt-2 space-y-1 text-xs text-slate-500">
+                        <div>CPU peak: {formatPercent(desktop.cpu_max_percent_7d)}</div>
+                        <div>Memory peak: {formatPercent(desktop.memory_max_percent_7d)}</div>
+                      </div>
+                    </td>
                     <td className="px-4 py-3 align-top">{reasonBadges(desktop.removal_reasons)}</td>
                     <td className="px-4 py-3 align-top">
                       {desktop.account_action ? (
@@ -979,9 +1276,9 @@ export default function AzureVirtualDesktopsPage() {
                 ))}
               </tbody>
             </table>
-            {scroll.hasMore ? (
+            {hasMore ? (
               <div
-                ref={scroll.sentinelRef}
+                ref={sentinelRef}
                 className="border-t border-slate-200 px-4 py-3 text-center text-xs text-slate-400"
               >
                 Showing {visible.length} of {sorted.length} tracked desktops
@@ -993,9 +1290,12 @@ export default function AzureVirtualDesktopsPage() {
 
       {activeDesktop ? (
         <AzureVirtualDesktopDetailDrawer
-          desktop={activeDesktop}
+          detail={desktopDetailQuery.data}
+          initialDesktop={activeDesktop}
+          isUtilizationEnabled={isUtilizationFocused}
+          isUtilizationLoading={desktopDetailQuery.isLoading}
+          utilizationError={desktopDetailQuery.error instanceof Error ? desktopDetailQuery.error : null}
           onClose={() => {
-            setSelectedDesktop(null);
             updateRouteParams({ desktopId: null });
           }}
         />

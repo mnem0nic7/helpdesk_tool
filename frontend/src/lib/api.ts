@@ -1217,6 +1217,19 @@ export interface AzureVirtualDesktopRow extends AzureVirtualMachineRow {
   mark_account_for_follow_up: boolean;
   account_action: string;
   removal_reasons: string[];
+  utilization_status: "over_utilized" | "under_utilized" | "healthy" | "unavailable";
+  under_utilized: boolean;
+  over_utilized: boolean;
+  utilization_data_available: boolean;
+  utilization_fully_evaluable: boolean;
+  cpu_data_available: boolean;
+  memory_data_available: boolean;
+  cpu_max_percent_7d: number | null;
+  cpu_time_at_full_percent_7d: number | null;
+  memory_max_percent_7d: number | null;
+  memory_time_at_full_percent_7d: number | null;
+  utilization_reasons: string[];
+  utilization_error: string;
 }
 
 export interface AzureVirtualDesktopRemovalSummary {
@@ -1231,6 +1244,9 @@ export interface AzureVirtualDesktopRemovalSummary {
   account_follow_up_count: number;
   explicit_avd_assignments: number;
   fallback_session_history_assignments: number;
+  under_utilized: number;
+  over_utilized: number;
+  utilization_unavailable: number;
   owner_history_unavailable: number;
 }
 
@@ -1240,6 +1256,43 @@ export interface AzureVirtualDesktopRemovalResponse {
   total_count: number;
   summary: AzureVirtualDesktopRemovalSummary;
   generated_at: string;
+}
+
+export interface AzureUtilizationSeriesPoint {
+  timestamp: string;
+  label: string;
+  value: number;
+}
+
+export interface AzureVirtualDesktopUtilizationDetail {
+  lookback_days: number;
+  under_threshold_percent: number;
+  over_threshold_percent: number;
+  interval: string;
+  status: "over_utilized" | "under_utilized" | "healthy" | "unavailable";
+  under_utilized: boolean;
+  over_utilized: boolean;
+  utilization_data_available: boolean;
+  utilization_fully_evaluable: boolean;
+  cpu_data_available: boolean;
+  memory_data_available: boolean;
+  cpu_max_percent: number | null;
+  cpu_points_at_full: number;
+  cpu_total_points: number;
+  cpu_time_at_full_percent: number | null;
+  memory_max_percent: number | null;
+  memory_points_at_full: number;
+  memory_total_points: number;
+  memory_time_at_full_percent: number | null;
+  reasoning: string[];
+  error: string;
+  cpu_series?: AzureUtilizationSeriesPoint[];
+  memory_series?: AzureUtilizationSeriesPoint[];
+}
+
+export interface AzureVirtualDesktopDetailResponse {
+  desktop: AzureVirtualDesktopRow;
+  utilization: AzureVirtualDesktopUtilizationDetail;
 }
 
 export interface AzureVirtualMachineAssociatedResource {
@@ -2336,6 +2389,8 @@ export interface AzureVirtualMachineQueryParams {
 export interface AzureVirtualDesktopRemovalQueryParams {
   search?: string;
   removal_only?: boolean;
+  under_utilized_only?: boolean;
+  over_utilized_only?: boolean;
 }
 
 export interface AzureSavingsQueryParams {
@@ -2730,6 +2785,12 @@ export const api = {
   ): Promise<AzureVirtualDesktopRemovalResponse> {
     return fetchJSON<AzureVirtualDesktopRemovalResponse>(
       `/api/azure/virtual-desktops/removal-candidates${buildQuery(params)}`,
+    );
+  },
+
+  getAzureVirtualDesktopDetail(resource_id: string): Promise<AzureVirtualDesktopDetailResponse> {
+    return fetchJSON<AzureVirtualDesktopDetailResponse>(
+      `/api/azure/virtual-desktops/detail${buildQuery({ resource_id })}`,
     );
   },
 
