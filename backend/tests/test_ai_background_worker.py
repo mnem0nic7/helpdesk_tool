@@ -43,3 +43,42 @@ async def test_background_ai_worker_runs_jobs_serially():
     assert await task_two == "second"
     assert events == ["first-start", "first-end", "second-start"]
     assert worker.status()["busy"] is False
+
+
+@pytest.mark.asyncio
+async def test_background_ai_worker_prefers_higher_priority_queue_items() -> None:
+    worker = AIBackgroundWorker()
+    events: list[str] = []
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def first_job() -> str:
+        events.append("first-start")
+        first_started.set()
+        await release_first.wait()
+        events.append("first-end")
+        return "first"
+
+    async def low_priority_job() -> str:
+        events.append("low-start")
+        return "low"
+
+    async def high_priority_job() -> str:
+        events.append("high-start")
+        return "high"
+
+    first_task = asyncio.create_task(worker.run_item(lane="auto_triage", key="OIT-1", work=first_job))
+    await first_started.wait()
+
+    low_task = asyncio.create_task(worker.run_item(lane="technician_scoring", key="OIT-2", work=low_priority_job))
+    high_task = asyncio.create_task(
+        worker.run_item(lane="report_batch_summary", key="template-1", work=high_priority_job)
+    )
+
+    await asyncio.sleep(0.02)
+    release_first.set()
+
+    assert await first_task == "first"
+    assert await high_task == "high"
+    assert await low_task == "low"
+    assert events == ["first-start", "first-end", "high-start", "low-start"]

@@ -544,6 +544,54 @@ export interface ReportTemplateInsight {
   trend: ReportTemplateInsightPoint[];
 }
 
+export interface ReportAISummary {
+  template_id: string;
+  template_name: string;
+  site_scope: string;
+  source: "manual" | "nightly";
+  status: string;
+  summary: string;
+  bullets: string[];
+  fallback_used: boolean;
+  model_used: string;
+  generated_at?: string | null;
+  template_version: string;
+  data_version: string;
+  error: string;
+}
+
+export interface ReportAISummaryBatchStartResponse {
+  batch_id: string;
+  site_scope: string;
+  status: string;
+  item_count: number;
+  requested_at: string;
+}
+
+export interface ReportAISummaryBatchItem {
+  template_id: string;
+  template_name: string;
+  status: string;
+  source: "manual" | "nightly";
+  summary: string;
+  bullets: string[];
+  fallback_used: boolean;
+  model_used: string;
+  generated_at?: string | null;
+  error: string;
+}
+
+export interface ReportAISummaryBatchStatus {
+  batch_id: string;
+  site_scope: string;
+  status: string;
+  item_count: number;
+  requested_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  items: ReportAISummaryBatchItem[];
+}
+
 export interface ReportTemplateSaveRequest {
   name: string;
   description?: string;
@@ -2580,6 +2628,18 @@ export const api = {
 
   listReportTemplateInsights(): Promise<ReportTemplateInsight[]> {
     return fetchJSON<ReportTemplateInsight[]>("/api/report/templates/insights");
+  },
+
+  listReportAISummaries(): Promise<ReportAISummary[]> {
+    return fetchJSON<ReportAISummary[]>("/api/report/templates/ai-summaries");
+  },
+
+  generateReportAISummaries(): Promise<ReportAISummaryBatchStartResponse> {
+    return postJSON<ReportAISummaryBatchStartResponse>("/api/report/templates/ai-summaries/generate", {});
+  },
+
+  getReportAISummaryBatch(batchId: string): Promise<ReportAISummaryBatchStatus> {
+    return fetchJSON<ReportAISummaryBatchStatus>(`/api/report/templates/ai-summaries/batches/${encodeURIComponent(batchId)}`);
   },
 
   createReportTemplate(body: ReportTemplateSaveRequest): Promise<ReportTemplate> {

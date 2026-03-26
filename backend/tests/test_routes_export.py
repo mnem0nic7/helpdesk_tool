@@ -1112,6 +1112,90 @@ class TestReportTemplates:
         assert drawing_parts
 
 
+class TestReportAISummaries:
+    def test_list_current_report_ai_summaries_returns_primary_summaries(self, test_client):
+        import routes_export
+
+        routes_export.report_ai_summary_service.list_current_summaries.return_value = [
+            {
+                "template_id": "tpl-1",
+                "template_name": "Executive",
+                "site_scope": "primary",
+                "source": "manual",
+                "status": "ready",
+                "summary": "Summary text",
+                "bullets": ["Bullet one"],
+                "fallback_used": False,
+                "model_used": "qwen2.5:7b",
+                "generated_at": "2026-03-26T00:00:00+00:00",
+                "template_version": "2026-03-26T00:00:00+00:00",
+                "data_version": "2026-03-26T00:00:00+00:00",
+                "error": "",
+            },
+        ]
+
+        resp = test_client.get("/api/report/templates/ai-summaries")
+
+        assert resp.status_code == 200
+        assert resp.json()[0]["template_id"] == "tpl-1"
+
+    def test_generate_report_ai_summaries_queues_manual_batch(self, test_client):
+        import routes_export
+
+        routes_export.report_ai_summary_service.start_manual_batch.return_value = {
+            "batch_id": "batch-2",
+            "site_scope": "primary",
+            "status": "queued",
+            "item_count": 3,
+            "requested_at": "2026-03-26T00:00:00+00:00",
+        }
+
+        resp = test_client.post("/api/report/templates/ai-summaries/generate")
+
+        assert resp.status_code == 200
+        assert resp.json()["batch_id"] == "batch-2"
+
+    def test_get_report_ai_summary_batch_status_returns_items(self, test_client):
+        import routes_export
+
+        routes_export.report_ai_summary_service.get_batch_status.return_value = {
+            "batch_id": "batch-3",
+            "site_scope": "primary",
+            "status": "running",
+            "item_count": 1,
+            "requested_at": "2026-03-26T00:00:00+00:00",
+            "started_at": "2026-03-26T00:01:00+00:00",
+            "completed_at": None,
+            "items": [
+                {
+                    "template_id": "tpl-1",
+                    "template_name": "Executive",
+                    "status": "running",
+                    "source": "manual",
+                    "summary": "",
+                    "bullets": [],
+                    "fallback_used": False,
+                    "model_used": "",
+                    "generated_at": None,
+                    "error": "",
+                },
+            ],
+        }
+
+        resp = test_client.get("/api/report/templates/ai-summaries/batches/batch-3")
+
+        assert resp.status_code == 200
+        assert resp.json()["items"][0]["status"] == "running"
+
+    def test_generate_report_ai_summaries_hidden_on_non_primary_host(self, test_client):
+        resp = test_client.post(
+            "/api/report/templates/ai-summaries/generate",
+            headers={"host": "oasisdev.movedocs.com"},
+        )
+
+        assert resp.status_code == 404
+
+
 class TestLegacyExport:
     """GET /api/export/excel"""
 

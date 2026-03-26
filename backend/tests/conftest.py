@@ -223,6 +223,7 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     import user_admin_jobs as user_admin_jobs_module
     import user_admin_providers as user_admin_providers_module
     import user_exit_workflows as user_exit_workflows_module
+    import report_ai_summary_service as report_ai_summary_service_module
 
     for mod in [issue_cache, routes_metrics, routes_tickets, routes_chart, routes_export, routes_cache, routes_triage]:
         monkeypatch.setattr(mod, "cache", mock_cache)
@@ -324,6 +325,33 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     mock_onedrive_copy_jobs.get_job.return_value = None
     monkeypatch.setattr(onedrive_copy_jobs_module, "onedrive_copy_jobs", mock_onedrive_copy_jobs)
     monkeypatch.setattr(routes_tools, "onedrive_copy_jobs", mock_onedrive_copy_jobs)
+
+    mock_report_ai_summary_service = MagicMock()
+    mock_report_ai_summary_service.start_worker = AsyncMock()
+    mock_report_ai_summary_service.stop_worker = AsyncMock()
+    mock_report_ai_summary_service.list_current_summaries.return_value = []
+    mock_report_ai_summary_service.get_current_master_summaries.return_value = {}
+    mock_report_ai_summary_service.start_manual_batch = AsyncMock(
+        return_value={
+            "batch_id": "batch-1",
+            "site_scope": "primary",
+            "status": "queued",
+            "item_count": 0,
+            "requested_at": "2026-03-26T00:00:00+00:00",
+        }
+    )
+    mock_report_ai_summary_service.get_batch_status.return_value = {
+        "batch_id": "batch-1",
+        "site_scope": "primary",
+        "status": "completed",
+        "item_count": 0,
+        "requested_at": "2026-03-26T00:00:00+00:00",
+        "started_at": "2026-03-26T00:00:00+00:00",
+        "completed_at": "2026-03-26T00:00:00+00:00",
+        "items": [],
+    }
+    monkeypatch.setattr(report_ai_summary_service_module, "report_ai_summary_service", mock_report_ai_summary_service)
+    monkeypatch.setattr(routes_export, "report_ai_summary_service", mock_report_ai_summary_service)
 
     mock_user_admin_providers = MagicMock()
     mock_user_admin_providers.get_capabilities.return_value = {
@@ -460,6 +488,7 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     mock_kb_store.ensure_seed_articles.return_value = 0
     monkeypatch.setattr(main, "kb_store", mock_kb_store)
     monkeypatch.setattr(main, "onedrive_copy_jobs", mock_onedrive_copy_jobs)
+    monkeypatch.setattr(main, "report_ai_summary_service", mock_report_ai_summary_service)
     app = main.app
     from starlette.testclient import TestClient
     from auth import create_session

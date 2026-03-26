@@ -6,7 +6,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from models import ReportConfig, ReportTemplate
+from models import ReportAISummary, ReportConfig, ReportTemplate
 from report_workbook_builder import ReportWorkbookBuilder, _template_readiness
 
 
@@ -325,7 +325,7 @@ def test_master_workbook_hides_dashboard_helper_columns_and_aligns_first_respons
     assert report_index["A2"].value == "⚠️"
     assert report_index["I2"].value == "proxy"
     assert dashboard["F6"].value == "Trend"
-    assert dashboard["G6"].value == "Key Findings & Actions"
+    assert dashboard["G6"].value == "AI Summary & Explanation"
     assert data_gaps["C4"].value == "proxy"
     assert detail_sheet["B7"].value == "proxy"
     assert detail_sheet["B7"].comment is not None
@@ -415,7 +415,7 @@ def test_master_workbook_adds_percent_columns_total_rows_and_dashboard_formulas(
     assert dashboard["B7"].value is not None
     assert dashboard["B11"].value is not None
     assert dashboard["F7"].value is not None
-    assert dashboard["G6"].value == "Key Findings & Actions"
+    assert dashboard["G6"].value == "AI Summary & Explanation"
 
     with zipfile.ZipFile(path) as workbook_zip:
         worksheet_xml = "\n".join(
@@ -616,3 +616,138 @@ def test_followup_template_readiness_and_gaps_do_not_depend_on_report_name():
     )
 
     assert any("daily public follow-up" in gap.limitation.lower() for gap in gaps)
+
+
+def test_master_workbook_uses_manual_ai_summaries_when_all_included_templates_have_current_summaries(tmp_path: Path):
+    builder = ReportWorkbookBuilder(
+        all_issues=[
+            _make_issue(
+                key="OIT-AI-1",
+                created="2026-03-21T00:00:00+00:00",
+                updated="2026-03-22T00:00:00+00:00",
+                resolved="2026-03-22T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+                sla_response_status="Met",
+                sla_resolution_status="Met",
+            )
+        ],
+        site_scope="primary",
+        today=date(2026, 3, 24),
+        enable_changelog_fetch=False,
+    )
+    template = _make_template(
+        id="tpl-ai",
+        name="SLA Compliance Rate",
+        category="Executive",
+        group_by="sla_resolution_status",
+        sort_field="created",
+    )
+    summary = ReportAISummary(
+        template_id=template.id,
+        template_name=template.name,
+        site_scope="primary",
+        source="manual",
+        status="ready",
+        summary="SLA performance improved across the current reporting window.",
+        bullets=[
+            "Resolution compliance is trending in the right direction.",
+            "Breach volume is concentrated in a small set of tickets.",
+        ],
+        fallback_used=False,
+        model_used="qwen2.5:7b",
+        generated_at="2026-03-24T00:00:00+00:00",
+        template_version=template.updated_at,
+        data_version="2026-03-24T00:00:00+00:00",
+        error="",
+    )
+    path = tmp_path / "master-ai-summary.xlsx"
+
+    builder.build_master_report(path=str(path), templates=[template], ai_template_summaries=[summary])
+
+    workbook = load_workbook(path)
+    dashboard = workbook["Executive Dashboard"]
+
+    assert dashboard["G6"].value == "AI Summary & Explanation"
+    assert dashboard["G7"].value == "SLA Compliance Rate: SLA performance improved across the current reporting window."
+    assert dashboard["G8"].value == "• Resolution compliance is trending in the right direction."
+
+
+def test_dashboard_context_and_findings_use_7_day_primary_metrics():
+    builder = ReportWorkbookBuilder(
+        all_issues=[
+            _make_issue(
+                key="OIT-CUR-1",
+                created="2026-03-20T00:00:00+00:00",
+                updated="2026-03-21T00:00:00+00:00",
+                resolved="2026-03-21T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+                request_type="Access Request",
+                sla_response_status="Met",
+                sla_resolution_status="Met",
+            ),
+            _make_issue(
+                key="OIT-CUR-2",
+                created="2026-03-22T00:00:00+00:00",
+                updated="2026-03-23T00:00:00+00:00",
+                resolved="2026-03-23T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+                priority="Highest",
+                request_type="Laptop",
+                sla_response_status="BREACHED",
+                sla_resolution_status="BREACHED",
+            ),
+            _make_issue(
+                key="OIT-PRIOR-1",
+                created="2026-03-12T00:00:00+00:00",
+                updated="2026-03-13T00:00:00+00:00",
+                resolved="2026-03-13T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+                request_type="Security Alert",
+                sla_response_status="Met",
+                sla_resolution_status="Met",
+            ),
+            _make_issue(
+                key="OIT-OLDER-1",
+                created="2026-03-02T00:00:00+00:00",
+                updated="2026-03-04T00:00:00+00:00",
+                resolved="2026-03-04T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+                request_type="Security Alert",
+                sla_response_status="Met",
+                sla_resolution_status="Met",
+            ),
+        ],
+        site_scope="primary",
+        today=date(2026, 3, 24),
+        enable_changelog_fetch=False,
+    )
+
+    context = builder._build_dashboard_context(
+        report_name="Executive Dashboard",
+        report_description="Cross-template operational summary",
+        facts=list(builder._facts_by_key.values()),
+        template=None,
+    )
+
+    assert context["prior_7_window_start"] == date(2026, 3, 11)
+    assert context["prior_7_window_end"] == date(2026, 3, 17)
+    assert context["kpis"][4]["value_7d"] == 2
+    assert context["kpis"][4]["prior_7d"] == 1
+    assert context["kpis"][4]["delta"] == 1
+    assert context["top_category_rows"][0]["group"] == "Access Request"
+    assert context["sla_status_counts"]["Met"] == 1
+    assert context["sla_status_counts"]["BREACHED"] == 1
+
+    findings = builder._build_key_findings(context, anomaly=None)
+
+    assert "last 7 days" in findings[0]
+    assert "30d context" in findings[0]
+    assert "2-Hour Response + Daily Follow-Up" in findings[2]
+    assert "Top weekly demand:" in findings[3]
+    assert "blocking readiness gap" in findings[4]
+    assert "proxy metrics" not in findings[4]

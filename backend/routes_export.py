@@ -26,6 +26,9 @@ from metrics import percentile
 from auth import require_authenticated_user
 from models import (
     OasisDevWorkloadReportRequest,
+    ReportAISummary,
+    ReportAISummaryBatchStartResponse,
+    ReportAISummaryBatchStatus,
     ReportConfig,
     ReportTemplate,
     ReportTemplateExportSelectionRequest,
@@ -34,6 +37,7 @@ from models import (
     ReportTemplateUpdateRequest,
 )
 from report_template_store import report_template_store
+from report_ai_summary_service import report_ai_summary_service
 from report_workbook_builder import (
     ReportWorkbookBuilder,
     report_window_mode,
@@ -90,13 +94,18 @@ def _write_master_report_workbook_file(
     site_scope: str,
     all_issues: list[dict[str, Any]],
     today: date,
+    ai_template_summaries: list[ReportAISummary] | None = None,
 ) -> None:
     builder = ReportWorkbookBuilder(
         all_issues=all_issues,
         site_scope=site_scope,
         today=today,
     )
-    builder.build_master_report(path=path, templates=templates)
+    builder.build_master_report(
+        path=path,
+        templates=templates,
+        ai_template_summaries=ai_template_summaries,
+    )
 
 
 def _apply_runtime_template_readiness(
@@ -606,6 +615,12 @@ def _ensure_oasisdev_site() -> None:
     """Restrict OasisDev-only reports to the OasisDev host."""
     if get_current_site_scope() != "oasisdev":
         raise HTTPException(status_code=404, detail="Report not available on this site.")
+
+
+def _ensure_primary_report_ai_site() -> None:
+    """Restrict report AI summary features to the primary host."""
+    if get_current_site_scope() != "primary":
+        raise HTTPException(status_code=404, detail="AI report summaries are not available on this site.")
 
 
 def _parse_iso_date(raw: str | None, *, field_name: str, default: date) -> date:
@@ -1206,6 +1221,42 @@ async def list_report_template_insights(
     return insights
 
 
+@router.get("/report/templates/ai-summaries", response_model=list[ReportAISummary])
+async def list_report_ai_summaries(
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[ReportAISummary]:
+    """Return current AI summaries for the active site's saved templates."""
+    site_scope = get_current_site_scope()
+    if site_scope != "primary":
+        return []
+    return report_ai_summary_service.list_current_summaries(site_scope)
+
+
+@router.post("/report/templates/ai-summaries/generate", response_model=ReportAISummaryBatchStartResponse)
+async def generate_report_ai_summaries(
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> ReportAISummaryBatchStartResponse:
+    """Queue manual AI summaries for templates included in the master export."""
+    _ensure_primary_report_ai_site()
+    try:
+        return await report_ai_summary_service.start_manual_batch(get_current_site_scope())
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/report/templates/ai-summaries/batches/{batch_id}", response_model=ReportAISummaryBatchStatus)
+async def get_report_ai_summary_batch_status(
+    batch_id: str,
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> ReportAISummaryBatchStatus:
+    """Return current status for a manual report AI summary batch."""
+    _ensure_primary_report_ai_site()
+    try:
+        return report_ai_summary_service.get_batch_status(batch_id, get_current_site_scope())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="AI summary batch not found.") from exc
+
+
 @router.get("/report/templates/master.xlsx")
 async def export_master_report_workbook(
     _session: dict[str, Any] = Depends(require_authenticated_user),
@@ -1225,6 +1276,11 @@ async def export_master_report_workbook(
     site_scope = get_current_site_scope()
     all_issues = _calculation_scoped_issues(include_excluded_on_primary=True)
     today = _today_utc()
+    ai_template_summaries = (
+        list(report_ai_summary_service.get_current_master_summaries(site_scope, templates).values())
+        if site_scope == "primary"
+        else []
+    )
     await asyncio.to_thread(
         _write_master_report_workbook_file,
         path=tmp_path,
@@ -1232,6 +1288,7 @@ async def export_master_report_workbook(
         site_scope=site_scope,
         all_issues=all_issues,
         today=today,
+        ai_template_summaries=ai_template_summaries,
     )
     logger.info("Master report workbook saved to %s (%d templates included)", tmp_path, included_count)
     return FileResponse(

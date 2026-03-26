@@ -200,6 +200,7 @@ def select_available_ollama_model(
 
 _DEFAULT_AI_TEAMS_BY_FEATURE: dict[str, str] = {
     "ticket_auto_triage": "Service Desk",
+    "report_ai_summary": "Service Desk",
     "technician_qa": "Service Desk",
     "kb_ticket_draft": "Service Desk",
     "kb_sop_draft": "Service Desk",
@@ -209,6 +210,7 @@ _DEFAULT_AI_TEAMS_BY_FEATURE: dict[str, str] = {
 }
 
 _DEFAULT_AI_TEAMS_BY_APP: dict[str, str] = {
+    "reports": "Service Desk",
     "tickets": "Service Desk",
     "knowledge_base": "Service Desk",
     "azure_portal": "FinOps",

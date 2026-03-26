@@ -17,7 +17,7 @@ from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 
 from jira_client import JiraClient
 from metrics import extract_sla_info, issue_to_row, parse_dt, percentile
-from models import ReportConfig, ReportTemplate
+from models import ReportAISummary, ReportConfig, ReportTemplate
 from routes_tickets import _match
 from site_context import issue_matches_scope
 
@@ -1580,11 +1580,21 @@ class ReportWorkbookBuilder:
                 "format": fmt,
             })
 
-    def build_master_report(self, *, path: str, templates: Sequence[ReportTemplate]) -> None:
+    def build_master_report(
+        self,
+        *,
+        path: str,
+        templates: Sequence[ReportTemplate],
+        ai_template_summaries: Sequence[ReportAISummary] | None = None,
+    ) -> None:
         if self.site_scope != "primary":
             self._build_master_report_legacy(path=path, templates=templates)
             return
-        self._build_master_report_primary(path=path, templates=templates)
+        self._build_master_report_primary(
+            path=path,
+            templates=templates,
+            ai_template_summaries=ai_template_summaries,
+        )
 
     def _build_master_report_legacy(self, *, path: str, templates: Sequence[ReportTemplate]) -> None:
         included_templates = [template for template in templates if template.include_in_master_export]
@@ -1671,8 +1681,19 @@ class ReportWorkbookBuilder:
         finally:
             workbook.close()
 
-    def _build_master_report_primary(self, *, path: str, templates: Sequence[ReportTemplate]) -> None:
+    def _build_master_report_primary(
+        self,
+        *,
+        path: str,
+        templates: Sequence[ReportTemplate],
+        ai_template_summaries: Sequence[ReportAISummary] | None = None,
+    ) -> None:
         included_templates = [template for template in templates if template.include_in_master_export]
+        ai_summaries_by_id = {
+            summary.template_id: summary
+            for summary in (ai_template_summaries or [])
+            if summary.template_id
+        }
         self._prepare_master_changelogs(included_templates)
         workbook = xlsxwriter.Workbook(
             path,
@@ -1783,6 +1804,8 @@ class ReportWorkbookBuilder:
                 dashboard_context,
                 helper_sheet_name=dashboard_info["helper_sheet_name"],
                 detail_summaries=detail_summaries,
+                included_templates=included_templates,
+                ai_summaries_by_id=ai_summaries_by_id,
                 anomaly=anomaly,
             )
         finally:
@@ -1859,12 +1882,24 @@ class ReportWorkbookBuilder:
         worksheet.write(1, 0, context["report_name"], formats["subtitle"])
         worksheet.write(2, 0, context["report_description"], formats["text"])
         worksheet.write(3, 0, f"Generated: {self.now.isoformat()}", formats["muted"])
+        worksheet.merge_range(
+            4,
+            0,
+            4,
+            4,
+            (
+                "Primary view uses current 7-day metrics. 30-day values are context only. "
+                f"Δ compares current 7d to the prior 7d window "
+                f"({context['prior_7_window_start'].isoformat()} to {context['prior_7_window_end'].isoformat()})."
+            ),
+            formats["muted"],
+        )
 
         kpi_headers = [
             "Metric",
             "7d",
             "30d",
-            "Δ vs Prior",
+            "Δ vs Prior 7d",
             "Sparkline",
         ]
         start_row = 5
@@ -2138,6 +2173,8 @@ class ReportWorkbookBuilder:
         *,
         helper_sheet_name: str,
         detail_summaries: Sequence[MasterSheetSummary],
+        included_templates: Sequence[ReportTemplate],
+        ai_summaries_by_id: dict[str, ReportAISummary],
         anomaly: TrendAnomaly | None,
     ) -> None:
         summary_lookup = {(summary.report_name, summary.window_label): summary for summary in detail_summaries}
@@ -2151,7 +2188,7 @@ class ReportWorkbookBuilder:
         volume_30 = summary_lookup.get(("Ticket Volume by Category", "30 Day"))
         start_row = 5
         worksheet.write(start_row, 5, "Trend", formats["header"])
-        worksheet.write(start_row, 6, "Key Findings & Actions", formats["header"])
+        worksheet.write(start_row, 6, "AI Summary & Explanation", formats["header"])
 
         if sla_7 and sla_30 and sla_7.metric_row is not None and sla_30.metric_row is not None:
             worksheet.write_formula(
@@ -2168,12 +2205,11 @@ class ReportWorkbookBuilder:
                 formats["percent"],
                 context["kpis"][0]["value_30d"],
             )
-            worksheet.write_formula(
+            worksheet.write_number(
                 start_row + 1,
                 3,
-                f"=B{start_row + 2}-C{start_row + 2}",
+                context["kpis"][0]["delta"],
                 formats["delta_percent"],
-                context["kpis"][0]["value_7d"] - context["kpis"][0]["value_30d"],
             )
         if mttr_7 and mttr_30 and mttr_7.total_row is not None and mttr_30.total_row is not None:
             worksheet.write_formula(
@@ -2190,12 +2226,11 @@ class ReportWorkbookBuilder:
                 formats["hours"],
                 context["kpis"][1]["value_30d"],
             )
-            worksheet.write_formula(
+            worksheet.write_number(
                 start_row + 2,
                 3,
-                f"=B{start_row + 3}-C{start_row + 3}",
+                context["kpis"][1]["delta"],
                 formats["hours"],
-                context["kpis"][1]["value_7d"] - context["kpis"][1]["value_30d"],
             )
         if fr_7 and fr_30 and fr_7.metric_row is not None and fr_30.metric_row is not None:
             worksheet.write_formula(
@@ -2212,12 +2247,11 @@ class ReportWorkbookBuilder:
                 formats["percent"],
                 context["kpis"][2]["value_30d"],
             )
-            worksheet.write_formula(
+            worksheet.write_number(
                 start_row + 3,
                 3,
-                f"=B{start_row + 4}-C{start_row + 4}",
+                context["kpis"][2]["delta"],
                 formats["delta_percent"],
-                context["kpis"][2]["value_7d"] - context["kpis"][2]["value_30d"],
             )
         worksheet.write_formula(
             start_row + 4,
@@ -2233,16 +2267,11 @@ class ReportWorkbookBuilder:
             formats["integer"],
             context["kpis"][3]["value_30d"],
         )
-        worksheet.write_formula(
+        worksheet.write_number(
             start_row + 4,
             3,
-            "=INDEX(Trends!G5:G34,COUNTA(Trends!G5:G34))-INDEX(Trends!G5:G34,1)",
+            context["kpis"][3]["delta"],
             formats["integer"],
-            (
-                (context["trend_rows"][-1]["backlog_count"] - context["trend_rows"][0]["backlog_count"])
-                if context["trend_rows"]
-                else 0
-            ),
         )
         if volume_7 and volume_30 and volume_7.total_row is not None and volume_30.total_row is not None:
             worksheet.write_formula(
@@ -2259,12 +2288,11 @@ class ReportWorkbookBuilder:
                 formats["integer"],
                 context["kpis"][4]["value_30d"],
             )
-            worksheet.write_formula(
+            worksheet.write_number(
                 start_row + 5,
                 3,
-                f"=B{start_row + 6}-C{start_row + 6}",
+                context["kpis"][4]["delta"],
                 formats["integer"],
-                context["kpis"][4]["value_7d"] - context["kpis"][4]["value_30d"],
             )
 
         trend_rows = {
@@ -2353,7 +2381,18 @@ class ReportWorkbookBuilder:
             "format": formats["kpi_bad"],
         })
 
-        findings = self._build_key_findings(context, anomaly=anomaly)
+        use_ai_summaries = bool(included_templates) and all(
+            template.id in ai_summaries_by_id and ai_summaries_by_id[template.id].summary
+            for template in included_templates
+        )
+        findings = (
+            self._build_ai_summary_lines(
+                [ai_summaries_by_id[template.id] for template in included_templates],
+                templates=included_templates,
+            )
+            if use_ai_summaries
+            else self._build_key_findings(context, anomaly=anomaly)
+        )
         for offset, finding in enumerate(findings, start=1):
             row_idx = start_row + offset
             worksheet.write(row_idx, 6, finding, formats["finding_text"])
@@ -2362,68 +2401,136 @@ class ReportWorkbookBuilder:
         worksheet.set_column(5, 5, 12)
         worksheet.set_column(6, 6, 58)
 
+    def _build_ai_summary_lines(
+        self,
+        summaries: Sequence[ReportAISummary],
+        *,
+        templates: Sequence[ReportTemplate],
+    ) -> list[str]:
+        summary_lookup = {summary.template_id: summary for summary in summaries}
+        lines: list[str] = []
+        for template in templates:
+            summary = summary_lookup.get(template.id)
+            if summary is None or not summary.summary:
+                continue
+            lines.append(f"{template.name}: {summary.summary}")
+            for bullet in summary.bullets[:3]:
+                lines.append(f"• {bullet}")
+        return lines
+
     def _build_key_findings(self, context: dict[str, Any], *, anomaly: TrendAnomaly | None) -> list[str]:
         def _group_row(rows: Sequence[dict[str, Any]], label: str) -> dict[str, Any] | None:
             return next((row for row in rows if str(row.get("group") or "").strip().lower() == label.lower()), None)
 
-        sla_rate = context["kpis"][0]["value_30d"]
-        sla_rows_30 = context.get("sla_rows_30") or []
-        breached_sla = _group_row(sla_rows_30, "BREACHED") or {}
-        met_sla = _group_row(sla_rows_30, "Met") or {}
+        def _row_count(row: dict[str, Any] | None) -> int:
+            return int((row or {}).get("count") or 0)
+
+        def _met_rate_from_rows(rows: Sequence[dict[str, Any]]) -> float:
+            total = sum(int(row.get("count") or 0) for row in rows)
+            if total <= 0:
+                return 0.0
+            return _row_count(_group_row(rows, "Met")) / total
+
+        def _priority_focus(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+            high_rows = [
+                row
+                for row in rows
+                if str(row.get("group") or "").strip().lower() in {"high", "highest"}
+            ]
+            source_rows = high_rows or list(rows)
+            if not source_rows:
+                return {"group": "(none)", "avg_ttr_hours": 0.0, "p95_ttr_hours": 0.0}
+            return max(
+                source_rows,
+                key=lambda row: (
+                    float(row.get("p95_ttr_hours") or 0.0),
+                    float(row.get("avg_ttr_hours") or 0.0),
+                ),
+            )
+
+        def _top_categories_text(rows: Sequence[dict[str, Any]]) -> str:
+            top_rows = [row for row in rows[:2] if int(row.get("count") or 0) > 0]
+            if not top_rows:
+                return ""
+            rendered = ", ".join(
+                f"{row.get('group') or '(none)'} ({int(row.get('count') or 0):,})"
+                for row in top_rows
+            )
+            return f" Top weekly demand: {rendered}."
+
+        sla_rate = context["kpis"][0]["value_7d"]
+        sla_rate_30d = context["kpis"][0]["value_30d"]
+        sla_rows_7 = context.get("sla_rows_7") or []
+        breached_sla = _group_row(sla_rows_7, "BREACHED") or {}
+        met_sla = _group_row(sla_rows_7, "Met") or {}
         sla_icon = "🔴" if sla_rate < 0.9 else "🟢"
 
-        mttr_rows = context.get("mttr_priority_rows") or []
-        worst_mttr = max(mttr_rows, key=lambda row: row.get("p95_ttr_hours") or 0.0) if mttr_rows else {"group": "(none)", "p95_ttr_hours": 0.0}
+        mttr_rows = context.get("mttr_priority_rows_7") or context.get("mttr_priority_rows") or []
+        worst_mttr = _priority_focus(mttr_rows)
 
-        fr_rate = context["kpis"][2]["value_30d"]
-        fr_rows_30 = context.get("first_response_rows_30") or []
-        breached_fr = _group_row(fr_rows_30, "BREACHED") or {}
-        fr_icon = "🟢" if fr_rate >= 0.9 else ("🟡" if fr_rate >= 0.75 else "🔴")
+        fr_rate = context["kpis"][2]["value_7d"]
+        fr_rate_30d = context["kpis"][2]["value_30d"]
+        fr_rows_7 = context.get("first_response_rows_7") or []
+        breached_fr = _group_row(fr_rows_7, "BREACHED") or {}
+        followup_rows_7 = context.get("followup_rows_7") or []
+        followup_rate = _met_rate_from_rows(followup_rows_7)
+        followup_breached = _group_row(followup_rows_7, "BREACHED") or {}
+        response_icon = "🟢" if followup_rate >= 0.9 else ("🟡" if followup_rate >= 0.75 else "🔴")
 
         backlog_rows = context.get("backlog_rows") or []
         fresh_backlog = _group_row(backlog_rows, "0-3 days") or {}
         oldest_backlog = _group_row(backlog_rows, "60+ days") or {}
-        trend_rows = context.get("trend_rows") or []
-        backlog_current = trend_rows[-1]["backlog_count"] if trend_rows else 0
-        backlog_start = trend_rows[0]["backlog_count"] if trend_rows else 0
+        backlog_current = int(context["kpis"][3]["value_7d"] or 0)
+        backlog_prior_7 = int(context["kpis"][3].get("prior_7d") or 0)
         backlog_icon = "🟢" if not (oldest_backlog.get("total") or 0) else "🟡"
         old_tickets_text = (
             "No tickets >60 days."
             if not (oldest_backlog.get("total") or 0)
             else f"{int(oldest_backlog.get('total') or 0):,} tickets are >60 days old."
         )
+        category_text = _top_categories_text(context.get("top_category_rows_7") or context.get("top_category_rows") or [])
 
-        findings = [
+        if anomaly:
+            data_quality_line = (
+                "⚠️ Data Quality: "
+                f"{anomaly.count:,} escalation spike on {anomaly.day} is a suspected outlier and should be verified before it is used in executive interpretation."
+            )
+        elif context.get("gaps"):
+            gap = context["gaps"][0]
+            limitation = str(getattr(gap, "limitation", "") or "").strip()
+            recommendation = str(getattr(gap, "recommendation", "") or "").strip()
+            data_quality_line = "⚠️ Data Quality: " + " ".join(part for part in [limitation, recommendation] if part).strip()
+        else:
+            data_quality_line = "🟢 Data Quality: Executive metrics are using current 7-day operational data with no blocking readiness gap detected."
+
+        return [
             (
-                f"{sla_icon} SLA Compliance: {sla_rate:.1%} (30d) — below 90% target. "
+                f"{sla_icon} SLA Compliance: {sla_rate:.1%} met in the last 7 days "
+                f"(30d context: {sla_rate_30d:.1%}). "
+                f"{_row_count(breached_sla):,} tickets breached. "
                 f"BREACHED tickets avg {(breached_sla.get('avg_ttr_hours') or 0.0):.1f}h TTR vs "
                 f"{(met_sla.get('avg_ttr_hours') or 0.0):.1f}h for Met. "
-                f"Focus: reduce breach count from {int(breached_sla.get('count') or 0):,}."
+                "Focus: reduce the weekly breach count."
             ),
             (
-                f"🔴 MTTR Tail Risk: {worst_mttr.get('group') or '(none)'} P95 = "
-                f"{(worst_mttr.get('p95_ttr_hours') or 0.0):,.1f}h. "
-                "Worst tail in the portfolio. Action: review that queue for stale tickets."
+                f"🔴 MTTR Tail Risk: overall 7d P95 is {context['kpis'][1]['value_7d']:,.1f}h. "
+                f"{worst_mttr.get('group') or '(none)'} is the slowest priority band at "
+                f"Avg {(worst_mttr.get('avg_ttr_hours') or 0.0):,.1f}h / "
+                f"P95 {(worst_mttr.get('p95_ttr_hours') or 0.0):,.1f}h."
             ),
             (
-                f"{fr_icon} First Response: {fr_rate:.1%} Met (30d). "
-                f"{int(breached_fr.get('count') or 0):,} BREACHED avg {(breached_fr.get('avg_ttr_hours') or 0.0):.1f}h. "
-                "Action: triage BREACHED first-response tickets."
+                f"{response_icon} Response Discipline: First Response SLA ran at {fr_rate:.1%} in the last 7 days "
+                f"(30d context: {fr_rate_30d:.1%}), while 2-Hour Response + Daily Follow-Up ran at {followup_rate:.1%}. "
+                f"{_row_count(breached_fr):,} first-response breaches and {_row_count(followup_breached):,} follow-up breaches need active triage."
             ),
             (
                 f"{backlog_icon} Backlog: {backlog_current:,} open tickets, "
                 f"{(fresh_backlog.get('percent_of_backlog') or 0.0):.0%} in 0-3d bucket. "
-                f"{'Down' if backlog_current <= backlog_start else 'Up'} from {backlog_start:,}. "
-                f"{old_tickets_text}"
+                f"{'Down' if backlog_current <= backlog_prior_7 else 'Up'} from {backlog_prior_7:,} seven days ago. "
+                f"{old_tickets_text}{category_text}"
             ),
+            data_quality_line,
         ]
-        if anomaly:
-            findings.append(
-                f"⚠️ Data Quality: Escalation Rate & FCR are proxy metrics. {anomaly.count:,} escalation spike on {anomaly.day} is a suspected outlier and needs verification."
-            )
-        else:
-            findings.append("⚠️ Data Quality: Escalation Rate and FCR are proxy metrics. See Data Gaps for current limitations.")
-        return findings
 
     def _build_dashboard_context(
         self,
@@ -2441,23 +2548,37 @@ class ReportWorkbookBuilder:
 
         volume_7 = self._facts_for_window(facts, window_field="created", window_start=current_7_start, window_end=current_7_end)
         volume_30 = self._facts_for_window(facts, window_field="created", window_start=current_30_start, window_end=current_30_end)
+        volume_prior_7 = self._facts_for_window(facts, window_field="created", window_start=prior_7_start, window_end=prior_7_end)
         volume_prior_30 = self._facts_for_window(facts, window_field="created", window_start=prior_30_start, window_end=prior_30_end)
 
         mttr_7 = self._facts_for_window(facts, window_field="resolved", window_start=current_7_start, window_end=current_7_end)
         mttr_30 = self._facts_for_window(facts, window_field="resolved", window_start=current_30_start, window_end=current_30_end)
+        mttr_prior_7 = self._facts_for_window(facts, window_field="resolved", window_start=prior_7_start, window_end=prior_7_end)
         mttr_prior_30 = self._facts_for_window(facts, window_field="resolved", window_start=prior_30_start, window_end=prior_30_end)
 
         fr_7 = self._facts_for_window(facts, window_field="created", window_start=current_7_start, window_end=current_7_end)
         fr_30 = self._facts_for_window(facts, window_field="created", window_start=current_30_start, window_end=current_30_end)
+        fr_prior_7 = self._facts_for_window(facts, window_field="created", window_start=prior_7_start, window_end=prior_7_end)
         fr_prior_30 = self._facts_for_window(facts, window_field="created", window_start=prior_30_start, window_end=prior_30_end)
 
         backlog_open = [fact for fact in facts if fact.is_open]
-        backlog_prior = [fact for fact in facts if fact.created_dt and fact.created_dt.date() <= prior_30_end and (not fact.resolved_dt or fact.resolved_dt.date() > prior_30_end)]
+        backlog_prior_7 = [
+            fact
+            for fact in facts
+            if fact.created_dt and fact.created_dt.date() <= prior_7_end and (not fact.resolved_dt or fact.resolved_dt.date() > prior_7_end)
+        ]
+        backlog_prior_30 = [
+            fact
+            for fact in facts
+            if fact.created_dt and fact.created_dt.date() <= prior_30_end and (not fact.resolved_dt or fact.resolved_dt.date() > prior_30_end)
+        ]
 
         sla_7 = self._sla_status_counts(mttr_7)
         sla_30 = self._sla_status_counts(mttr_30)
+        sla_prior_7 = self._sla_status_counts(mttr_prior_7)
         fr_status_7 = self._first_response_status_counts(fr_7)
         fr_status_30 = self._first_response_status_counts(fr_30)
+        fr_status_prior_7 = self._first_response_status_counts(fr_prior_7)
 
         kpis = [
             {
@@ -2465,53 +2586,80 @@ class ReportWorkbookBuilder:
                 "type": "percent",
                 "value_7d": self._sla_rate(sla_7),
                 "value_30d": self._sla_rate(sla_30),
-                "delta": self._sla_rate(sla_30) - self._sla_rate(self._sla_status_counts(self._facts_for_window(facts, window_field='resolved', window_start=prior_30_start, window_end=prior_30_end))),
+                "prior_7d": self._sla_rate(sla_prior_7),
+                "delta": self._sla_rate(sla_7) - self._sla_rate(sla_prior_7),
             },
             {
                 "label": "MTTR P95 (h)",
                 "type": "hours",
                 "value_7d": _percentile_hours(_metric_values_for_kind("mttr", mttr_7), 95) or 0.0,
                 "value_30d": _percentile_hours(_metric_values_for_kind("mttr", mttr_30), 95) or 0.0,
-                "delta": (_percentile_hours(_metric_values_for_kind("mttr", mttr_30), 95) or 0.0) - (_percentile_hours(_metric_values_for_kind("mttr", mttr_prior_30), 95) or 0.0),
+                "prior_7d": _percentile_hours(_metric_values_for_kind("mttr", mttr_prior_7), 95) or 0.0,
+                "delta": (_percentile_hours(_metric_values_for_kind("mttr", mttr_7), 95) or 0.0) - (_percentile_hours(_metric_values_for_kind("mttr", mttr_prior_7), 95) or 0.0),
             },
             {
                 "label": "First Response SLA Met %",
                 "type": "percent",
                 "value_7d": self._met_rate(fr_status_7),
                 "value_30d": self._met_rate(fr_status_30),
-                "delta": self._met_rate(fr_status_30) - self._met_rate(self._first_response_status_counts(fr_prior_30)),
+                "prior_7d": self._met_rate(fr_status_prior_7),
+                "delta": self._met_rate(fr_status_7) - self._met_rate(fr_status_prior_7),
             },
             {
                 "label": "Backlog Count",
                 "type": "integer",
                 "value_7d": len(backlog_open),
                 "value_30d": len(backlog_open),
-                "delta": len(backlog_open) - len(backlog_prior),
+                "prior_7d": len(backlog_prior_7),
+                "delta": len(backlog_open) - len(backlog_prior_7),
             },
             {
                 "label": "Ticket Volume",
                 "type": "integer",
                 "value_7d": len(volume_7),
                 "value_30d": len(volume_30),
-                "delta": len(volume_30) - len(volume_prior_30),
+                "prior_7d": len(volume_prior_7),
+                "delta": len(volume_7) - len(volume_prior_7),
             },
         ]
 
-        top_category_rows = self._group_summary_rows(
+        top_category_rows_7 = self._group_summary_rows(
+            facts=volume_7,
+            prior_facts=volume_prior_7,
+            group_by="request_type",
+            report_kind="ticket_volume",
+        )
+        if len(top_category_rows_7) > 10:
+            other_count = sum(row["count"] for row in top_category_rows_7[10:])
+            top_category_rows_7 = top_category_rows_7[:10] + [{"group": "Other", "count": other_count, "avg_ttr_hours": 0.0, "p95_ttr_hours": 0.0}]
+
+        top_category_rows_30 = self._group_summary_rows(
             facts=volume_30,
             prior_facts=volume_prior_30,
             group_by="request_type",
             report_kind="ticket_volume",
         )
-        if len(top_category_rows) > 10:
-            other_count = sum(row["count"] for row in top_category_rows[10:])
-            top_category_rows = top_category_rows[:10] + [{"group": "Other", "count": other_count, "avg_ttr_hours": 0.0, "p95_ttr_hours": 0.0}]
+        if len(top_category_rows_30) > 10:
+            other_count = sum(row["count"] for row in top_category_rows_30[10:])
+            top_category_rows_30 = top_category_rows_30[:10] + [{"group": "Other", "count": other_count, "avg_ttr_hours": 0.0, "p95_ttr_hours": 0.0}]
 
-        mttr_priority_rows = self._group_summary_rows(
+        mttr_priority_rows_7 = self._group_summary_rows(
+            facts=mttr_7,
+            prior_facts=mttr_prior_7,
+            group_by="priority",
+            report_kind="mttr",
+        )
+        mttr_priority_rows_30 = self._group_summary_rows(
             facts=mttr_30,
             prior_facts=mttr_prior_30,
             group_by="priority",
             report_kind="mttr",
+        )
+        sla_rows_7 = self._group_summary_rows(
+            facts=mttr_7,
+            prior_facts=mttr_prior_7,
+            group_by="sla_resolution_status",
+            report_kind="sla",
         )
         sla_rows_30 = self._group_summary_rows(
             facts=mttr_30,
@@ -2519,13 +2667,25 @@ class ReportWorkbookBuilder:
             group_by="sla_resolution_status",
             report_kind="sla",
         )
+        first_response_rows_7 = self._group_summary_rows(
+            facts=fr_7,
+            prior_facts=fr_prior_7,
+            group_by="sla_first_response_status",
+            report_kind="first_response",
+        )
         first_response_rows_30 = self._group_summary_rows(
             facts=fr_30,
             prior_facts=fr_prior_30,
             group_by="sla_first_response_status",
             report_kind="first_response",
         )
-        backlog_rows, backlog_statuses = self._backlog_rows(backlog_open, backlog_prior)
+        followup_rows_7 = self._group_summary_rows(
+            facts=fr_7,
+            prior_facts=fr_prior_7,
+            group_by="response_followup_status",
+            report_kind="follow_up",
+        )
+        backlog_rows, backlog_statuses = self._backlog_rows(backlog_open, backlog_prior_7)
         escalation_rows = [
             row
             for row in self._group_summary_rows(
@@ -2555,18 +2715,29 @@ class ReportWorkbookBuilder:
             facts=gap_facts,
             window_label=gap_window_label,
         )
-        problem_areas = self._problem_areas(mttr_priority_rows, top_category_rows, backlog_rows)
+        problem_areas = self._problem_areas(mttr_priority_rows_7, top_category_rows_7, backlog_rows)
         return {
             "report_name": report_name,
             "report_description": report_description,
             "trend_rows": trend_rows,
             "kpis": kpis,
-            "sla_status_counts": sla_30,
-            "first_response_status_counts": fr_status_30,
-            "mttr_priority_rows": mttr_priority_rows,
+            "current_7_window_start": current_7_start,
+            "current_7_window_end": current_7_end,
+            "prior_7_window_start": prior_7_start,
+            "prior_7_window_end": prior_7_end,
+            "sla_status_counts": sla_7,
+            "first_response_status_counts": fr_status_7,
+            "mttr_priority_rows": mttr_priority_rows_7,
+            "mttr_priority_rows_7": mttr_priority_rows_7,
+            "mttr_priority_rows_30": mttr_priority_rows_30,
+            "sla_rows_7": sla_rows_7,
             "sla_rows_30": sla_rows_30,
+            "first_response_rows_7": first_response_rows_7,
             "first_response_rows_30": first_response_rows_30,
-            "top_category_rows": top_category_rows,
+            "followup_rows_7": followup_rows_7,
+            "top_category_rows": top_category_rows_7,
+            "top_category_rows_7": top_category_rows_7,
+            "top_category_rows_30": top_category_rows_30,
             "backlog_rows": backlog_rows,
             "backlog_statuses": backlog_statuses,
             "escalation_rows": escalation_rows,
@@ -2729,7 +2900,7 @@ class ReportWorkbookBuilder:
             )
         if category_rows:
             busiest = max(category_rows, key=lambda row: row.get("count") or 0)
-            problems.append(f"Highest demand: {busiest['group']} drove {busiest.get('count') or 0:,} tickets in the last 30 days.")
+            problems.append(f"Highest demand this week: {busiest['group']} drove {busiest.get('count') or 0:,} tickets in the last 7 days.")
         if backlog_rows:
             oldest = max(backlog_rows, key=lambda row: row.get("total") or 0)
             problems.append(f"Backlog pressure: {oldest['bucket']} holds {oldest.get('total') or 0:,} open tickets.")

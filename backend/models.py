@@ -237,6 +237,62 @@ class ReportTemplateInsight(BaseModel):
     trend: list[ReportTemplateInsightPoint] = Field(default_factory=list)
 
 
+class ReportAISummary(BaseModel):
+    """Current AI-generated narrative for a saved report template."""
+
+    template_id: str
+    template_name: str
+    site_scope: str
+    source: Literal["manual", "nightly"] = "manual"
+    status: str = "ready"
+    summary: str = ""
+    bullets: list[str] = Field(default_factory=list)
+    fallback_used: bool = False
+    model_used: str = ""
+    generated_at: Optional[str] = None
+    template_version: str = ""
+    data_version: str = ""
+    error: str = ""
+
+
+class ReportAISummaryBatchStartResponse(BaseModel):
+    """Response returned when a manual AI summary batch is queued."""
+
+    batch_id: str
+    site_scope: str
+    status: str = "queued"
+    item_count: int = 0
+    requested_at: str
+
+
+class ReportAISummaryBatchItem(BaseModel):
+    """Per-template progress entry for a report AI summary batch."""
+
+    template_id: str
+    template_name: str
+    status: str = "queued"
+    source: Literal["manual", "nightly"] = "manual"
+    summary: str = ""
+    bullets: list[str] = Field(default_factory=list)
+    fallback_used: bool = False
+    model_used: str = ""
+    generated_at: Optional[str] = None
+    error: str = ""
+
+
+class ReportAISummaryBatchStatus(BaseModel):
+    """Manual AI summary batch status payload."""
+
+    batch_id: str
+    site_scope: str
+    status: str = "queued"
+    item_count: int = 0
+    requested_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    items: list[ReportAISummaryBatchItem] = Field(default_factory=list)
+
+
 class ReportTemplateExportSelectionRequest(BaseModel):
     """Update whether a template is included in the master workbook export."""
 

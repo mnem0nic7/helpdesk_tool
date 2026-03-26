@@ -46,6 +46,7 @@ from issue_cache import cache
 from azure_cache import azure_cache
 from azure_vm_export_jobs import azure_vm_export_jobs
 from onedrive_copy_jobs import onedrive_copy_jobs
+from report_ai_summary_service import report_ai_summary_service
 from user_admin_jobs import user_admin_jobs
 from user_exit_workflows import user_exit_workflows
 from knowledge_base import kb_store
@@ -106,6 +107,7 @@ async def _start_deferred_services(app: FastAPI) -> None:
         ("Azure cost export service", azure_cost_export_service.start),
         ("Azure VM export worker", azure_vm_export_jobs.start_worker),
         ("OneDrive copy worker", onedrive_copy_jobs.start_worker),
+        ("Report AI summary worker", report_ai_summary_service.start_worker),
         ("User admin worker", user_admin_jobs.start_worker),
         ("User exit workflow worker", user_exit_workflows.start_worker),
         ("Azure alert loop", start_azure_alert_loop),
@@ -219,6 +221,7 @@ async def lifespan(app: FastAPI):
     await stop_azure_alert_loop()
     await user_exit_workflows.stop_worker()
     await user_admin_jobs.stop_worker()
+    await report_ai_summary_service.stop_worker()
     await onedrive_copy_jobs.stop_worker()
     await ai_work_scheduler.stop_worker()
     await azure_vm_export_jobs.stop_worker()
