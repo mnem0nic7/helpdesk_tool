@@ -2381,16 +2381,17 @@ class ReportWorkbookBuilder:
             "format": formats["kpi_bad"],
         })
 
-        use_ai_summaries = bool(included_templates) and all(
-            template.id in ai_summaries_by_id and ai_summaries_by_id[template.id].summary
+        ai_summary_templates = [
+            template
             for template in included_templates
-        )
+            if template.id in ai_summaries_by_id and ai_summaries_by_id[template.id].summary
+        ]
         findings = (
             self._build_ai_summary_lines(
-                [ai_summaries_by_id[template.id] for template in included_templates],
-                templates=included_templates,
+                [ai_summaries_by_id[template.id] for template in ai_summary_templates],
+                templates=ai_summary_templates,
             )
-            if use_ai_summaries
+            if ai_summary_templates
             else self._build_key_findings(context, anomaly=anomaly)
         )
         for offset, finding in enumerate(findings, start=1):

@@ -123,6 +123,35 @@ def test_list_current_summaries_ignores_stale_summary_versions(monkeypatch, tmp_
     assert service.list_current_summaries("primary") == []
 
 
+def test_list_current_summaries_reuses_latest_summary_after_restart_when_refresh_token_is_not_loaded(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    service = ReportAISummaryService(db_path=str(tmp_path / "report-ai-restart.db"))
+    template = _make_template(template_id="tpl-restart", name="Template", include_in_master_export=True)
+    prompt_version = summary_module._REPORT_AI_SUMMARY_PROMPT_VERSION
+    monkeypatch.setattr(summary_module.report_template_store, "list_templates", lambda scope: [template])
+
+    latest = _SummaryGenerationResult(
+        status="ready",
+        source="manual",
+        summary="Persisted summary",
+        bullets=["Persisted bullet"],
+        fallback_used=False,
+        model_used="qwen2.5:7b",
+        generated_at="2026-03-26T00:00:00+00:00",
+        template_version=template.updated_at,
+        data_version=f"2026-03-26T08:00:00+00:00|{prompt_version}",
+    )
+    service._upsert_summary(site_scope="primary", template=template, result=latest)
+    monkeypatch.setattr(service, "_current_data_version", lambda: f"|{prompt_version}")
+
+    summaries = service.list_current_summaries("primary")
+
+    assert [summary.template_id for summary in summaries] == ["tpl-restart"]
+    assert summaries[0].summary == "Persisted summary"
+
+
 def test_current_data_version_includes_prompt_contract(monkeypatch, tmp_path: Path) -> None:
     service = ReportAISummaryService(db_path=str(tmp_path / "report-ai-version.db"))
     monkeypatch.setattr(summary_module.cache, "status", lambda: {"last_refresh": "2026-03-26T08:00:00+00:00"})

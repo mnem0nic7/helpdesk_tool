@@ -85,6 +85,11 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     return data
 
 
+def _split_data_version(value: str) -> tuple[str, str]:
+    refresh_token, _, prompt_version = str(value or "").partition("|")
+    return refresh_token.strip(), prompt_version.strip()
+
+
 @dataclass
 class _SummaryGenerationResult:
     status: str
@@ -205,9 +210,19 @@ class ReportAISummaryService:
         template: ReportTemplate,
         data_version: str,
     ) -> bool:
+        summary_refresh_token, summary_prompt_version = _split_data_version(summary.data_version)
+        current_refresh_token, current_prompt_version = _split_data_version(data_version)
+        data_version_matches = summary.data_version == data_version
+        if summary_prompt_version and current_prompt_version and summary_prompt_version == current_prompt_version:
+            if current_refresh_token:
+                data_version_matches = summary_refresh_token == current_refresh_token
+            else:
+                # Reuse the latest stored summary after a cold start when the
+                # persisted Jira refresh token has not been reloaded yet.
+                data_version_matches = True
         return (
             summary.template_version == template.updated_at
-            and summary.data_version == data_version
+            and data_version_matches
             and summary.status in {"ready", "fallback"}
         )
 

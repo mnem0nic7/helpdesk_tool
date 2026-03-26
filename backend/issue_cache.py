@@ -80,6 +80,7 @@ class IssueCache:
         self._db_path = db_path or os.path.join(DATA_DIR, "issues_cache.db")
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._init_db()
+        self._restore_last_refresh()
 
         # Set to True once start_background_refresh() is called.
         # _ensure_initialized() uses this to decide whether to wait for the

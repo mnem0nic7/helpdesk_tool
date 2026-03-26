@@ -1025,6 +1025,63 @@ class TestReportTemplates:
         report_names = [index_ws.cell(row=row_idx, column=2).value for row_idx in range(2, index_ws.max_row + 1)]
         assert "First Response Time" not in report_names
 
+    def test_master_workbook_only_passes_selected_templates_to_summary_lookup_and_writer(self, test_client, monkeypatch):
+        import routes_export
+
+        templates_resp = test_client.get("/api/report/templates")
+        assert templates_resp.status_code == 200
+        first_response_template = next(
+            template for template in templates_resp.json() if template["name"] == "First Response Time"
+        )
+
+        toggle_resp = test_client.post(
+            f"/api/report/templates/{first_response_template['id']}/export-selection",
+            json={"include_in_master_export": False},
+        )
+        assert toggle_resp.status_code == 200
+
+        captured: dict[str, list[str]] = {}
+
+        async def fake_to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        def fake_get_current_master_summaries(site_scope: str, templates):
+            assert site_scope == "primary"
+            captured["summary_lookup"] = [template.name for template in templates]
+            return {}
+
+        def fake_write_master_report_workbook_file(
+            *,
+            path: str,
+            templates,
+            site_scope: str,
+            all_issues,
+            today,
+            ai_template_summaries=None,
+        ) -> None:
+            del site_scope, all_issues, today, ai_template_summaries
+            captured["writer_templates"] = [template.name for template in templates]
+            with open(path, "wb") as handle:
+                handle.write(b"master-workbook")
+
+        monkeypatch.setattr(routes_export.asyncio, "to_thread", fake_to_thread)
+        monkeypatch.setattr(
+            routes_export.report_ai_summary_service,
+            "get_current_master_summaries",
+            fake_get_current_master_summaries,
+        )
+        monkeypatch.setattr(
+            routes_export,
+            "_write_master_report_workbook_file",
+            fake_write_master_report_workbook_file,
+        )
+
+        workbook_resp = test_client.get("/api/report/templates/master.xlsx")
+
+        assert workbook_resp.status_code == 200
+        assert "First Response Time" not in captured["summary_lookup"]
+        assert captured["summary_lookup"] == captured["writer_templates"]
+
     def test_seed_template_export_selection_can_be_toggled_without_full_edit(self, test_client):
         templates_resp = test_client.get("/api/report/templates")
         assert templates_resp.status_code == 200

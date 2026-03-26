@@ -216,6 +216,23 @@ def test_load_from_db_drops_non_tracked_project_keys(tmp_path):
     assert count == 0
 
 
+def test_init_restores_last_refresh_from_metadata(tmp_path):
+    db_path = tmp_path / "issues.db"
+    IssueCache(str(db_path))
+    expected = "2026-03-26T08:00:00+00:00"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_refresh', ?)",
+            (expected,),
+        )
+
+    restored = IssueCache(str(db_path))
+
+    assert restored.last_refresh is not None
+    assert restored.last_refresh.isoformat() == expected
+    assert restored.status()["last_refresh"] == expected
+
+
 def test_upsert_issue_ignores_non_tracked_project_keys(tmp_path):
     cache = IssueCache(str(tmp_path / "issues.db"))
     cache._initialized = True

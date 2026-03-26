@@ -1261,12 +1261,12 @@ async def get_report_ai_summary_batch_status(
 async def export_master_report_workbook(
     _session: dict[str, Any] = Depends(require_authenticated_user),
 ) -> FileResponse:
-    """Export all saved report templates for the current site in a single workbook."""
+    """Export the selected master-report templates for the current site in a single workbook."""
     templates = report_template_store.list_templates(get_current_site_scope())
-    for template in templates:
-        if template.include_in_master_export:
-            _validate_report_window(template.config, template_name=template.name)
-    included_count = sum(1 for template in templates if template.include_in_master_export)
+    included_templates = [template for template in templates if template.include_in_master_export]
+    for template in included_templates:
+        _validate_report_window(template.config, template_name=template.name)
+    included_count = len(included_templates)
     report_prefix = get_site_profile()["report_prefix"]
     now = datetime.now(timezone.utc)
     filename = f"{report_prefix}_Master_Report_{now.strftime('%Y%m%d_%H%M')}.xlsx"
@@ -1277,14 +1277,14 @@ async def export_master_report_workbook(
     all_issues = _calculation_scoped_issues(include_excluded_on_primary=True)
     today = _today_utc()
     ai_template_summaries = (
-        list(report_ai_summary_service.get_current_master_summaries(site_scope, templates).values())
+        list(report_ai_summary_service.get_current_master_summaries(site_scope, included_templates).values())
         if site_scope == "primary"
         else []
     )
     await asyncio.to_thread(
         _write_master_report_workbook_file,
         path=tmp_path,
-        templates=templates,
+        templates=included_templates,
         site_scope=site_scope,
         all_issues=all_issues,
         today=today,

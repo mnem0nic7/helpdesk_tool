@@ -673,6 +673,68 @@ def test_master_workbook_uses_manual_ai_summaries_when_all_included_templates_ha
     assert dashboard["G8"].value == "• Resolution compliance is trending in the right direction."
 
 
+def test_master_workbook_uses_available_ai_summaries_for_selected_reports_even_if_one_is_missing(tmp_path: Path):
+    builder = ReportWorkbookBuilder(
+        all_issues=[
+            _make_issue(
+                key="OIT-AI-2",
+                created="2026-03-21T00:00:00+00:00",
+                updated="2026-03-22T00:00:00+00:00",
+                resolved="2026-03-22T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+                sla_response_status="Met",
+                sla_resolution_status="Met",
+            )
+        ],
+        site_scope="primary",
+        today=date(2026, 3, 24),
+        enable_changelog_fetch=False,
+    )
+    template_with_summary = _make_template(
+        id="tpl-ai-1",
+        name="SLA Compliance Rate",
+        category="Executive",
+        group_by="sla_resolution_status",
+        sort_field="created",
+    )
+    template_without_summary = _make_template(
+        id="tpl-ai-2",
+        name="Mean Time to Resolution",
+        category="Executive",
+        group_by="priority",
+        sort_field="resolved",
+    )
+    summary = ReportAISummary(
+        template_id=template_with_summary.id,
+        template_name=template_with_summary.name,
+        site_scope="primary",
+        source="manual",
+        status="ready",
+        summary="SLA performance improved across the current reporting window.",
+        bullets=["Resolution compliance is trending in the right direction."],
+        fallback_used=False,
+        model_used="qwen2.5:7b",
+        generated_at="2026-03-24T00:00:00+00:00",
+        template_version=template_with_summary.updated_at,
+        data_version="2026-03-24T00:00:00+00:00",
+        error="",
+    )
+    path = tmp_path / "master-ai-summary-partial.xlsx"
+
+    builder.build_master_report(
+        path=str(path),
+        templates=[template_with_summary, template_without_summary],
+        ai_template_summaries=[summary],
+    )
+
+    workbook = load_workbook(path)
+    dashboard = workbook["Executive Dashboard"]
+
+    assert dashboard["G7"].value == "SLA Compliance Rate: SLA performance improved across the current reporting window."
+    assert dashboard["G8"].value == "• Resolution compliance is trending in the right direction."
+
+
 def test_dashboard_context_and_findings_use_7_day_primary_metrics():
     builder = ReportWorkbookBuilder(
         all_issues=[
