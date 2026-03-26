@@ -2049,6 +2049,15 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
     setPendingAction(null);
   }
 
+  useEffect(() => {
+    const targetUserId = searchParams.get("userId");
+    if (!targetUserId) return;
+    const matched = users.find((user) => user.id === targetUserId);
+    if (matched && matched.id !== selectedUser?.id) {
+      setSelectedUser(matched);
+    }
+  }, [searchParams, selectedUser?.id, users]);
+
   if (isLoading) {
     return <div className="text-sm text-slate-500">Loading Entra users...</div>;
   }
@@ -2060,15 +2069,6 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
       </div>
     );
   }
-
-  useEffect(() => {
-    const targetUserId = searchParams.get("userId");
-    if (!targetUserId) return;
-    const matched = users.find((user) => user.id === targetUserId);
-    if (matched && matched.id !== selectedUser?.id) {
-      setSelectedUser(matched);
-    }
-  }, [searchParams, selectedUser?.id, users]);
 
   function updateRouteParams(next: { search?: string; userId?: string | null }) {
     const params = new URLSearchParams(searchParams);
