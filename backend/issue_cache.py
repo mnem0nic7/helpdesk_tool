@@ -273,6 +273,14 @@ class IssueCache:
         key = issue.get("key", "")
         if not key:
             return
+        if not JiraClient.is_tracked_issue(issue):
+            self.evict_issue(key)
+            logger.info(
+                "Cache: ignored non-tracked issue %s (%s)",
+                key,
+                JiraClient.tracked_project_key(issue) or "unknown-project",
+            )
+            return
 
         fields = issue.setdefault("fields", {})
         if not has_request_type(fields):
@@ -443,8 +451,12 @@ class IssueCache:
             return False
         new_all: dict[str, dict[str, Any]] = {}
         new_filtered: dict[str, dict[str, Any]] = {}
+        dropped_keys: list[str] = []
         for key, data, excluded in rows:
             issue = json.loads(data)
+            if not JiraClient.is_tracked_issue(issue):
+                dropped_keys.append(key)
+                continue
             new_all[key] = issue
             if not excluded:
                 new_filtered[key] = issue
@@ -452,6 +464,8 @@ class IssueCache:
             self._all_issues = new_all
             self._issues = new_filtered
             self._initialized = True
+        if dropped_keys:
+            self._prune_non_tracked_issues()
         self._restore_last_refresh()
         logger.info(
             "Cache: restored %d total, %d filtered from SQLite (last Jira sync: %s)",
@@ -490,6 +504,27 @@ class IssueCache:
                 ],
             )
         logger.info("Cache: upserted %d issues to SQLite", len(issues))
+
+    def _prune_non_tracked_issues(self) -> list[str]:
+        """Drop cached issues that no longer belong to a tracked Jira board/project."""
+        with self._lock:
+            dropped_keys = [
+                key
+                for key, issue in self._all_issues.items()
+                if not JiraClient.is_tracked_issue(issue)
+            ]
+            for key in dropped_keys:
+                self._all_issues.pop(key, None)
+                self._issues.pop(key, None)
+        if dropped_keys:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.executemany("DELETE FROM issues WHERE key = ?", [(key,) for key in dropped_keys])
+            logger.info(
+                "Cache: pruned %d non-tracked issues: %s",
+                len(dropped_keys),
+                ", ".join(sorted(dropped_keys)[:10]),
+            )
+        return dropped_keys
 
     # ------------------------------------------------------------------
     # Initialization
@@ -554,6 +589,7 @@ class IssueCache:
         try:
             logger.info("Cache: starting full fetch …")
             all_issues = self._client.search_all(_ALL_JQL, progress_callback=self._progress_callback)
+            all_issues = [issue for issue in all_issues if JiraClient.is_tracked_issue(issue)]
             logger.info("Cache: fetched %d total issues", len(all_issues))
 
             # Carry forward existing request type data (free, no API calls)
@@ -639,6 +675,7 @@ class IssueCache:
             )
             logger.info("Cache: incremental refresh with JQL: %s", jql)
             updated_issues = self._client.search_all(jql, progress_callback=self._progress_callback)
+            updated_issues = [issue for issue in updated_issues if JiraClient.is_tracked_issue(issue)]
             logger.info("Cache: incremental fetched %d issues", len(updated_issues))
 
             # Enrich request types for the updated batch
@@ -656,6 +693,7 @@ class IssueCache:
                     else:
                         self._issues[key] = issue
                 self._last_refresh = datetime.now(timezone.utc)
+            self._prune_non_tracked_issues()
             self._persist_last_refresh()
 
             self.ensure_auto_triage_processed_backfill()

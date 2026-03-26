@@ -79,6 +79,18 @@ def test_manual_incremental_refresh_updates_oasisdev_tickets(tmp_path):
     assert cache._client.enriched_batches == [["OIT-100", "OIT-500"]]
 
 
+def test_incremental_refresh_prunes_cached_non_tracked_project_keys(tmp_path):
+    updated_issues = [_issue("OIT-100", "Primary new")]
+    cache = _build_cache(tmp_path, updated_issues)
+    moved_issue = _issue("MSD-900", "Moved away")
+    cache._all_issues[moved_issue["key"]] = moved_issue
+
+    cache._incremental_refresh()
+
+    assert "MSD-900" not in cache._all_issues
+    assert "MSD-900" not in cache._issues
+
+
 def test_incremental_refresh_expands_lookback_from_last_refresh_gap(tmp_path):
     updated_issues = [_issue("OIT-100", "Primary new")]
     cache = _build_cache(tmp_path, updated_issues)
@@ -183,3 +195,29 @@ def test_followup_bootstrap_backfills_cached_recent_issues(tmp_path):
     assert changed == 1
     assert cache._all_issues["OIT-200"]["fields"]["_movedocs_followup_status"] == "Running"
     assert "_movedocs_followup_status" not in cache._all_issues["OIT-201"]["fields"]
+
+
+def test_load_from_db_drops_non_tracked_project_keys(tmp_path):
+    cache = IssueCache(str(tmp_path / "issues.db"))
+    oit_issue = _issue("OIT-100", "Tracked")
+    msd_issue = _issue("MSD-100", "Moved away")
+
+    cache._upsert_to_db([oit_issue, msd_issue])
+
+    restored = IssueCache(str(tmp_path / "issues.db"))
+
+    assert restored._load_from_db() is True
+    assert set(restored._all_issues) == {"OIT-100"}
+    assert "MSD-100" not in restored._issues
+
+
+def test_upsert_issue_ignores_non_tracked_project_keys(tmp_path):
+    cache = IssueCache(str(tmp_path / "issues.db"))
+    cache._initialized = True
+    cache._all_issues = {"OIT-100": _issue("OIT-100", "Tracked")}
+    cache._issues = dict(cache._all_issues)
+
+    cache.upsert_issue(_issue("MSD-101", "Moved away"))
+
+    assert set(cache._all_issues) == {"OIT-100"}
+    assert set(cache._issues) == {"OIT-100"}

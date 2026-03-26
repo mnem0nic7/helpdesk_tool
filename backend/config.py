@@ -38,6 +38,13 @@ def _env_auth_provider(name: str, default: str) -> str:
     return default
 
 
+TRACKED_JIRA_PROJECT_KEYS: list[str] = [
+    key.strip().upper()
+    for key in (_env_csv("TRACKED_JIRA_PROJECT_KEYS") or [JIRA_PROJECT])
+    if key.strip()
+]
+
+
 JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID: str = _env_custom_field_id(
     "JIRA_FOLLOWUP_LAST_PUBLIC_AGENT_TOUCH_FIELD_ID"
 )

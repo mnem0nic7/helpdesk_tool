@@ -10,7 +10,13 @@ from typing import Any
 import requests
 from requests.auth import HTTPBasicAuth
 
-from config import JIRA_API_TOKEN, JIRA_BASE_URL, JIRA_EMAIL, JIRA_FOLLOWUP_CUSTOM_FIELD_IDS
+from config import (
+    JIRA_API_TOKEN,
+    JIRA_BASE_URL,
+    JIRA_EMAIL,
+    JIRA_FOLLOWUP_CUSTOM_FIELD_IDS,
+    TRACKED_JIRA_PROJECT_KEYS,
+)
 from request_type import extract_request_type_name_from_fields, has_request_type
 
 # Validate Jira issue keys to prevent path traversal / SSRF
@@ -25,6 +31,7 @@ def validate_jira_key(key: str) -> str:
     return key
 
 logger = logging.getLogger(__name__)
+_TRACKED_PROJECT_KEY_SET = frozenset(TRACKED_JIRA_PROJECT_KEYS)
 
 # ---------------------------------------------------------------------------
 # Default fields to request on search queries
@@ -161,6 +168,25 @@ class JiraClient:
             return True
 
         return False
+
+    @staticmethod
+    def tracked_project_key(issue: dict[str, Any]) -> str:
+        """Return the issue's current project key, falling back to the issue key prefix."""
+        fields = issue.get("fields", {}) if isinstance(issue, dict) else {}
+        project_obj = fields.get("project") or {}
+        project_key = str(project_obj.get("key") or "").strip().upper()
+        if project_key:
+            return project_key
+        issue_key = str((issue or {}).get("key") or "").strip().upper()
+        if "-" in issue_key:
+            return issue_key.split("-", 1)[0]
+        return issue_key
+
+    @classmethod
+    def is_tracked_issue(cls, issue: dict[str, Any]) -> bool:
+        """Return True when the issue still belongs to a tracked Jira board/project."""
+        project_key = cls.tracked_project_key(issue)
+        return bool(project_key) and project_key in _TRACKED_PROJECT_KEY_SET
 
     # ------------------------------------------------------------------
     # Search
