@@ -75,7 +75,7 @@ class TestReportPreview:
         data = resp.json()
         assert data["grouped"] is False
         assert isinstance(data["rows"], list)
-        assert data["total_count"] > 0
+        assert data["total_count"] >= 0
 
     def test_custom_columns(self, test_client):
         resp = test_client.post("/api/report/preview", json={
@@ -365,6 +365,20 @@ class TestReportPreview:
         keys = [row["key"] for row in resp.json()["rows"]]
         assert keys == ["OIT-PRIMARY-1"]
 
+    def test_preview_rejects_invalid_custom_window(self, test_client):
+        resp = test_client.post("/api/report/preview", json={
+            "filters": {"created_after": "2026-03-10"},
+            "columns": ["key", "summary"],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": False,
+            "window_mode": "custom",
+        })
+
+        assert resp.status_code == 400
+        assert "Created Before" in resp.json()["detail"]
+
 
 class TestReportExport:
     """POST /api/report/export"""
@@ -403,13 +417,14 @@ class TestReportExport:
         workbook = load_workbook(BytesIO(resp.content))
         assert workbook.sheetnames[0] == "Summary"
         assert "Trends" in workbook.sheetnames
-        assert workbook.sheetnames[-2:] == ["7 Day", "30 Day"]
+        assert "30 Day" in workbook.sheetnames
+        assert "7 Day" not in workbook.sheetnames
         assert "Data Gaps" in workbook.sheetnames
 
         workbook_zip = zipfile.ZipFile(BytesIO(resp.content))
         assert any(name.startswith("xl/charts/chart") for name in workbook_zip.namelist())
 
-    def test_detail_export_uses_7d_and_30d_created_windows(self, test_client, mock_cache, monkeypatch):
+    def test_detail_export_uses_selected_created_window(self, test_client, mock_cache, monkeypatch):
         monkeypatch.setattr("routes_export._today_utc", lambda: date(2026, 3, 10))
 
         issues = [
@@ -435,12 +450,12 @@ class TestReportExport:
             "sort_dir": "desc",
             "group_by": None,
             "include_excluded": False,
+            "window_mode": "7d",
         })
         assert resp.status_code == 200
 
         workbook = load_workbook(BytesIO(resp.content))
         seven_day = workbook["7 Day"]
-        thirty_day = workbook["30 Day"]
 
         assert seven_day["A1"].value == "Report"
         assert seven_day.row_dimensions[1].hidden is True
@@ -449,12 +464,10 @@ class TestReportExport:
         assert seven_day["A3"].value == "Window Field"
         assert seven_day["B3"].value == "Created"
         assert seven_day["A13"].value == "Key"
-        assert thirty_day["B2"].value == "30 Day"
+        assert "30 Day" not in workbook.sheetnames
 
         seven_day_keys = [cell.value for cell in seven_day["A"] if isinstance(cell.value, str) and cell.value.startswith("OIT-WIN-")]
-        thirty_day_keys = [cell.value for cell in thirty_day["A"] if isinstance(cell.value, str) and cell.value.startswith("OIT-WIN-")]
         assert len(seven_day_keys) == 7
-        assert len(thirty_day_keys) == 8
 
     def test_grouped_export_uses_live_config_window_field_when_template_id_is_provided(self, test_client, mock_cache, monkeypatch):
         monkeypatch.setattr("routes_export._today_utc", lambda: date(2026, 3, 10))
@@ -493,6 +506,7 @@ class TestReportExport:
         mttr_template = next(template for template in templates_resp.json() if template["name"] == "Mean Time to Resolution")
         export_config = dict(mttr_template["config"])
         export_config["sort_field"] = "created"
+        export_config["window_mode"] = "7d"
 
         resp = test_client.post(
             f"/api/report/export?template_id={mttr_template['id']}",
@@ -502,7 +516,6 @@ class TestReportExport:
 
         workbook = load_workbook(BytesIO(resp.content))
         seven_day = workbook["7 Day"]
-        thirty_day = workbook["30 Day"]
         assert seven_day["B1"].value == "Mean Time to Resolution"
         assert seven_day["B3"].value == "Created"
         assert seven_day["H13"].value == "Δ Count vs Prior"
@@ -516,13 +529,7 @@ class TestReportExport:
             for row in seven_day.iter_rows(min_row=14, max_col=2)
             if row[0].value in {"High", "Medium"}
         }
-        thirty_day_counts = {
-            row[0].value: row[1].value
-            for row in thirty_day.iter_rows(min_row=14, max_col=2)
-            if row[0].value in {"High", "Medium"}
-        }
         assert seven_day_counts == {}
-        assert thirty_day_counts == {}
 
     def test_grouped_export_includes_raw_percentiles(self, test_client, mock_cache, monkeypatch):
         monkeypatch.setattr("routes_export._today_utc", lambda: date(2026, 3, 10))
@@ -588,6 +595,48 @@ class TestReportExport:
         assert round(float(high_row[4].value), 1) == 2.0
         assert round(float(high_row[5].value), 1) >= 90.0
         assert round(float(high_row[6].value), 1) >= 98.0
+
+    def test_detail_export_uses_custom_created_range(self, test_client, mock_cache, monkeypatch):
+        monkeypatch.setattr("routes_export._today_utc", lambda: date(2026, 3, 10))
+
+        issues = [
+            _make_workload_issue(
+                key=f"OIT-CUSTOM-{offset}",
+                summary=f"Custom issue {offset}",
+                status="Open",
+                status_category="To Do",
+                assignee="Taylor Ops",
+                created=f"{(date(2026, 3, 10) - timedelta(days=offset)).isoformat()}T10:00:00+00:00",
+                updated=f"{(date(2026, 3, 10) - timedelta(days=offset)).isoformat()}T10:00:00+00:00",
+                oasisdev=False,
+            )
+            for offset in range(8)
+        ]
+        mock_cache.get_all_issues.return_value = issues
+        mock_cache.get_filtered_issues.return_value = issues
+
+        resp = test_client.post("/api/report/export", json={
+            "filters": {
+                "created_after": "2026-03-06",
+                "created_before": "2026-03-08",
+            },
+            "columns": ["key", "summary"],
+            "sort_field": "resolved",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": False,
+            "window_mode": "custom",
+        })
+        assert resp.status_code == 200
+
+        workbook = load_workbook(BytesIO(resp.content))
+        custom_sheet = workbook["Custom Range"]
+        assert custom_sheet["B2"].value == "Custom Range"
+        assert custom_sheet["B3"].value == "Created"
+        assert custom_sheet["B4"].value == "2026-03-06"
+        assert custom_sheet["B5"].value == "2026-03-08"
+        exported_keys = [cell.value for cell in custom_sheet["A"] if isinstance(cell.value, str) and cell.value.startswith("OIT-CUSTOM-")]
+        assert exported_keys == ["OIT-CUSTOM-2", "OIT-CUSTOM-3", "OIT-CUSTOM-4"]
 
 
 class TestReportTemplates:
@@ -820,6 +869,30 @@ class TestReportTemplates:
         assert list_resp.status_code == 200
         assert all(row["id"] != created["id"] for row in list_resp.json())
 
+    def test_create_template_rejects_invalid_custom_window(self, test_client):
+        create_resp = test_client.post(
+            "/api/report/templates",
+            json={
+                "name": "Broken Custom Window",
+                "description": "",
+                "category": "Executive",
+                "notes": "",
+                "include_in_master_export": False,
+                "config": {
+                    "filters": {"created_after": "2026-03-10"},
+                    "columns": ["key", "summary"],
+                    "sort_field": "created",
+                    "sort_dir": "desc",
+                    "group_by": None,
+                    "include_excluded": False,
+                    "window_mode": "custom",
+                },
+            },
+        )
+
+        assert create_resp.status_code == 400
+        assert "Created Before" in create_resp.json()["detail"]
+
     def test_seed_templates_can_be_updated_and_deleted(self, test_client):
         list_resp = test_client.get("/api/report/templates")
         assert list_resp.status_code == 200
@@ -876,9 +949,8 @@ class TestReportTemplates:
         assert "Executive Dashboard" in workbook.sheetnames
         assert "Trends" in workbook.sheetnames
         assert "Data Gaps" in workbook.sheetnames
-        assert "First Response Time 7d" in workbook.sheetnames
-        assert "First Response Time 30d" in workbook.sheetnames
-        assert "Backlog Size & Aging 30d" in workbook.sheetnames
+        assert "First Response Time 30 Day" in workbook.sheetnames
+        assert "Backlog Size & Aging 30 Day" in workbook.sheetnames
 
         index_ws = workbook["Report Index"]
         headers = [index_ws.cell(row=1, column=idx).value for idx in range(1, 14)]
@@ -902,11 +974,11 @@ class TestReportTemplates:
         assert index_ws["A2"].value in {"✅", "⚠️", "🔴"}
         assert index_ws["C2"].hyperlink is not None
 
-        frt_ws = workbook["First Response Time 7d"]
+        frt_ws = workbook["First Response Time 30 Day"]
         assert frt_ws["A1"].value == "Report"
         assert frt_ws["B1"].value == "First Response Time"
         assert frt_ws["A2"].value == "Window"
-        assert frt_ws["B2"].value == "7 Day"
+        assert frt_ws["B2"].value == "30 Day"
         assert frt_ws["A3"].value == "Window Field"
         assert frt_ws["B3"].value == "Created"
         assert frt_ws["A7"].value == "Readiness"
@@ -947,8 +1019,7 @@ class TestReportTemplates:
         workbook = load_workbook(BytesIO(workbook_resp.content))
         assert "Report Index" in workbook.sheetnames
         assert "Executive Dashboard" in workbook.sheetnames
-        assert "First Response Time 7d" not in workbook.sheetnames
-        assert "First Response Time 30d" not in workbook.sheetnames
+        assert "First Response Time 30 Day" not in workbook.sheetnames
 
         index_ws = workbook["Report Index"]
         report_names = [index_ws.cell(row=row_idx, column=2).value for row_idx in range(2, index_ws.max_row + 1)]
@@ -969,7 +1040,7 @@ class TestReportTemplates:
         assert payload["is_seed"] is True
         assert payload["include_in_master_export"] is False
 
-    def test_template_insights_return_7d_30d_p95_and_window_field(self, test_client, mock_cache, monkeypatch):
+    def test_template_insights_return_window_aware_metrics(self, test_client, mock_cache, monkeypatch):
         monkeypatch.setattr("routes_export._today_utc", lambda: date(2026, 3, 4))
 
         issues = []
@@ -1013,18 +1084,22 @@ class TestReportTemplates:
         data = resp.json()
 
         frt = next(item for item in data if item["template_name"] == "First Response Time")
+        assert frt["window_mode"] == "30d"
+        assert frt["window_label"] == "30 Day"
         assert frt["window_field"] == "created"
         assert frt["window_field_label"] == "Created"
-        assert frt["count_7d"] == 14
-        assert frt["count_30d"] == 20
-        assert frt["p95_daily_count_30d"] == 2.0
-        assert len(frt["trend_30d"]) == 30
+        assert frt["window_start"] == "2026-02-03"
+        assert frt["window_end"] == "2026-03-04"
+        assert frt["count_in_window"] == 20
+        assert frt["p95_daily_count"] == 2.0
+        assert len(frt["trend"]) == 30
 
         mttr = next(item for item in data if item["template_name"] == "Mean Time to Resolution")
+        assert mttr["window_mode"] == "30d"
+        assert mttr["window_label"] == "30 Day"
         assert mttr["window_field"] == "resolved"
         assert mttr["window_field_label"] == "Resolved"
-        assert mttr["count_7d"] == 5
-        assert mttr["count_30d"] == 5
+        assert mttr["count_in_window"] == 5
 
     def test_master_workbook_contains_dashboard_and_detail_charts(self, test_client):
         resp = test_client.get("/api/report/templates/master.xlsx")

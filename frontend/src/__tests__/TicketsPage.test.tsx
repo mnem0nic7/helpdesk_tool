@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { render } from "../test-utils.tsx";
 import TicketsPage from "../pages/TicketsPage.tsx";
 
-const { mockApi } = vi.hoisted(() => ({
+const { mockApi, mockGetSiteBranding } = vi.hoisted(() => ({
   mockApi: {
     getTickets: vi.fn(),
     refreshVisibleTickets: vi.fn(),
@@ -16,16 +16,22 @@ const { mockApi } = vi.hoisted(() => ({
     getRequestTypes: vi.fn(),
     getTransitions: vi.fn(),
     updateTicket: vi.fn(),
+    createTicket: vi.fn(),
     transitionTicket: vi.fn(),
     addTicketComment: vi.fn(),
     exportAll: vi.fn(() => "/api/export/all"),
     getMe: vi.fn(),
   },
+  mockGetSiteBranding: vi.fn(),
 }));
 
 vi.mock("../lib/api.ts", () => ({
   api: mockApi,
   default: mockApi,
+}));
+
+vi.mock("../lib/siteContext.ts", () => ({
+  getSiteBranding: mockGetSiteBranding,
 }));
 
 const ticketRow = {
@@ -89,6 +95,12 @@ describe("TicketsPage", () => {
       thresholds: [],
     })) as unknown as typeof IntersectionObserver;
     window.history.pushState({}, "", "/tickets");
+    mockGetSiteBranding.mockReturnValue({
+      scope: "primary",
+      appName: "OIT Helpdesk",
+      dashboardName: "OIT Dashboard",
+      alertPrefix: "OIT",
+    });
     mockApi.getTickets.mockResolvedValue({
       tickets: [ticketRow],
       matched_count: 1,
@@ -116,10 +128,25 @@ describe("TicketsPage", () => {
     mockApi.getPriorities.mockResolvedValue([{ id: "1", name: "High" }]);
     mockApi.getRequestTypes.mockResolvedValue([{ id: "1", name: "Hardware", description: "" }]);
     mockApi.getTransitions.mockResolvedValue([]);
+    mockApi.createTicket.mockResolvedValue({
+      created_key: "OIT-500",
+      created_id: "100500",
+      detail: {
+        ...ticketDetail,
+        ticket: {
+          ...ticketRow,
+          key: "OIT-500",
+          summary: "Newly created ticket",
+          priority: "High",
+          request_type: "Hardware",
+        },
+      },
+    });
     mockApi.getMe.mockResolvedValue({
       email: "test@example.com",
       name: "Test User",
       is_admin: true,
+      can_manage_users: true,
       jira_auth: { connected: false, mode: "fallback_it_app", site_url: "", account_name: "", configured: true },
     });
   });
@@ -181,6 +208,61 @@ describe("TicketsPage", () => {
     await waitFor(() => {
       expect(mockApi.refreshVisibleTickets).toHaveBeenCalledWith(["OIT-1"]);
     });
+  });
+
+  it("shows a create ticket button on it-app for Jira write users", async () => {
+    render(<TicketsPage />);
+
+    expect(await screen.findByRole("button", { name: "Create Ticket" })).toBeInTheDocument();
+  });
+
+  it("does not show the create ticket button on non-primary hosts", async () => {
+    mockGetSiteBranding.mockReturnValue({
+      scope: "azure",
+      appName: "MoveDocs Azure Portal",
+      dashboardName: "Azure Control Center",
+      alertPrefix: "Azure",
+    });
+
+    render(<TicketsPage />);
+
+    await screen.findByRole("link", { name: "OIT-1" });
+    expect(screen.queryByRole("button", { name: "Create Ticket" })).not.toBeInTheDocument();
+  });
+
+  it("creates a ticket and opens it in the drawer", async () => {
+    const user = userEvent.setup();
+
+    render(<TicketsPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Create Ticket" }));
+    const dialog = await screen.findByRole("dialog", { name: "Create Ticket" });
+    const dialogScope = within(dialog);
+
+    const submitButton = dialogScope.getByRole("button", { name: "Create Ticket" });
+    expect(submitButton).toBeDisabled();
+
+    await user.type(dialogScope.getByLabelText("Summary"), "Newly created ticket");
+    await user.selectOptions(dialogScope.getByLabelText("Priority"), "High");
+    await user.selectOptions(dialogScope.getByLabelText("Request Type"), "1");
+    await user.type(dialogScope.getByLabelText("Description"), "Created from MoveDocs.");
+
+    expect(dialogScope.getByRole("button", { name: "Create Ticket" })).toBeEnabled();
+    await user.click(dialogScope.getByRole("button", { name: "Create Ticket" }));
+
+    await waitFor(() => {
+      expect(mockApi.createTicket).toHaveBeenCalledWith({
+        summary: "Newly created ticket",
+        description: "Created from MoveDocs.",
+        priority: "High",
+        request_type_id: "1",
+      });
+    });
+    await waitFor(() => {
+      expect(window.location.search).toBe("?ticket=OIT-500");
+    });
+    await screen.findByText("Ticket Actions");
+    expect(mockApi.getTicket).toHaveBeenCalledWith("OIT-500");
   });
 
   it("renders large ticket pages progressively", async () => {

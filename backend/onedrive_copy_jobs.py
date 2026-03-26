@@ -116,9 +116,135 @@ class OneDriveCopyJobManager:
                     ON onedrive_copy_jobs (requested_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_onedrive_copy_events_job
                     ON onedrive_copy_job_events (job_id, event_id DESC);
+                CREATE TABLE IF NOT EXISTS onedrive_copy_saved_upns (
+                    normalized_upn TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL DEFAULT '',
+                    principal_name TEXT NOT NULL DEFAULT '',
+                    mail TEXT NOT NULL DEFAULT '',
+                    source_hint TEXT NOT NULL DEFAULT 'manual',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_used_at TEXT NOT NULL,
+                    last_used_by_email TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_onedrive_copy_saved_upns_last_used
+                    ON onedrive_copy_saved_upns (last_used_at DESC);
                 """
             )
             conn.commit()
+
+    @staticmethod
+    def _normalize_upn(value: str) -> str:
+        return str(value or "").strip().lower()
+
+    def remember_user_option(
+        self,
+        upn: str,
+        *,
+        display_name: str = "",
+        principal_name: str = "",
+        mail: str = "",
+        source_hint: str = "manual",
+        used_by_email: str = "",
+    ) -> None:
+        normalized_upn = self._normalize_upn(principal_name or mail or upn)
+        if not normalized_upn:
+            return
+        now = _utcnow().isoformat()
+        display_name = str(display_name or "").strip()
+        principal_name = str(principal_name or normalized_upn).strip()
+        mail = str(mail or "").strip()
+        used_by_email = str(used_by_email or "").strip().lower()
+        normalized_source = "entra" if str(source_hint or "").strip().lower() == "entra" else "manual"
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO onedrive_copy_saved_upns (
+                    normalized_upn,
+                    display_name,
+                    principal_name,
+                    mail,
+                    source_hint,
+                    created_at,
+                    updated_at,
+                    last_used_at,
+                    last_used_by_email
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(normalized_upn) DO UPDATE SET
+                    display_name = CASE
+                        WHEN excluded.display_name <> '' THEN excluded.display_name
+                        ELSE onedrive_copy_saved_upns.display_name
+                    END,
+                    principal_name = CASE
+                        WHEN excluded.principal_name <> '' THEN excluded.principal_name
+                        ELSE onedrive_copy_saved_upns.principal_name
+                    END,
+                    mail = CASE
+                        WHEN excluded.mail <> '' THEN excluded.mail
+                        ELSE onedrive_copy_saved_upns.mail
+                    END,
+                    source_hint = CASE
+                        WHEN excluded.source_hint = 'entra' THEN 'entra'
+                        ELSE onedrive_copy_saved_upns.source_hint
+                    END,
+                    updated_at = excluded.updated_at,
+                    last_used_at = excluded.last_used_at,
+                    last_used_by_email = CASE
+                        WHEN excluded.last_used_by_email <> '' THEN excluded.last_used_by_email
+                        ELSE onedrive_copy_saved_upns.last_used_by_email
+                    END
+                """,
+                (
+                    normalized_upn,
+                    display_name,
+                    principal_name,
+                    mail,
+                    normalized_source,
+                    now,
+                    now,
+                    now,
+                    used_by_email,
+                ),
+            )
+            conn.commit()
+
+    def list_saved_user_options(self, *, search: str = "", limit: int = 20) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT normalized_upn, display_name, principal_name, mail, source_hint, last_used_at
+                FROM onedrive_copy_saved_upns
+                ORDER BY last_used_at DESC, principal_name ASC, normalized_upn ASC
+                """
+            ).fetchall()
+        search_lower = str(search or "").strip().lower()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            normalized_upn = self._normalize_upn(str(row["normalized_upn"] or ""))
+            if not normalized_upn:
+                continue
+            display_name = str(row["display_name"] or "").strip()
+            principal_name = str(row["principal_name"] or "").strip() or normalized_upn
+            mail = str(row["mail"] or "").strip()
+            if search_lower:
+                haystack = " ".join([normalized_upn, display_name, principal_name, mail]).lower()
+                if search_lower not in haystack:
+                    continue
+            result.append(
+                {
+                    "id": f"saved:{normalized_upn}",
+                    "display_name": display_name,
+                    "principal_name": principal_name,
+                    "mail": mail,
+                    "enabled": None,
+                    "source": "saved",
+                    "last_used_at": str(row["last_used_at"] or ""),
+                }
+            )
+            if len(result) >= max(1, int(limit)):
+                break
+        return result
 
     def _cleanup_expired_jobs(self) -> None:
         cutoff = (_utcnow() - timedelta(days=ONEDRIVE_COPY_JOB_RETENTION_DAYS)).isoformat()
@@ -292,6 +418,8 @@ class OneDriveCopyJobManager:
                 ),
             )
             conn.commit()
+        self.remember_user_option(source, principal_name=source, source_hint="manual", used_by_email=requested_by_email)
+        self.remember_user_option(destination, principal_name=destination, source_hint="manual", used_by_email=requested_by_email)
         self._append_event(job_id, "info", f"Queued copy from {source} to {destination} into '{folder}'.")
         return self.get_job(job_id, include_events=True) or {
             "job_id": job_id,

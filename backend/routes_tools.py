@@ -32,26 +32,79 @@ def _require_tools_session(session: dict[str, Any] = Depends(require_tools_acces
     return session
 
 
+def _normalized_upn(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _normalize_user_option(row: dict[str, Any], *, source: str) -> dict[str, Any] | None:
+    principal_name = str(row.get("principal_name") or "").strip()
+    mail = str(row.get("mail") or "").strip()
+    normalized_upn = _normalized_upn(principal_name or mail)
+    if not normalized_upn:
+        return None
+    return {
+        "id": str(row.get("id") or (f"{source}:{normalized_upn}")),
+        "display_name": str(row.get("display_name") or "").strip(),
+        "principal_name": principal_name or normalized_upn,
+        "mail": mail,
+        "enabled": row.get("enabled"),
+        "source": "entra" if source == "entra" else "saved",
+    }
+
+
+def _find_exact_entra_user(upn: str) -> dict[str, Any] | None:
+    normalized_upn = _normalized_upn(upn)
+    if not normalized_upn:
+        return None
+    for row in azure_cache.list_directory_objects("users", search=upn):
+        option = _normalize_user_option(row, source="entra")
+        if not option:
+            continue
+        if normalized_upn in {
+            _normalized_upn(option.get("principal_name")),
+            _normalized_upn(option.get("mail")),
+        }:
+            return option
+    return None
+
+
 @router.get("/users", response_model=list[OneDriveCopyUserOptionResponse])
 def search_onedrive_copy_users(
     search: str = Query(default=""),
     limit: int = Query(default=20, ge=1, le=50),
     _session: dict[str, Any] = Depends(_require_tools_session),
 ) -> list[OneDriveCopyUserOptionResponse]:
-    rows = azure_cache.list_directory_objects("users", search=search)
-    normalized = [
-        {
-            "id": str(row.get("id") or ""),
-            "display_name": str(row.get("display_name") or ""),
-            "principal_name": str(row.get("principal_name") or ""),
-            "mail": str(row.get("mail") or ""),
-            "enabled": row.get("enabled"),
-        }
-        for row in rows
-        if str(row.get("id") or "").strip()
-    ]
-    normalized.sort(key=lambda row: (str(row["display_name"]).lower(), str(row["principal_name"]).lower()))
-    return [OneDriveCopyUserOptionResponse.model_validate(row) for row in normalized[:limit]]
+    normalized_options: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    if search.strip():
+        entra_rows = []
+        for row in azure_cache.list_directory_objects("users", search=search):
+            option = _normalize_user_option(row, source="entra")
+            if not option:
+                continue
+            entra_rows.append(option)
+        entra_rows.sort(key=lambda row: (str(row["display_name"]).lower(), str(row["principal_name"]).lower()))
+        for option in entra_rows:
+            normalized_upn = _normalized_upn(option.get("principal_name") or option.get("mail"))
+            if not normalized_upn or normalized_upn in seen:
+                continue
+            seen.add(normalized_upn)
+            normalized_options.append(option)
+
+    for row in onedrive_copy_jobs.list_saved_user_options(search=search, limit=limit):
+        option = _normalize_user_option(row, source="saved")
+        if not option:
+            continue
+        normalized_upn = _normalized_upn(option.get("principal_name") or option.get("mail"))
+        if not normalized_upn or normalized_upn in seen:
+            continue
+        seen.add(normalized_upn)
+        normalized_options.append(option)
+        if len(normalized_options) >= limit:
+            break
+
+    return [OneDriveCopyUserOptionResponse.model_validate(row) for row in normalized_options[:limit]]
 
 
 @router.post("/jobs", response_model=OneDriveCopyJobResponse, status_code=202)
@@ -74,6 +127,17 @@ def create_onedrive_copy_job(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    for upn in (body.source_upn, body.destination_upn):
+        exact_match = _find_exact_entra_user(upn)
+        if exact_match:
+            onedrive_copy_jobs.remember_user_option(
+                upn,
+                display_name=str(exact_match.get("display_name") or ""),
+                principal_name=str(exact_match.get("principal_name") or ""),
+                mail=str(exact_match.get("mail") or ""),
+                source_hint="entra",
+                used_by_email=str(session.get("email") or ""),
+            )
     return OneDriveCopyJobResponse.model_validate(job)
 
 

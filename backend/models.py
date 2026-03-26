@@ -171,6 +171,7 @@ class ReportConfig(BaseModel):
     sort_dir: str = "desc"  # "asc" or "desc"
     group_by: Optional[str] = None
     include_excluded: bool = False
+    window_mode: Literal["7d", "30d", "custom"] = "30d"
 
 
 class ReportTemplateBase(BaseModel):
@@ -225,12 +226,15 @@ class ReportTemplateInsight(BaseModel):
 
     template_id: str
     template_name: str
+    window_mode: Literal["7d", "30d", "custom"] = "30d"
+    window_label: str
     window_field: str
     window_field_label: str
-    count_7d: int
-    count_30d: int
-    p95_daily_count_30d: float
-    trend_30d: list[ReportTemplateInsightPoint] = Field(default_factory=list)
+    window_start: str
+    window_end: str
+    count_in_window: int
+    p95_daily_count: float
+    trend: list[ReportTemplateInsightPoint] = Field(default_factory=list)
 
 
 class ReportTemplateExportSelectionRequest(BaseModel):
@@ -293,6 +297,15 @@ class BulkCommentRequest(BulkActionRequest):
     """Add the same comment to a batch of issues."""
 
     comment: str
+
+
+class TicketCreateRequest(BaseModel):
+    """Create a new Jira service request ticket."""
+
+    summary: str = ""
+    description: str = ""
+    priority: str = ""
+    request_type_id: str = ""
 
 
 class TicketUpdateRequest(BaseModel):
@@ -663,6 +676,7 @@ class OneDriveCopyUserOptionResponse(BaseModel):
     principal_name: str = ""
     mail: str = ""
     enabled: Optional[bool] = None
+    source: Literal["entra", "saved"] = "entra"
 
 
 class OneDriveCopyJobCreateRequest(BaseModel):

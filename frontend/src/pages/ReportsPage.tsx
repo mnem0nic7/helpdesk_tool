@@ -138,9 +138,7 @@ const PRESETS: Preset[] = [
     description: "Recent ticket activity and trends",
     icon: "calendar",
     accent: "sky",
-    filters: {
-      created_after: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),
-    },
+    filters: {},
     columns: ["key", "summary", "issue_type", "status", "priority", "assignee", "created", "resolved", "calendar_ttr_hours"],
     sort_field: "created",
     sort_dir: "desc",
@@ -245,6 +243,41 @@ function formatCompactMetric(value: number): string {
     return value.toFixed(1);
   }
   return String(value);
+}
+
+function windowModeLabel(mode: ReportConfig["window_mode"]): string {
+  if (mode === "7d") return "7 Day";
+  if (mode === "30d") return "30 Day";
+  return "Custom Range";
+}
+
+function formatWindowRange(start: string, end: string): string {
+  return `${formatPlainDate(start)} – ${formatPlainDate(end)}`;
+}
+
+function validateWindowMode(
+  mode: ReportConfig["window_mode"],
+  createdAfter: string,
+  createdBefore: string,
+): string | null {
+  if (mode !== "custom") {
+    return null;
+  }
+  if (!createdAfter || !createdBefore) {
+    return "Custom report window requires both Created After and Created Before.";
+  }
+  if (createdAfter > createdBefore) {
+    return "Created After must be on or before Created Before.";
+  }
+  return null;
+}
+
+function templateWindowValidationError(template: ReportTemplate): string | null {
+  return validateWindowMode(
+    template.config.window_mode ?? "30d",
+    template.config.filters.created_after ?? "",
+    template.config.filters.created_before ?? "",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -613,6 +646,7 @@ function applyReportTemplateConfig(
     setSortDir: (value: "asc" | "desc") => void;
     setGroupBy: (value: string | null) => void;
     setIncludeExcluded: (value: boolean) => void;
+    setWindowMode: (value: ReportConfig["window_mode"]) => void;
   },
 ) {
   const templateFilters = template.config.filters ?? {};
@@ -637,6 +671,7 @@ function applyReportTemplateConfig(
   setters.setSortDir(template.config.sort_dir === "asc" ? "asc" : "desc");
   setters.setGroupBy(template.config.group_by || null);
   setters.setIncludeExcluded(Boolean(template.config.include_excluded));
+  setters.setWindowMode(template.config.window_mode ?? "30d");
 }
 
 // ---------------------------------------------------------------------------
@@ -660,6 +695,7 @@ export default function ReportsPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [groupBy, setGroupBy] = useState<string | null>(null);
   const [includeExcluded, setIncludeExcluded] = useState(false);
+  const [windowMode, setWindowMode] = useState<ReportConfig["window_mode"]>("30d");
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [masterExporting, setMasterExporting] = useState(false);
@@ -684,7 +720,13 @@ export default function ReportsPage() {
     sort_dir: sortDir,
     group_by: groupBy,
     include_excluded: includeExcluded,
-  }), [filters, columns, sortField, sortDir, groupBy, includeExcluded]);
+    window_mode: windowMode,
+  }), [filters, columns, sortField, sortDir, groupBy, includeExcluded, windowMode]);
+
+  const reportWindowValidationError = useMemo(
+    () => validateWindowMode(windowMode, filters.created_after, filters.created_before),
+    [filters.created_after, filters.created_before, windowMode],
+  );
 
   // Debounced config for preview queries
   const [debouncedConfig, setDebouncedConfig] = useState(config);
@@ -702,6 +744,7 @@ export default function ReportsPage() {
   const { data: preview, isLoading, isFetching, isError } = useQuery<ReportPreviewResponse>({
     queryKey: ["report-preview", debouncedConfig],
     queryFn: () => api.previewReport(debouncedConfig),
+    enabled: !reportWindowValidationError,
   });
 
   const {
@@ -766,6 +809,7 @@ export default function ReportsPage() {
     setSortDir(preset.sort_dir);
     setGroupBy(preset.group_by);
     setIncludeExcluded(preset.include_excluded);
+    setWindowMode("30d");
     setActivePreset(preset.name);
     setSelectedTemplateId(null);
   }, []);
@@ -879,6 +923,10 @@ export default function ReportsPage() {
 
   // Export
   async function handleExport() {
+    if (reportWindowValidationError) {
+      setTemplateMessage({ tone: "error", text: reportWindowValidationError });
+      return;
+    }
     setExporting(true);
     try {
       await api.exportReport(config, selectedTemplate?.id);
@@ -924,6 +972,7 @@ export default function ReportsPage() {
       setSortDir,
       setGroupBy,
       setIncludeExcluded,
+      setWindowMode,
     });
     setActivePreset(null);
     setSelectedTemplateId(template.id);
@@ -941,6 +990,10 @@ export default function ReportsPage() {
     const trimmedName = templateName.trim();
     if (!trimmedName) {
       setTemplateMessage({ tone: "error", text: "Template name is required." });
+      return;
+    }
+    if (reportWindowValidationError) {
+      setTemplateMessage({ tone: "error", text: reportWindowValidationError });
       return;
     }
     const body: ReportTemplateSaveRequest = {
@@ -1012,7 +1065,7 @@ export default function ReportsPage() {
           <p className="mt-1 text-sm text-gray-500">
             {isOasisDev
               ? "Run the OasisDev workload report for Dave, or build your own custom export below."
-              : "Configure filters, select columns, and preview before exporting 7-day and 30-day workbook tabs."}
+              : "Configure filters, choose a saved report window, and preview before exporting the workbook."}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -1035,7 +1088,7 @@ export default function ReportsPage() {
                 ) : (
                   <>
                     <DownloadIcon className="h-3.5 w-3.5" />
-                    {`Master Workbook 7d/30d (${exportIncludedCount})`}
+                    {`Master Workbook (${exportIncludedCount})`}
                   </>
                 )}
               </button>
@@ -1057,7 +1110,7 @@ export default function ReportsPage() {
           </a>
           <button
             onClick={handleExport}
-            disabled={exporting}
+            disabled={exporting || Boolean(reportWindowValidationError)}
             className="inline-flex items-center gap-2 rounded-md bg-slate-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-slate-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {exporting ? (
@@ -1071,7 +1124,7 @@ export default function ReportsPage() {
             ) : (
               <>
                 <DownloadIcon className="h-4 w-4" />
-                Export 7d / 30d Excel
+                Export Excel
               </>
             )}
           </button>
@@ -1420,6 +1473,14 @@ export default function ReportsPage() {
                 const readinessClass = READINESS_STYLES[template.readiness] ?? READINESS_STYLES.custom;
                 const active = selectedTemplateId === template.id;
                 const insight = templateInsightsById[template.id] ?? null;
+                const windowError = templateWindowValidationError(template);
+                const effectiveWindowLabel = insight
+                  ? insight.window_mode === "custom"
+                    ? `Custom ${formatWindowRange(insight.window_start, insight.window_end)}`
+                    : insight.window_label
+                  : template.config.window_mode === "custom" && template.config.filters.created_after && template.config.filters.created_before
+                    ? `Custom ${formatWindowRange(template.config.filters.created_after, template.config.filters.created_before)}`
+                    : windowModeLabel(template.config.window_mode ?? "30d");
                 return (
                   <div
                     key={template.id}
@@ -1453,6 +1514,9 @@ export default function ReportsPage() {
                       <span className="rounded-full bg-gray-50 px-2 py-0.5 ring-1 ring-gray-200">
                         {template.category || "Uncategorized"}
                       </span>
+                      <span className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700 ring-1 ring-blue-200">
+                        {effectiveWindowLabel}
+                      </span>
                       <span>
                         {template.config.group_by ? `Grouped by ${FIELD_META[template.config.group_by]?.label ?? template.config.group_by}` : "Detail view"}
                       </span>
@@ -1465,28 +1529,31 @@ export default function ReportsPage() {
                     <div className="mt-3">
                       {isTemplateInsightsLoading && !insight ? (
                         <div className="rounded-md border border-gray-200 bg-gray-50/60 px-3 py-4 text-xs text-gray-500">
-                          Loading 7-day and 30-day metrics...
+                          Loading selected-window metrics...
                         </div>
                       ) : insight ? (
                         <>
-                          <div className="grid grid-cols-3 gap-2">
-                            <ReportInsightStat label="7d" value={formatCompactMetric(insight.count_7d)} tone="blue" />
-                            <ReportInsightStat label="30d" value={formatCompactMetric(insight.count_30d)} tone="emerald" />
-                            <ReportInsightStat label="P95 / Day" value={formatCompactMetric(insight.p95_daily_count_30d)} tone="amber" />
+                          <div className="grid grid-cols-2 gap-2">
+                            <ReportInsightStat label={insight.window_label} value={formatCompactMetric(insight.count_in_window)} tone="blue" />
+                            <ReportInsightStat label="P95 / Day" value={formatCompactMetric(insight.p95_daily_count)} tone="amber" />
                           </div>
                           <div className="mt-3 rounded-md border border-emerald-100 bg-emerald-50/40 p-2.5">
                             <div className="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
-                              <span>30-Day Trend</span>
+                              <span>{effectiveWindowLabel}</span>
                               <span>{insight.window_field_label} Window</span>
                             </div>
                             <div className="mt-2">
-                              <TemplateTrendSparkline points={insight.trend_30d} />
+                              <TemplateTrendSparkline points={insight.trend} />
                             </div>
                           </div>
                         </>
+                      ) : windowError ? (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-4 text-xs text-amber-700">
+                          {windowError}
+                        </div>
                       ) : (
                         <div className="rounded-md border border-dashed border-gray-200 bg-gray-50/60 px-3 py-4 text-xs text-gray-500">
-                          Rolling metrics are unavailable for this template.
+                          Windowed metrics are unavailable for this template.
                         </div>
                       )}
                     </div>
@@ -1507,7 +1574,9 @@ export default function ReportsPage() {
                           ? `Saved by ${template.created_by_name}`
                           : insight
                             ? `Windowed by ${insight.window_field_label.toLowerCase()} date`
-                            : "System"}
+                            : windowError
+                              ? "Custom range needs valid created dates"
+                              : "System"}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -1578,6 +1647,28 @@ export default function ReportsPage() {
                 />
               </label>
               <label className="block space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Report Window</span>
+                <select
+                  value={windowMode}
+                  onChange={(e) => setWindowMode(e.target.value as ReportConfig["window_mode"])}
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-700 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+                >
+                  <option value="7d">7 Day</option>
+                  <option value="30d">30 Day</option>
+                  <option value="custom">Custom Range</option>
+                </select>
+              </label>
+              {windowMode === "custom" && (
+                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-700">
+                  Custom range uses the existing <span className="font-semibold">Created After</span> and <span className="font-semibold">Created Before</span> filters below.
+                </div>
+              )}
+              {reportWindowValidationError && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+                  {reportWindowValidationError}
+                </div>
+              )}
+              <label className="block space-y-1.5">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Notes</span>
                 <textarea
                   value={templateNotes}
@@ -1615,6 +1706,14 @@ export default function ReportsPage() {
                     <div className="mt-1 text-lg font-semibold text-gray-900">{columns.length}</div>
                   </div>
                   <div className="rounded-md border border-gray-200 bg-white px-3 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">Window</div>
+                    <div className="mt-1 text-sm font-semibold text-gray-900">
+                      {windowMode === "custom" && filters.created_after && filters.created_before
+                        ? formatWindowRange(filters.created_after, filters.created_before)
+                        : windowModeLabel(windowMode)}
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-gray-200 bg-white px-3 py-3">
                     <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">View</div>
                     <div className="mt-1 text-sm font-semibold text-gray-900">
                       {groupBy ? `Grouped by ${FIELD_META[groupBy]?.label ?? groupBy}` : "Detail rows"}
@@ -1639,7 +1738,7 @@ export default function ReportsPage() {
                 <button
                   type="button"
                   onClick={handleSaveTemplate}
-                  disabled={templateBusy}
+                  disabled={templateBusy || Boolean(reportWindowValidationError)}
                   className="rounded-md bg-slate-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {templateBusy ? "Saving..." : selectedTemplate ? "Update Template" : "Save Template"}
@@ -1845,7 +1944,7 @@ export default function ReportsPage() {
               </svg>
             )}
           </div>
-          {preview && (
+          {preview && !reportWindowValidationError && (
             <div className="flex items-center gap-4 text-[11px] tabular-nums">
               <span className="text-gray-400">
                 Showing <span className="font-semibold text-gray-600">{Math.min(preview.rows.length, 100)}</span> of{" "}
@@ -1863,7 +1962,14 @@ export default function ReportsPage() {
 
         {/* Table */}
         <div className="overflow-x-auto">
-          {isLoading && !preview ? (
+          {reportWindowValidationError ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-2">
+              <svg className="w-8 h-8 text-amber-300" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.72-1.36 3.486 0l6.518 11.591c.75 1.334-.213 2.99-1.742 2.99H3.48c-1.53 0-2.492-1.656-1.743-2.99L8.257 3.1zM11 13a1 1 0 10-2 0 1 1 0 002 0zm-1-7a.75.75 0 00-.75.75v4a.75.75 0 001.5 0v-4A.75.75 0 0010 6z" clipRule="evenodd" />
+              </svg>
+              <span className="text-xs text-amber-600">{reportWindowValidationError}</span>
+            </div>
+          ) : isLoading && !preview ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
               <svg className="h-8 w-8 animate-spin text-slate-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />

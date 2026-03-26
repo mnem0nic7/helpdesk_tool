@@ -52,6 +52,57 @@ def test_create_job_rejects_same_source_and_destination(tmp_path):
         )
 
 
+def test_create_job_saves_recent_upns_for_future_dropdown_reuse(tmp_path):
+    manager = OneDriveCopyJobManager(db_path=str(tmp_path / "onedrive_copy_jobs.db"))
+
+    manager.create_job(
+        site_scope="primary",
+        source_upn="Former.User@example.com",
+        destination_upn="dest@example.com",
+        destination_folder="CopiedFiles",
+        test_mode=False,
+        test_file_limit=25,
+        exclude_system_folders=True,
+        requested_by_email="gallison@movedocs.com",
+        requested_by_name="Gallison",
+    )
+
+    saved = manager.list_saved_user_options(limit=10)
+
+    assert [row["principal_name"] for row in saved] == [
+        "dest@example.com",
+        "Former.User@example.com",
+    ]
+    assert saved[0]["source"] == "saved"
+    assert saved[1]["source"] == "saved"
+
+
+def test_remember_user_option_enriches_saved_rows_and_searches_by_upn(tmp_path):
+    manager = OneDriveCopyJobManager(db_path=str(tmp_path / "onedrive_copy_jobs.db"))
+    manager.remember_user_option(
+        "wayne.berry@librasolutionsgroup.com",
+        display_name="Wayne Berry",
+        principal_name="wayne.berry@librasolutionsgroup.com",
+        mail="wayne.berry@librasolutionsgroup.com",
+        source_hint="entra",
+        used_by_email="wberry@movedocs.com",
+    )
+
+    saved = manager.list_saved_user_options(search="wayne", limit=10)
+
+    assert saved == [
+        {
+            "id": "saved:wayne.berry@librasolutionsgroup.com",
+            "display_name": "Wayne Berry",
+            "principal_name": "wayne.berry@librasolutionsgroup.com",
+            "mail": "wayne.berry@librasolutionsgroup.com",
+            "enabled": None,
+            "source": "saved",
+            "last_used_at": saved[0]["last_used_at"],
+        }
+    ]
+
+
 def test_process_job_preserves_empty_folders_and_excludes_system_roots(tmp_path, monkeypatch):
     tree = {
         "source-root": [

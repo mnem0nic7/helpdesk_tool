@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 
@@ -26,7 +27,7 @@ from issue_cache import cache
 from jira_client import JiraClient, validate_jira_key
 from jira_write_service import add_fallback_internal_audit_note, get_jira_write_context, prepend_fallback_actor_line
 from metrics import _is_open, is_excluded_from_stale, issue_to_row, matches_libra_support_filter
-from models import TicketCommentRequest, TicketRefreshRequest, TicketTransitionRequest, TicketUpdateRequest
+from models import TicketCommentRequest, TicketCreateRequest, TicketRefreshRequest, TicketTransitionRequest, TicketUpdateRequest
 from requestor_sync_service import requestor_sync_service
 from request_type import extract_request_type_name_from_fields
 from site_context import get_current_site_scope, get_scoped_issues, key_is_visible_in_scope
@@ -37,6 +38,7 @@ router = APIRouter(prefix="/api")
 
 _client = JiraClient()
 _STALE_DAYS = 1
+_DEFAULT_CREATE_ISSUE_TYPE = "[System] Service request"
 
 
 def _match(issue: dict[str, Any], **filters: Any) -> bool:
@@ -596,6 +598,65 @@ async def get_ticket(key: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Issue {key} not found")
 
 
+@router.post("/tickets")
+async def create_ticket(
+    body: TicketCreateRequest,
+    _admin: dict = Depends(require_admin),
+) -> dict[str, Any]:
+    """Create a new Jira service request ticket on the primary host."""
+    if get_current_site_scope() != "primary":
+        raise HTTPException(status_code=404, detail="Ticket creation is only available on it-app")
+
+    summary = str(body.summary or "").strip()
+    priority = str(body.priority or "").strip()
+    request_type_id = str(body.request_type_id or "").strip()
+    description = str(body.description or "")
+
+    if not summary:
+        raise HTTPException(status_code=400, detail="summary cannot be empty")
+    if not priority:
+        raise HTTPException(status_code=400, detail="priority cannot be empty")
+    if not request_type_id:
+        raise HTTPException(status_code=400, detail="request_type_id cannot be empty")
+
+    try:
+        ctx = get_jira_write_context(_admin, shared_client=_client)
+        created_issue = ctx.client.create_issue(
+            project_key=JIRA_PROJECT,
+            issue_type=_DEFAULT_CREATE_ISSUE_TYPE,
+            summary=summary,
+            description=description,
+        )
+        key = str(created_issue.get("key") or "").strip().upper()
+        if not key:
+            raise HTTPException(status_code=502, detail="Jira did not return a created issue key")
+        ctx.client.update_priority(key, priority)
+        ctx.client.set_request_type(key, request_type_id)
+        if ctx.is_fallback:
+            add_fallback_internal_audit_note(
+                key,
+                action_summary=f"Created ticket with priority {priority} and request type {request_type_id}",
+                session=_admin,
+                shared_client=_client,
+            )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to create ticket in project %s", JIRA_PROJECT)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    issue = _client.get_issue(key)
+    cache.upsert_issue(issue)
+    detail = _load_ticket_detail(key, issue=issue)
+    return {
+        "created_key": key,
+        "created_id": str(created_issue.get("id") or "").strip(),
+        "detail": detail,
+    }
+
+
 @router.post("/tickets/{key}/sync-reporter")
 async def sync_ticket_reporter(
     key: str,
@@ -648,6 +709,10 @@ async def sync_ticket_requestor(
         }
     except HTTPException:
         raise
+    except requests.HTTPError as exc:
+        logger.exception("Failed to sync requestor for ticket %s", key)
+        status_code = getattr(getattr(exc, "response", None), "status_code", None) or 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Failed to sync requestor for ticket %s", key)
         raise HTTPException(status_code=400, detail=str(exc)) from exc

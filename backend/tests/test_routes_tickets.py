@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+import requests
+from unittest.mock import MagicMock
 
 
 # ===== Direct _match() tests =====
@@ -455,6 +457,147 @@ def _request_comments() -> list[dict[str, Any]]:
 
 
 class TestTicketDetailAndActions:
+    def test_create_ticket_creates_issue_updates_fields_and_returns_detail(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        issue["key"] = "OIT-999"
+        issue["fields"]["summary"] = "New laptop request"
+        issue["fields"]["priority"] = {"name": "Medium"}
+        issue["fields"]["customfield_11102"]["requestType"]["name"] = "Laptop"
+
+        calls: list[tuple[Any, ...]] = []
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "create_issue",
+            lambda **kwargs: calls.append(("create_issue", kwargs)) or {"id": "100999", "key": "OIT-999"},
+        )
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "update_priority",
+            lambda key, value: calls.append(("priority", key, value)),
+        )
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "set_request_type",
+            lambda key, value: calls.append(("request_type", key, value)),
+        )
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
+        monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
+        monkeypatch.setattr(
+            routes_tickets.requestor_sync_service,
+            "maybe_reconcile_issue",
+            lambda issue: {
+                "updated": False,
+                "message": "",
+                "requestor_identity": {
+                    "extracted_email": "",
+                    "directory_match": False,
+                    "jira_account_id": "",
+                    "jira_status": "unmatched",
+                    "message": "",
+                },
+            },
+        )
+        monkeypatch.setattr(routes_tickets, "add_fallback_internal_audit_note", lambda *args, **kwargs: None)
+
+        resp = test_client.post(
+            "/api/tickets",
+            json={
+                "summary": "New laptop request",
+                "description": "Please create a laptop ticket.",
+                "priority": "Medium",
+                "request_type_id": "122",
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["created_key"] == "OIT-999"
+        assert data["created_id"] == "100999"
+        assert data["detail"]["ticket"]["key"] == "OIT-999"
+        assert calls == [
+            (
+                "create_issue",
+                {
+                    "project_key": "OIT",
+                    "issue_type": "[System] Service request",
+                    "summary": "New laptop request",
+                    "description": "Please create a laptop ticket.",
+                },
+            ),
+            ("priority", "OIT-999", "Medium"),
+            ("request_type", "OIT-999", "122"),
+        ]
+        assert issue in [call.args[0] for call in mock_cache.upsert_issue.call_args_list]
+
+    def test_create_ticket_rejects_missing_required_fields(self, test_client):
+        missing_summary = test_client.post(
+            "/api/tickets",
+            json={
+                "summary": "   ",
+                "description": "",
+                "priority": "",
+                "request_type_id": "",
+            },
+        )
+        missing_priority = test_client.post(
+            "/api/tickets",
+            json={
+                "summary": "Need VPN access",
+                "description": "",
+                "priority": "",
+                "request_type_id": "122",
+            },
+        )
+        missing_request_type = test_client.post(
+            "/api/tickets",
+            json={
+                "summary": "Need VPN access",
+                "description": "",
+                "priority": "High",
+                "request_type_id": "",
+            },
+        )
+
+        assert missing_summary.status_code == 400
+        assert missing_summary.json()["detail"] == "summary cannot be empty"
+        assert missing_priority.status_code == 400
+        assert missing_priority.json()["detail"] == "priority cannot be empty"
+        assert missing_request_type.status_code == 400
+        assert missing_request_type.json()["detail"] == "request_type_id cannot be empty"
+
+    def test_create_ticket_is_primary_only(self, test_client):
+        resp = test_client.post(
+            "/api/tickets",
+            headers={"host": "oasisdev.movedocs.com"},
+            json={
+                "summary": "VPN access",
+                "description": "",
+                "priority": "High",
+                "request_type_id": "122",
+            },
+        )
+
+        assert resp.status_code == 404
+
+    def test_create_ticket_requires_admin(self, test_client, monkeypatch):
+        import auth
+
+        monkeypatch.setattr(auth, "is_admin_user", lambda email: False)
+
+        resp = test_client.post(
+            "/api/tickets",
+            json={
+                "summary": "VPN access",
+                "description": "",
+                "priority": "High",
+                "request_type_id": "122",
+            },
+        )
+
+        assert resp.status_code == 403
+
     def test_get_ticket_detail_returns_full_payload(self, test_client, mock_cache, monkeypatch):
         import routes_tickets
 
@@ -820,6 +963,27 @@ class TestTicketDetailAndActions:
         assert resp.json()["updated"] is True
         assert resp.json()["message"] == "Created Jira customer and synced reporter to Grace Hopper."
         assert resp.json()["detail"]["requestor_identity"]["jira_status"] == "created_jira_customer"
+
+    def test_sync_ticket_requestor_preserves_upstream_http_status(self, test_client, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
+
+        response = MagicMock()
+        response.status_code = 412
+        error = requests.HTTPError("412 Precondition Failed — Jira error: experimental endpoint", response=response)
+
+        def _raise(issue, force=False):
+            raise error
+
+        monkeypatch.setattr(routes_tickets.requestor_sync_service, "reconcile_issue", _raise)
+
+        resp = test_client.post("/api/tickets/OIT-123/sync-requestor")
+
+        assert resp.status_code == 412
+        assert "412 Precondition Failed" in resp.json()["detail"]
 
     def test_get_requestor_sync_status_returns_recent_rows(self, test_client, monkeypatch):
         import routes_tickets

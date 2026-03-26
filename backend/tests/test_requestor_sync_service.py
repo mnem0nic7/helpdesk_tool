@@ -326,3 +326,40 @@ def test_reconcile_issue_prefers_extracted_email_over_occ_creator_name(tmp_path)
     assert result["updated"] is True
     assert result["requestor_identity"]["match_source"] == "reporter_email"
     assert client.created_customers == [("grace.hopper@example.com", "Grace Hopper")]
+
+
+def test_reconcile_issue_reuses_existing_jira_customer_without_creating_duplicate(tmp_path):
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    client = FakeJiraClient()
+    service = RequestorSyncService(store=store, client=client)
+
+    service.refresh_directory_emails(
+        [
+            {
+                "id": "user-1",
+                "display_name": "Grace Hopper",
+                "mail": "grace.hopper@example.com",
+                "primary_mail": "grace.hopper@example.com",
+                "principal_name": "grace.hopper@example.com",
+                "email_aliases": [],
+                "account_class": "user",
+            }
+        ]
+    )
+    client.customer_rows = [
+        {
+            "accountId": "acct-existing",
+            "displayName": "Grace Hopper",
+            "emailAddress": "grace.hopper@example.com",
+        }
+    ]
+    issue = _issue("Reporter Email: grace.hopper@example.com")
+
+    result = service.reconcile_issue(issue, force=True)
+
+    assert result["updated"] is True
+    assert result["requestor_identity"]["jira_status"] == "updated_reporter"
+    assert client.created_customers == []
+    assert client.service_desk_adds == [("desk-1", ["acct-existing"])]
+    assert client.reporter_updates == [("OIT-123", "acct-existing")]
+    assert issue["fields"]["reporter"]["emailAddress"] == "grace.hopper@example.com"

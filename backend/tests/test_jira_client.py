@@ -91,6 +91,43 @@ def test_create_issue_posts_expected_payload():
     assert payload["fields"]["description"]["type"] == "doc"
 
 
+def test_get_service_desk_customers_sends_experimental_opt_in_header():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = {"values": [], "isLastPage": True}
+    client.session.get = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    customers = client.get_service_desk_customers("desk-1", query="grace@example.com")
+
+    assert customers == []
+    headers = client.session.get.call_args.kwargs["headers"]
+    assert headers["X-ExperimentalApi"] == "opt-in"
+
+
+def test_create_customer_does_not_send_experimental_header():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = {"accountId": "acct-1"}
+    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    client.create_customer(email="grace@example.com", display_name="Grace Hopper")
+
+    assert client.session.post.call_args.kwargs.get("headers") is None
+
+
+def test_add_customers_to_service_desk_does_not_send_experimental_header():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    client.add_customers_to_service_desk("desk-1", ["acct-1"])
+
+    assert client.session.post.call_args.kwargs.get("headers") is None
+
+
 def test_get_issue_changelog_all_paginates(monkeypatch):
     client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
 

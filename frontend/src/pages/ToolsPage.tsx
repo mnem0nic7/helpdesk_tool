@@ -12,6 +12,16 @@ const EXCLUDED_ROOT_FOLDERS = [
   "Videos",
 ];
 
+const UPN_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+
+type PickerOptionSource = OneDriveCopyUserOption["source"] | "manual";
+
+interface ToolUserPickerOption extends OneDriveCopyUserOption {
+  canonical_upn: string;
+  source: PickerOptionSource;
+  synthetic?: boolean;
+}
+
 function formatDateTime(value: string | null): string {
   if (!value) return "-";
   const date = new Date(value);
@@ -67,6 +77,78 @@ function buttonClass(kind: "primary" | "secondary" = "secondary", disabled = fal
   return "rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50";
 }
 
+function normalizeUpn(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function looksLikeUpn(value: string): boolean {
+  return UPN_PATTERN.test(value.trim());
+}
+
+function optionCanonicalUpn(option: Pick<OneDriveCopyUserOption, "principal_name" | "mail">): string {
+  return option.principal_name.trim() || option.mail.trim();
+}
+
+function buildPickerOptions(query: string, options: OneDriveCopyUserOption[] | undefined): ToolUserPickerOption[] {
+  const trimmedQuery = query.trim();
+  const normalizedQuery = normalizeUpn(trimmedQuery);
+  const result: ToolUserPickerOption[] = [];
+  const seen = new Set<string>();
+
+  for (const option of options ?? []) {
+    const canonicalUpn = optionCanonicalUpn(option);
+    const normalizedUpn = normalizeUpn(canonicalUpn);
+    if (!normalizedUpn || seen.has(normalizedUpn)) continue;
+    seen.add(normalizedUpn);
+    result.push({
+      ...option,
+      canonical_upn: canonicalUpn,
+    });
+  }
+
+  if (trimmedQuery && looksLikeUpn(trimmedQuery) && !seen.has(normalizedQuery)) {
+    result.push({
+      id: `manual:${normalizedQuery}`,
+      display_name: `Use and save "${trimmedQuery}"`,
+      principal_name: trimmedQuery,
+      mail: "",
+      enabled: true,
+      source: "manual",
+      canonical_upn: trimmedQuery,
+      synthetic: true,
+    });
+  }
+
+  return result;
+}
+
+function optionSubtitle(option: ToolUserPickerOption): string {
+  if (option.synthetic) {
+    return "Not found in Entra cache. Save this UPN locally for reuse.";
+  }
+  const canonicalUpn = option.canonical_upn || option.mail || "No directory email";
+  const segments = [canonicalUpn];
+  if (option.source === "saved") {
+    segments.push("Saved UPN");
+  } else {
+    segments.push("Entra cache");
+  }
+  if (option.source === "entra" && option.enabled === false) {
+    segments.push("Disabled");
+  }
+  return segments.join(" • ");
+}
+
+function sourceBadgeClass(source: PickerOptionSource): string {
+  if (source === "saved") {
+    return "bg-amber-100 text-amber-800";
+  }
+  if (source === "manual") {
+    return "bg-violet-100 text-violet-800";
+  }
+  return "bg-sky-100 text-sky-800";
+}
+
 function CountCard({ label, value, tone = "text-slate-900" }: { label: string; value: string; tone?: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -119,26 +201,30 @@ function LoginAuditPanel({ events }: { events: AppLoginAuditEvent[] }) {
   );
 }
 
-function DirectoryTypeaheadField({
+function DirectoryComboboxField({
   label,
   value,
-  onChange,
-  query,
+  onInputChange,
+  onSelect,
+  selected,
   loading,
   options,
   placeholder,
+  emptyMessage,
 }: {
   label: string;
   value: string;
-  onChange: (value: string) => void;
-  query: string;
+  onInputChange: (value: string) => void;
+  onSelect: (value: ToolUserPickerOption) => void;
+  selected: ToolUserPickerOption | null;
   loading: boolean;
-  options: OneDriveCopyUserOption[] | undefined;
+  options: ToolUserPickerOption[];
   placeholder: string;
+  emptyMessage: string;
 }) {
   const [focused, setFocused] = useState(false);
-  const trimmedQuery = query.trim();
-  const showDropdown = focused && trimmedQuery.length >= 2;
+  const showDropdown = focused && (loading || options.length > 0 || value.trim().length > 0);
+  const showLoading = loading && value.trim().length > 0;
 
   return (
     <label className="block space-y-2">
@@ -146,43 +232,54 @@ function DirectoryTypeaheadField({
       <div className="relative">
         <input
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => onInputChange(event.target.value)}
           onFocus={() => setFocused(true)}
           onBlur={() => window.setTimeout(() => setFocused(false), 150)}
           className={inputClass()}
           placeholder={placeholder}
           autoComplete="off"
           spellCheck={false}
+          aria-expanded={showDropdown}
+          aria-autocomplete="list"
         />
         {showDropdown ? (
           <div className="absolute z-10 mt-2 max-h-64 w-full overflow-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-            {loading ? (
+            {showLoading ? (
               <div className="px-3 py-2 text-sm text-slate-500">Searching directory...</div>
-            ) : options && options.length > 0 ? (
+            ) : options.length > 0 ? (
               options.map((option) => {
-                const preferredValue = option.principal_name || option.mail;
                 return (
                   <button
                     key={option.id}
                     type="button"
                     className="flex w-full flex-col rounded-xl px-3 py-2 text-left transition hover:bg-slate-50"
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => onChange(preferredValue)}
+                    onClick={() => onSelect(option)}
                   >
-                    <span className="text-sm font-medium text-slate-900">{option.display_name || preferredValue}</span>
-                    <span className="text-xs text-slate-500">
-                      {option.principal_name || option.mail || "No directory email"}
-                      {option.enabled === false ? " - disabled" : ""}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-slate-900">
+                        {option.display_name || option.canonical_upn}
+                      </span>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${sourceBadgeClass(option.source)}`}>
+                        {option.source === "manual" ? "Use + save" : option.source}
+                      </span>
+                    </div>
+                    <span className="text-xs text-slate-500">{optionSubtitle(option)}</span>
                   </button>
                 );
               })
             ) : (
-              <div className="px-3 py-2 text-sm text-slate-500">No cached match found. You can still paste a UPN manually.</div>
+              <div className="px-3 py-2 text-sm text-slate-500">{emptyMessage}</div>
             )}
           </div>
         ) : null}
       </div>
+      {selected ? (
+        <div className="text-xs text-slate-500">
+          Selected: {selected.canonical_upn}
+          {selected.source === "saved" ? " • saved locally" : selected.source === "manual" ? " • will be saved locally" : " • from Entra"}
+        </div>
+      ) : null}
     </label>
   );
 }
@@ -288,16 +385,18 @@ function OneDriveCopyJobDetail({ job }: { job: OneDriveCopyJobStatus }) {
 export default function ToolsPage() {
   const branding = getSiteBranding();
   const queryClient = useQueryClient();
-  const [sourceUpn, setSourceUpn] = useState("");
-  const [destinationUpn, setDestinationUpn] = useState("");
+  const [sourceUpnInput, setSourceUpnInput] = useState("");
+  const [destinationUpnInput, setDestinationUpnInput] = useState("");
+  const [selectedSource, setSelectedSource] = useState<ToolUserPickerOption | null>(null);
+  const [selectedDestination, setSelectedDestination] = useState<ToolUserPickerOption | null>(null);
   const [destinationFolder, setDestinationFolder] = useState("");
   const [testMode, setTestMode] = useState(false);
   const [testFileLimit, setTestFileLimit] = useState("25");
   const [excludeSystemFolders, setExcludeSystemFolders] = useState(true);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [formError, setFormError] = useState("");
-  const deferredSourceSearch = useDeferredValue(sourceUpn);
-  const deferredDestinationSearch = useDeferredValue(destinationUpn);
+  const deferredSourceSearch = useDeferredValue(sourceUpnInput);
+  const deferredDestinationSearch = useDeferredValue(destinationUpnInput);
 
   const meQuery = useQuery({
     queryKey: ["auth", "me"],
@@ -309,16 +408,19 @@ export default function ToolsPage() {
   const sourceSearchQuery = useQuery({
     queryKey: ["onedrive-copy", "users", deferredSourceSearch],
     queryFn: () => api.searchOneDriveCopyUsers(deferredSourceSearch.trim(), 8),
-    enabled: canAccessTools && deferredSourceSearch.trim().length >= 2,
+    enabled: canAccessTools,
     staleTime: 30_000,
   });
 
   const destinationSearchQuery = useQuery({
     queryKey: ["onedrive-copy", "users", deferredDestinationSearch],
     queryFn: () => api.searchOneDriveCopyUsers(deferredDestinationSearch.trim(), 8),
-    enabled: canAccessTools && deferredDestinationSearch.trim().length >= 2,
+    enabled: canAccessTools,
     staleTime: 30_000,
   });
+
+  const sourceOptions = buildPickerOptions(sourceUpnInput, sourceSearchQuery.data);
+  const destinationOptions = buildPickerOptions(destinationUpnInput, destinationSearchQuery.data);
 
   const jobsQuery = useQuery({
     queryKey: ["onedrive-copy", "jobs"],
@@ -357,8 +459,8 @@ export default function ToolsPage() {
   const createJobMutation = useMutation({
     mutationFn: () =>
       api.createOneDriveCopyJob({
-        source_upn: sourceUpn.trim(),
-        destination_upn: destinationUpn.trim(),
+        source_upn: selectedSource?.canonical_upn.trim() || "",
+        destination_upn: selectedDestination?.canonical_upn.trim() || "",
         destination_folder: destinationFolder.trim(),
         test_mode: testMode,
         test_file_limit: Math.max(1, Number.parseInt(testFileLimit, 10) || 25),
@@ -374,21 +476,58 @@ export default function ToolsPage() {
       setFormError(error instanceof Error ? error.message : "Failed to queue the OneDrive copy job.");
     },
   });
+  const canQueueJob =
+    !!selectedSource &&
+    !!selectedDestination &&
+    destinationFolder.trim().length > 0 &&
+    !createJobMutation.isPending;
 
   function submitJob() {
     if (!canAccessTools) {
       setFormError("Tools access is restricted.");
       return;
     }
-    if (!sourceUpn.trim() || !destinationUpn.trim() || !destinationFolder.trim()) {
-      setFormError("Source UPN, destination UPN, and destination folder are all required.");
+    if (!selectedSource || !selectedDestination) {
+      setFormError("Select both the source and destination users from the dropdown before queueing the job.");
       return;
     }
-    if (sourceUpn.trim().toLowerCase() === destinationUpn.trim().toLowerCase()) {
+    if (!destinationFolder.trim()) {
+      setFormError("Destination folder is required.");
+      return;
+    }
+    if (normalizeUpn(selectedSource.canonical_upn) === normalizeUpn(selectedDestination.canonical_upn)) {
       setFormError("Source and destination UPNs must be different.");
       return;
     }
     createJobMutation.mutate();
+  }
+
+  function handleSourceInputChange(value: string) {
+    setSourceUpnInput(value);
+    setFormError("");
+    if (selectedSource && normalizeUpn(value) !== normalizeUpn(selectedSource.canonical_upn)) {
+      setSelectedSource(null);
+    }
+  }
+
+  function handleDestinationInputChange(value: string) {
+    setDestinationUpnInput(value);
+    setFormError("");
+    if (selectedDestination && normalizeUpn(value) !== normalizeUpn(selectedDestination.canonical_upn)) {
+      setSelectedDestination(null);
+    }
+  }
+
+  function handleSourceSelect(option: ToolUserPickerOption) {
+    setSelectedSource(option);
+    setSourceUpnInput(option.canonical_upn);
+    setFormError("");
+  }
+
+  function handleDestinationSelect(option: ToolUserPickerOption) {
+    setSelectedDestination(option);
+    setDestinationUpnInput(option.canonical_upn);
+    setFormError("");
   }
 
   return (
@@ -436,23 +575,27 @@ export default function ToolsPage() {
             </div>
 
             <div className="mt-6 grid gap-4 md:grid-cols-2">
-              <DirectoryTypeaheadField
+              <DirectoryComboboxField
                 label="Source user UPN"
-                value={sourceUpn}
-                onChange={setSourceUpn}
-                query={deferredSourceSearch}
+                value={sourceUpnInput}
+                onInputChange={handleSourceInputChange}
+                onSelect={handleSourceSelect}
+                selected={selectedSource}
                 loading={sourceSearchQuery.isLoading}
-                options={sourceSearchQuery.data}
+                options={sourceOptions}
                 placeholder="dahrens@example.com"
+                emptyMessage="No saved or Entra matches found yet. Enter a valid UPN to use and save it."
               />
-              <DirectoryTypeaheadField
+              <DirectoryComboboxField
                 label="Destination user UPN"
-                value={destinationUpn}
-                onChange={setDestinationUpn}
-                query={deferredDestinationSearch}
+                value={destinationUpnInput}
+                onInputChange={handleDestinationInputChange}
+                onSelect={handleDestinationSelect}
+                selected={selectedDestination}
                 loading={destinationSearchQuery.isLoading}
-                options={destinationSearchQuery.data}
+                options={destinationOptions}
                 placeholder="sstutsman@example.com"
+                emptyMessage="No saved or Entra matches found yet. Enter a valid UPN to use and save it."
               />
             </div>
 
@@ -461,7 +604,10 @@ export default function ToolsPage() {
                 <span className="text-sm font-medium text-slate-700">Destination folder name</span>
                 <input
                   value={destinationFolder}
-                  onChange={(event) => setDestinationFolder(event.target.value)}
+                  onChange={(event) => {
+                    setDestinationFolder(event.target.value);
+                    setFormError("");
+                  }}
                   className={inputClass()}
                   placeholder="DaveAhrensFilesFull_V4"
                 />
@@ -518,8 +664,8 @@ export default function ToolsPage() {
               <button
                 type="button"
                 onClick={submitJob}
-                disabled={createJobMutation.isPending}
-                className={buttonClass("primary", createJobMutation.isPending)}
+                disabled={!canQueueJob}
+                className={buttonClass("primary", !canQueueJob)}
               >
                 {createJobMutation.isPending ? "Queueing..." : "Queue OneDrive Copy"}
               </button>

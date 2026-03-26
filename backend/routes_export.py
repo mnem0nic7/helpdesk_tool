@@ -34,7 +34,11 @@ from models import (
     ReportTemplateUpdateRequest,
 )
 from report_template_store import report_template_store
-from report_workbook_builder import ReportWorkbookBuilder
+from report_workbook_builder import (
+    ReportWorkbookBuilder,
+    report_window_mode,
+    resolve_report_window_spec,
+)
 from routes_tickets import _match
 from site_context import get_current_site_scope, get_scoped_issues, get_site_profile
 
@@ -110,7 +114,10 @@ def _apply_runtime_template_readiness(
     )
     adjusted: list[ReportTemplate] = []
     for template in templates:
-        runtime_readiness = builder.runtime_template_readiness(template)
+        try:
+            runtime_readiness = builder.runtime_template_readiness(template)
+        except ValueError:
+            runtime_readiness = "gap"
         adjusted.append(template.model_copy(update={"readiness": runtime_readiness}))
     return adjusted
 
@@ -171,11 +178,6 @@ _REPORT_WINDOW_LABELS: dict[str, str] = {
     "updated": "Updated",
     "resolved": "Resolved",
 }
-
-_WINDOW_EXPORT_SPECS: list[tuple[str, int]] = [
-    ("7 Day", 7),
-    ("30 Day", 30),
-]
 
 _DETAIL_WIDTH_DEFAULTS: dict[str, int] = {
     "key": 12,
@@ -257,15 +259,27 @@ def _issues_matching_config(
     config: ReportConfig,
     *,
     issues: list[dict[str, Any]] | None = None,
+    report_name: str = "",
+    today: date | None = None,
 ) -> list[dict[str, Any]]:
     """Return scoped Jira issues that match the report config filters."""
     source_issues = issues if issues is not None else _calculation_scoped_issues(include_excluded_on_primary=config.include_excluded)
     source_issues = [iss for iss in source_issues if JiraClient.is_tracked_issue(iss)]
     filters = config.filters.model_dump(exclude_none=True)
+    if report_window_mode(config) != "custom":
+        filters.pop("created_after", None)
+        filters.pop("created_before", None)
     for k in ("open_only", "stale_only"):
         if not filters.get(k):
             filters.pop(k, None)
-    return [iss for iss in source_issues if _match(iss, **filters)]
+    matched = [iss for iss in source_issues if _match(iss, **filters)]
+    window_field = _date_field_for_report_window_config(config, report_name=report_name)
+    window_spec = resolve_report_window_spec(config, today=today or _today_utc())
+    return [
+        issue
+        for issue in matched
+        if (issue_day := _issue_date_for_window(issue, window_field)) and window_spec.start <= issue_day <= window_spec.end
+    ]
 
 
 def _rows_from_issues(config: ReportConfig, issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -508,64 +522,63 @@ def _build_master_report_workbook(
         window_field = _date_field_for_report_window(template)
         window_field_label = _REPORT_WINDOW_LABELS.get(window_field, "Created")
         base_issues = _calculation_scoped_issues(include_excluded_on_primary=config.include_excluded)
+        window_spec = resolve_report_window_spec(config, today=today or _today_utc())
+        rows, window_start, window_end = _windowed_rows_for_report(
+            config,
+            window_field=window_field,
+            report_name=template.name,
+            issues=base_issues,
+            today=today,
+        )
+        sheet_name = _unique_sheet_name(f"{template.name} {window_spec.label}", used_names)
+        metadata = [
+            ("Report", template.name),
+            ("Window", window_spec.label),
+            ("Window Field", window_field_label),
+            ("Window Start", window_start.isoformat()),
+            ("Window End", window_end.isoformat()),
+            ("Category", template.category or "Uncategorized"),
+            ("Readiness", template.readiness or "custom"),
+            ("View", view_type),
+            ("Description", template.description or ""),
+            ("Notes", template.notes or ""),
+            ("Generated", now.isoformat()),
+        ]
 
-        for window_label, window_days in _WINDOW_EXPORT_SPECS:
-            rows, window_start, window_end = _windowed_rows_for_report(
-                config,
-                window_field=window_field,
-                window_days=window_days,
-                issues=base_issues,
-                today=today,
+        sheet = wb.create_sheet(sheet_name)
+        if config.group_by:
+            rendered_rows = _write_grouped_sheet(
+                sheet,
+                title=sheet_name,
+                group_by=config.group_by,
+                rows=rows,
+                metadata=metadata,
             )
-            sheet_name = _unique_sheet_name(f"{template.name} {window_days}d", used_names)
-            metadata = [
-                ("Report", template.name),
-                ("Window", window_label),
-                ("Window Field", window_field_label),
-                ("Window Start", window_start.isoformat()),
-                ("Window End", window_end.isoformat()),
-                ("Category", template.category or "Uncategorized"),
-                ("Readiness", template.readiness or "custom"),
-                ("View", view_type),
-                ("Description", template.description or ""),
-                ("Notes", template.notes or ""),
-                ("Generated", now.isoformat()),
-            ]
+            exported_row_count = len(rendered_rows)
+        else:
+            columns = config.columns or DEFAULT_COLUMNS
+            _write_detail_sheet(
+                sheet,
+                title=sheet_name,
+                columns=columns,
+                rows=rows,
+                metadata=metadata,
+            )
+            exported_row_count = len(rows)
 
-            sheet = wb.create_sheet(sheet_name)
-            if config.group_by:
-                rendered_rows = _write_grouped_sheet(
-                    sheet,
-                    title=sheet_name,
-                    group_by=config.group_by,
-                    rows=rows,
-                    metadata=metadata,
-                )
-                exported_row_count = len(rendered_rows)
-            else:
-                columns = config.columns or DEFAULT_COLUMNS
-                _write_detail_sheet(
-                    sheet,
-                    title=sheet_name,
-                    columns=columns,
-                    rows=rows,
-                    metadata=metadata,
-                )
-                exported_row_count = len(rows)
-
-            index_ws.cell(row=index_row, column=1, value=template.name)
-            index_ws.cell(row=index_row, column=2, value=sheet_name)
-            index_ws.cell(row=index_row, column=3, value=window_label)
-            index_ws.cell(row=index_row, column=4, value=window_field_label)
-            index_ws.cell(row=index_row, column=5, value=window_start.isoformat())
-            index_ws.cell(row=index_row, column=6, value=window_end.isoformat())
-            index_ws.cell(row=index_row, column=7, value=template.category or "")
-            index_ws.cell(row=index_row, column=8, value=template.readiness or "custom")
-            index_ws.cell(row=index_row, column=9, value=view_type)
-            index_ws.cell(row=index_row, column=10, value=exported_row_count)
-            index_ws.cell(row=index_row, column=11, value=template.description or "")
-            index_ws.cell(row=index_row, column=12, value=template.notes or "")
-            index_row += 1
+        index_ws.cell(row=index_row, column=1, value=template.name)
+        index_ws.cell(row=index_row, column=2, value=sheet_name)
+        index_ws.cell(row=index_row, column=3, value=window_spec.label)
+        index_ws.cell(row=index_row, column=4, value=window_field_label)
+        index_ws.cell(row=index_row, column=5, value=window_start.isoformat())
+        index_ws.cell(row=index_row, column=6, value=window_end.isoformat())
+        index_ws.cell(row=index_row, column=7, value=template.category or "")
+        index_ws.cell(row=index_row, column=8, value=template.readiness or "custom")
+        index_ws.cell(row=index_row, column=9, value=view_type)
+        index_ws.cell(row=index_row, column=10, value=exported_row_count)
+        index_ws.cell(row=index_row, column=11, value=template.description or "")
+        index_ws.cell(row=index_row, column=12, value=template.notes or "")
+        index_row += 1
 
     index_ws.freeze_panes = "A2"
     index_ws.auto_filter.ref = f"A1:L{index_row - 1}"
@@ -623,6 +636,8 @@ def _parse_issue_date(issue: dict[str, Any], field_name: str) -> date | None:
 
 def _date_field_for_report_window_config(config: ReportConfig, *, report_name: str = "") -> str:
     """Choose the most useful date field for rolling report windows."""
+    if report_window_mode(config) == "custom":
+        return "created"
     sort_field = str(config.sort_field or "").strip().lower()
     if sort_field in _REPORT_WINDOW_LABELS:
         return sort_field
@@ -679,28 +694,34 @@ def _report_view_type(config: ReportConfig) -> str:
     return "Grouped" if config.group_by else "Detail"
 
 
+def _validate_report_window(config: ReportConfig, *, template_name: str | None = None) -> None:
+    try:
+        resolve_report_window_spec(config, today=_today_utc())
+    except ValueError as exc:
+        prefix = f'Template "{template_name}": ' if template_name else ""
+        raise HTTPException(status_code=400, detail=f"{prefix}{exc}") from exc
+
+
 def _windowed_rows_for_report(
     config: ReportConfig,
     *,
     window_field: str,
-    window_days: int,
+    report_name: str = "",
     issues: list[dict[str, Any]] | None = None,
     today: date | None = None,
 ) -> tuple[list[dict[str, Any]], date, date]:
-    """Return sorted report rows for a rolling report window."""
-    matched_issues = _issues_matching_config(config, issues=issues)
-    window_issues, window_start, window_end = _filter_issues_for_report_window(
-        matched_issues,
-        window_field=window_field,
-        window_days=window_days,
-        today=today,
-    )
-    return _rows_from_issues(config, window_issues), window_start, window_end
+    """Return sorted report rows for the configured report window."""
+    window_spec = resolve_report_window_spec(config, today=today or _today_utc())
+    matched_issues = _issues_matching_config(config, issues=issues, report_name=report_name, today=today)
+    return _rows_from_issues(config, matched_issues), window_spec.start, window_spec.end
 
 
 def _report_filters_dict(config: ReportConfig) -> dict[str, Any]:
     """Normalize report filters for matching helpers."""
     filters = config.filters.model_dump(exclude_none=True)
+    if report_window_mode(config) != "custom":
+        filters.pop("created_after", None)
+        filters.pop("created_before", None)
     for key in ("open_only", "stale_only"):
         if not filters.get(key):
             filters.pop(key, None)
@@ -708,28 +729,24 @@ def _report_filters_dict(config: ReportConfig) -> dict[str, Any]:
 
 
 def _build_template_insight(template: ReportTemplate, issues: list[dict[str, Any]], *, today: date | None = None) -> ReportTemplateInsight:
-    """Compute 7-day / 30-day counts and a 30-day sparkline for a saved template."""
+    """Compute a window-aware summary for a saved template."""
     effective_today = today or _today_utc()
+    window_spec = resolve_report_window_spec(template.config, today=effective_today)
     window_field = _date_field_for_report_window(template)
-    window_start_30 = effective_today - timedelta(days=29)
-    window_start_7 = effective_today - timedelta(days=6)
-    days = [window_start_30 + timedelta(days=offset) for offset in range(30)]
+    days = [window_spec.start + timedelta(days=offset) for offset in range(window_spec.days)]
     daily_counts = {day.isoformat(): 0 for day in days}
     filters = _report_filters_dict(template.config)
 
-    count_7d = 0
-    count_30d = 0
+    count_in_window = 0
     for issue in issues:
         if not _match(issue, **filters):
             continue
         issue_day = _issue_date_for_window(issue, window_field)
-        if not issue_day or issue_day < window_start_30 or issue_day > effective_today:
+        if not issue_day or issue_day < window_spec.start or issue_day > window_spec.end:
             continue
         issue_key = issue_day.isoformat()
         daily_counts[issue_key] += 1
-        count_30d += 1
-        if issue_day >= window_start_7:
-            count_7d += 1
+        count_in_window += 1
 
     ordered_counts = [daily_counts[day.isoformat()] for day in days]
     trend = [
@@ -739,12 +756,15 @@ def _build_template_insight(template: ReportTemplate, issues: list[dict[str, Any
     return ReportTemplateInsight(
         template_id=template.id,
         template_name=template.name,
+        window_mode=report_window_mode(template.config),
+        window_label=window_spec.label,
         window_field=window_field,
         window_field_label=_REPORT_WINDOW_LABELS.get(window_field, "Created"),
-        count_7d=count_7d,
-        count_30d=count_30d,
-        p95_daily_count_30d=round(float(percentile([float(value) for value in ordered_counts], 95) or 0.0), 1),
-        trend_30d=trend,
+        window_start=window_spec.start.isoformat(),
+        window_end=window_spec.end.isoformat(),
+        count_in_window=count_in_window,
+        p95_daily_count=round(float(percentile([float(value) for value in ordered_counts], 95) or 0.0), 1),
+        trend=trend,
     )
 
 
@@ -1087,7 +1107,11 @@ def _build_oasisdev_workload_workbook(report: dict[str, Any]) -> Workbook:
 @router.post("/report/preview")
 async def report_preview(config: ReportConfig) -> dict[str, Any]:
     """Return a preview of the report (capped at 100 rows)."""
-    rows = _apply_config(config)
+    _validate_report_window(config)
+    try:
+        rows = _apply_config(config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     columns = config.columns or DEFAULT_COLUMNS
 
     if config.group_by:
@@ -1109,6 +1133,7 @@ async def report_preview(config: ReportConfig) -> dict[str, Any]:
 @router.post("/report/export")
 async def report_export(config: ReportConfig, template_id: str | None = None) -> FileResponse:
     """Generate and return an Excel workbook from the report config."""
+    _validate_report_window(config)
     report_prefix = get_site_profile()["report_prefix"]
     site_scope = get_current_site_scope()
     template = None
@@ -1166,14 +1191,19 @@ async def list_report_template_insights(
     if not templates:
         return []
     today = _today_utc()
-    return [
-        _build_template_insight(
-            template,
-            _calculation_scoped_issues(include_excluded_on_primary=template.config.include_excluded),
-            today=today,
-        )
-        for template in templates
-    ]
+    insights: list[ReportTemplateInsight] = []
+    for template in templates:
+        try:
+            insights.append(
+                _build_template_insight(
+                    template,
+                    _calculation_scoped_issues(include_excluded_on_primary=template.config.include_excluded),
+                    today=today,
+                )
+            )
+        except ValueError:
+            logger.warning("Skipping template insight for invalid window config: %s", template.name)
+    return insights
 
 
 @router.get("/report/templates/master.xlsx")
@@ -1182,6 +1212,9 @@ async def export_master_report_workbook(
 ) -> FileResponse:
     """Export all saved report templates for the current site in a single workbook."""
     templates = report_template_store.list_templates(get_current_site_scope())
+    for template in templates:
+        if template.include_in_master_export:
+            _validate_report_window(template.config, template_name=template.name)
     included_count = sum(1 for template in templates if template.include_in_master_export)
     report_prefix = get_site_profile()["report_prefix"]
     now = datetime.now(timezone.utc)
@@ -1215,6 +1248,7 @@ async def create_report_template(
     session: dict[str, Any] = Depends(require_authenticated_user),
 ) -> ReportTemplate:
     """Create a saved report template for the current site scope."""
+    _validate_report_window(body.config)
     try:
         return report_template_store.create_template(
             site_scope=get_current_site_scope(),
@@ -1238,6 +1272,7 @@ async def update_report_template(
     session: dict[str, Any] = Depends(require_authenticated_user),
 ) -> ReportTemplate:
     """Update a saved report template for the current site scope."""
+    _validate_report_window(body.config)
     try:
         return report_template_store.update_template(
             template_id=template_id,

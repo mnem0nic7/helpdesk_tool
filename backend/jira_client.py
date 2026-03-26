@@ -129,6 +129,13 @@ class JiraClient:
             self._thread_local.session = session
         return self._thread_local.session
 
+    @staticmethod
+    def _jsm_experimental_headers(headers: dict[str, str] | None = None) -> dict[str, str]:
+        """Return headers for Jira Service Management experimental endpoints."""
+        merged = dict(headers or {})
+        merged["X-ExperimentalApi"] = "opt-in"
+        return merged
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -710,7 +717,12 @@ class JiraClient:
             params: dict[str, Any] = {"start": start, "limit": 100}
             if query.strip():
                 params["query"] = query.strip()
-            resp = self.session.get(url, params=params, timeout=self._TIMEOUT)
+            resp = self.session.get(
+                url,
+                params=params,
+                headers=self._jsm_experimental_headers(),
+                timeout=self._TIMEOUT,
+            )
             self._raise_for_status(resp)
             data = resp.json()
             values = data.get("values") or []

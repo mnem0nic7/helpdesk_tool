@@ -455,6 +455,19 @@ export interface TicketUpdatePayload {
   work_category?: string;
 }
 
+export interface TicketCreatePayload {
+  summary: string;
+  description: string;
+  priority: string;
+  request_type_id: string;
+}
+
+export interface TicketCreateResponse {
+  created_key: string;
+  created_id: string;
+  detail: TicketDetail;
+}
+
 export type LibraSupportFilterMode =
   | "all"
   | "libra_support"
@@ -483,6 +496,7 @@ export interface ReportConfig {
   sort_dir: "asc" | "desc";
   group_by: string | null;
   include_excluded: boolean;
+  window_mode: "7d" | "30d" | "custom";
 }
 
 /** Response from POST /api/report/preview. */
@@ -519,12 +533,15 @@ export interface ReportTemplateInsightPoint {
 export interface ReportTemplateInsight {
   template_id: string;
   template_name: string;
+  window_mode: "7d" | "30d" | "custom";
+  window_label: string;
   window_field: string;
   window_field_label: string;
-  count_7d: number;
-  count_30d: number;
-  p95_daily_count_30d: number;
-  trend_30d: ReportTemplateInsightPoint[];
+  window_start: string;
+  window_end: string;
+  count_in_window: number;
+  p95_daily_count: number;
+  trend: ReportTemplateInsightPoint[];
 }
 
 export interface ReportTemplateSaveRequest {
@@ -1241,6 +1258,7 @@ export interface OneDriveCopyUserOption {
   principal_name: string;
   mail: string;
   enabled: boolean | null;
+  source: "entra" | "saved";
 }
 
 export interface OneDriveCopyJobRequest {
@@ -2496,6 +2514,10 @@ export const api = {
 
   updateTicket(key: string, payload: TicketUpdatePayload): Promise<TicketDetail> {
     return putJSON<TicketDetail>(`/api/tickets/${encodeURIComponent(key)}`, payload);
+  },
+
+  createTicket(payload: TicketCreatePayload): Promise<TicketCreateResponse> {
+    return postJSON<TicketCreateResponse>("/api/tickets", payload);
   },
 
   transitionTicket(key: string, transitionId: string): Promise<TicketDetail> {

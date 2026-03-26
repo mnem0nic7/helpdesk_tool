@@ -23,7 +23,27 @@ def test_search_onedrive_copy_users_returns_directory_matches(test_client, monke
             "enabled": False,
         }
     ]
+    mock_jobs = MagicMock()
+    mock_jobs.list_saved_user_options.return_value = [
+        {
+            "id": "saved:ada@example.com",
+            "display_name": "Ada Saved",
+            "principal_name": "ada@example.com",
+            "mail": "",
+            "enabled": None,
+            "source": "saved",
+        },
+        {
+            "id": "saved:grace@example.com",
+            "display_name": "Grace Hopper",
+            "principal_name": "grace@example.com",
+            "mail": "",
+            "enabled": None,
+            "source": "saved",
+        },
+    ]
     monkeypatch.setattr(routes_tools, "azure_cache", mock_cache)
+    monkeypatch.setattr(routes_tools, "onedrive_copy_jobs", mock_jobs)
 
     resp = test_client.get(
         "/api/tools/onedrive-copy/users?search=ada&limit=10",
@@ -34,13 +54,57 @@ def test_search_onedrive_copy_users_returns_directory_matches(test_client, monke
     payload = resp.json()
     assert payload[0]["display_name"] == "Ada Lovelace"
     assert payload[0]["principal_name"] == "ada@example.com"
+    assert payload[0]["source"] == "entra"
+    assert payload[1]["display_name"] == "Grace Hopper"
+    assert payload[1]["source"] == "saved"
     mock_cache.list_directory_objects.assert_called_once_with("users", search="ada")
+    mock_jobs.list_saved_user_options.assert_called_once_with(search="ada", limit=10)
+
+
+def test_search_onedrive_copy_users_returns_recent_saved_matches_for_empty_search(test_client, monkeypatch):
+    import routes_tools
+
+    mock_cache = MagicMock()
+    mock_jobs = MagicMock()
+    mock_jobs.list_saved_user_options.return_value = [
+        {
+            "id": "saved:former@example.com",
+            "display_name": "Former User",
+            "principal_name": "former@example.com",
+            "mail": "",
+            "enabled": None,
+            "source": "saved",
+        }
+    ]
+    monkeypatch.setattr(routes_tools, "azure_cache", mock_cache)
+    monkeypatch.setattr(routes_tools, "onedrive_copy_jobs", mock_jobs)
+
+    resp = test_client.get(
+        "/api/tools/onedrive-copy/users?search=&limit=10",
+        headers={"host": "azure.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload == [
+        {
+            "id": "saved:former@example.com",
+            "display_name": "Former User",
+            "principal_name": "former@example.com",
+            "mail": "",
+            "enabled": None,
+            "source": "saved",
+        }
+    ]
+    mock_cache.list_directory_objects.assert_not_called()
+    mock_jobs.list_saved_user_options.assert_called_once_with(search="", limit=10)
 
 
 def test_create_onedrive_copy_job_is_available_on_primary_and_azure(test_client, monkeypatch):
     import routes_tools
 
     mock_jobs = MagicMock()
+    mock_jobs.list_saved_user_options.return_value = []
     mock_jobs.create_job.side_effect = [
         {
             "job_id": "job-primary",
@@ -97,6 +161,46 @@ def test_create_onedrive_copy_job_is_available_on_primary_and_azure(test_client,
             "events": [],
         },
     ]
+    mock_cache = MagicMock()
+    mock_cache.list_directory_objects.side_effect = [
+        [
+            {
+                "id": "source-user",
+                "display_name": "Source User",
+                "principal_name": "source@example.com",
+                "mail": "source@example.com",
+                "enabled": True,
+            }
+        ],
+        [
+            {
+                "id": "dest-user",
+                "display_name": "Dest User",
+                "principal_name": "dest@example.com",
+                "mail": "dest@example.com",
+                "enabled": True,
+            }
+        ],
+        [
+            {
+                "id": "source-user",
+                "display_name": "Source User",
+                "principal_name": "source@example.com",
+                "mail": "source@example.com",
+                "enabled": True,
+            }
+        ],
+        [
+            {
+                "id": "dest-user",
+                "display_name": "Dest User",
+                "principal_name": "dest@example.com",
+                "mail": "dest@example.com",
+                "enabled": True,
+            }
+        ],
+    ]
+    monkeypatch.setattr(routes_tools, "azure_cache", mock_cache)
     monkeypatch.setattr(routes_tools, "onedrive_copy_jobs", mock_jobs)
 
     primary = test_client.post(
@@ -128,13 +232,18 @@ def test_create_onedrive_copy_job_is_available_on_primary_and_azure(test_client,
     assert primary.json()["site_scope"] == "primary"
     assert azure.status_code == 202
     assert azure.json()["site_scope"] == "azure"
+    assert mock_jobs.remember_user_option.call_count == 4
 
 
 def test_create_onedrive_copy_job_returns_validation_errors(test_client, monkeypatch):
     import routes_tools
 
     mock_jobs = MagicMock()
+    mock_jobs.list_saved_user_options.return_value = []
     mock_jobs.create_job.side_effect = ValueError("Source and destination UPNs must be different")
+    mock_cache = MagicMock()
+    mock_cache.list_directory_objects.return_value = []
+    monkeypatch.setattr(routes_tools, "azure_cache", mock_cache)
     monkeypatch.setattr(routes_tools, "onedrive_copy_jobs", mock_jobs)
 
     resp = test_client.post(

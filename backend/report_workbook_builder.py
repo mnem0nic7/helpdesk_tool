@@ -10,7 +10,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Literal, Sequence
 
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
@@ -28,11 +28,6 @@ _REPORT_WINDOW_LABELS: dict[str, str] = {
     "updated": "Updated",
     "resolved": "Resolved",
 }
-
-_WINDOW_EXPORT_SPECS: list[tuple[str, int]] = [
-    ("7 Day", 7),
-    ("30 Day", 30),
-]
 
 _MASTER_CHANGELOG_PREFETCH_LIMIT = 250
 _MASTER_CHANGELOG_SKIP_PREFIX = "Skipped Jira changelog fetch for large master export"
@@ -313,6 +308,8 @@ def _now_utc() -> datetime:
 
 
 def _date_field_for_report_window_config(config: ReportConfig, *, report_name: str = "") -> str:
+    if report_window_mode(config) == "custom":
+        return "created"
     sort_field = str(config.sort_field or "").strip().lower()
     if sort_field in _REPORT_WINDOW_LABELS:
         return sort_field
@@ -333,6 +330,56 @@ def _prior_window_bounds(window_days: int, *, today: date) -> tuple[date, date]:
     current_start, _ = _window_bounds(window_days, today=today)
     prior_end = current_start - timedelta(days=1)
     prior_start = prior_end - timedelta(days=max(window_days - 1, 0))
+    return prior_start, prior_end
+
+
+@dataclass(frozen=True)
+class ReportWindowSpec:
+    mode: Literal["7d", "30d", "custom"]
+    label: str
+    start: date
+    end: date
+    days: int
+
+
+def report_window_mode(config: ReportConfig) -> Literal["7d", "30d", "custom"]:
+    mode = str(getattr(config, "window_mode", "30d") or "30d").strip().lower()
+    if mode in {"7d", "30d", "custom"}:
+        return mode
+    return "30d"
+
+
+def resolve_report_window_spec(config: ReportConfig, *, today: date) -> ReportWindowSpec:
+    mode = report_window_mode(config)
+    if mode == "7d":
+        start, end = _window_bounds(7, today=today)
+        return ReportWindowSpec(mode="7d", label="7 Day", start=start, end=end, days=7)
+    if mode == "30d":
+        start, end = _window_bounds(30, today=today)
+        return ReportWindowSpec(mode="30d", label="30 Day", start=start, end=end, days=30)
+    created_after = str(config.filters.created_after or "").strip()
+    created_before = str(config.filters.created_before or "").strip()
+    if not created_after or not created_before:
+        raise ValueError("Custom report windows require both Created After and Created Before dates.")
+    try:
+        start = date.fromisoformat(created_after)
+        end = date.fromisoformat(created_before)
+    except ValueError as exc:
+        raise ValueError("Custom report windows require valid Created After and Created Before dates.") from exc
+    if start > end:
+        raise ValueError("Custom report windows require Created After to be on or before Created Before.")
+    return ReportWindowSpec(
+        mode="custom",
+        label="Custom Range",
+        start=start,
+        end=end,
+        days=(end - start).days + 1,
+    )
+
+
+def prior_bounds_for_window_spec(spec: ReportWindowSpec) -> tuple[date, date]:
+    prior_end = spec.start - timedelta(days=1)
+    prior_start = prior_end - timedelta(days=max(spec.days - 1, 0))
     return prior_start, prior_end
 
 
@@ -571,6 +618,9 @@ class ReportWorkbookBuilder:
         else:
             candidates = list(self._all_issues)
         filters = config.filters.model_dump(exclude_none=True)
+        if report_window_mode(config) != "custom":
+            filters.pop("created_after", None)
+            filters.pop("created_before", None)
         for key in ("open_only", "stale_only"):
             if not filters.get(key):
                 filters.pop(key, None)
@@ -590,12 +640,12 @@ class ReportWorkbookBuilder:
             return template.readiness or "custom"
         facts = self._facts_for_config(template.config)
         window_field = _date_field_for_report_window_config(template.config, report_name=template.name)
-        current_start, current_end = _window_bounds(30, today=self.today)
+        window_spec = resolve_report_window_spec(template.config, today=self.today)
         window_facts = self._facts_for_window(
             facts,
             window_field=window_field,
-            window_start=current_start,
-            window_end=current_end,
+            window_start=window_spec.start,
+            window_end=window_spec.end,
         )
         return _template_readiness(template, facts=window_facts or facts)
 
@@ -618,16 +668,15 @@ class ReportWorkbookBuilder:
     def _changelog_target_keys_for_single(self, config: ReportConfig, *, report_name: str) -> set[str]:
         facts = self._facts_for_config(config)
         window_field = _date_field_for_report_window_config(config, report_name=report_name)
+        window_spec = resolve_report_window_spec(config, today=self.today)
         target: set[str] = set()
-        for _, days in _WINDOW_EXPORT_SPECS:
-            current_start, current_end = _window_bounds(days, today=self.today)
-            prior_start, prior_end = _prior_window_bounds(days, today=self.today)
-            for fact in facts:
-                issue_day = _date_for_window(fact, window_field)
-                if not issue_day:
-                    continue
-                if current_start <= issue_day <= current_end or prior_start <= issue_day <= prior_end:
-                    target.add(fact.key)
+        prior_start, prior_end = prior_bounds_for_window_spec(window_spec)
+        for fact in facts:
+            issue_day = _date_for_window(fact, window_field)
+            if not issue_day:
+                continue
+            if window_spec.start <= issue_day <= window_spec.end or prior_start <= issue_day <= prior_end:
+                target.add(fact.key)
         for fact in facts:
             if any(
                 dt and dt.date() >= self.today - timedelta(days=29)
@@ -645,15 +694,14 @@ class ReportWorkbookBuilder:
                 continue
             facts = self._facts_for_config(config)
             window_field = _date_field_for_report_window_config(config, report_name=template.name)
-            for _, days in _WINDOW_EXPORT_SPECS:
-                current_start, current_end = _window_bounds(days, today=self.today)
-                prior_start, prior_end = _prior_window_bounds(days, today=self.today)
-                for fact in facts:
-                    issue_day = _date_for_window(fact, window_field)
-                    if not issue_day:
-                        continue
-                    if current_start <= issue_day <= current_end or prior_start <= issue_day <= prior_end:
-                        target.add(fact.key)
+            window_spec = resolve_report_window_spec(config, today=self.today)
+            prior_start, prior_end = prior_bounds_for_window_spec(window_spec)
+            for fact in facts:
+                issue_day = _date_for_window(fact, window_field)
+                if not issue_day:
+                    continue
+                if window_spec.start <= issue_day <= window_spec.end or prior_start <= issue_day <= prior_end:
+                    target.add(fact.key)
         return target
 
     def _apply_changelog(self, fact: ReportIssueFact, histories: Sequence[dict[str, Any]]) -> None:
@@ -775,17 +823,15 @@ class ReportWorkbookBuilder:
             self._write_trends_sheet(workbook, formats, summary_context["trend_rows"], title="Trends")
             if summary_context["gaps"]:
                 self._write_data_gaps_sheet(workbook, formats, summary_context["gaps"], title="Data Gaps")
-            for window_label, window_days in _WINDOW_EXPORT_SPECS:
-                self._write_template_window_sheet(
-                    workbook,
-                    formats,
-                    template=template,
-                    config=config,
-                    report_name=report_name,
-                    report_description=report_description,
-                    window_label=window_label,
-                    window_days=window_days,
-                )
+            self._write_template_window_sheet(
+                workbook,
+                formats,
+                template=template,
+                config=config,
+                report_name=report_name,
+                report_description=report_description,
+                window_spec=resolve_report_window_spec(config, today=self.today),
+            )
         finally:
             workbook.close()
 
@@ -1024,18 +1070,16 @@ class ReportWorkbookBuilder:
         config: ReportConfig,
         report_name: str,
         report_description: str,
-        window_label: str,
-        window_days: int,
+        window_spec: ReportWindowSpec,
         sheet_name: str,
     ) -> MasterSheetSummary:
         view_type = _report_view_type(config)
         report_kind = _report_kind(report_name, config)
         window_field = _date_field_for_report_window_config(config, report_name=report_name)
         window_field_label = _REPORT_WINDOW_LABELS.get(window_field, "Created")
-        current_start, current_end = _window_bounds(window_days, today=self.today)
-        prior_start, prior_end = _prior_window_bounds(window_days, today=self.today)
+        prior_start, prior_end = prior_bounds_for_window_spec(window_spec)
         facts = self._facts_for_config(config)
-        current_facts = self._facts_for_window(facts, window_field=window_field, window_start=current_start, window_end=current_end)
+        current_facts = self._facts_for_window(facts, window_field=window_field, window_start=window_spec.start, window_end=window_spec.end)
         prior_facts = self._facts_for_window(facts, window_field=window_field, window_start=prior_start, window_end=prior_end)
         readiness = _template_readiness(template, facts=current_facts)
         metadata = self._template_window_metadata(
@@ -1045,10 +1089,10 @@ class ReportWorkbookBuilder:
             readiness=readiness,
             view_type=view_type,
             notes=(template.notes or ""),
-            window_label=window_label,
+            window_label=window_spec.label,
             window_field_label=window_field_label,
-            window_start=current_start,
-            window_end=current_end,
+            window_start=window_spec.start,
+            window_end=window_spec.end,
         )
         worksheet = workbook.add_worksheet(sheet_name)
         self._write_metadata_block(worksheet, formats, metadata)
@@ -1064,7 +1108,7 @@ class ReportWorkbookBuilder:
                 formats,
                 backlog_rows,
                 backlog_statuses,
-                window_days=window_days,
+                window_days=window_spec.days,
             )
             self._insert_backlog_chart(worksheet, table_info, workbook)
             row_count = len(backlog_rows)
@@ -1095,10 +1139,10 @@ class ReportWorkbookBuilder:
         return MasterSheetSummary(
             report_name=report_name,
             sheet_name=sheet_name,
-            window_label=window_label,
+            window_label=window_spec.label,
             window_field_label=window_field_label,
-            window_start=current_start,
-            window_end=current_end,
+            window_start=window_spec.start,
+            window_end=window_spec.end,
             category=template.category or "",
             readiness=readiness,
             view_type=view_type,
@@ -1570,18 +1614,19 @@ class ReportWorkbookBuilder:
             for template in included_templates:
                 config = template.config if isinstance(template.config, ReportConfig) else ReportConfig()
                 gap_window_field = _date_field_for_report_window_config(config, report_name=template.name)
-                gap_window_start, gap_window_end = _window_bounds(30, today=self.today)
+                gap_window_spec = resolve_report_window_spec(config, today=self.today)
                 gap_facts = self._facts_for_window(
                     self._facts_for_config(config),
                     window_field=gap_window_field,
-                    window_start=gap_window_start,
-                    window_end=gap_window_end,
+                    window_start=gap_window_spec.start,
+                    window_end=gap_window_spec.end,
                 )
                 aggregated_gaps.extend(
                     self._build_data_gaps(
                         template=template,
                         report_name=template.name,
                         facts=gap_facts,
+                        window_label=gap_window_spec.label,
                     )
                 )
             self._write_master_dashboard_sheet(workbook, formats, dashboard_context, used_names)
@@ -1594,35 +1639,34 @@ class ReportWorkbookBuilder:
 
             for template in included_templates:
                 config = template.config if isinstance(template.config, ReportConfig) else ReportConfig()
-                for window_label, window_days in _WINDOW_EXPORT_SPECS:
-                    sheet_name = _unique_sheet_name(f"{template.name} {window_days}d", used_names)
-                    window_summary = self._write_template_window_sheet(
-                        workbook,
-                        formats,
-                        template=template,
-                        config=config,
-                        report_name=template.name,
-                        report_description=template.description or "",
-                        window_label=window_label,
-                        window_days=window_days,
-                        sheet_name=sheet_name,
-                    )
-                    index_rows.append(
-                        {
-                            "report": template.name,
-                            "sheet": sheet_name,
-                            "window": window_label,
-                            "window_field": window_summary["window_field_label"],
-                            "window_start": window_summary["window_start"].isoformat(),
-                            "window_end": window_summary["window_end"].isoformat(),
-                            "category": template.category or "",
-                            "readiness": window_summary["readiness"],
-                            "view": window_summary["view_type"],
-                            "rows": window_summary["row_count"],
-                            "description": template.description or "",
-                            "notes": template.notes or "",
-                        }
-                    )
+                window_spec = resolve_report_window_spec(config, today=self.today)
+                sheet_name = _unique_sheet_name(f"{template.name} {window_spec.label}", used_names)
+                window_summary = self._write_template_window_sheet(
+                    workbook,
+                    formats,
+                    template=template,
+                    config=config,
+                    report_name=template.name,
+                    report_description=template.description or "",
+                    window_spec=window_spec,
+                    sheet_name=sheet_name,
+                )
+                index_rows.append(
+                    {
+                        "report": template.name,
+                        "sheet": sheet_name,
+                        "window": window_spec.label,
+                        "window_field": window_summary["window_field_label"],
+                        "window_start": window_summary["window_start"].isoformat(),
+                        "window_end": window_summary["window_end"].isoformat(),
+                        "category": template.category or "",
+                        "readiness": window_summary["readiness"],
+                        "view": window_summary["view_type"],
+                        "rows": window_summary["row_count"],
+                        "description": template.description or "",
+                        "notes": template.notes or "",
+                    }
+                )
             self._write_index_sheet(index_sheet, formats, index_rows)
         finally:
             workbook.close()
@@ -1667,50 +1711,50 @@ class ReportWorkbookBuilder:
             for template in included_templates:
                 config = template.config if isinstance(template.config, ReportConfig) else ReportConfig()
                 gap_window_field = _date_field_for_report_window_config(config, report_name=template.name)
-                gap_window_start, gap_window_end = _window_bounds(30, today=self.today)
+                gap_window_spec = resolve_report_window_spec(config, today=self.today)
                 gap_facts = self._facts_for_window(
                     self._facts_for_config(config),
                     window_field=gap_window_field,
-                    window_start=gap_window_start,
-                    window_end=gap_window_end,
+                    window_start=gap_window_spec.start,
+                    window_end=gap_window_spec.end,
                 )
                 aggregated_gaps.extend(
                     self._build_data_gaps(
                         template=template,
                         report_name=template.name,
                         facts=gap_facts,
+                        window_label=gap_window_spec.label,
                     )
                 )
-                for window_label, window_days in _WINDOW_EXPORT_SPECS:
-                    sheet_name = _unique_sheet_name(f"{template.name} {window_days}d", used_names)
-                    summary = self._write_master_template_window_sheet(
-                        workbook,
-                        formats,
-                        template=template,
-                        config=config,
-                        report_name=template.name,
-                        report_description=template.description or "",
-                        window_label=window_label,
-                        window_days=window_days,
-                        sheet_name=sheet_name,
-                    )
-                    detail_summaries.append(summary)
-                    index_rows.append(
-                        {
-                            "report": summary.report_name,
-                            "sheet": summary.sheet_name,
-                            "window": summary.window_label,
-                            "window_field": summary.window_field_label,
-                            "window_start": summary.window_start.isoformat(),
-                            "window_end": summary.window_end.isoformat(),
-                            "category": summary.category,
-                            "readiness": summary.readiness,
-                            "view": summary.view_type,
-                            "rows": summary.row_count,
-                            "description": summary.description,
-                            "notes": summary.notes,
-                        }
-                    )
+                window_spec = resolve_report_window_spec(config, today=self.today)
+                sheet_name = _unique_sheet_name(f"{template.name} {window_spec.label}", used_names)
+                summary = self._write_master_template_window_sheet(
+                    workbook,
+                    formats,
+                    template=template,
+                    config=config,
+                    report_name=template.name,
+                    report_description=template.description or "",
+                    window_spec=window_spec,
+                    sheet_name=sheet_name,
+                )
+                detail_summaries.append(summary)
+                index_rows.append(
+                    {
+                        "report": summary.report_name,
+                        "sheet": summary.sheet_name,
+                        "window": summary.window_label,
+                        "window_field": summary.window_field_label,
+                        "window_start": summary.window_start.isoformat(),
+                        "window_end": summary.window_end.isoformat(),
+                        "category": summary.category,
+                        "readiness": summary.readiness,
+                        "view": summary.view_type,
+                        "rows": summary.row_count,
+                        "description": summary.description,
+                        "notes": summary.notes,
+                    }
+                )
 
             if anomaly:
                 aggregated_gaps.append(
@@ -2494,15 +2538,23 @@ class ReportWorkbookBuilder:
         ][:10]
 
         gap_facts = facts
+        gap_window_label = "All"
         if template is not None:
             gap_window_field = _date_field_for_report_window_config(template.config, report_name=report_name)
+            gap_window_spec = resolve_report_window_spec(template.config, today=self.today)
             gap_facts = self._facts_for_window(
                 facts,
                 window_field=gap_window_field,
-                window_start=current_30_start,
-                window_end=current_30_end,
+                window_start=gap_window_spec.start,
+                window_end=gap_window_spec.end,
             )
-        gaps = self._build_data_gaps(template=template, report_name=report_name, facts=gap_facts)
+            gap_window_label = gap_window_spec.label
+        gaps = self._build_data_gaps(
+            template=template,
+            report_name=report_name,
+            facts=gap_facts,
+            window_label=gap_window_label,
+        )
         problem_areas = self._problem_areas(mttr_priority_rows, top_category_rows, backlog_rows)
         return {
             "report_name": report_name,
@@ -2557,6 +2609,7 @@ class ReportWorkbookBuilder:
         template: ReportTemplate | None,
         report_name: str,
         facts: Sequence[ReportIssueFact],
+        window_label: str = "All",
     ) -> list[TemplateGap]:
         name = report_name.strip().lower()
         report_kind = _report_kind(
@@ -2570,14 +2623,14 @@ class ReportWorkbookBuilder:
             if template_readiness in {"gap", "proxy"}:
                 limitation = template.notes or "This report relies on partial source data."
                 recommendation = "Review the configured Jira fields or workflow history to improve readiness."
-                gaps.append(TemplateGap(template.name, "All", template_readiness, limitation, recommendation))
+                gaps.append(TemplateGap(template.name, window_label, template_readiness, limitation, recommendation))
         if report_kind == "first_response" or "first response" in name:
             missing = sum(1 for fact in facts if fact.first_response_hours is None)
             if missing:
                 gaps.append(
                     TemplateGap(
                         report_name,
-                        "All",
+                        window_label,
                         template_readiness,
                         f"{missing} tickets are missing Jira first-response elapsed time, so percentile reporting is partial.",
                         "Ensure the Jira first-response SLA timer is populated for all relevant requests.",
@@ -2599,7 +2652,7 @@ class ReportWorkbookBuilder:
                 gaps.append(
                     TemplateGap(
                         report_name,
-                        "All",
+                        window_label,
                         "proxy",
                         "; ".join(limitation_parts) + ". Proxy fallback is being used for those tickets.",
                         "Refresh the local follow-up authority cache from Jira public comments and confirm the first-response SLA timer is available for all relevant requests.",
@@ -2609,7 +2662,7 @@ class ReportWorkbookBuilder:
             gaps.append(
                 TemplateGap(
                     report_name,
-                    "All",
+                    window_label,
                     "proxy",
                     "Escalation rate currently uses assignee-change, priority-increase, and marker heuristics.",
                     "Add explicit Jira escalation markers or workflow transitions to move this metric from proxy to ready.",
@@ -2619,7 +2672,7 @@ class ReportWorkbookBuilder:
             gaps.append(
                 TemplateGap(
                     report_name,
-                    "All",
+                    window_label,
                     "proxy",
                     "First Contact Resolution still uses a one-touch proxy based on first resolution timing and comment volume.",
                     "Add contact-cycle data or explicit one-touch markers to make FCR authoritative.",
@@ -2629,7 +2682,7 @@ class ReportWorkbookBuilder:
             gaps.append(
                 TemplateGap(
                     report_name,
-                    "All",
+                    window_label,
                     "gap",
                     "No survey source is currently connected for CSAT.",
                     "Connect CSAT survey data to Jira or a linked satisfaction feed.",
@@ -2639,7 +2692,7 @@ class ReportWorkbookBuilder:
             gaps.append(
                 TemplateGap(
                     report_name,
-                    "All",
+                    window_label,
                     "proxy",
                     "Jira changelog prefetch was skipped for this large master export, so escalation and reopen heuristics may be incomplete.",
                     "Reduce master export scope or move changelog enrichment to an asynchronous export pipeline.",
@@ -2654,7 +2707,7 @@ class ReportWorkbookBuilder:
             gaps.append(
                 TemplateGap(
                     report_name,
-                    "All",
+                    window_label,
                     "proxy",
                     "Some Jira changelog fetches failed, so reopen and escalation heuristics may be incomplete.",
                     "Check Jira API connectivity and changelog permissions for the report service account.",
@@ -2806,18 +2859,16 @@ class ReportWorkbookBuilder:
         config: ReportConfig,
         report_name: str,
         report_description: str,
-        window_label: str,
-        window_days: int,
+        window_spec: ReportWindowSpec,
         sheet_name: str | None = None,
     ) -> dict[str, Any]:
         view_type = _report_view_type(config)
         report_kind = _report_kind(report_name, config)
         window_field = _date_field_for_report_window_config(config, report_name=report_name)
         window_field_label = _REPORT_WINDOW_LABELS.get(window_field, "Created")
-        current_start, current_end = _window_bounds(window_days, today=self.today)
-        prior_start, prior_end = _prior_window_bounds(window_days, today=self.today)
+        prior_start, prior_end = prior_bounds_for_window_spec(window_spec)
         facts = self._facts_for_config(config)
-        current_facts = self._facts_for_window(facts, window_field=window_field, window_start=current_start, window_end=current_end)
+        current_facts = self._facts_for_window(facts, window_field=window_field, window_start=window_spec.start, window_end=window_spec.end)
         prior_facts = self._facts_for_window(facts, window_field=window_field, window_start=prior_start, window_end=prior_end)
         readiness = _template_readiness(template, facts=current_facts) if template else "custom"
         metadata = self._template_window_metadata(
@@ -2827,12 +2878,12 @@ class ReportWorkbookBuilder:
             readiness=readiness,
             view_type=view_type,
             notes=(template.notes if template else ""),
-            window_label=window_label,
+            window_label=window_spec.label,
             window_field_label=window_field_label,
-            window_start=current_start,
-            window_end=current_end,
+            window_start=window_spec.start,
+            window_end=window_spec.end,
         )
-        worksheet = workbook.add_worksheet(sheet_name or window_label)
+        worksheet = workbook.add_worksheet(sheet_name or window_spec.label)
         self._write_metadata_block(worksheet, formats, metadata)
         if report_kind == "backlog":
             backlog_rows, backlog_statuses = self._backlog_rows([fact for fact in current_facts if fact.is_open], [fact for fact in prior_facts if fact.is_open])
@@ -2861,8 +2912,8 @@ class ReportWorkbookBuilder:
             row_count = len(current_facts)
         return {
             "window_field_label": window_field_label,
-            "window_start": current_start,
-            "window_end": current_end,
+            "window_start": window_spec.start,
+            "window_end": window_spec.end,
             "readiness": readiness,
             "view_type": view_type,
             "row_count": row_count,

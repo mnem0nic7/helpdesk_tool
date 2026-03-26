@@ -65,7 +65,35 @@ describe("ToolsPage", () => {
       can_manage_users: true,
       can_access_tools: true,
     });
-    mockApi.searchOneDriveCopyUsers.mockResolvedValue([]);
+    mockApi.searchOneDriveCopyUsers.mockImplementation(async (search: string) => {
+      const query = search.trim().toLowerCase();
+      if (!query) return [];
+      if (query.includes("source")) {
+        return [
+          {
+            id: "user-source",
+            display_name: "Source User",
+            principal_name: "source@example.com",
+            mail: "source@example.com",
+            enabled: true,
+            source: "entra" as const,
+          },
+        ];
+      }
+      if (query.includes("dest")) {
+        return [
+          {
+            id: "saved:dest@example.com",
+            display_name: "Dest User",
+            principal_name: "dest@example.com",
+            mail: "",
+            enabled: null,
+            source: "saved" as const,
+          },
+        ];
+      }
+      return [];
+    });
     mockApi.listOneDriveCopyJobs.mockResolvedValue([baseJob]);
     mockApi.getOneDriveCopyJob.mockResolvedValue(baseJob);
     mockApi.listLoginAudit.mockResolvedValue([
@@ -108,7 +136,11 @@ describe("ToolsPage", () => {
     await screen.findByText("Copy a full OneDrive to another user");
 
     fireEvent.change(screen.getByLabelText("Source user UPN"), { target: { value: "source@example.com" } });
+    expect(await screen.findByText("Source User")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Source User/i }));
     fireEvent.change(screen.getByLabelText("Destination user UPN"), { target: { value: "dest@example.com" } });
+    expect(await screen.findByText("Dest User")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Dest User/i }));
     fireEvent.change(screen.getByLabelText("Destination folder name"), { target: { value: "CopiedFiles" } });
     fireEvent.click(screen.getByRole("button", { name: "Queue OneDrive Copy" }));
 
