@@ -275,8 +275,19 @@ service_container_id() {
     docker compose ps -q "$1" 2>/dev/null | head -n1
 }
 
+legacy_service_container_id() {
+    local service="$1"
+    docker ps -q \
+        --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" \
+        --filter "label=com.docker.compose.service=${service}" | head -n1
+}
+
 service_is_running() {
     [[ -n "$(service_container_id "$1")" ]]
+}
+
+legacy_service_is_running() {
+    [[ -n "$(legacy_service_container_id "$1")" ]]
 }
 
 service_ip() {
@@ -287,6 +298,39 @@ service_ip() {
         return 1
     fi
     docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_id"
+}
+
+legacy_service_ip() {
+    local service="$1"
+    local container_id
+    container_id="$(legacy_service_container_id "$service")"
+    if [[ -z "$container_id" ]]; then
+        return 1
+    fi
+    docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_id"
+}
+
+render_legacy_upstreams() {
+    local backend_ip frontend_ip
+    backend_ip="$(legacy_service_ip backend)"
+    frontend_ip="$(legacy_service_ip frontend)"
+    ensure_state_dir
+    cat > "$ACTIVE_UPSTREAMS_FILE" <<EOF
+(active_upstreams) {
+	@api path /api/*
+	reverse_proxy @api ${backend_ip}:8000 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-Proto {http.request.scheme}
+	}
+
+	reverse_proxy ${frontend_ip}:80 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-Proto {http.request.scheme}
+	}
+}
+EOF
 }
 
 service_local_http_ok() {
@@ -534,15 +578,6 @@ cleanup_legacy_single_services() {
     done
 }
 
-legacy_service_is_running() {
-    local service="$1"
-    local container_ids
-    container_ids="$(docker ps -q \
-        --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" \
-        --filter "label=com.docker.compose.service=${service}")"
-    [[ -n "$container_ids" ]]
-}
-
 prepare_runtime_state_for_bootstrap() {
     local service="$1"
     docker compose run --rm --no-deps -T "$service" python3 - <<'PY'
@@ -589,18 +624,22 @@ PY
 rollback_to_previous_color() {
     local previous_color="$1"
     local failed_color="$2"
-    if [[ -z "$previous_color" ]]; then
+    if [[ -n "$previous_color" ]]; then
+        echo ">>> Rolling back traffic to ${previous_color}..."
+        post_internal_runtime "$(backend_service_for_color "$previous_color")" promote >/dev/null || true
+        post_internal_runtime "$(backend_service_for_color "$failed_color")" demote >/dev/null || true
+        wait_for_backend_role "$(backend_service_for_color "$previous_color")" leader 60 || true
+        switch_traffic_to_color "$previous_color"
         return 0
     fi
-    echo ">>> Rolling back traffic to ${previous_color}..."
-    post_internal_runtime "$(backend_service_for_color "$previous_color")" promote >/dev/null || true
-    post_internal_runtime "$(backend_service_for_color "$failed_color")" demote >/dev/null || true
-    wait_for_backend_role "$(backend_service_for_color "$previous_color")" leader 60 || true
-    switch_traffic_to_color "$previous_color"
+    if legacy_service_is_running backend && legacy_service_is_running frontend; then
+        echo ">>> Rolling back traffic to legacy single-color services..."
+        render_legacy_upstreams
+        reload_caddy
+    fi
 }
 
 ensure_state_dir
-ensure_active_upstreams_file
 
 ACTIVE_COLOR=""
 TARGET_COLOR=""
@@ -635,6 +674,13 @@ build_services "$TARGET_BACKEND_SERVICE" "$TARGET_FRONTEND_SERVICE"
 if [[ "$BOOTSTRAP_DEPLOY" == "1" ]] && legacy_service_is_running backend; then
     echo ">>> Preparing runtime state for migration from the legacy single backend..."
     prepare_runtime_state_for_bootstrap "$TARGET_BACKEND_SERVICE"
+fi
+
+if [[ "$BOOTSTRAP_DEPLOY" == "1" ]] && legacy_service_is_running backend && legacy_service_is_running frontend; then
+    echo ">>> Keeping Caddy pointed at legacy services until blue-green cutover succeeds..."
+    render_legacy_upstreams
+else
+    ensure_active_upstreams_file
 fi
 
 echo ">>> Starting inactive app color (${TARGET_COLOR})..."
