@@ -109,6 +109,10 @@ ATLASSIAN_ACCESS_GROUPS: list[str] = _env_csv("ATLASSIAN_ACCESS_GROUPS") or [
 ATLASSIAN_ADMIN_GROUPS: list[str] = _env_csv("ATLASSIAN_ADMIN_GROUPS") or [
     "MoveDocs Service Desk Agents",
 ]
+TOOLS_ALLOWED_IDENTIFIERS: list[str] = _env_csv("TOOLS_ALLOWED_IDENTIFIERS") or [
+    "gallison",
+    "wberry",
+]
 
 
 AuthProvider = Literal["entra", "atlassian"]
@@ -193,6 +197,12 @@ AZURE_VM_EXPORT_SHARED_MAX_RUNTIME_SECONDS: int = int(
 )
 AZURE_COST_INTER_QUERY_DELAY_SECONDS: float = float(os.getenv("AZURE_COST_INTER_QUERY_DELAY_SECONDS", "2"))
 AZURE_COST_MAX_RETRIES: int = int(os.getenv("AZURE_COST_MAX_RETRIES", "5"))
+ONEDRIVE_COPY_BATCH_SIZE: int = int(os.getenv("ONEDRIVE_COPY_BATCH_SIZE", "10"))
+ONEDRIVE_COPY_MAX_RETRIES: int = int(os.getenv("ONEDRIVE_COPY_MAX_RETRIES", "5"))
+ONEDRIVE_COPY_RETRY_DELAY_BASE_SECONDS: int = int(
+    os.getenv("ONEDRIVE_COPY_RETRY_DELAY_BASE_SECONDS", "10")
+)
+ONEDRIVE_COPY_JOB_RETENTION_DAYS: int = int(os.getenv("ONEDRIVE_COPY_JOB_RETENTION_DAYS", "14"))
 AZURE_COST_EXPORTS_ENABLED: bool = _env_bool("AZURE_COST_EXPORTS_ENABLED", "0")
 AZURE_COST_EXPORT_ROOT: str = os.getenv("AZURE_COST_EXPORT_ROOT", os.path.join(DATA_DIR, "azure_cost_exports"))
 AZURE_COST_EXPORT_DATASETS: str = os.getenv("AZURE_COST_EXPORT_DATASETS", "FOCUS")

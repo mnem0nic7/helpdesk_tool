@@ -29,6 +29,7 @@ from config import (
     ENTRA_CLIENT_SECRET,
     ALLOWED_USERS,
     ADMIN_USERS,
+    TOOLS_ALLOWED_IDENTIFIERS,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,23 @@ def _init_session_db() -> None:
                 updated_at               TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS login_audit (
+                event_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                sid            TEXT NOT NULL,
+                email          TEXT NOT NULL,
+                name           TEXT NOT NULL,
+                auth_provider  TEXT NOT NULL,
+                site_scope     TEXT NOT NULL,
+                source_ip      TEXT NOT NULL,
+                user_agent     TEXT NOT NULL,
+                created_at     TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_login_audit_created
+                ON login_audit (created_at DESC)
+        """)
 
 
 _init_session_db()
@@ -90,6 +108,8 @@ def create_session(
     is_admin: bool | None = None,
     can_manage_users: bool | None = None,
     site_scope: str = "primary",
+    source_ip: str = "",
+    user_agent: str = "",
 ) -> str:
     """Create a new session, persist it, and return the session ID."""
     sid = secrets.token_urlsafe(32)
@@ -112,6 +132,23 @@ def create_session(
                 int(resolved_is_admin),
                 int(resolved_can_manage_users),
                 str(site_scope or "primary"),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO login_audit (
+                sid, email, name, auth_provider, site_scope, source_ip, user_agent, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sid,
+                email,
+                name,
+                str(auth_provider or "entra"),
+                str(site_scope or "primary"),
+                str(source_ip or "").strip(),
+                str(user_agent or "").strip(),
+                datetime.now(timezone.utc).isoformat(),
             ),
         )
     logger.info("Session created for %s", email)
@@ -367,6 +404,15 @@ def is_admin_user(email: str) -> bool:
     return email.lower() in admins
 
 
+def user_can_access_tools(email: str) -> bool:
+    normalized_email = str(email or "").strip().lower()
+    if not normalized_email:
+        return False
+    localpart = normalized_email.split("@", 1)[0]
+    allowed = {identifier.strip().lower() for identifier in TOOLS_ALLOWED_IDENTIFIERS if identifier.strip()}
+    return normalized_email in allowed or localpart in allowed
+
+
 def session_is_admin(session: dict[str, Any] | None) -> bool:
     if not session:
         return False
@@ -387,6 +433,12 @@ def session_can_manage_users(session: dict[str, Any] | None) -> bool:
     if stored is not None:
         return bool(stored)
     return True
+
+
+def session_can_access_tools(session: dict[str, Any] | None) -> bool:
+    if not session:
+        return False
+    return user_can_access_tools(str(session.get("email") or ""))
 
 
 def require_admin(request: Request) -> dict[str, Any]:
@@ -425,6 +477,46 @@ def require_authenticated_user(request: Request) -> dict[str, Any]:
     return session
 
 
+def require_tools_access(request: Request) -> dict[str, Any]:
+    """FastAPI dependency: require explicit access to the Tools surface."""
+    from fastapi import HTTPException as _HTTPException
+
+    sid = request.cookies.get("session_id", "")
+    session = get_session(sid) if sid else None
+    if not session:
+        raise _HTTPException(status_code=401, detail="Not authenticated")
+    if not session_can_access_tools(session):
+        raise _HTTPException(status_code=403, detail="Tools access is restricted")
+    return session
+
+
+def list_login_audit(*, limit: int = 100) -> list[dict[str, Any]]:
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT event_id, email, name, auth_provider, site_scope, source_ip, user_agent, created_at
+            FROM login_audit
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+    return [
+        {
+            "event_id": int(row["event_id"]),
+            "email": str(row["email"] or ""),
+            "name": str(row["name"] or ""),
+            "auth_provider": str(row["auth_provider"] or "entra"),
+            "site_scope": str(row["site_scope"] or "primary"),
+            "source_ip": str(row["source_ip"] or ""),
+            "user_agent": str(row["user_agent"] or ""),
+            "created_at": str(row["created_at"] or ""),
+        }
+        for row in rows
+    ]
+
+
 def session_to_public_user(session: dict[str, Any]) -> dict[str, Any]:
     """Return the frontend-safe user payload for the current session."""
     return {
@@ -432,6 +524,7 @@ def session_to_public_user(session: dict[str, Any]) -> dict[str, Any]:
         "name": session["name"],
         "is_admin": session_is_admin(session),
         "can_manage_users": session_can_manage_users(session),
+        "can_access_tools": session_can_access_tools(session),
         "jira_auth": get_atlassian_connection_status(session["email"]),
     }
 

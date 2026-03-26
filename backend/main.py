@@ -36,6 +36,7 @@ from routes_alerts import router as alerts_router
 from routes_kb import router as kb_router
 from routes_azure import router as azure_router
 from routes_azure_alerts import router as azure_alerts_router
+from routes_tools import router as tools_router
 from routes_user_admin import router as user_admin_router
 from routes_user_exit import router as user_exit_router
 from ai_work_scheduler import AIWorkScheduler
@@ -44,6 +45,7 @@ from azure_cost_exports import azure_cost_export_service
 from issue_cache import cache
 from azure_cache import azure_cache
 from azure_vm_export_jobs import azure_vm_export_jobs
+from onedrive_copy_jobs import onedrive_copy_jobs
 from user_admin_jobs import user_admin_jobs
 from user_exit_workflows import user_exit_workflows
 from knowledge_base import kb_store
@@ -103,6 +105,7 @@ async def _start_deferred_services(app: FastAPI) -> None:
     starters: tuple[tuple[str, Any], ...] = (
         ("Azure cost export service", azure_cost_export_service.start),
         ("Azure VM export worker", azure_vm_export_jobs.start_worker),
+        ("OneDrive copy worker", onedrive_copy_jobs.start_worker),
         ("User admin worker", user_admin_jobs.start_worker),
         ("User exit workflow worker", user_exit_workflows.start_worker),
         ("Azure alert loop", start_azure_alert_loop),
@@ -216,6 +219,7 @@ async def lifespan(app: FastAPI):
     await stop_azure_alert_loop()
     await user_exit_workflows.stop_worker()
     await user_admin_jobs.stop_worker()
+    await onedrive_copy_jobs.stop_worker()
     await ai_work_scheduler.stop_worker()
     await azure_vm_export_jobs.stop_worker()
     await azure_cost_export_service.stop()
@@ -352,6 +356,7 @@ app.include_router(alerts_router)
 app.include_router(kb_router)
 app.include_router(azure_router)
 app.include_router(azure_alerts_router)
+app.include_router(tools_router)
 app.include_router(user_admin_router)
 app.include_router(user_exit_router)
 

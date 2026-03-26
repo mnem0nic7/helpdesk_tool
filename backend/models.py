@@ -654,6 +654,79 @@ class AzureVirtualMachineCostExportJobResponse(BaseModel):
     error: Optional[str] = None
 
 
+class OneDriveCopyUserOptionResponse(BaseModel):
+    """Directory-backed user lookup row for the OneDrive copy tool."""
+
+    id: str
+    display_name: str
+    principal_name: str = ""
+    mail: str = ""
+    enabled: Optional[bool] = None
+
+
+class OneDriveCopyJobCreateRequest(BaseModel):
+    """Request body for starting a OneDrive copy job."""
+
+    source_upn: str = Field(min_length=3, max_length=320)
+    destination_upn: str = Field(min_length=3, max_length=320)
+    destination_folder: str = Field(min_length=1, max_length=255)
+    test_mode: bool = False
+    test_file_limit: int = Field(default=25, ge=1, le=500)
+    exclude_system_folders: bool = True
+
+
+class OneDriveCopyJobEventResponse(BaseModel):
+    """One persisted job event or failure row."""
+
+    event_id: int
+    level: Literal["info", "warning", "error"]
+    message: str
+    created_at: str
+
+
+class AppLoginAuditEventResponse(BaseModel):
+    """One recorded MoveDocs login event."""
+
+    event_id: int
+    email: str
+    name: str
+    auth_provider: str
+    site_scope: str
+    source_ip: str = ""
+    user_agent: str = ""
+    created_at: str
+
+
+class OneDriveCopyJobResponse(BaseModel):
+    """Status payload for one OneDrive copy background job."""
+
+    job_id: str
+    site_scope: str
+    status: Literal["queued", "running", "completed", "failed"]
+    phase: Literal["queued", "resolving_drives", "enumerating", "creating_folders", "dispatching_copy", "completed", "failed"]
+    requested_by_email: str
+    requested_by_name: str
+    source_upn: str
+    destination_upn: str
+    destination_folder: str
+    test_mode: bool = False
+    test_file_limit: int = 25
+    exclude_system_folders: bool = True
+    requested_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    progress_current: int = 0
+    progress_total: int = 0
+    progress_message: str = ""
+    total_folders_found: int = 0
+    total_files_found: int = 0
+    folders_created: int = 0
+    files_dispatched: int = 0
+    files_failed: int = 0
+    error: Optional[str] = None
+    events: list[OneDriveCopyJobEventResponse] = Field(default_factory=list)
+
+
 class AzureDirectoryObject(BaseModel):
     """Normalized Entra directory object row."""
 

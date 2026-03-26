@@ -841,6 +841,7 @@ export interface UserInfo {
   name: string;
   is_admin: boolean;
   can_manage_users: boolean;
+  can_access_tools?: boolean;
   jira_auth?: JiraAuthStatus;
 }
 
@@ -1225,6 +1226,69 @@ export interface AzureVirtualMachineCostExportJobStatus {
   file_name: string | null;
   file_ready: boolean;
   error: string | null;
+}
+
+export interface OneDriveCopyUserOption {
+  id: string;
+  display_name: string;
+  principal_name: string;
+  mail: string;
+  enabled: boolean | null;
+}
+
+export interface OneDriveCopyJobRequest {
+  source_upn: string;
+  destination_upn: string;
+  destination_folder: string;
+  test_mode: boolean;
+  test_file_limit: number;
+  exclude_system_folders: boolean;
+}
+
+export interface OneDriveCopyJobEvent {
+  event_id: number;
+  level: "info" | "warning" | "error";
+  message: string;
+  created_at: string;
+}
+
+export interface AppLoginAuditEvent {
+  event_id: number;
+  email: string;
+  name: string;
+  auth_provider: string;
+  site_scope: string;
+  source_ip: string;
+  user_agent: string;
+  created_at: string;
+}
+
+export interface OneDriveCopyJobStatus {
+  job_id: string;
+  site_scope: string;
+  status: "queued" | "running" | "completed" | "failed";
+  phase: "queued" | "resolving_drives" | "enumerating" | "creating_folders" | "dispatching_copy" | "completed" | "failed";
+  requested_by_email: string;
+  requested_by_name: string;
+  source_upn: string;
+  destination_upn: string;
+  destination_folder: string;
+  test_mode: boolean;
+  test_file_limit: number;
+  exclude_system_folders: boolean;
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  progress_current: number;
+  progress_total: number;
+  progress_message: string;
+  total_folders_found: number;
+  total_files_found: number;
+  folders_created: number;
+  files_dispatched: number;
+  files_failed: number;
+  error: string | null;
+  events: OneDriveCopyJobEvent[];
 }
 
 export interface AzureDirectoryExtra {
@@ -2614,6 +2678,28 @@ export const api = {
 
   getAzureUsers(search = ""): Promise<AzureDirectoryObject[]> {
     return fetchJSON<AzureDirectoryObject[]>(`/api/azure/directory/users${buildQuery({ search })}`);
+  },
+
+  searchOneDriveCopyUsers(search = "", limit = 20): Promise<OneDriveCopyUserOption[]> {
+    return fetchJSON<OneDriveCopyUserOption[]>(
+      `/api/tools/onedrive-copy/users${buildQuery({ search, limit })}`,
+    );
+  },
+
+  createOneDriveCopyJob(body: OneDriveCopyJobRequest): Promise<OneDriveCopyJobStatus> {
+    return postJSON<OneDriveCopyJobStatus>("/api/tools/onedrive-copy/jobs", body);
+  },
+
+  listOneDriveCopyJobs(limit = 100): Promise<OneDriveCopyJobStatus[]> {
+    return fetchJSON<OneDriveCopyJobStatus[]>(`/api/tools/onedrive-copy/jobs${buildQuery({ limit })}`);
+  },
+
+  getOneDriveCopyJob(job_id: string): Promise<OneDriveCopyJobStatus> {
+    return fetchJSON<OneDriveCopyJobStatus>(`/api/tools/onedrive-copy/jobs/${encodeURIComponent(job_id)}`);
+  },
+
+  listLoginAudit(limit = 100): Promise<AppLoginAuditEvent[]> {
+    return fetchJSON<AppLoginAuditEvent[]>(`/api/tools/onedrive-copy/login-audit${buildQuery({ limit })}`);
   },
 
   getAzureGroups(search = ""): Promise<AzureDirectoryObject[]> {

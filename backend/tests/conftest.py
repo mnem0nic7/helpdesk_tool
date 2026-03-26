@@ -22,6 +22,7 @@ os.environ.setdefault("JIRA_EMAIL", "test@example.com")
 os.environ.setdefault("JIRA_API_TOKEN", "test-token")
 os.environ.setdefault("JIRA_BASE_URL", "https://example.atlassian.net")
 os.environ.setdefault("APP_SECRET_KEY", "test-secret-key")
+os.environ.setdefault("TOOLS_ALLOWED_IDENTIFIERS", "test,gallison,wberry")
 
 # Frozen time constant (also used in test_metrics.py)
 FROZEN_NOW = datetime(2026, 3, 4, 12, 0, 0, tzinfo=timezone.utc)
@@ -214,9 +215,11 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     import routes_cache
     import routes_triage
     import routes_azure
+    import routes_tools
     import routes_user_admin
     import routes_user_exit
     import azure_cache as azure_cache_module
+    import onedrive_copy_jobs as onedrive_copy_jobs_module
     import user_admin_jobs as user_admin_jobs_module
     import user_admin_providers as user_admin_providers_module
     import user_exit_workflows as user_exit_workflows_module
@@ -313,6 +316,14 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     mock_user_admin_jobs.job_belongs_to.return_value = True
     monkeypatch.setattr(user_admin_jobs_module, "user_admin_jobs", mock_user_admin_jobs)
     monkeypatch.setattr(routes_user_admin, "user_admin_jobs", mock_user_admin_jobs)
+
+    mock_onedrive_copy_jobs = MagicMock()
+    mock_onedrive_copy_jobs.start_worker = AsyncMock()
+    mock_onedrive_copy_jobs.stop_worker = AsyncMock()
+    mock_onedrive_copy_jobs.list_jobs.return_value = []
+    mock_onedrive_copy_jobs.get_job.return_value = None
+    monkeypatch.setattr(onedrive_copy_jobs_module, "onedrive_copy_jobs", mock_onedrive_copy_jobs)
+    monkeypatch.setattr(routes_tools, "onedrive_copy_jobs", mock_onedrive_copy_jobs)
 
     mock_user_admin_providers = MagicMock()
     mock_user_admin_providers.get_capabilities.return_value = {
@@ -448,6 +459,7 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     mock_kb_store = MagicMock()
     mock_kb_store.ensure_seed_articles.return_value = 0
     monkeypatch.setattr(main, "kb_store", mock_kb_store)
+    monkeypatch.setattr(main, "onedrive_copy_jobs", mock_onedrive_copy_jobs)
     app = main.app
     from starlette.testclient import TestClient
     from auth import create_session

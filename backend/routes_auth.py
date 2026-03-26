@@ -65,6 +65,13 @@ def _request_auth_provider(request: Request) -> str:
     return get_auth_provider_for_scope(get_site_scope_from_request(request))
 
 
+def _request_client_ip(request: Request) -> str:
+    forwarded = str(request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip()
+    return str((request.client.host if request.client else "") or "").strip()
+
+
 def _set_session_cookie(response: RedirectResponse, sid: str) -> None:
     response.set_cookie(
         key=_COOKIE_NAME,
@@ -247,7 +254,14 @@ async def _complete_entra_login(request: Request) -> RedirectResponse:
         logger.warning("OAuth callback: user %s not in whitelist", email)
         raise HTTPException(status_code=403, detail="Access denied — your account is not authorized")
 
-    sid = create_session(email, name, auth_provider="entra", site_scope=get_site_scope_from_request(request))
+    sid = create_session(
+        email,
+        name,
+        auth_provider="entra",
+        site_scope=get_site_scope_from_request(request),
+        source_ip=_request_client_ip(request),
+        user_agent=str(request.headers.get("user-agent") or ""),
+    )
     response = RedirectResponse(url="/")
     _set_session_cookie(response, sid)
     logger.info("User %s logged in", email)
@@ -301,6 +315,8 @@ async def callback(request: Request):
         is_admin=bool(access["is_admin"]),
         can_manage_users=bool(access["is_admin"]),
         site_scope=get_site_scope_from_request(request),
+        source_ip=_request_client_ip(request),
+        user_agent=str(request.headers.get("user-agent") or ""),
     )
     response = RedirectResponse(url="/")
     _set_session_cookie(response, sid)

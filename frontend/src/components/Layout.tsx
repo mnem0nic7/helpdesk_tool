@@ -14,6 +14,7 @@ interface NavItem {
   label: string;
   icon: string;
   primaryOnly?: boolean;
+  requiresToolsAccess?: boolean;
 }
 
 const helpdeskNavItems: NavItem[] = [
@@ -26,6 +27,7 @@ const helpdeskNavItems: NavItem[] = [
   { to: "/triage", label: "AI Triage", icon: "\u25C6" },
   { to: "/ai-log", label: "AI Log", icon: "\u25CB" },
   { to: "/alerts", label: "Alerts", icon: "\u25B3" },
+  { to: "/tools", label: "Tools", icon: "\u2692", primaryOnly: true, requiresToolsAccess: true },
   { to: "/users", label: "Users", icon: "\u25C7", primaryOnly: true },
   { to: "/knowledge-base", label: "Knowledge Base", icon: "\u25A9", primaryOnly: true },
 ];
@@ -39,6 +41,7 @@ const azureNavItems: NavItem[] = [
   { to: "/storage", label: "Storage", icon: "storage" },
   { to: "/identity", label: "Identity", icon: "identity" },
   { to: "/users", label: "Users", icon: "users" },
+  { to: "/tools", label: "Tools", icon: "tools", requiresToolsAccess: true },
   { to: "/cost", label: "Cost", icon: "cost" },
   { to: "/allocations", label: "Allocation", icon: "allocation" },
   { to: "/ai-costs", label: "AI Cost", icon: "ai-costs" },
@@ -57,6 +60,7 @@ const azureBreadcrumbLabels: Record<string, string> = {
   storage: "Storage",
   identity: "Identity",
   users: "Users",
+  tools: "Tools",
   cost: "Cost",
   allocations: "Allocation",
   "ai-costs": "AI Cost",
@@ -95,6 +99,8 @@ function AzureSidebarIcon({ icon }: { icon: string }) {
       return <svg aria-hidden="true" {...common}><circle cx="9" cy="9" r="3" /><path d="M4 19c.9-2.7 3.2-4 5-4s4.1 1.3 5 4" /><path d="M17 8h4" /><path d="M19 6v4" /></svg>;
     case "users":
       return <svg aria-hidden="true" {...common}><circle cx="8" cy="8" r="3" /><circle cx="17" cy="9" r="2.5" /><path d="M3.5 19c.8-2.8 3.1-4.2 4.5-4.2 1.5 0 3.8 1.4 4.6 4.2" /><path d="M14 19c.5-1.8 1.9-3.1 3.5-3.1 1 0 2.2.5 3 1.7" /></svg>;
+    case "tools":
+      return <svg aria-hidden="true" {...common}><path d="m14.5 6.5 3 3" /><path d="m11 10 7-7" /><path d="m9 12-6 6v3h3l6-6" /><path d="m15 12 3 3" /></svg>;
     case "cost":
       return <svg aria-hidden="true" {...common}><path d="M12 3v18" /><path d="M17 7.5c0-1.7-2.2-3-5-3s-5 1.3-5 3 1.4 2.5 5 3 5 1.3 5 3-2.2 3-5 3-5-1.3-5-3" /></svg>;
     case "allocation":
@@ -210,7 +216,7 @@ export default function Layout() {
         {/* Navigation */}
         <nav className="flex-1 space-y-1 px-3 py-4">
           {navItems
-            .filter((item) => !item.primaryOnly || branding.scope === "primary")
+            .filter((item) => (!item.primaryOnly || branding.scope === "primary") && (!item.requiresToolsAccess || !!user.can_access_tools))
             .map(({ to, label, icon }) => (
               <NavLink
                 key={to}

@@ -216,9 +216,31 @@ class AzureClient:
         *,
         scope: str,
         params: dict[str, Any] | None = None,
-        json_body: dict[str, Any] | None = None,
+        json_body: Any = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        resp = self._raw_request(
+            method,
+            url,
+            scope=scope,
+            params=params,
+            json_body=json_body,
+            headers=headers,
+        )
+        if not resp.content:
+            return {}
+        return resp.json()
+
+    def _raw_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        scope: str,
+        params: dict[str, Any] | None = None,
+        json_body: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> requests.Response:
         request_headers = {
             "Authorization": f"Bearer {self._get_token(scope)}",
             "Accept": "application/json",
@@ -239,9 +261,7 @@ class AzureClient:
                 status_code=resp.status_code,
                 headers=dict(resp.headers),
             )
-        if not resp.content:
-            return {}
-        return resp.json()
+        return resp
 
     def _cost_management_request(
         self,
@@ -249,7 +269,7 @@ class AzureClient:
         url: str,
         *,
         params: dict[str, Any] | None = None,
-        json_body: dict[str, Any] | None = None,
+        json_body: Any = None,
         caller: str = "default",
     ) -> dict[str, Any]:
         with self._cost_query_coordinator.claim(caller):
@@ -855,10 +875,29 @@ Resources
         *,
         api_version: str = "v1.0",
         params: dict[str, Any] | None = None,
-        json_body: dict[str, Any] | None = None,
+        json_body: Any = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         return self._request(
+            method,
+            self._graph_url(path, api_version=api_version),
+            scope=_GRAPH_SCOPE,
+            params=params,
+            json_body=json_body,
+            headers=headers,
+        )
+
+    def graph_raw_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        api_version: str = "v1.0",
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> requests.Response:
+        return self._raw_request(
             method,
             self._graph_url(path, api_version=api_version),
             scope=_GRAPH_SCOPE,
@@ -894,6 +933,39 @@ Resources
         if page_size is not None:
             params["$top"] = str(page_size)
         return self._paged_get(url, scope=_GRAPH_SCOPE, params=params)
+
+    def get_user_drive(self, user_id: str) -> dict[str, Any]:
+        return self.graph_request("GET", f"users/{user_id}/drive")
+
+    def get_user_drive_root(self, user_id: str) -> dict[str, Any]:
+        return self.graph_request("GET", f"users/{user_id}/drive/root")
+
+    def list_user_drive_children(self, user_id: str, folder_id: str) -> list[dict[str, Any]]:
+        normalized_folder_id = str(folder_id or "").strip()
+        path = f"users/{user_id}/drive/root/children" if normalized_folder_id == "root" else f"users/{user_id}/drive/items/{normalized_folder_id}/children"
+        return self.graph_paged_get(path, params={"$top": "999"})
+
+    def create_user_drive_folder(self, user_id: str, parent_id: str, name: str) -> dict[str, Any]:
+        normalized_parent_id = str(parent_id or "").strip()
+        path = f"users/{user_id}/drive/root/children" if normalized_parent_id == "root" else f"users/{user_id}/drive/items/{normalized_parent_id}/children"
+        return self.graph_request(
+            "POST",
+            path,
+            json_body={
+                "name": name,
+                "folder": {},
+                "@microsoft.graph.conflictBehavior": "rename",
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+    def graph_batch_request(self, requests_payload: list[dict[str, Any]]) -> dict[str, Any]:
+        return self.graph_request(
+            "POST",
+            "$batch",
+            json_body={"requests": requests_payload},
+            headers={"Content-Type": "application/json"},
+        )
 
     def list_users(self) -> list[dict[str, Any]]:
         full_select = [* _USER_BASE_SELECT, *_USER_OPTIONAL_SELECT]

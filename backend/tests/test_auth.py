@@ -20,6 +20,7 @@ os.environ.setdefault("ENTRA_CLIENT_ID", "test-client-id")
 os.environ.setdefault("ENTRA_CLIENT_SECRET", "test-client-secret")
 os.environ.setdefault("APP_SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ALLOWED_USERS", "")
+os.environ.setdefault("TOOLS_ALLOWED_IDENTIFIERS", "test,gallison,wberry")
 
 
 # ---------------------------------------------------------------------------
@@ -36,12 +37,14 @@ class TestSessionStore:
         assert len(sid) >= 32
 
     def test_get_session_returns_user_data(self):
-        from auth import create_session, get_session
+        from auth import create_session, get_session, list_login_audit
         sid = create_session("bob@example.com", "Bob Builder")
         session = get_session(sid)
         assert session is not None
         assert session["email"] == "bob@example.com"
         assert session["name"] == "Bob Builder"
+        audit_rows = list_login_audit(limit=10)
+        assert any(row["email"] == "bob@example.com" and row["name"] == "Bob Builder" for row in audit_rows)
 
     def test_get_session_returns_none_for_unknown(self):
         from auth import get_session
@@ -93,6 +96,13 @@ class TestAllowedUsers:
         import auth
         monkeypatch.setattr(auth, "ALLOWED_USERS", "Alice@Example.COM")
         assert auth.is_allowed_user("alice@example.com") is True
+
+    def test_tools_access_matches_localpart_or_exact_email(self, monkeypatch):
+        import auth
+        monkeypatch.setattr(auth, "TOOLS_ALLOWED_IDENTIFIERS", ["gallison", "wberry@example.com"])
+        assert auth.user_can_access_tools("gallison@movedocs.com") is True
+        assert auth.user_can_access_tools("wberry@example.com") is True
+        assert auth.user_can_access_tools("someone@example.com") is False
 
 
 # ---------------------------------------------------------------------------
