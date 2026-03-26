@@ -318,11 +318,15 @@ class RuntimeRoleManager:
 
             if desired == self._color:
                 claimed = await asyncio.to_thread(self._claim_lease_sync)
-                if claimed and self._role != "leader":
-                    logger.info("Runtime role: promoting %s to leader", self._color)
-                    if self._start_leader_cb is not None:
-                        await self._start_leader_cb()
-                    self._role = "leader"
+                if claimed:
+                    _, owner, expires_at = await asyncio.to_thread(self._read_store)
+                    self._lease_owner_color = owner
+                    self._lease_expires_at = expires_at
+                    if self._role != "leader":
+                        logger.info("Runtime role: promoting %s to leader", self._color)
+                        if self._start_leader_cb is not None:
+                            await self._start_leader_cb()
+                        self._role = "leader"
                     self._leader_ready = True
                 elif self._role == "leader":
                     logger.warning("Runtime role: %s lost leader lease; demoting to follower", self._color)

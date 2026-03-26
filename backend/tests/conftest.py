@@ -22,6 +22,7 @@ os.environ.setdefault("JIRA_EMAIL", "test@example.com")
 os.environ.setdefault("JIRA_API_TOKEN", "test-token")
 os.environ.setdefault("JIRA_BASE_URL", "https://example.atlassian.net")
 os.environ.setdefault("APP_SECRET_KEY", "test-secret-key")
+os.environ.setdefault("DEPLOY_CONTROL_SECRET", "")
 os.environ.setdefault("TOOLS_ALLOWED_IDENTIFIERS", "test,gallison,wberry")
 
 # Frozen time constant (also used in test_metrics.py)
