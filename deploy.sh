@@ -440,7 +440,15 @@ PY
 
 reload_caddy() {
     docker compose up -d caddy >/dev/null
-    docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+    local attempts="${1:-30}"
+    for _ in $(seq 1 "$attempts"); do
+        if docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "ERROR: Timed out waiting for Caddy to accept a config reload."
+    return 1
 }
 
 switch_traffic_to_color() {
