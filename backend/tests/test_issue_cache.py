@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import sqlite3
 
 from issue_cache import IssueCache
 
@@ -198,17 +199,21 @@ def test_followup_bootstrap_backfills_cached_recent_issues(tmp_path):
 
 
 def test_load_from_db_drops_non_tracked_project_keys(tmp_path):
-    cache = IssueCache(str(tmp_path / "issues.db"))
+    db_path = tmp_path / "issues.db"
+    cache = IssueCache(str(db_path))
     oit_issue = _issue("OIT-100", "Tracked")
     msd_issue = _issue("MSD-100", "Moved away")
 
     cache._upsert_to_db([oit_issue, msd_issue])
 
-    restored = IssueCache(str(tmp_path / "issues.db"))
+    restored = IssueCache(str(db_path))
 
     assert restored._load_from_db() is True
     assert set(restored._all_issues) == {"OIT-100"}
     assert "MSD-100" not in restored._issues
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM issues WHERE key = ?", ("MSD-100",)).fetchone()[0]
+    assert count == 0
 
 
 def test_upsert_issue_ignores_non_tracked_project_keys(tmp_path):

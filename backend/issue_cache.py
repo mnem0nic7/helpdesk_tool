@@ -465,7 +465,13 @@ class IssueCache:
             self._issues = new_filtered
             self._initialized = True
         if dropped_keys:
-            self._prune_non_tracked_issues()
+            with sqlite3.connect(self._db_path) as conn:
+                conn.executemany("DELETE FROM issues WHERE key = ?", [(key,) for key in dropped_keys])
+            logger.info(
+                "Cache: dropped %d non-tracked issues from SQLite restore: %s",
+                len(dropped_keys),
+                ", ".join(sorted(dropped_keys)[:10]),
+            )
         self._restore_last_refresh()
         logger.info(
             "Cache: restored %d total, %d filtered from SQLite (last Jira sync: %s)",
