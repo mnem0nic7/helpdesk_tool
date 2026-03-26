@@ -92,6 +92,7 @@ def test_ollama_config_defaults_and_overrides(monkeypatch):
     monkeypatch.setenv("AUTO_TRIAGE_MODEL", "")
     monkeypatch.setenv("TECHNICIAN_SCORE_MODEL", "")
     monkeypatch.setenv("AZURE_ALERT_RULE_MODEL", "")
+    monkeypatch.setenv("REPORT_AI_SUMMARY_MODEL", "")
 
     config = _reload_config()
 
@@ -104,6 +105,7 @@ def test_ollama_config_defaults_and_overrides(monkeypatch):
     assert config.AUTO_TRIAGE_MODEL == "qwen2.5:3b"
     assert config.TECHNICIAN_SCORE_MODEL == "qwen2.5:3b"
     assert config.AZURE_ALERT_RULE_MODEL == "qwen2.5:3b"
+    assert config.REPORT_AI_SUMMARY_MODEL == "qwen2.5:3b"
 
 
 def test_ai_pricing_config_parses_json(monkeypatch):
