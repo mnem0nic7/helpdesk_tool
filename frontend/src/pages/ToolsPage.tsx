@@ -16,7 +16,7 @@ const UPN_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 
 type PickerOptionSource = OneDriveCopyUserOption["source"] | "manual";
 
-interface ToolUserPickerOption extends OneDriveCopyUserOption {
+interface ToolUserPickerOption extends Omit<OneDriveCopyUserOption, "source"> {
   canonical_upn: string;
   source: PickerOptionSource;
   synthetic?: boolean;
