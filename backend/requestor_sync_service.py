@@ -8,7 +8,7 @@ from collections import defaultdict
 from typing import Any
 
 from ai_client import _extract_reporter_hint_from_text, extract_adf_text
-from config import JIRA_PROJECT, REQUESTOR_OCC_NAME_DOMAIN_PRIORITY
+from config import JIRA_PROJECT, REQUESTOR_IGNORED_EMAILS, REQUESTOR_OCC_NAME_DOMAIN_PRIORITY
 from jira_client import JiraClient
 from metrics import _is_open
 from requestor_sync_store import requestor_sync_store
@@ -66,9 +66,27 @@ class RequestorSyncService:
             domain.lower(): index
             for index, domain in enumerate(REQUESTOR_OCC_NAME_DOMAIN_PRIORITY, start=1)
         }
+        self._ignored_requestor_emails = {
+            normalized
+            for normalized in (_normalize_email(email) for email in REQUESTOR_IGNORED_EMAILS)
+            if normalized
+        }
 
     def _jira_client(self) -> JiraClient:
         return self._client or JiraClient()
+
+    def _is_ignored_requestor_email(self, email: Any) -> bool:
+        return _normalize_email(email) in self._ignored_requestor_emails
+
+    @staticmethod
+    def _ignored_requestor_message(email: str) -> str:
+        normalized = _normalize_email(email)
+        if normalized:
+            return (
+                f"{normalized} is on the ignored requestor list. "
+                "Reporter was left unchanged. Use the reporter search to set it manually."
+            )
+        return "This mailbox is on the ignored requestor list. Reporter was left unchanged. Use the reporter search to set it manually."
 
     def refresh_directory_emails(self, users: list[dict[str, Any]]) -> int:
         entries: list[dict[str, str]] = []
@@ -271,10 +289,13 @@ class RequestorSyncService:
     def _directory_matches_for_name(self, reporter_hint: str) -> list[dict[str, Any]]:
         return self._store.get_directory_matches_by_display_name(reporter_hint)
 
-    def _ranked_name_match_candidate(self, reporter_hint: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str]:
+    def _ranked_name_match_candidate(
+        self,
+        reporter_hint: str,
+    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str, bool]:
         rows = self._directory_matches_for_name(reporter_hint)
         if not rows:
-            return None, [], ""
+            return None, [], "", False
 
         grouped: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -300,6 +321,34 @@ class RequestorSyncService:
                     candidate["canonical_email"] = canonical_email
 
         candidates = list(grouped.values())
+        filtered_candidates: list[dict[str, Any]] = []
+        ignored_only = False
+        for candidate in candidates:
+            filtered_emails = {
+                str(email)
+                for email in candidate["emails"]
+                if email and not self._is_ignored_requestor_email(email)
+            }
+            if not filtered_emails:
+                ignored_only = True
+                continue
+            canonical_email = _normalize_email(candidate.get("canonical_email"))
+            filtered_candidates.append(
+                {
+                    "entra_user_id": str(candidate["entra_user_id"]),
+                    "display_name": str(candidate["display_name"]),
+                    "canonical_email": canonical_email if canonical_email in filtered_emails else "",
+                    "emails": filtered_emails,
+                }
+            )
+        candidates = filtered_candidates
+        if not candidates:
+            return (
+                None,
+                rows,
+                "All Office 365 identities matched for this OCC creator are on the ignored requestor list.",
+                ignored_only,
+            )
         if len(candidates) == 1:
             candidate = candidates[0]
             emails = sorted(str(email) for email in candidate["emails"])
@@ -308,7 +357,7 @@ class RequestorSyncService:
                 "entra_user_id": str(candidate["entra_user_id"]),
                 "display_name": str(candidate["display_name"]),
                 "canonical_email": chosen_email,
-            }, rows, ""
+            }, rows, "", False
 
         ranked_candidates: list[dict[str, Any]] = []
         for candidate in candidates:
@@ -336,18 +385,18 @@ class RequestorSyncService:
             )
 
         if not ranked_candidates:
-            return None, rows, "No ranked Office 365 email domain could break the tie."
+            return None, rows, "No ranked Office 365 email domain could break the tie.", False
 
         best_rank = min(int(candidate["rank"]) for candidate in ranked_candidates)
         winners = [candidate for candidate in ranked_candidates if int(candidate["rank"]) == best_rank]
         if len(winners) != 1:
-            return None, rows, "Multiple Office 365 identities matched this OCC creator name after domain ranking."
+            return None, rows, "Multiple Office 365 identities matched this OCC creator name after domain ranking.", False
         winner = winners[0]
         return {
             "entra_user_id": str(winner["entra_user_id"]),
             "display_name": str(winner["display_name"]),
             "canonical_email": str(winner["canonical_email"]),
-        }, rows, ""
+        }, rows, "", False
 
     def _sync_directory_identity(
         self,
@@ -519,6 +568,21 @@ class RequestorSyncService:
     def get_requestor_identity(self, issue: dict[str, Any]) -> dict[str, Any]:
         extracted = self.extract_requestor_identity(issue)
         if extracted["email"]:
+            if self._is_ignored_requestor_email(extracted["email"]):
+                message = self._ignored_requestor_message(extracted["email"])
+                return self._build_identity_payload(
+                    issue,
+                    extracted_email=extracted["email"],
+                    directory_matches=[],
+                    state={
+                        "extracted_email": _normalize_email(extracted["email"]),
+                        "canonical_email": "",
+                        "jira_account_id": "",
+                        "sync_status": "ignored_requestor_email",
+                        "message": message,
+                        "match_source": extracted["source"],
+                    },
+                )
             matches = self._store.get_directory_matches(_normalize_email(extracted["email"]))
             return self._build_identity_payload(
                 issue,
@@ -534,7 +598,27 @@ class RequestorSyncService:
             )
         reporter_obj = (issue.get("fields") or {}).get("reporter") or {}
         if extracted["reporter_hint"] and isinstance(reporter_obj, dict) and self._reporter_is_integration(reporter_obj):
-            matches = self._directory_matches_for_name(extracted["reporter_hint"])
+            _, matches, ambiguity_reason, ignored_only = self._ranked_name_match_candidate(
+                extracted["reporter_hint"]
+            )
+            if ignored_only:
+                message = (
+                    f"{ambiguity_reason} Reporter was left unchanged for OCC creator "
+                    f"'{_compact_name(extracted['reporter_hint'])}'. Use the reporter search to set it manually."
+                )
+                return self._build_identity_payload(
+                    issue,
+                    extracted_email="",
+                    directory_matches=[],
+                    state={
+                        "extracted_email": "",
+                        "canonical_email": "",
+                        "jira_account_id": "",
+                        "sync_status": "ignored_requestor_email",
+                        "message": message,
+                        "match_source": "occ_creator_name",
+                    },
+                )
             return self._build_identity_payload(
                 issue,
                 extracted_email="",
@@ -592,7 +676,9 @@ class RequestorSyncService:
         if not extracted_email:
             reporter_hint = _compact_name(extracted.get("reporter_hint"))
             if reporter_hint and isinstance(reporter_obj, dict) and self._reporter_is_integration(reporter_obj):
-                selected_match, name_matches, ambiguity_reason = self._ranked_name_match_candidate(reporter_hint)
+                selected_match, name_matches, ambiguity_reason, ignored_only = self._ranked_name_match_candidate(
+                    reporter_hint
+                )
                 if not name_matches:
                     message = (
                         f"No Office 365 name match was found for OCC creator '{reporter_hint}'. "
@@ -620,6 +706,32 @@ class RequestorSyncService:
                         ),
                     }
                 if selected_match is None:
+                    if ignored_only:
+                        message = (
+                            f"{ambiguity_reason} Reporter was left unchanged for OCC creator '{reporter_hint}'. "
+                            "Use the reporter search to set it manually."
+                        )
+                        self._store.upsert_requestor_link(
+                            email_key="",
+                            ticket_key=key,
+                            extracted_email="",
+                            directory_display_name=reporter_hint,
+                            match_source="occ_creator_name",
+                            sync_status="ignored_requestor_email",
+                            message=message,
+                        )
+                        state = self._store.get_ticket_state(key)
+                        return {
+                            "updated": False,
+                            "message": message,
+                            "requestor_identity": self._build_identity_payload(
+                                issue,
+                                extracted_email="",
+                                directory_matches=[],
+                                state=state,
+                                fallback_match_source="occ_creator_name",
+                            ),
+                        }
                     message = (
                         f"Multiple Office 365 users matched OCC creator '{reporter_hint}'. "
                         "Reporter was left unchanged. Use the reporter search to set it manually."
@@ -674,6 +786,28 @@ class RequestorSyncService:
             }
 
         email_key = extracted_email
+        if self._is_ignored_requestor_email(email_key):
+            message = self._ignored_requestor_message(email_key)
+            self._store.upsert_requestor_link(
+                email_key=email_key,
+                ticket_key=key,
+                extracted_email=extracted_email,
+                match_source=extracted["source"],
+                sync_status="ignored_requestor_email",
+                message=message,
+            )
+            state = self._store.get_ticket_state(key)
+            return {
+                "updated": False,
+                "message": message,
+                "requestor_identity": self._build_identity_payload(
+                    issue,
+                    extracted_email=extracted_email,
+                    directory_matches=[],
+                    state=state,
+                    fallback_match_source=extracted["source"],
+                ),
+            }
         directory_matches = self._store.get_directory_matches(email_key)
         if not directory_matches:
             message = "No exact Office 365 directory match was found for this requestor email."

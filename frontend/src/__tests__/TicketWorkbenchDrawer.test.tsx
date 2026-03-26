@@ -332,6 +332,36 @@ describe("TicketWorkbenchDrawer", () => {
     expect(await screen.findByText("Reporter synced to Grace Hopper.")).toBeInTheDocument();
   });
 
+  it("shows ignored mailbox requestors as manual review instead of a synced match", async () => {
+    mockApi.getTicket.mockResolvedValue({
+      ...ticketDetail,
+      reporter: "Email Quarantine",
+      requestor_identity: {
+        extracted_email: "emailquarantine@librasolutionsgroup.com",
+        directory_match: false,
+        jira_account_id: "",
+        jira_status: "ignored_requestor_email",
+        message:
+          "emailquarantine@librasolutionsgroup.com is on the ignored requestor list. Reporter was left unchanged. Use the reporter search to set it manually.",
+        match_source: "reporter_email",
+      },
+    });
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={{ ...ticketRow, reporter: "Email Quarantine" }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Requestor Reconciliation");
+    expect(screen.getByText("Ignored Mailbox")).toBeInTheDocument();
+    expect(screen.getByText(/emailquarantine@librasolutionsgroup\.com/i)).toBeInTheDocument();
+    expect(screen.queryByText("Office 365 Match")).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Reporter was left unchanged\. Use the reporter search/i).length).toBeGreaterThan(0);
+  });
+
   it("renders office previews from the same-origin preview URL instead of a blob iframe", async () => {
     mockApi.getTicket.mockResolvedValue({
       ...ticketDetail,

@@ -159,6 +159,13 @@ REQUESTOR_OCC_NAME_DOMAIN_PRIORITY: list[str] = [
     for domain in (_env_csv("REQUESTOR_OCC_NAME_DOMAIN_PRIORITY") or _REQUESTOR_OCC_NAME_DOMAIN_PRIORITY_DEFAULT)
     if domain.strip()
 ]
+REQUESTOR_IGNORED_EMAILS: list[str] = [
+    email.lower()
+    for email in (
+        _env_csv("REQUESTOR_IGNORED_EMAILS") or ["emailquarantine@librasolutionsgroup.com"]
+    )
+    if email.strip()
+]
 
 
 AuthProvider = Literal["entra", "atlassian"]

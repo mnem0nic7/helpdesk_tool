@@ -151,6 +151,8 @@ function requestorStatusTone(
     case "ambiguous_name_match":
     case "jira_conflict":
       return "amber";
+    case "ignored_requestor_email":
+      return "slate";
     default:
       return "slate";
   }
@@ -180,6 +182,8 @@ function requestorStatusLabel(status: string): string {
       return "Sync Failed";
     case "no_name_match":
       return "No Name Match";
+    case "ignored_requestor_email":
+      return "Ignored Mailbox";
     default:
       return status || "Unknown";
   }
@@ -947,7 +951,8 @@ export default function TicketWorkbenchDrawer({
                             {requestorIdentity.extracted_email || "None"}
                           </div>
                           {requestorIdentity.jira_status === "no_name_match" ||
-                          requestorIdentity.jira_status === "ambiguous_name_match" ? (
+                          requestorIdentity.jira_status === "ambiguous_name_match" ||
+                          requestorIdentity.jira_status === "ignored_requestor_email" ? (
                             <div>Reporter was left unchanged. Use the reporter search above to set it manually.</div>
                           ) : null}
                           <div>{requestorIdentity.message || "No requestor reconciliation status yet."}</div>

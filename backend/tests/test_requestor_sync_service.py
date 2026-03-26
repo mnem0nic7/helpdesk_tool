@@ -13,6 +13,7 @@ os.environ.setdefault("JIRA_EMAIL", "test@example.com")
 os.environ.setdefault("JIRA_API_TOKEN", "test-token")
 os.environ.setdefault("JIRA_BASE_URL", "https://example.atlassian.net")
 
+import requestor_sync_service as requestor_sync_module
 from requestor_sync_service import RequestorSyncService
 from requestor_sync_store import RequestorSyncStore
 
@@ -363,3 +364,182 @@ def test_reconcile_issue_reuses_existing_jira_customer_without_creating_duplicat
     assert client.service_desk_adds == [("desk-1", ["acct-existing"])]
     assert client.reporter_updates == [("OIT-123", "acct-existing")]
     assert issue["fields"]["reporter"]["emailAddress"] == "grace.hopper@example.com"
+
+
+def test_reconcile_issue_ignores_blocklisted_extracted_email(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        requestor_sync_module,
+        "REQUESTOR_IGNORED_EMAILS",
+        [" MailTo:EmailQuarantine@LibraSolutionsGroup.com "],
+    )
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    client = FakeJiraClient()
+    service = RequestorSyncService(store=store, client=client)
+
+    issue = _issue("Reporter Email: <EmailQuarantine@LibraSolutionsGroup.com>")
+
+    result = service.reconcile_issue(issue, force=True)
+
+    assert result["updated"] is False
+    assert result["requestor_identity"]["jira_status"] == "ignored_requestor_email"
+    assert result["requestor_identity"]["extracted_email"] == "emailquarantine@librasolutionsgroup.com"
+    assert result["requestor_identity"]["directory_match"] is False
+    assert client.created_customers == []
+    assert client.service_desk_adds == []
+    assert client.reporter_updates == []
+    assert "ignored requestor list" in result["message"]
+
+
+def test_get_requestor_identity_marks_ignored_email_without_syncing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        requestor_sync_module,
+        "REQUESTOR_IGNORED_EMAILS",
+        ["emailquarantine@librasolutionsgroup.com"],
+    )
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    service = RequestorSyncService(store=store, client=FakeJiraClient())
+
+    identity = service.get_requestor_identity(
+        _issue("Reporter Email: emailquarantine@librasolutionsgroup.com")
+    )
+
+    assert identity["jira_status"] == "ignored_requestor_email"
+    assert identity["directory_match"] is False
+    assert "ignored requestor list" in identity["message"]
+
+
+def test_get_requestor_identity_prefers_ignored_email_status_over_old_synced_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        requestor_sync_module,
+        "REQUESTOR_IGNORED_EMAILS",
+        ["emailquarantine@librasolutionsgroup.com"],
+    )
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    service = RequestorSyncService(store=store, client=FakeJiraClient())
+    store.upsert_requestor_link(
+        email_key="emailquarantine@librasolutionsgroup.com",
+        ticket_key="OIT-123",
+        extracted_email="emailquarantine@librasolutionsgroup.com",
+        canonical_email="emailquarantine@librasolutionsgroup.com",
+        jira_account_id="acct-old",
+        jira_display_name="Email Quarantine",
+        match_source="reporter_email",
+        sync_status="updated_reporter",
+        message="Reporter synced to Email Quarantine.",
+    )
+
+    identity = service.get_requestor_identity(
+        _issue("Reporter Email: emailquarantine@librasolutionsgroup.com")
+    )
+
+    assert identity["jira_status"] == "ignored_requestor_email"
+    assert identity["jira_account_id"] == ""
+    assert "ignored requestor list" in identity["message"]
+
+
+def test_get_requestor_identity_marks_occ_name_as_ignored_when_only_ignored_candidates_exist(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        requestor_sync_module,
+        "REQUESTOR_IGNORED_EMAILS",
+        ["emailquarantine@librasolutionsgroup.com"],
+    )
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    service = RequestorSyncService(store=store, client=FakeJiraClient())
+    service.refresh_directory_emails(
+        [
+            {
+                "id": "user-1",
+                "display_name": "Email Quarantine",
+                "mail": "emailquarantine@librasolutionsgroup.com",
+                "primary_mail": "emailquarantine@librasolutionsgroup.com",
+                "principal_name": "emailquarantine@librasolutionsgroup.com",
+                "email_aliases": [],
+                "account_class": "shared_mailbox",
+            }
+        ]
+    )
+
+    identity = service.get_requestor_identity(
+        _issue("OCC Ticket Created By: Email Quarantine | OCC Ticket ID: LIBRA-SR-1")
+    )
+
+    assert identity["jira_status"] == "ignored_requestor_email"
+    assert identity["match_source"] == "occ_creator_name"
+    assert identity["directory_match"] is False
+    assert "ignored requestor list" in identity["message"]
+
+
+def test_reconcile_issue_occ_name_skips_ignored_candidate_and_uses_valid_match(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        requestor_sync_module,
+        "REQUESTOR_IGNORED_EMAILS",
+        ["emailquarantine@librasolutionsgroup.com"],
+    )
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    client = FakeJiraClient()
+    service = RequestorSyncService(store=store, client=client)
+
+    service.refresh_directory_emails(
+        [
+            {
+                "id": "user-1",
+                "display_name": "Email Quarantine",
+                "mail": "emailquarantine@librasolutionsgroup.com",
+                "primary_mail": "emailquarantine@librasolutionsgroup.com",
+                "principal_name": "emailquarantine@librasolutionsgroup.com",
+                "email_aliases": [],
+                "account_class": "shared_mailbox",
+            },
+            {
+                "id": "user-2",
+                "display_name": "Email Quarantine",
+                "mail": "emailquarantine@keyhealth.net",
+                "primary_mail": "emailquarantine@keyhealth.net",
+                "principal_name": "emailquarantine@keyhealth.net",
+                "email_aliases": [],
+                "account_class": "shared_mailbox",
+            },
+        ]
+    )
+    issue = _issue("OCC Ticket Created By: Email Quarantine | OCC Ticket ID: LIBRA-SR-1")
+
+    result = service.reconcile_issue(issue, force=True)
+
+    assert result["updated"] is True
+    assert result["requestor_identity"]["match_source"] == "occ_creator_name"
+    assert client.created_customers == [("emailquarantine@keyhealth.net", "Email Quarantine")]
+
+
+def test_reconcile_issue_occ_name_marks_ignored_when_only_ignored_candidates_exist(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        requestor_sync_module,
+        "REQUESTOR_IGNORED_EMAILS",
+        ["emailquarantine@librasolutionsgroup.com"],
+    )
+    store = RequestorSyncStore(str(tmp_path / "requestor_sync.db"))
+    client = FakeJiraClient()
+    service = RequestorSyncService(store=store, client=client)
+
+    service.refresh_directory_emails(
+        [
+            {
+                "id": "user-1",
+                "display_name": "Email Quarantine",
+                "mail": "emailquarantine@librasolutionsgroup.com",
+                "primary_mail": "emailquarantine@librasolutionsgroup.com",
+                "principal_name": "emailquarantine@librasolutionsgroup.com",
+                "email_aliases": [],
+                "account_class": "shared_mailbox",
+            }
+        ]
+    )
+    issue = _issue("OCC Ticket Created By: Email Quarantine | OCC Ticket ID: LIBRA-SR-1")
+
+    result = service.reconcile_issue(issue, force=True)
+
+    assert result["updated"] is False
+    assert result["requestor_identity"]["jira_status"] == "ignored_requestor_email"
+    assert result["requestor_identity"]["match_source"] == "occ_creator_name"
+    assert client.created_customers == []
+    assert client.reporter_updates == []
+    assert "ignored requestor list" in result["message"]
