@@ -101,6 +101,32 @@ def test_postgres_mode_backfills_legacy_jobs_and_requeues_running_jobs(tmp_path,
     assert job["recipient_email"] == "user@example.com"
 
 
+def test_postgres_init_commits_schema_before_backfill():
+    events: list[str] = []
+
+    class _FakeConn:
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append("exit")
+            return False
+
+        def commit(self):
+            events.append("commit")
+
+    manager = AzureVMExportJobManager.__new__(AzureVMExportJobManager)
+    manager._use_postgres = True
+    manager._conn = lambda: _FakeConn()
+    manager._create_schema = lambda conn: events.append("schema")
+    manager._backfill_from_sqlite_if_needed = lambda: events.append("backfill")
+
+    AzureVMExportJobManager._init_db(manager)
+
+    assert events == ["enter", "schema", "commit", "exit", "backfill"]
+
+
 def test_explicit_db_path_keeps_sqlite_fallback_when_postgres_is_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr("azure_vm_export_jobs.postgres_enabled", lambda: True)
 

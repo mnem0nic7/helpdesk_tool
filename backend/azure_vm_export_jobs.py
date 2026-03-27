@@ -147,10 +147,14 @@ class AzureVMExportJobManager:
                 )
 
     def _init_db(self) -> None:
+        if self._use_postgres:
+            with self._conn() as conn:
+                self._create_schema(conn)
+                conn.commit()
+            self._backfill_from_sqlite_if_needed()
+            return
         with self._conn() as conn:
             self._create_schema(conn)
-            if self._use_postgres:
-                self._backfill_from_sqlite_if_needed()
             conn.commit()
 
     def _coerce_job(self, row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
