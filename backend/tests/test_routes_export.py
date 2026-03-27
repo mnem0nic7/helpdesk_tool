@@ -174,6 +174,46 @@ class TestReportPreview:
         assert row["last_comment_author"] == "Taylor Resolver"
         assert row["last_comment_date"] == "2026-03-02T12:00:00+00:00"
 
+    def test_preview_includes_occ_ticket_id_when_requested(self, test_client, mock_cache):
+        issue = {
+            "key": "OIT-779",
+            "fields": {
+                "summary": "Imported from OCC",
+                "description": "OCC Ticket Created By: Libra PhishER | OCC Ticket ID: LIBRA-SR-075203",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex-agent"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": None,
+                "created": "2026-03-02T10:00:00+00:00",
+                "updated": "2026-03-02T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": [],
+                "components": [],
+                "customfield_10010": None,
+                "customfield_11239": "Service requests",
+                "customfield_11266": None,
+                "customfield_11264": None,
+                "customfield_10700": [],
+                "attachment": [],
+            },
+        }
+        mock_cache.get_all_issues.return_value = [issue]
+        mock_cache.get_filtered_issues.return_value = [issue]
+
+        resp = test_client.post("/api/report/preview", json={
+            "filters": {},
+            "columns": ["key", "occ_ticket_id"],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": False,
+        })
+        assert resp.status_code == 200
+        row = resp.json()["rows"][0]
+        assert row["occ_ticket_id"] == "LIBRA-SR-075203"
+
     def test_grouped_preview_supports_response_followup_compliance(self, test_client, mock_cache):
         issue = {
             "key": "OIT-778",
@@ -637,6 +677,40 @@ class TestReportExport:
         assert custom_sheet["B5"].value == "2026-03-08"
         exported_keys = [cell.value for cell in custom_sheet["A"] if isinstance(cell.value, str) and cell.value.startswith("OIT-CUSTOM-")]
         assert exported_keys == ["OIT-CUSTOM-2", "OIT-CUSTOM-3", "OIT-CUSTOM-4"]
+
+    def test_detail_export_includes_occ_ticket_id_column(self, test_client, mock_cache, monkeypatch):
+        monkeypatch.setattr("routes_export._today_utc", lambda: date(2026, 3, 10))
+
+        issue = _make_workload_issue(
+            key="OIT-OCC-1",
+            summary="Imported from OCC",
+            status="Open",
+            status_category="To Do",
+            assignee="Taylor Ops",
+            created="2026-03-09T10:00:00+00:00",
+            updated="2026-03-09T10:00:00+00:00",
+            oasisdev=False,
+        )
+        issue["fields"]["description"] = "OCC Ticket Created By: Libra PhishER | OCC Ticket ID: LIBRA-SR-075203"
+        mock_cache.get_all_issues.return_value = [issue]
+        mock_cache.get_filtered_issues.return_value = [issue]
+
+        resp = test_client.post("/api/report/export", json={
+            "filters": {},
+            "columns": ["key", "occ_ticket_id"],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": False,
+        })
+        assert resp.status_code == 200
+
+        workbook = load_workbook(BytesIO(resp.content))
+        detail_sheet = workbook["30 Day"]
+        assert detail_sheet["A13"].value == "Key"
+        assert detail_sheet["B13"].value == "OCC Ticket ID"
+        assert detail_sheet["A14"].value == "OIT-OCC-1"
+        assert detail_sheet["B14"].value == "LIBRA-SR-075203"
 
 
 class TestReportTemplates:

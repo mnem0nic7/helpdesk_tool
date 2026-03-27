@@ -494,6 +494,16 @@ class TestIssueToRow:
         assert row["request_type"] == "Business Application Support"
         assert row["request_type_id"] == "123"
 
+    def test_extracts_occ_ticket_id_from_description(self, freeze_time):
+        issue = {
+            "key": "OIT-556",
+            "fields": {
+                "description": "OCC Ticket Created By: Libra PhishER | OCC Ticket ID: LIBRA-SR-075203",
+            },
+        }
+        row = issue_to_row(issue)
+        assert row["occ_ticket_id"] == "LIBRA-SR-075203"
+
     def test_response_followup_marks_ticket_met_when_response_and_cadence_hold(self, freeze_time):
         issue = {
             "key": "OIT-701",

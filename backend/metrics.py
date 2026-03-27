@@ -6,6 +6,7 @@ by the REST API) and filter out excluded tickets internally before computing.
 
 from __future__ import annotations
 
+import re
 import statistics
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -110,6 +111,8 @@ _ONBOARDING_OFFBOARDING_MARKERS: tuple[str, ...] = (
 )
 LIBRA_SUPPORT_LABEL = "libra_support"
 LibraSupportFilter = Literal["all", "libra_support", "non_libra_support"]
+LOCAL_OCC_TICKET_ID_FIELD = "_movedocs_occ_ticket_id"
+_OCC_TICKET_ID_RE = re.compile(r"\bOCC\s+Ticket\s+ID\s*:\s*([A-Z0-9][A-Z0-9_-]*)", re.I)
 
 
 # ---------------------------------------------------------------------------
@@ -982,6 +985,7 @@ def issue_to_row(
         "assignee_account_id": assignee_id,
         "reporter": reporter_name,
         "reporter_account_id": reporter_id,
+        "occ_ticket_id": extract_occ_ticket_id_from_fields(fields),
         "created": created_str,
         "updated": updated_str,
         "resolved": resolved_str,
@@ -1066,6 +1070,39 @@ def _extract_description(fields: dict[str, Any], max_len: int = 500) -> str:
         full = " ".join(texts)
         return full[:max_len] if max_len else full
     return ""
+
+
+def extract_occ_ticket_id_from_text(text: str) -> str:
+    """Extract a normalized OCC ticket id from free-form ticket text."""
+    if not text:
+        return ""
+    match = _OCC_TICKET_ID_RE.search(text)
+    if not match:
+        return ""
+    return str(match.group(1) or "").strip(" \t|,.;:").upper()
+
+
+def extract_occ_ticket_id_from_fields(fields: dict[str, Any]) -> str:
+    """Return the stored OCC ticket id or derive it from the Jira description."""
+    stored = str(fields.get(LOCAL_OCC_TICKET_ID_FIELD) or "").strip()
+    if stored:
+        return stored
+    return extract_occ_ticket_id_from_text(_extract_description(fields, max_len=0))
+
+
+def sync_occ_ticket_id_field(fields: dict[str, Any]) -> bool:
+    """Refresh the cached OCC ticket id field from the current description text."""
+    current = str(fields.get(LOCAL_OCC_TICKET_ID_FIELD) or "").strip()
+    extracted = extract_occ_ticket_id_from_text(_extract_description(fields, max_len=0))
+    if extracted:
+        if extracted != current:
+            fields[LOCAL_OCC_TICKET_ID_FIELD] = extracted
+            return True
+        return False
+    if current:
+        fields.pop(LOCAL_OCC_TICKET_ID_FIELD, None)
+        return True
+    return False
 
 
 def _all_comments_text(fields: dict[str, Any]) -> str:

@@ -98,6 +98,7 @@ class TicketRow(BaseModel):
     assignee_account_id: str
     reporter: str
     reporter_account_id: str = ""
+    occ_ticket_id: str = ""
     created: str
     updated: str
     resolved: str

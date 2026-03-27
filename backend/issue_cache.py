@@ -16,6 +16,7 @@ from typing import Any
 from config import DATA_DIR, JIRA_PROJECT
 from ai_background_worker import background_ai_worker
 from jira_client import JiraClient
+from metrics import sync_occ_ticket_id_field
 from redis_utils import redis_state_store
 from request_type import extract_request_type_name_from_fields, has_request_type
 from site_context import SiteScope, filter_issues_for_scope
@@ -42,6 +43,9 @@ _AUTO_TRIAGE_ONE_TIME_BACKFILL_METADATA_KEY = (
     "auto_triage_backfill_older_than_24h_processed_v1"
 )
 _AUTO_TRIAGE_ONE_TIME_BACKFILL_HOURS = 24
+_OCC_TICKET_ID_ONE_TIME_BACKFILL_METADATA_KEY = (
+    "occ_ticket_id_backfill_from_cached_descriptions_v1"
+)
 _REDIS_ISSUES_HASH = "issue_cache:issues"
 _REDIS_METADATA_KEY = "issue_cache:metadata"
 
@@ -75,6 +79,7 @@ class IssueCache:
         self._auto_triage_last_started: datetime | None = None
         self._auto_triage_last_finished: datetime | None = None
         self._auto_triage_backfill_checked = False
+        self._occ_ticket_backfill_checked = False
 
         # Refresh progress tracking
         self._refresh_progress: dict[str, Any] = {}
@@ -151,6 +156,26 @@ class IssueCache:
                     )
                     for issue in issues
                 ],
+            )
+
+    def _get_metadata_value(self, key: str) -> str:
+        if self._use_redis_store:
+            return str(redis_state_store.hget(_REDIS_METADATA_KEY, key) or "")
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT value FROM metadata WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return str(row[0] or "") if row else ""
+
+    def _set_metadata_value(self, key: str, value: str) -> None:
+        if self._use_redis_store:
+            redis_state_store.hset(_REDIS_METADATA_KEY, key, value)
+            return
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+                (key, value),
             )
 
     def _delete_keys_from_store(self, keys: list[str]) -> None:
@@ -301,6 +326,7 @@ class IssueCache:
                     fields["summary"] = value
                 elif field == "description":
                     fields["description"] = value
+                    sync_occ_ticket_id_field(fields)
                 elif field == "priority":
                     fields["priority"] = {"name": value}
                 elif field == "request_type":
@@ -415,6 +441,7 @@ class IssueCache:
                 self._issues.pop(key, None)
             else:
                 self._issues[key] = issue
+        sync_occ_ticket_id_field(fields)
 
         self._upsert_to_db([issue])
 
@@ -482,6 +509,7 @@ class IssueCache:
             for key in normalized_keys
             if key in refreshed_by_key
         ]
+        self._sync_occ_ticket_ids(refreshed_issues)
 
         # Keys not returned by Jira have been moved or deleted — evict them.
         missing_keys = [k for k in normalized_keys if k not in refreshed_by_key]
@@ -540,29 +568,14 @@ class IssueCache:
         """Write _last_refresh timestamp to the metadata table."""
         if not self._last_refresh:
             return
-        if self._use_redis_store:
-            redis_state_store.hset(_REDIS_METADATA_KEY, "last_refresh", self._last_refresh.isoformat())
-            return
-        with self._conn() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_refresh', ?)",
-                (self._last_refresh.isoformat(),),
-            )
+        self._set_metadata_value("last_refresh", self._last_refresh.isoformat())
 
     def _restore_last_refresh(self) -> None:
         """Read the persisted last_refresh timestamp from the metadata table."""
         try:
-            if self._use_redis_store:
-                raw = redis_state_store.hget(_REDIS_METADATA_KEY, "last_refresh")
-                if raw:
-                    self._last_refresh = datetime.fromisoformat(raw)
-            else:
-                with self._conn() as conn:
-                    row = conn.execute(
-                        "SELECT value FROM metadata WHERE key = 'last_refresh'"
-                    ).fetchone()
-                if row:
-                    self._last_refresh = datetime.fromisoformat(row[0])
+            raw = self._get_metadata_value("last_refresh")
+            if raw:
+                self._last_refresh = datetime.fromisoformat(raw)
         except Exception:
             pass  # Non-fatal — will fall back to full startup lookback
 
@@ -605,6 +618,7 @@ class IssueCache:
             len(new_filtered),
             self._last_refresh.isoformat() if self._last_refresh else "unknown",
         )
+        self.ensure_occ_ticket_id_backfill()
         self.ensure_auto_triage_processed_backfill()
         return True
 
@@ -720,6 +734,7 @@ class IssueCache:
 
             self._sync_requestors_best_effort(all_issues, open_only=True)
             self._sync_followup_authority_best_effort(all_issues, recent_days=35)
+            self._sync_occ_ticket_ids(all_issues)
 
             new_all: dict[str, dict[str, Any]] = {}
             new_filtered: dict[str, dict[str, Any]] = {}
@@ -798,6 +813,7 @@ class IssueCache:
                 self._client.enrich_request_types(updated_issues, existing_cache=self._all_issues)
                 self._sync_requestors_best_effort(updated_issues, open_only=False)
                 self._sync_followup_authority_best_effort(updated_issues, recent_days=35)
+                self._sync_occ_ticket_ids(updated_issues)
 
             with self._lock:
                 for issue in updated_issues:
@@ -911,6 +927,42 @@ class IssueCache:
                 "Cache: bootstrapped local follow-up authority for %d cached issues",
                 len(changed_issues),
             )
+        return len(changed_issues)
+
+    @staticmethod
+    def _sync_occ_ticket_ids(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        changed: list[dict[str, Any]] = []
+        for issue in issues:
+            fields = issue.setdefault("fields", {})
+            if sync_occ_ticket_id_field(fields):
+                changed.append(issue)
+        return changed
+
+    def ensure_occ_ticket_id_backfill(self) -> int:
+        """Run the one-time cached backfill for legacy issues missing OCC ids."""
+        if self._occ_ticket_backfill_checked:
+            return 0
+
+        if self._get_metadata_value(_OCC_TICKET_ID_ONE_TIME_BACKFILL_METADATA_KEY) == "1":
+            self._occ_ticket_backfill_checked = True
+            return 0
+
+        with self._lock:
+            issues = list(self._all_issues.values())
+
+        if not issues:
+            return 0
+
+        changed_issues = self._sync_occ_ticket_ids(issues)
+        if changed_issues:
+            self._upsert_to_db(changed_issues)
+
+        self._set_metadata_value(_OCC_TICKET_ID_ONE_TIME_BACKFILL_METADATA_KEY, "1")
+        self._occ_ticket_backfill_checked = True
+        logger.info(
+            "Cache: one-time OCC ticket id backfill updated %d cached issues",
+            len(changed_issues),
+        )
         return len(changed_issues)
 
     def enrich_missing_request_types(self) -> int:

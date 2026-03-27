@@ -35,6 +35,7 @@ const FIELD_META: Record<string, FieldInfo> = {
   key:                       { label: "Key",               description: "Jira issue key",                     category: "identity" },
   summary:                   { label: "Summary",           description: "Issue title",                        category: "identity" },
   description:               { label: "Description",       description: "Issue description text",             category: "identity" },
+  occ_ticket_id:             { label: "OCC Ticket ID",     description: "Source OCC ticket identifier",       category: "identity" },
   issue_type:                { label: "Type",              description: "Issue type",                         category: "identity" },
   labels:                    { label: "Labels",            description: "Issue labels",                       category: "identity" },
   components:                { label: "Components",        description: "Issue components",                   category: "identity" },
@@ -88,7 +89,7 @@ const SORTABLE_FIELDS = ALL_FIELDS.filter((f) => !["labels", "components", "orga
 
 const GROUPABLE_FIELDS = [
   "status", "status_category", "priority", "assignee", "reporter",
-  "issue_type", "resolution", "request_type", "work_category", "excluded",
+  "issue_type", "resolution", "request_type", "work_category", "occ_ticket_id", "excluded",
   "sla_first_response_status", "sla_resolution_status",
   "response_followup_status", "first_response_2h_status", "daily_followup_status",
 ];

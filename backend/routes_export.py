@@ -139,6 +139,7 @@ FIELD_META: dict[str, dict[str, str]] = {
     "key": {"label": "Key", "description": "Jira issue key"},
     "summary": {"label": "Summary", "description": "Issue title"},
     "description": {"label": "Description", "description": "Issue description text"},
+    "occ_ticket_id": {"label": "OCC Ticket ID", "description": "Source OCC ticket identifier parsed from ticket text"},
     "issue_type": {"label": "Type", "description": "Issue type"},
     "status": {"label": "Status", "description": "Current status"},
     "status_category": {"label": "Status Category", "description": "Status category (To Do / In Progress / Done)"},
@@ -192,6 +193,7 @@ _DETAIL_WIDTH_DEFAULTS: dict[str, int] = {
     "key": 12,
     "summary": 50,
     "description": 60,
+    "occ_ticket_id": 18,
     "issue_type": 18,
     "status": 22,
     "status_category": 18,
@@ -233,6 +235,7 @@ _DETAIL_WIDTH_DEFAULTS: dict[str, int] = {
 _COLUMNS: list[tuple[str, str]] = [
     ("Key", "key"),
     ("Summary", "summary"),
+    ("OCC Ticket ID", "occ_ticket_id"),
     ("Type", "issue_type"),
     ("Status", "status"),
     ("Priority", "priority"),

@@ -244,6 +244,7 @@ export interface MetricsResponse {
 export interface TicketRow {
   key: string;
   summary: string;
+  occ_ticket_id?: string;
   issue_type: string;
   status: string;
   status_category: string;
