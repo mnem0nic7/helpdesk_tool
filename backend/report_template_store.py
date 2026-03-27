@@ -11,7 +11,13 @@ from typing import Any
 
 from config import DATA_DIR
 from models import ReportConfig, ReportTemplate
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
+
+try:
+    from psycopg import IntegrityError as PostgresIntegrityError
+except ImportError:  # pragma: no cover - optional in some local test envs
+    PostgresIntegrityError = sqlite3.IntegrityError
 
 
 def _utcnow() -> str:
@@ -322,14 +328,79 @@ class ReportTemplateStore:
 
     def __init__(self, db_path: str | None = None) -> None:
         self._db_path = db_path or os.path.join(DATA_DIR, "report_templates.db")
+        self._use_postgres = postgres_enabled() and db_path is None
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._init_db()
         self._sync_seed_templates()
 
-    def _conn(self) -> sqlite3.Connection:
+    def _sqlite_conn(self) -> sqlite3.Connection:
         return connect_sqlite(self._db_path)
 
+    def _conn(self):
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres()
+        return self._sqlite_conn()
+
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres or not os.path.exists(self._db_path):
+            return
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM report_templates").fetchone()
+            if row and int(row["count"]) > 0:
+                return
+        with self._sqlite_conn() as sqlite_conn:
+            template_rows = sqlite_conn.execute("SELECT * FROM report_templates").fetchall()
+            deleted_seed_rows = sqlite_conn.execute("SELECT * FROM deleted_seed_keys").fetchall()
+        with self._conn() as conn:
+            if template_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO report_templates (
+                        id, seed_key, site_scope, name, description, category, notes, readiness, is_seed,
+                        include_in_master_export, config_json, created_by_email, created_by_name, updated_by_email,
+                        updated_by_name, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(id) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["id"],
+                            row["seed_key"],
+                            row["site_scope"],
+                            row["name"],
+                            row["description"],
+                            row["category"],
+                            row["notes"],
+                            row["readiness"],
+                            row["is_seed"],
+                            row["include_in_master_export"],
+                            row["config_json"],
+                            row["created_by_email"],
+                            row["created_by_name"],
+                            row["updated_by_email"],
+                            row["updated_by_name"],
+                            row["created_at"],
+                            row["updated_at"],
+                        )
+                        for row in template_rows
+                    ],
+                )
+            if deleted_seed_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO deleted_seed_keys (seed_key, deleted_at)
+                    VALUES (%s, %s)
+                    ON CONFLICT(seed_key) DO NOTHING
+                    """,
+                    [(row["seed_key"], row["deleted_at"]) for row in deleted_seed_rows],
+                )
+
     def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            self._backfill_from_sqlite_if_needed()
+            return
         with self._conn() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
@@ -391,29 +462,36 @@ class ReportTemplateStore:
         now = _utcnow()
         with self._conn() as conn:
             deleted_seed_keys = {
-                str(row[0])
+                str(row["seed_key"] if hasattr(row, "keys") else row[0])
                 for row in conn.execute("SELECT seed_key FROM deleted_seed_keys").fetchall()
             }
             for template in _SEED_TEMPLATES:
                 seed_key = str(template["seed_key"])
                 if seed_key in deleted_seed_keys:
                     continue
+                seed_query = (
+                    "SELECT id, created_at FROM report_templates WHERE seed_key = %s"
+                    if self._use_postgres
+                    else
+                    "SELECT id, created_at FROM report_templates WHERE seed_key = ?"
+                )
                 existing = conn.execute(
-                    "SELECT id, created_at FROM report_templates WHERE seed_key = ?",
+                    seed_query,
                     (seed_key,),
                 ).fetchone()
                 if existing is not None:
                     continue
                 config_json = json.dumps(template["config"], sort_keys=True)
                 try:
-                    conn.execute(
-                        """
+                    insert_query = """
                         INSERT INTO report_templates (
                             id, seed_key, site_scope, name, description, category, notes,
                             readiness, is_seed, include_in_master_export, config_json, created_by_email, created_by_name,
                             updated_by_email, updated_by_name, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '', 'System', '', 'System', ?, ?)
-                        """,
+                        ) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, 1, {placeholder}, {placeholder}, '', 'System', '', 'System', {placeholder}, {placeholder})
+                    """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+                    conn.execute(
+                        insert_query,
                         (
                             seed_key,
                             seed_key,
@@ -429,28 +507,33 @@ class ReportTemplateStore:
                             now,
                         ),
                     )
-                except sqlite3.IntegrityError:
+                except (sqlite3.IntegrityError, PostgresIntegrityError):
                     # If a user already created a template with the same site/name, keep
                     # their version and skip the built-in insert.
                     continue
 
     def list_templates(self, site_scope: str) -> list[ReportTemplate]:
         with self._conn() as conn:
-            rows = conn.execute(
-                """
+            query = """
                 SELECT *
                 FROM report_templates
-                WHERE site_scope = ?
+                WHERE site_scope = {placeholder}
                 ORDER BY category ASC, name ASC
-                """,
+            """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+            rows = conn.execute(
+                query,
                 (site_scope,),
             ).fetchall()
         return [self._row_to_template(row) for row in rows]
 
     def get_template(self, template_id: str, site_scope: str) -> ReportTemplate | None:
         with self._conn() as conn:
+            query = "SELECT * FROM report_templates WHERE id = {placeholder} AND site_scope = {placeholder}".replace(
+                "{placeholder}",
+                "%s" if self._use_postgres else "?",
+            )
             row = conn.execute(
-                "SELECT * FROM report_templates WHERE id = ? AND site_scope = ?",
+                query,
                 (template_id, site_scope),
             ).fetchone()
         if row is None:
@@ -477,14 +560,15 @@ class ReportTemplateStore:
         now = _utcnow()
         try:
             with self._conn() as conn:
-                conn.execute(
-                    """
+                query = """
                     INSERT INTO report_templates (
                         id, seed_key, site_scope, name, description, category, notes,
                         readiness, is_seed, include_in_master_export, config_json, created_by_email, created_by_name,
                         updated_by_email, updated_by_name, created_at, updated_at
-                    ) VALUES (?, NULL, ?, ?, ?, ?, ?, 'custom', 0, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                    ) VALUES ({placeholder}, NULL, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, 'custom', 0, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+                conn.execute(
+                    query,
                     (
                         template_id,
                         site_scope,
@@ -502,7 +586,7 @@ class ReportTemplateStore:
                         now,
                     ),
                 )
-        except sqlite3.IntegrityError as exc:
+        except (sqlite3.IntegrityError, PostgresIntegrityError) as exc:
             raise ValueError(f"A template named '{normalized_name}' already exists on this site.") from exc
         created = self.get_template(template_id, site_scope)
         if created is None:
@@ -531,20 +615,21 @@ class ReportTemplateStore:
             raise ValueError("Template name is required")
         try:
             with self._conn() as conn:
-                conn.execute(
-                    """
+                query = """
                     UPDATE report_templates
-                    SET name = ?,
-                        description = ?,
-                        category = ?,
-                        notes = ?,
-                        include_in_master_export = ?,
-                        config_json = ?,
-                        updated_by_email = ?,
-                        updated_by_name = ?,
-                        updated_at = ?
-                    WHERE id = ? AND site_scope = ?
-                    """,
+                    SET name = {placeholder},
+                        description = {placeholder},
+                        category = {placeholder},
+                        notes = {placeholder},
+                        include_in_master_export = {placeholder},
+                        config_json = {placeholder},
+                        updated_by_email = {placeholder},
+                        updated_by_name = {placeholder},
+                        updated_at = {placeholder}
+                    WHERE id = {placeholder} AND site_scope = {placeholder}
+                """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+                conn.execute(
+                    query,
                     (
                         normalized_name,
                         description.strip(),
@@ -559,7 +644,7 @@ class ReportTemplateStore:
                         site_scope,
                     ),
                 )
-        except sqlite3.IntegrityError as exc:
+        except (sqlite3.IntegrityError, PostgresIntegrityError) as exc:
             raise ValueError(f"A template named '{normalized_name}' already exists on this site.") from exc
         updated = self.get_template(template_id, site_scope)
         if updated is None:
@@ -568,24 +653,33 @@ class ReportTemplateStore:
 
     def delete_template(self, template_id: str, site_scope: str) -> None:
         with self._conn() as conn:
+            select_query = "SELECT seed_key FROM report_templates WHERE id = {placeholder} AND site_scope = {placeholder}".replace(
+                "{placeholder}",
+                "%s" if self._use_postgres else "?",
+            )
             existing = conn.execute(
-                "SELECT seed_key FROM report_templates WHERE id = ? AND site_scope = ?",
+                select_query,
                 (template_id, site_scope),
             ).fetchone()
             if existing is None:
                 raise KeyError("Template not found")
             seed_key = str(existing["seed_key"] or "").strip()
             if seed_key:
-                conn.execute(
-                    """
+                deleted_query = """
                     INSERT INTO deleted_seed_keys (seed_key, deleted_at)
-                    VALUES (?, ?)
+                    VALUES ({placeholder}, {placeholder})
                     ON CONFLICT(seed_key) DO UPDATE SET deleted_at = excluded.deleted_at
-                    """,
+                """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+                conn.execute(
+                    deleted_query,
                     (seed_key, _utcnow()),
                 )
+            delete_query = "DELETE FROM report_templates WHERE id = {placeholder} AND site_scope = {placeholder}".replace(
+                "{placeholder}",
+                "%s" if self._use_postgres else "?",
+            )
             conn.execute(
-                "DELETE FROM report_templates WHERE id = ? AND site_scope = ?",
+                delete_query,
                 (template_id, site_scope),
             )
 
@@ -602,15 +696,16 @@ class ReportTemplateStore:
         if existing is None:
             raise KeyError("Template not found")
         with self._conn() as conn:
-            conn.execute(
-                """
+            query = """
                 UPDATE report_templates
-                SET include_in_master_export = ?,
-                    updated_by_email = ?,
-                    updated_by_name = ?,
-                    updated_at = ?
-                WHERE id = ? AND site_scope = ?
-                """,
+                SET include_in_master_export = {placeholder},
+                    updated_by_email = {placeholder},
+                    updated_by_name = {placeholder},
+                    updated_at = {placeholder}
+                WHERE id = {placeholder} AND site_scope = {placeholder}
+            """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+            conn.execute(
+                query,
                 (
                     1 if include_in_master_export else 0,
                     actor_email.strip(),

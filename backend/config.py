@@ -118,6 +118,16 @@ AZURE_FINOPS_RECOMMENDATION_TEAMS_CHANNEL_LABEL: str = (
     os.getenv("AZURE_FINOPS_RECOMMENDATION_TEAMS_CHANNEL_LABEL", "FinOps").strip() or "FinOps"
 )
 DATA_DIR: str = os.getenv("DATA_DIR", "/app/data")
+DATABASE_URL: str = os.getenv("DATABASE_URL", "").strip()
+DATABASE_CONNECT_TIMEOUT_SECONDS: int = int(os.getenv("DATABASE_CONNECT_TIMEOUT_SECONDS", "10"))
+REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
+REDIS_NAMESPACE: str = os.getenv("REDIS_NAMESPACE", "altlassian").strip() or "altlassian"
+STORAGE_DUAL_WRITE_SQLITE: bool = os.getenv("STORAGE_DUAL_WRITE_SQLITE", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 PRIMARY_APP_HOST: str = os.getenv("PRIMARY_APP_HOST", "it-app.movedocs.com")
 OASISDEV_APP_HOST: str = os.getenv("OASISDEV_APP_HOST", "oasisdev.movedocs.com")
 AZURE_APP_HOST: str = os.getenv("AZURE_APP_HOST", "azure.movedocs.com")

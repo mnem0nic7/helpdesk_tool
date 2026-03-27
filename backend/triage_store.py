@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from config import DATA_DIR
 from models import TechnicianScore, TriageResult
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
@@ -20,10 +21,95 @@ class TriageStore:
 
     def __init__(self, db_path: str | None = None) -> None:
         self._db_path = db_path or os.path.join(DATA_DIR, "triage_suggestions.db")
+        self._use_postgres = postgres_enabled() and db_path is None
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._init_db()
 
+    def _sqlite_conn(self) -> sqlite3.Connection:
+        return connect_sqlite(self._db_path, row_factory=None)
+
+    def _placeholder(self) -> str:
+        return "%s" if self._use_postgres else "?"
+
+    def _conn(self):
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres(row_factory=None)
+        return self._sqlite_conn()
+
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres or not os.path.exists(self._db_path):
+            return
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) FROM triage_suggestions").fetchone()
+            if row and int(row[0]) > 0:
+                return
+        with self._sqlite_conn() as sqlite_conn:
+            metadata_rows = sqlite_conn.execute("SELECT key, value FROM metadata").fetchall()
+            suggestion_rows = sqlite_conn.execute(
+                "SELECT key, data, model, created_at, updated_at FROM suggestions"
+            ).fetchall()
+            auto_triaged_rows = sqlite_conn.execute(
+                "SELECT key, processed_at, priority_updated, request_type_updated FROM auto_triaged"
+            ).fetchall()
+            log_rows = sqlite_conn.execute(
+                "SELECT key, field, old_value, new_value, confidence, model, source, approved_by, timestamp FROM auto_triage_log"
+            ).fetchall()
+            technician_rows = sqlite_conn.execute(
+                "SELECT key, data, model, created_at, updated_at FROM technician_scores"
+            ).fetchall()
+        with self._conn() as conn:
+            if metadata_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO triage_metadata (key, value)
+                    VALUES (%s, %s)
+                    ON CONFLICT(key) DO NOTHING
+                    """,
+                    metadata_rows,
+                )
+            if suggestion_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO triage_suggestions (key, data, model, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT(key) DO NOTHING
+                    """,
+                    suggestion_rows,
+                )
+            if auto_triaged_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO triage_auto_triaged (key, processed_at, priority_updated, request_type_updated)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT(key) DO NOTHING
+                    """,
+                    auto_triaged_rows,
+                )
+            if log_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO triage_auto_triage_log (
+                        key, field, old_value, new_value, confidence, model, source, approved_by, timestamp
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    log_rows,
+                )
+            if technician_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO triage_technician_scores (key, data, model, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT(key) DO NOTHING
+                    """,
+                    technician_rows,
+                )
+
     def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            self._backfill_from_sqlite_if_needed()
+            return
         with connect_sqlite(self._db_path, row_factory=None) as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS metadata "
@@ -71,13 +157,11 @@ class TriageStore:
                 "ON suggestions(updated_at)"
             )
 
-    def _conn(self) -> sqlite3.Connection:
-        return connect_sqlite(self._db_path, row_factory=None)
-
     def get(self, key: str) -> TriageResult | None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT data FROM suggestions WHERE key = ?", (key,)
+                f"SELECT data FROM {'triage_suggestions' if self._use_postgres else 'suggestions'} WHERE key = {self._placeholder()}",
+                (key,),
             ).fetchone()
         if not row:
             return None
@@ -86,10 +170,10 @@ class TriageStore:
     def get_many(self, keys: list[str]) -> dict[str, TriageResult]:
         if not keys:
             return {}
-        placeholders = ",".join("?" for _ in keys)
+        placeholders = ",".join(self._placeholder() for _ in keys)
         with self._conn() as conn:
             rows = conn.execute(
-                f"SELECT key, data FROM suggestions WHERE key IN ({placeholders})",
+                f"SELECT key, data FROM {'triage_suggestions' if self._use_postgres else 'suggestions'} WHERE key IN ({placeholders})",
                 keys,
             ).fetchall()
         return {k: TriageResult(**json.loads(d)) for k, d in rows}
@@ -99,17 +183,32 @@ class TriageStore:
         data = result.model_dump_json()
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO suggestions "
-                "(key, data, model, created_at, updated_at) "
-                "VALUES (?, ?, ?, COALESCE("
-                "  (SELECT created_at FROM suggestions WHERE key = ?), ?"
-                "), ?)",
+                (
+                    """
+                    INSERT INTO triage_suggestions (key, data, model, created_at, updated_at)
+                    VALUES (%s, %s, %s, COALESCE((SELECT created_at FROM triage_suggestions WHERE key = %s), %s), %s)
+                    ON CONFLICT(key) DO UPDATE SET
+                        data = excluded.data,
+                        model = excluded.model,
+                        updated_at = excluded.updated_at
+                    """
+                    if self._use_postgres
+                    else
+                    "INSERT OR REPLACE INTO suggestions "
+                    "(key, data, model, created_at, updated_at) "
+                    "VALUES (?, ?, ?, COALESCE("
+                    "  (SELECT created_at FROM suggestions WHERE key = ?), ?"
+                    "), ?)"
+                ),
                 (result.key, data, result.model_used, result.key, now, now),
             )
 
     def delete(self, key: str) -> None:
         with self._conn() as conn:
-            conn.execute("DELETE FROM suggestions WHERE key = ?", (key,))
+            conn.execute(
+                f"DELETE FROM {'triage_suggestions' if self._use_postgres else 'suggestions'} WHERE key = {self._placeholder()}",
+                (key,),
+            )
 
     def list_all(self, strip_auto_fields: bool = False) -> list[TriageResult]:
         """Return all stored suggestions.
@@ -120,7 +219,7 @@ class TriageStore:
         """
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT data FROM suggestions ORDER BY updated_at DESC"
+                f"SELECT data FROM {'triage_suggestions' if self._use_postgres else 'suggestions'} ORDER BY updated_at DESC"
             ).fetchall()
         results = [TriageResult(**json.loads(row[0])) for row in rows]
         if strip_auto_fields:
@@ -151,12 +250,22 @@ class TriageStore:
         now = datetime.now(timezone.utc).isoformat()
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO auto_triaged (key, processed_at, priority_updated, request_type_updated) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET "
-                "processed_at = excluded.processed_at, "
-                "priority_updated = MAX(priority_updated, excluded.priority_updated), "
-                "request_type_updated = MAX(request_type_updated, excluded.request_type_updated)",
+                (
+                    "INSERT INTO triage_auto_triaged (key, processed_at, priority_updated, request_type_updated) "
+                    "VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT(key) DO UPDATE SET "
+                    "processed_at = excluded.processed_at, "
+                    "priority_updated = GREATEST(triage_auto_triaged.priority_updated, excluded.priority_updated), "
+                    "request_type_updated = GREATEST(triage_auto_triaged.request_type_updated, excluded.request_type_updated)"
+                    if self._use_postgres
+                    else
+                    "INSERT INTO auto_triaged (key, processed_at, priority_updated, request_type_updated) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET "
+                    "processed_at = excluded.processed_at, "
+                    "priority_updated = MAX(priority_updated, excluded.priority_updated), "
+                    "request_type_updated = MAX(request_type_updated, excluded.request_type_updated)"
+                ),
                 (key, now, int(priority_updated), int(request_type_updated)),
             )
 
@@ -172,6 +281,25 @@ class TriageStore:
         now = datetime.now(timezone.utc).isoformat()
         rows = [(key, now, 0, 0) for key in dict.fromkeys(normalized_keys)]
         with self._conn() as conn:
+            if self._use_postgres:
+                existing = {
+                    row[0]
+                    for row in conn.execute(
+                        f"SELECT key FROM triage_auto_triaged WHERE key IN ({','.join(self._placeholder() for _ in normalized_keys)})",
+                        normalized_keys,
+                    ).fetchall()
+                }
+                new_rows = [row for row in rows if row[0] not in existing]
+                if new_rows:
+                    conn.executemany(
+                        """
+                        INSERT INTO triage_auto_triaged (key, processed_at, priority_updated, request_type_updated)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT(key) DO NOTHING
+                        """,
+                        new_rows,
+                    )
+                return len(new_rows)
             conn.executemany(
                 "INSERT OR IGNORE INTO auto_triaged (key, processed_at, priority_updated, request_type_updated) "
                 "VALUES (?, ?, ?, ?)",
@@ -182,26 +310,31 @@ class TriageStore:
     def get_auto_triaged_keys(self) -> set[str]:
         """Return all keys that have been auto-triaged."""
         with self._conn() as conn:
-            rows = conn.execute("SELECT key FROM auto_triaged").fetchall()
+            rows = conn.execute(
+                f"SELECT key FROM {'triage_auto_triaged' if self._use_postgres else 'auto_triaged'}"
+            ).fetchall()
         return {row[0] for row in rows}
 
     def clear_auto_triaged(self) -> None:
         """Delete all rows from auto_triaged so tickets can be re-processed."""
         with self._conn() as conn:
-            conn.execute("DELETE FROM auto_triaged")
+            conn.execute(f"DELETE FROM {'triage_auto_triaged' if self._use_postgres else 'auto_triaged'}")
 
     def clear_auto_triaged_keys(self, keys: list[str]) -> None:
         """Delete specific keys from auto_triaged so they can be re-processed."""
         if not keys:
             return
-        placeholders = ",".join("?" for _ in keys)
+        placeholders = ",".join(self._placeholder() for _ in keys)
         with self._conn() as conn:
-            conn.execute(f"DELETE FROM auto_triaged WHERE key IN ({placeholders})", keys)
+            conn.execute(
+                f"DELETE FROM {'triage_auto_triaged' if self._use_postgres else 'auto_triaged'} WHERE key IN ({placeholders})",
+                keys,
+            )
 
     def get_metadata(self, key: str) -> str | None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT value FROM metadata WHERE key = ?",
+                f"SELECT value FROM {'triage_metadata' if self._use_postgres else 'metadata'} WHERE key = {self._placeholder()}",
                 (key,),
             ).fetchone()
         return str(row[0]) if row else None
@@ -209,7 +342,13 @@ class TriageStore:
     def set_metadata(self, key: str, value: str) -> None:
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+                (
+                    "INSERT INTO triage_metadata (key, value) VALUES (%s, %s) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                    if self._use_postgres
+                    else
+                    "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)"
+                ),
                 (key, value),
             )
 
@@ -232,9 +371,16 @@ class TriageStore:
         now = datetime.now(timezone.utc).isoformat()
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO auto_triage_log "
-                "(key, field, old_value, new_value, confidence, model, source, approved_by, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "INSERT INTO triage_auto_triage_log "
+                    "(key, field, old_value, new_value, confidence, model, source, approved_by, timestamp) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                    if self._use_postgres
+                    else
+                    "INSERT INTO auto_triage_log "
+                    "(key, field, old_value, new_value, confidence, model, source, approved_by, timestamp) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                ),
                 (key, field, old_value, new_value, confidence, model, source, approved_by, now),
             )
 
@@ -242,24 +388,25 @@ class TriageStore:
         """Return recent triage changes, newest first."""
         normalized_search = search.strip().lower()
         with self._conn() as conn:
+            log_table = "triage_auto_triage_log" if self._use_postgres else "auto_triage_log"
             if normalized_search:
                 rows = conn.execute(
-                    "SELECT key, field, old_value, new_value, confidence, model, source, approved_by, timestamp "
-                    "FROM auto_triage_log "
-                    "WHERE lower(coalesce(key, '')) LIKE ? "
-                    "OR lower(coalesce(field, '')) LIKE ? "
-                    "OR lower(coalesce(old_value, '')) LIKE ? "
-                    "OR lower(coalesce(new_value, '')) LIKE ? "
-                    "OR lower(coalesce(model, '')) LIKE ? "
-                    "OR lower(coalesce(source, '')) LIKE ? "
-                    "OR lower(coalesce(approved_by, '')) LIKE ? "
-                    "ORDER BY timestamp DESC LIMIT ?",
+                    f"SELECT key, field, old_value, new_value, confidence, model, source, approved_by, timestamp "
+                    f"FROM {log_table} "
+                    f"WHERE lower(coalesce(key, '')) LIKE {self._placeholder()} "
+                    f"OR lower(coalesce(field, '')) LIKE {self._placeholder()} "
+                    f"OR lower(coalesce(old_value, '')) LIKE {self._placeholder()} "
+                    f"OR lower(coalesce(new_value, '')) LIKE {self._placeholder()} "
+                    f"OR lower(coalesce(model, '')) LIKE {self._placeholder()} "
+                    f"OR lower(coalesce(source, '')) LIKE {self._placeholder()} "
+                    f"OR lower(coalesce(approved_by, '')) LIKE {self._placeholder()} "
+                    f"ORDER BY timestamp DESC LIMIT {self._placeholder()}",
                     tuple([f"%{normalized_search}%"] * 7 + [limit]),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT key, field, old_value, new_value, confidence, model, source, approved_by, timestamp "
-                    "FROM auto_triage_log ORDER BY timestamp DESC LIMIT ?",
+                    f"SELECT key, field, old_value, new_value, confidence, model, source, approved_by, timestamp "
+                    f"FROM {log_table} ORDER BY timestamp DESC LIMIT {self._placeholder()}",
                     (limit,),
                 ).fetchall()
         return [
@@ -283,11 +430,19 @@ class TriageStore:
         data = score.model_dump_json()
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO technician_scores "
-                "(key, data, model, created_at, updated_at) "
-                "VALUES (?, ?, ?, COALESCE("
-                "  (SELECT created_at FROM technician_scores WHERE key = ?), ?"
-                "), ?)",
+                (
+                    "INSERT INTO triage_technician_scores "
+                    "(key, data, model, created_at, updated_at) "
+                    "VALUES (%s, %s, %s, COALESCE((SELECT created_at FROM triage_technician_scores WHERE key = %s), %s), %s) "
+                    "ON CONFLICT(key) DO UPDATE SET data = excluded.data, model = excluded.model, updated_at = excluded.updated_at"
+                    if self._use_postgres
+                    else
+                    "INSERT OR REPLACE INTO technician_scores "
+                    "(key, data, model, created_at, updated_at) "
+                    "VALUES (?, ?, ?, COALESCE("
+                    "  (SELECT created_at FROM technician_scores WHERE key = ?), ?"
+                    "), ?)"
+                ),
                 (score.key, data, score.model_used, score.key, now, now),
             )
 
@@ -295,7 +450,7 @@ class TriageStore:
         """Return technician QA scores, newest first."""
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT data FROM technician_scores ORDER BY updated_at DESC LIMIT ?",
+                f"SELECT data FROM {'triage_technician_scores' if self._use_postgres else 'technician_scores'} ORDER BY updated_at DESC LIMIT {self._placeholder()}",
                 (limit,),
             ).fetchall()
         return [TechnicianScore(**json.loads(row[0])) for row in rows]
@@ -304,7 +459,7 @@ class TriageStore:
         """Return the technician QA score for a specific ticket, if present."""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT data FROM technician_scores WHERE key = ? LIMIT 1",
+                f"SELECT data FROM {'triage_technician_scores' if self._use_postgres else 'technician_scores'} WHERE key = {self._placeholder()} LIMIT 1",
                 (key,),
             ).fetchone()
         if not row:
@@ -314,13 +469,15 @@ class TriageStore:
     def get_technician_scored_keys(self) -> set[str]:
         """Return keys that already have a technician QA score."""
         with self._conn() as conn:
-            rows = conn.execute("SELECT key FROM technician_scores").fetchall()
+            rows = conn.execute(
+                f"SELECT key FROM {'triage_technician_scores' if self._use_postgres else 'technician_scores'}"
+            ).fetchall()
         return {row[0] for row in rows}
 
     def clear_technician_scores(self) -> None:
         """Delete all technician QA scores."""
         with self._conn() as conn:
-            conn.execute("DELETE FROM technician_scores")
+            conn.execute(f"DELETE FROM {'triage_technician_scores' if self._use_postgres else 'technician_scores'}")
 
     # ------------------------------------------------------------------
     # Per-field manipulation

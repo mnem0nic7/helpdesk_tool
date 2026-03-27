@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import sqlite3
 
 import pytest
 
@@ -33,6 +34,37 @@ class FakeOneDriveClient:
         if self.batch_responses:
             return self.batch_responses.pop(0)
         return {"responses": [{"id": str(item["id"]), "status": 202} for item in requests_payload]}
+
+
+class _PostgresSqliteProxy:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    @staticmethod
+    def _translate(sql: str) -> str:
+        return sql.replace("%s", "?")
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
+        return self._conn.execute(self._translate(sql), params)
+
+    def executemany(self, sql: str, seq_of_params: list[tuple[Any, ...]]) -> sqlite3.Cursor:
+        return self._conn.executemany(self._translate(sql), seq_of_params)
+
+    def executescript(self, sql: str) -> sqlite3.Cursor:
+        return self._conn.executescript(sql)
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def __enter__(self) -> _PostgresSqliteProxy:
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return self._conn.__exit__(exc_type, exc, tb)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
 
 
 def test_create_job_rejects_same_source_and_destination(tmp_path):
@@ -101,6 +133,222 @@ def test_remember_user_option_enriches_saved_rows_and_searches_by_upn(tmp_path):
             "last_used_at": saved[0]["last_used_at"],
         }
     ]
+
+
+def test_postgres_mode_backfills_legacy_jobs_and_requeues_running_jobs(tmp_path, monkeypatch):
+    legacy_db_path = tmp_path / "onedrive_copy_jobs.db"
+    postgres_db_path = tmp_path / "onedrive_copy_jobs_postgres.db"
+
+    legacy_manager = OneDriveCopyJobManager(db_path=str(legacy_db_path))
+    with legacy_manager._conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO onedrive_copy_jobs (
+                job_id,
+                site_scope,
+                status,
+                phase,
+                requested_by_email,
+                requested_by_name,
+                source_upn,
+                destination_upn,
+                destination_folder,
+                test_mode,
+                test_file_limit,
+                exclude_system_folders,
+                requested_at,
+                started_at,
+                progress_current,
+                progress_total,
+                progress_message
+            )
+            VALUES (?, ?, 'running', 'enumerating', ?, ?, ?, ?, ?, 1, 3, 1, ?, ?, 2, 3, 'Working')
+            """,
+            (
+                "job-running",
+                "primary",
+                "user@example.com",
+                "Example User",
+                "source@example.com",
+                "dest@example.com",
+                "CopiedFiles",
+                "2026-03-26T00:00:00+00:00",
+                "2026-03-26T00:01:00+00:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO onedrive_copy_job_events (
+                job_id,
+                level,
+                message,
+                created_at
+            )
+            VALUES (?, 'info', ?, ?)
+            """,
+            ("job-running", "Queued copy request", "2026-03-26T00:00:05+00:00"),
+        )
+        conn.execute(
+            """
+            INSERT INTO onedrive_copy_saved_upns (
+                normalized_upn,
+                display_name,
+                principal_name,
+                mail,
+                source_hint,
+                created_at,
+                updated_at,
+                last_used_at,
+                last_used_by_email
+            )
+            VALUES (?, ?, ?, ?, 'manual', ?, ?, ?, ?)
+            """,
+            (
+                "source@example.com",
+                "Source User",
+                "source@example.com",
+                "source@example.com",
+                "2026-03-26T00:00:10+00:00",
+                "2026-03-26T00:00:10+00:00",
+                "2026-03-26T00:00:10+00:00",
+                "tech@example.com",
+            ),
+        )
+        conn.commit()
+
+    monkeypatch.setattr("onedrive_copy_jobs.DATA_DIR", tmp_path)
+    monkeypatch.setattr("onedrive_copy_jobs.postgres_enabled", lambda: True)
+
+    def create_postgres_schema() -> None:
+        with sqlite3.connect(postgres_db_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS onedrive_copy_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    site_scope TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    phase TEXT NOT NULL,
+                    requested_by_email TEXT NOT NULL,
+                    requested_by_name TEXT NOT NULL,
+                    source_upn TEXT NOT NULL,
+                    destination_upn TEXT NOT NULL,
+                    destination_folder TEXT NOT NULL,
+                    test_mode INTEGER NOT NULL DEFAULT 0,
+                    test_file_limit INTEGER NOT NULL DEFAULT 25,
+                    exclude_system_folders INTEGER NOT NULL DEFAULT 1,
+                    requested_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    progress_current INTEGER NOT NULL DEFAULT 0,
+                    progress_total INTEGER NOT NULL DEFAULT 0,
+                    progress_message TEXT NOT NULL DEFAULT '',
+                    total_folders_found INTEGER NOT NULL DEFAULT 0,
+                    total_files_found INTEGER NOT NULL DEFAULT 0,
+                    folders_created INTEGER NOT NULL DEFAULT 0,
+                    files_dispatched INTEGER NOT NULL DEFAULT 0,
+                    files_failed INTEGER NOT NULL DEFAULT 0,
+                    source_drive_id TEXT NOT NULL DEFAULT '',
+                    destination_drive_id TEXT NOT NULL DEFAULT '',
+                    destination_top_folder_id TEXT NOT NULL DEFAULT '',
+                    error TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS onedrive_copy_job_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS onedrive_copy_saved_upns (
+                    normalized_upn TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL DEFAULT '',
+                    principal_name TEXT NOT NULL DEFAULT '',
+                    mail TEXT NOT NULL DEFAULT '',
+                    source_hint TEXT NOT NULL DEFAULT 'manual',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_used_at TEXT NOT NULL,
+                    last_used_by_email TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_onedrive_copy_jobs_requested_at
+                    ON onedrive_copy_jobs (requested_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_onedrive_copy_events_job
+                    ON onedrive_copy_job_events (job_id, event_id DESC);
+                CREATE INDEX IF NOT EXISTS idx_onedrive_copy_saved_upns_last_used
+                    ON onedrive_copy_saved_upns (last_used_at DESC);
+                """
+            )
+
+    monkeypatch.setattr("onedrive_copy_jobs.ensure_postgres_schema", create_postgres_schema)
+
+    def fake_connect_postgres(*, row_factory=sqlite3.Row):
+        conn = sqlite3.connect(postgres_db_path)
+        conn.row_factory = row_factory
+        return _PostgresSqliteProxy(conn)
+
+    monkeypatch.setattr("onedrive_copy_jobs.connect_postgres", fake_connect_postgres)
+
+    manager = OneDriveCopyJobManager()
+    job = manager.get_job("job-running")
+    saved_before = manager.list_saved_user_options(limit=10)
+    created = manager.create_job(
+        site_scope="azure",
+        source_upn="fresh.source@example.com",
+        destination_upn="fresh.dest@example.com",
+        destination_folder="CopiedFiles",
+        test_mode=False,
+        test_file_limit=25,
+        exclude_system_folders=True,
+        requested_by_email="tech@example.com",
+        requested_by_name="Tech User",
+    )
+
+    assert manager._use_postgres is True
+    assert job is not None
+    assert job["status"] == "queued"
+    assert job["phase"] == "queued"
+    assert job["progress_current"] == 0
+    assert job["progress_message"] == "Re-queued after restart"
+    assert saved_before == [
+        {
+            "id": "saved:source@example.com",
+            "display_name": "Source User",
+            "principal_name": "source@example.com",
+            "mail": "source@example.com",
+            "enabled": None,
+            "source": "saved",
+            "last_used_at": "2026-03-26T00:00:10+00:00",
+        }
+    ]
+    assert created["status"] == "queued"
+    assert manager.get_job(created["job_id"]) is not None
+
+
+def test_explicit_db_path_keeps_sqlite_fallback_when_postgres_is_enabled(tmp_path, monkeypatch):
+    monkeypatch.setattr("onedrive_copy_jobs.postgres_enabled", lambda: True)
+
+    def fail_connect_postgres(*args, **kwargs):
+        raise AssertionError("connect_postgres should not be used when db_path is explicit")
+
+    monkeypatch.setattr("onedrive_copy_jobs.connect_postgres", fail_connect_postgres)
+
+    manager = OneDriveCopyJobManager(db_path=str(tmp_path / "onedrive_copy_jobs.db"))
+
+    assert manager._use_postgres is False
+    job = manager.create_job(
+        site_scope="primary",
+        source_upn="source@example.com",
+        destination_upn="dest@example.com",
+        destination_folder="CopiedFiles",
+        test_mode=False,
+        test_file_limit=25,
+        exclude_system_folders=True,
+        requested_by_email="tech@example.com",
+        requested_by_name="Tech User",
+    )
+
+    assert job["status"] == "queued"
+    assert manager.get_job(job["job_id"]) is not None
 
 
 def test_process_job_preserves_empty_folders_and_excludes_system_roots(tmp_path, monkeypatch):

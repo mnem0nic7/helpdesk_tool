@@ -8,6 +8,10 @@ x-backend-common: &backend-common
     - backend/.env
   environment: &backend-env
     DATA_DIR: /app/data
+    DATABASE_URL: postgresql://altlassian:altlassian@postgres:5432/altlassian
+    REDIS_URL: redis://redis:6379/0
+    REDIS_NAMESPACE: altlassian
+    STORAGE_DUAL_WRITE_SQLITE: "1"
     KB_ARTICLE_ARCHIVE: /app/private/OIT_KB_Articles.zip
     OLLAMA_BASE_URL: http://host.docker.internal:11434
     APP_RUNTIME_BLUEGREEN_ENABLED: "1"
@@ -31,6 +35,37 @@ x-frontend-common: &frontend-common
   restart: unless-stopped
 
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: altlassian
+      POSTGRES_USER: altlassian
+      POSTGRES_PASSWORD: altlassian
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U altlassian -d altlassian"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - app_net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - app_net
+    restart: unless-stopped
+
   caddy:
     build:
       context: .
@@ -54,12 +89,22 @@ services:
     environment:
       <<: *backend-env
       APP_RUNTIME_COLOR: blue
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   backend_green:
     <<: *backend-common
     environment:
       <<: *backend-env
       APP_RUNTIME_COLOR: green
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   frontend_blue:
     <<: *frontend-common
@@ -74,3 +119,5 @@ volumes:
   cache_data:
   caddy_data:
   caddy_config:
+  postgres_data:
+  redis_data:

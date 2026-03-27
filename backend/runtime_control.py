@@ -17,6 +17,7 @@ from config import (
     APP_RUNTIME_LEASE_SECONDS,
     DATA_DIR,
 )
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class RuntimeRoleManager:
         heartbeat_seconds: int = APP_RUNTIME_HEARTBEAT_SECONDS,
     ) -> None:
         self._db_path = db_path or str(_DB_PATH)
+        self._use_postgres = postgres_enabled() and db_path is None
         self._color = (color or APP_RUNTIME_COLOR or "single").strip().lower() or "single"
         self._bluegreen_enabled = bool(bluegreen_enabled)
         self._lease_seconds = max(5, int(lease_seconds))
@@ -82,10 +84,69 @@ class RuntimeRoleManager:
         self._lock = asyncio.Lock()
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect_sqlite(self) -> sqlite3.Connection:
         return connect_sqlite(self._db_path)
 
+    def _connect(self):
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres()
+        return self._connect_sqlite()
+
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres:
+            return
+        sqlite_path = Path(self._db_path)
+        if not sqlite_path.exists():
+            return
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT desired_leader_color, lease_owner_color, lease_expires_at
+                FROM runtime_leader_state
+                WHERE singleton_id = %s
+                """,
+                (_LEASE_SINGLETON_ID,),
+            ).fetchone()
+            if row and any(str(row[column] or "").strip() for column in ("desired_leader_color", "lease_owner_color", "lease_expires_at")):
+                return
+        with self._connect_sqlite() as sqlite_conn:
+            row = sqlite_conn.execute(
+                """
+                SELECT desired_leader_color, lease_owner_color, lease_expires_at
+                FROM runtime_leader_state
+                WHERE singleton_id = ?
+                """,
+                (_LEASE_SINGLETON_ID,),
+            ).fetchone()
+        if row is None:
+            return
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_leader_state (
+                    singleton_id, desired_leader_color, lease_owner_color, lease_expires_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT(singleton_id) DO UPDATE SET
+                    desired_leader_color = excluded.desired_leader_color,
+                    lease_owner_color = excluded.lease_owner_color,
+                    lease_expires_at = excluded.lease_expires_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    _LEASE_SINGLETON_ID,
+                    str(row["desired_leader_color"] or ""),
+                    str(row["lease_owner_color"] or ""),
+                    str(row["lease_expires_at"] or ""),
+                    _utcnow_iso(),
+                ),
+            )
+
     def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            self._backfill_from_sqlite_if_needed()
+            return
         with self._connect() as conn:
             conn.execute(
                 """
@@ -110,14 +171,24 @@ class RuntimeRoleManager:
 
     def _read_store(self) -> tuple[str | None, str | None, str | None]:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT desired_leader_color, lease_owner_color, lease_expires_at
-                FROM runtime_leader_state
-                WHERE singleton_id = ?
-                """,
-                (_LEASE_SINGLETON_ID,),
-            ).fetchone()
+            if self._use_postgres:
+                row = conn.execute(
+                    """
+                    SELECT desired_leader_color, lease_owner_color, lease_expires_at
+                    FROM runtime_leader_state
+                    WHERE singleton_id = %s
+                    """,
+                    (_LEASE_SINGLETON_ID,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT desired_leader_color, lease_owner_color, lease_expires_at
+                    FROM runtime_leader_state
+                    WHERE singleton_id = ?
+                    """,
+                    (_LEASE_SINGLETON_ID,),
+                ).fetchone()
         if row is None:
             return None, None, None
         desired = str(row["desired_leader_color"] or "").strip().lower() or None
@@ -129,14 +200,24 @@ class RuntimeRoleManager:
         now = _utcnow()
         expires_at = (now + timedelta(seconds=self._lease_seconds)).isoformat()
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT desired_leader_color, lease_owner_color, lease_expires_at
-                FROM runtime_leader_state
-                WHERE singleton_id = ?
-                """,
-                (_LEASE_SINGLETON_ID,),
-            ).fetchone()
+            if self._use_postgres:
+                row = conn.execute(
+                    """
+                    SELECT desired_leader_color, lease_owner_color, lease_expires_at
+                    FROM runtime_leader_state
+                    WHERE singleton_id = %s
+                    """,
+                    (_LEASE_SINGLETON_ID,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT desired_leader_color, lease_owner_color, lease_expires_at
+                    FROM runtime_leader_state
+                    WHERE singleton_id = ?
+                    """,
+                    (_LEASE_SINGLETON_ID,),
+                ).fetchone()
             desired = str((row["desired_leader_color"] if row else "") or "").strip().lower()
             owner = str((row["lease_owner_color"] if row else "") or "").strip().lower()
             owner_expires_at = _parse_dt(str((row["lease_expires_at"] if row else "") or ""))
@@ -159,67 +240,126 @@ class RuntimeRoleManager:
                 )
             )
             if not can_claim:
-                conn.execute(
-                    """
-                    UPDATE runtime_leader_state
-                    SET desired_leader_color = ?, updated_at = ?
-                    WHERE singleton_id = ?
-                    """,
-                    (desired, now.isoformat(), _LEASE_SINGLETON_ID),
-                )
+                if self._use_postgres:
+                    conn.execute(
+                        """
+                        UPDATE runtime_leader_state
+                        SET desired_leader_color = %s, updated_at = %s
+                        WHERE singleton_id = %s
+                        """,
+                        (desired, now.isoformat(), _LEASE_SINGLETON_ID),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE runtime_leader_state
+                        SET desired_leader_color = ?, updated_at = ?
+                        WHERE singleton_id = ?
+                        """,
+                        (desired, now.isoformat(), _LEASE_SINGLETON_ID),
+                    )
                 return False
 
-            conn.execute(
-                """
-                UPDATE runtime_leader_state
-                SET desired_leader_color = ?,
-                    lease_owner_color = ?,
-                    lease_expires_at = ?,
-                    updated_at = ?
-                WHERE singleton_id = ?
-                """,
-                (self._color, self._color, expires_at, now.isoformat(), _LEASE_SINGLETON_ID),
-            )
-        return True
-
-    def _release_lease_sync(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE runtime_leader_state
-                SET lease_owner_color = '',
-                    lease_expires_at = '',
-                    updated_at = ?
-                WHERE singleton_id = ? AND lease_owner_color = ?
-                """,
-                (_utcnow_iso(), _LEASE_SINGLETON_ID, self._color),
-            )
-
-    def _set_desired_leader_sync(self, color: str | None, *, clear_lease: bool = False) -> None:
-        normalized = str(color or "").strip().lower()
-        with self._connect() as conn:
-            if clear_lease:
+            if self._use_postgres:
                 conn.execute(
                     """
                     UPDATE runtime_leader_state
-                    SET desired_leader_color = ?,
-                        lease_owner_color = '',
-                        lease_expires_at = '',
-                        updated_at = ?
-                    WHERE singleton_id = ?
+                    SET desired_leader_color = %s,
+                        lease_owner_color = %s,
+                        lease_expires_at = %s,
+                        updated_at = %s
+                    WHERE singleton_id = %s
                     """,
-                    (normalized, _utcnow_iso(), _LEASE_SINGLETON_ID),
+                    (self._color, self._color, expires_at, now.isoformat(), _LEASE_SINGLETON_ID),
                 )
             else:
                 conn.execute(
                     """
                     UPDATE runtime_leader_state
                     SET desired_leader_color = ?,
+                        lease_owner_color = ?,
+                        lease_expires_at = ?,
                         updated_at = ?
                     WHERE singleton_id = ?
                     """,
-                    (normalized, _utcnow_iso(), _LEASE_SINGLETON_ID),
+                    (self._color, self._color, expires_at, now.isoformat(), _LEASE_SINGLETON_ID),
                 )
+        return True
+
+    def _release_lease_sync(self) -> None:
+        with self._connect() as conn:
+            if self._use_postgres:
+                conn.execute(
+                    """
+                    UPDATE runtime_leader_state
+                    SET lease_owner_color = '',
+                        lease_expires_at = '',
+                        updated_at = %s
+                    WHERE singleton_id = %s AND lease_owner_color = %s
+                    """,
+                    (_utcnow_iso(), _LEASE_SINGLETON_ID, self._color),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE runtime_leader_state
+                    SET lease_owner_color = '',
+                        lease_expires_at = '',
+                        updated_at = ?
+                    WHERE singleton_id = ? AND lease_owner_color = ?
+                    """,
+                    (_utcnow_iso(), _LEASE_SINGLETON_ID, self._color),
+                )
+
+    def _set_desired_leader_sync(self, color: str | None, *, clear_lease: bool = False) -> None:
+        normalized = str(color or "").strip().lower()
+        with self._connect() as conn:
+            if clear_lease:
+                if self._use_postgres:
+                    conn.execute(
+                        """
+                        UPDATE runtime_leader_state
+                        SET desired_leader_color = %s,
+                            lease_owner_color = '',
+                            lease_expires_at = '',
+                            updated_at = %s
+                        WHERE singleton_id = %s
+                        """,
+                        (normalized, _utcnow_iso(), _LEASE_SINGLETON_ID),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE runtime_leader_state
+                        SET desired_leader_color = ?,
+                            lease_owner_color = '',
+                            lease_expires_at = '',
+                            updated_at = ?
+                        WHERE singleton_id = ?
+                        """,
+                        (normalized, _utcnow_iso(), _LEASE_SINGLETON_ID),
+                    )
+            else:
+                if self._use_postgres:
+                    conn.execute(
+                        """
+                        UPDATE runtime_leader_state
+                        SET desired_leader_color = %s,
+                            updated_at = %s
+                        WHERE singleton_id = %s
+                        """,
+                        (normalized, _utcnow_iso(), _LEASE_SINGLETON_ID),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE runtime_leader_state
+                        SET desired_leader_color = ?,
+                            updated_at = ?
+                        WHERE singleton_id = ?
+                        """,
+                        (normalized, _utcnow_iso(), _LEASE_SINGLETON_ID),
+                    )
 
     async def bootstrap(self) -> RuntimeState:
         if not self._bluegreen_enabled:

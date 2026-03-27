@@ -169,7 +169,15 @@ async def test_background_loop_can_start_and_stop():
     service = AzureCostExportService(pipeline=pipeline, enabled=True, poll_interval_seconds=0.01)
 
     assert await service.start() is True
-    await asyncio.sleep(0.05)
+
+    async def _wait_for_multiple_syncs() -> None:
+        for _ in range(30):
+            if pipeline.sync_calls >= 2:
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError(f"expected at least 2 sync calls, saw {pipeline.sync_calls}")
+
+    await _wait_for_multiple_syncs()
     assert await service.stop() is True
 
     assert pipeline.sync_calls >= 2

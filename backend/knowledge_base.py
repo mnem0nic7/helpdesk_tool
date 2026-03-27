@@ -14,6 +14,7 @@ from pathlib import Path
 
 from config import DATA_DIR
 from models import KnowledgeBaseArticle, KnowledgeBaseArticleUpsertRequest
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
@@ -160,13 +161,49 @@ class KnowledgeBaseStore:
 
     def __init__(self, db_path: str | None = None) -> None:
         self._db_path = db_path or os.path.join(DATA_DIR, "knowledge_base.db")
+        self._use_postgres = postgres_enabled() and db_path is None
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._init_db()
 
-    def _conn(self) -> sqlite3.Connection:
+    def _placeholder(self) -> str:
+        return "%s" if self._use_postgres else "?"
+
+    def _sqlite_conn(self) -> sqlite3.Connection:
         return connect_sqlite(self._db_path, row_factory=None)
 
+    def _conn(self):
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres(row_factory=None)
+        return self._sqlite_conn()
+
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres or not os.path.exists(self._db_path):
+            return
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) FROM kb_articles").fetchone()
+            if row and int(row[0]) > 0:
+                return
+        with self._sqlite_conn() as sqlite_conn:
+            rows = sqlite_conn.execute("SELECT * FROM kb_articles").fetchall()
+        with self._conn() as conn:
+            if rows:
+                conn.executemany(
+                    """
+                    INSERT INTO kb_articles (
+                        id, slug, code, title, request_type, summary, content, source_filename,
+                        source_ticket_key, imported_from_seed, ai_generated, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(id) DO NOTHING
+                    """,
+                    rows,
+                )
+
     def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            self._backfill_from_sqlite_if_needed()
+            return
         with self._conn() as conn:
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS kb_articles (
@@ -192,7 +229,23 @@ class KnowledgeBaseStore:
                 "CREATE INDEX IF NOT EXISTS idx_kb_articles_slug ON kb_articles(slug)"
             )
 
-    def _row_to_article(self, row: sqlite3.Row | tuple) -> KnowledgeBaseArticle:
+    def _row_to_article(self, row: sqlite3.Row | tuple | dict[str, object]) -> KnowledgeBaseArticle:
+        if isinstance(row, dict):
+            return KnowledgeBaseArticle(
+                id=int(row["id"]) if row.get("id") is not None else None,
+                slug=str(row["slug"]),
+                code=str(row["code"]),
+                title=str(row["title"]),
+                request_type=str(row["request_type"]),
+                summary=str(row["summary"]),
+                content=str(row["content"]),
+                source_filename=str(row["source_filename"]),
+                source_ticket_key=str(row["source_ticket_key"]),
+                imported_from_seed=bool(row["imported_from_seed"]),
+                ai_generated=bool(row["ai_generated"]),
+                created_at=str(row["created_at"]),
+                updated_at=str(row["updated_at"]),
+            )
         return KnowledgeBaseArticle(
             id=row[0],
             slug=row[1],
@@ -217,10 +270,13 @@ class KnowledgeBaseStore:
     def _slug_exists(self, slug: str, article_id: int | None = None) -> bool:
         with self._conn() as conn:
             if article_id is None:
-                row = conn.execute("SELECT 1 FROM kb_articles WHERE slug = ?", (slug,)).fetchone()
+                row = conn.execute(
+                    f"SELECT 1 FROM kb_articles WHERE slug = {self._placeholder()}",
+                    (slug,),
+                ).fetchone()
             else:
                 row = conn.execute(
-                    "SELECT 1 FROM kb_articles WHERE slug = ? AND id != ?",
+                    f"SELECT 1 FROM kb_articles WHERE slug = {self._placeholder()} AND id != {self._placeholder()}",
                     (slug, article_id),
                 ).fetchone()
         return row is not None
@@ -248,12 +304,12 @@ class KnowledgeBaseStore:
         clauses: list[str] = []
         params: list[str] = []
         if request_type:
-            clauses.append("request_type = ?")
+            clauses.append(f"request_type = {self._placeholder()}")
             params.append(request_type)
         if search:
             term = f"%{search.lower()}%"
             clauses.append(
-                "(LOWER(title) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(content) LIKE ? OR LOWER(code) LIKE ?)"
+                f"(LOWER(title) LIKE {self._placeholder()} OR LOWER(summary) LIKE {self._placeholder()} OR LOWER(content) LIKE {self._placeholder()} OR LOWER(code) LIKE {self._placeholder()})"
             )
             params.extend([term, term, term, term])
         if clauses:
@@ -267,9 +323,9 @@ class KnowledgeBaseStore:
     def get_article(self, article_id: int) -> KnowledgeBaseArticle | None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT id, slug, code, title, request_type, summary, content, "
-                "source_filename, source_ticket_key, imported_from_seed, ai_generated, created_at, updated_at "
-                "FROM kb_articles WHERE id = ?",
+                f"SELECT id, slug, code, title, request_type, summary, content, "
+                f"source_filename, source_ticket_key, imported_from_seed, ai_generated, created_at, updated_at "
+                f"FROM kb_articles WHERE id = {self._placeholder()}",
                 (article_id,),
             ).fetchone()
         return self._row_to_article(row) if row else None
@@ -302,27 +358,39 @@ class KnowledgeBaseStore:
         )
 
         with self._conn() as conn:
-            cur = conn.execute(
-                """INSERT INTO kb_articles
-                (slug, code, title, request_type, summary, content, source_filename, source_ticket_key,
-                 imported_from_seed, ai_generated, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    article.slug,
-                    article.code,
-                    article.title,
-                    article.request_type,
-                    article.summary,
-                    article.content,
-                    article.source_filename,
-                    article.source_ticket_key,
-                    int(article.imported_from_seed),
-                    int(article.ai_generated),
-                    article.created_at,
-                    article.updated_at,
-                ),
+            params = (
+                article.slug,
+                article.code,
+                article.title,
+                article.request_type,
+                article.summary,
+                article.content,
+                article.source_filename,
+                article.source_ticket_key,
+                int(article.imported_from_seed),
+                int(article.ai_generated),
+                article.created_at,
+                article.updated_at,
             )
-            article.id = int(cur.lastrowid)
+            if self._use_postgres:
+                row = conn.execute(
+                    """INSERT INTO kb_articles
+                    (slug, code, title, request_type, summary, content, source_filename, source_ticket_key,
+                     imported_from_seed, ai_generated, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id""",
+                    params,
+                ).fetchone()
+                article.id = int(row[0]) if row else None
+            else:
+                cur = conn.execute(
+                    """INSERT INTO kb_articles
+                    (slug, code, title, request_type, summary, content, source_filename, source_ticket_key,
+                     imported_from_seed, ai_generated, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    params,
+                )
+                article.id = int(cur.lastrowid)
         return article
 
     def update_article(
@@ -350,9 +418,9 @@ class KnowledgeBaseStore:
         with self._conn() as conn:
             conn.execute(
                 """UPDATE kb_articles
-                SET slug = ?, title = ?, request_type = ?, summary = ?, content = ?,
-                    source_ticket_key = ?, ai_generated = ?, updated_at = ?
-                WHERE id = ?""",
+                SET slug = {p}, title = {p}, request_type = {p}, summary = {p}, content = {p},
+                    source_ticket_key = {p}, ai_generated = {p}, updated_at = {p}
+                WHERE id = {p}""".format(p=self._placeholder()),
                 (
                     slug,
                     title,
@@ -401,7 +469,10 @@ class KnowledgeBaseStore:
 
     def delete_article(self, article_id: int) -> bool:
         with self._conn() as conn:
-            cur = conn.execute("DELETE FROM kb_articles WHERE id = ?", (article_id,))
+            cur = conn.execute(
+                f"DELETE FROM kb_articles WHERE id = {self._placeholder()}",
+                (article_id,),
+            )
         return cur.rowcount > 0
 
     def find_default_target_article(self, request_type: str) -> KnowledgeBaseArticle | None:

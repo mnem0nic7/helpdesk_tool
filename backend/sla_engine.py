@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from config import DATA_DIR
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from request_type import extract_request_type_name_from_fields
 from sqlite_utils import connect_sqlite
 
@@ -27,13 +28,88 @@ class SLAConfig:
 
     def __init__(self, db_path: str | None = None) -> None:
         self._db_path = db_path or os.path.join(DATA_DIR, "sla_config.db")
+        self._use_postgres = postgres_enabled() and db_path is None
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._init_db()
 
-    def _conn(self) -> sqlite3.Connection:
+    def _placeholder(self) -> str:
+        return "%s" if self._use_postgres else "?"
+
+    def _sqlite_conn(self) -> sqlite3.Connection:
         return connect_sqlite(self._db_path, row_factory=None)
 
+    def _conn(self):
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres(row_factory=None)
+        return self._sqlite_conn()
+
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres or not os.path.exists(self._db_path):
+            return
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) FROM sla_targets").fetchone()
+            if row and int(row[0]) > 0:
+                return
+        with self._sqlite_conn() as sqlite_conn:
+            targets = sqlite_conn.execute(
+                "SELECT id, sla_type, dimension, dimension_value, target_minutes FROM sla_targets"
+            ).fetchall()
+            settings = sqlite_conn.execute("SELECT key, value FROM sla_settings").fetchall()
+        with self._conn() as conn:
+            if targets:
+                conn.executemany(
+                    """
+                    INSERT INTO sla_targets (id, sla_type, dimension, dimension_value, target_minutes)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT(id) DO NOTHING
+                    """,
+                    targets,
+                )
+            if settings:
+                conn.executemany(
+                    """
+                    INSERT INTO sla_settings (key, value)
+                    VALUES (%s, %s)
+                    ON CONFLICT(key) DO NOTHING
+                    """,
+                    settings,
+                )
+
     def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            self._backfill_from_sqlite_if_needed()
+            with self._conn() as conn:
+                if conn.execute("SELECT COUNT(*) FROM sla_targets").fetchone()[0] == 0:
+                    conn.executemany(
+                        """
+                        INSERT INTO sla_targets (sla_type, dimension, dimension_value, target_minutes)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT(sla_type, dimension, dimension_value) DO NOTHING
+                        """,
+                        [
+                            ("first_response", "default", "*", 120),
+                            ("resolution", "default", "*", 540),
+                        ],
+                    )
+                if conn.execute("SELECT COUNT(*) FROM sla_settings").fetchone()[0] == 0:
+                    defaults = {
+                        "business_hours_start": "08:00",
+                        "business_hours_end": "20:00",
+                        "business_timezone": "America/New_York",
+                        "business_days": "0,1,2,3,4",
+                        "integration_reporters": "OSIJIRAOCC",
+                    }
+                    conn.executemany(
+                        """
+                        INSERT INTO sla_settings (key, value)
+                        VALUES (%s, %s)
+                        ON CONFLICT(key) DO NOTHING
+                        """,
+                        list(defaults.items()),
+                    )
+            return
         with self._conn() as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS sla_targets ("
@@ -96,14 +172,21 @@ class SLAConfig:
                    dimension_value: str, target_minutes: int) -> dict[str, Any]:
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO sla_targets (sla_type, dimension, dimension_value, target_minutes) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(sla_type, dimension, dimension_value) "
-                "DO UPDATE SET target_minutes = excluded.target_minutes",
+                (
+                    "INSERT INTO sla_targets (sla_type, dimension, dimension_value, target_minutes) "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT(sla_type, dimension, dimension_value) "
+                    "DO UPDATE SET target_minutes = excluded.target_minutes"
+                    if self._use_postgres
+                    else
+                    "INSERT INTO sla_targets (sla_type, dimension, dimension_value, target_minutes) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT(sla_type, dimension, dimension_value) "
+                    "DO UPDATE SET target_minutes = excluded.target_minutes"
+                ),
                 (sla_type, dimension, dimension_value, target_minutes),
             )
             row = conn.execute(
-                "SELECT id, sla_type, dimension, dimension_value, target_minutes "
-                "FROM sla_targets WHERE sla_type=? AND dimension=? AND dimension_value=?",
+                f"SELECT id, sla_type, dimension, dimension_value, target_minutes "
+                f"FROM sla_targets WHERE sla_type={self._placeholder()} AND dimension={self._placeholder()} AND dimension_value={self._placeholder()}",
                 (sla_type, dimension, dimension_value),
             ).fetchone()
         return {"id": row[0], "sla_type": row[1], "dimension": row[2],
@@ -111,7 +194,10 @@ class SLAConfig:
 
     def delete_target(self, target_id: int) -> bool:
         with self._conn() as conn:
-            cur = conn.execute("DELETE FROM sla_targets WHERE id = ?", (target_id,))
+            cur = conn.execute(
+                f"DELETE FROM sla_targets WHERE id = {self._placeholder()}",
+                (target_id,),
+            )
         return cur.rowcount > 0
 
     def get_target_for_ticket(self, sla_type: str, priority: str,
@@ -140,8 +226,14 @@ class SLAConfig:
         with self._conn() as conn:
             for key, value in settings.items():
                 conn.execute(
-                    "INSERT INTO sla_settings (key, value) VALUES (?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (
+                        "INSERT INTO sla_settings (key, value) VALUES (%s, %s) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                        if self._use_postgres
+                        else
+                        "INSERT INTO sla_settings (key, value) VALUES (?, ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                    ),
                     (key, value),
                 )
         return self.get_settings()

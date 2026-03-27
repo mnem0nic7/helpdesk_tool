@@ -16,6 +16,7 @@ from starlette.requests import Request
 
 from authlib.integrations.starlette_client import OAuth
 from cryptography.fernet import Fernet
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 
 from config import (
@@ -43,13 +44,123 @@ _DB_PATH = Path(DATA_DIR) / "sessions.db"
 _SESSION_TTL = timedelta(hours=8)
 _last_cleanup: datetime = datetime.now(timezone.utc)
 _CLEANUP_INTERVAL = timedelta(minutes=30)
+_USE_POSTGRES = postgres_enabled()
 
 
-def _session_conn() -> sqlite3.Connection:
+def _sqlite_session_conn() -> sqlite3.Connection:
     return connect_sqlite(_DB_PATH)
 
 
+def _session_conn():
+    if _USE_POSTGRES:
+        ensure_postgres_schema()
+        return connect_postgres()
+    return _sqlite_session_conn()
+
+
+def _backfill_sessions_from_sqlite_if_needed() -> None:
+    if not _USE_POSTGRES or not _DB_PATH.exists():
+        return
+    with _session_conn() as conn:
+        existing = conn.execute("SELECT COUNT(*) AS count FROM sessions").fetchone()
+        if existing and int(existing["count"]) > 0:
+            return
+    with _sqlite_session_conn() as sqlite_conn:
+        session_rows = sqlite_conn.execute(
+            """
+            SELECT sid, email, name, expires_at, auth_provider, is_admin, can_manage_users, site_scope
+            FROM sessions
+            """
+        ).fetchall()
+        atlassian_rows = sqlite_conn.execute(
+            """
+            SELECT email, atlassian_account_id, atlassian_account_name, cloud_id, site_url,
+                   scope, access_token_encrypted, refresh_token_encrypted, expires_at, updated_at
+            FROM atlassian_connections
+            """
+        ).fetchall()
+        audit_rows = sqlite_conn.execute(
+            """
+            SELECT sid, email, name, auth_provider, site_scope, source_ip, user_agent, created_at
+            FROM login_audit
+            """
+        ).fetchall()
+    with _session_conn() as conn:
+        if session_rows:
+            conn.executemany(
+                """
+                INSERT INTO sessions (
+                    sid, email, name, expires_at, auth_provider, is_admin, can_manage_users, site_scope
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(sid) DO NOTHING
+                """,
+                [
+                    (
+                        row["sid"],
+                        row["email"],
+                        row["name"],
+                        row["expires_at"],
+                        row["auth_provider"],
+                        row["is_admin"],
+                        row["can_manage_users"],
+                        row["site_scope"],
+                    )
+                    for row in session_rows
+                ],
+            )
+        if atlassian_rows:
+            conn.executemany(
+                """
+                INSERT INTO atlassian_connections (
+                    email, atlassian_account_id, atlassian_account_name, cloud_id, site_url,
+                    scope, access_token_encrypted, refresh_token_encrypted, expires_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(email) DO NOTHING
+                """,
+                [
+                    (
+                        row["email"],
+                        row["atlassian_account_id"],
+                        row["atlassian_account_name"],
+                        row["cloud_id"],
+                        row["site_url"],
+                        row["scope"],
+                        row["access_token_encrypted"],
+                        row["refresh_token_encrypted"],
+                        row["expires_at"],
+                        row["updated_at"],
+                    )
+                    for row in atlassian_rows
+                ],
+            )
+        if audit_rows:
+            conn.executemany(
+                """
+                INSERT INTO login_audit (
+                    sid, email, name, auth_provider, site_scope, source_ip, user_agent, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (
+                        row["sid"],
+                        row["email"],
+                        row["name"],
+                        row["auth_provider"],
+                        row["site_scope"],
+                        row["source_ip"],
+                        row["user_agent"],
+                        row["created_at"],
+                    )
+                    for row in audit_rows
+                ],
+            )
+
+
 def _init_session_db() -> None:
+    if _USE_POSTGRES:
+        ensure_postgres_schema()
+        _backfill_sessions_from_sqlite_if_needed()
+        return
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _session_conn() as conn:
         conn.execute("""
@@ -122,40 +233,76 @@ def create_session(
     resolved_is_admin = is_admin_user(email) if is_admin is None else bool(is_admin)
     resolved_can_manage_users = resolved_is_admin if can_manage_users is None else bool(can_manage_users)
     with _session_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO sessions (
-                sid, email, name, expires_at, auth_provider, is_admin, can_manage_users, site_scope
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                sid,
-                email,
-                name,
-                expires_at,
-                str(auth_provider or "entra"),
-                int(resolved_is_admin),
-                int(resolved_can_manage_users),
-                str(site_scope or "primary"),
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO login_audit (
-                sid, email, name, auth_provider, site_scope, source_ip, user_agent, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                sid,
-                email,
-                name,
-                str(auth_provider or "entra"),
-                str(site_scope or "primary"),
-                str(source_ip or "").strip(),
-                str(user_agent or "").strip(),
-                datetime.now(timezone.utc).isoformat(),
-            ),
-        )
+        if _USE_POSTGRES:
+            conn.execute(
+                """
+                INSERT INTO sessions (
+                    sid, email, name, expires_at, auth_provider, is_admin, can_manage_users, site_scope
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    sid,
+                    email,
+                    name,
+                    expires_at,
+                    str(auth_provider or "entra"),
+                    int(resolved_is_admin),
+                    int(resolved_can_manage_users),
+                    str(site_scope or "primary"),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO login_audit (
+                    sid, email, name, auth_provider, site_scope, source_ip, user_agent, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    sid,
+                    email,
+                    name,
+                    str(auth_provider or "entra"),
+                    str(site_scope or "primary"),
+                    str(source_ip or "").strip(),
+                    str(user_agent or "").strip(),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO sessions (
+                    sid, email, name, expires_at, auth_provider, is_admin, can_manage_users, site_scope
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sid,
+                    email,
+                    name,
+                    expires_at,
+                    str(auth_provider or "entra"),
+                    int(resolved_is_admin),
+                    int(resolved_can_manage_users),
+                    str(site_scope or "primary"),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO login_audit (
+                    sid, email, name, auth_provider, site_scope, source_ip, user_agent, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sid,
+                    email,
+                    name,
+                    str(auth_provider or "entra"),
+                    str(site_scope or "primary"),
+                    str(source_ip or "").strip(),
+                    str(user_agent or "").strip(),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
     logger.info("Session created for %s", email)
     return sid
 
@@ -168,10 +315,16 @@ def _cleanup_expired() -> None:
         return
     _last_cleanup = now
     with _session_conn() as conn:
-        cur = conn.execute(
-            "DELETE FROM sessions WHERE expires_at < ?",
-            (now.isoformat(),),
-        )
+        if _USE_POSTGRES:
+            cur = conn.execute(
+                "DELETE FROM sessions WHERE expires_at < %s",
+                (now.isoformat(),),
+            )
+        else:
+            cur = conn.execute(
+                "DELETE FROM sessions WHERE expires_at < ?",
+                (now.isoformat(),),
+            )
     if cur.rowcount:
         logger.info("Cleaned up %d expired sessions", cur.rowcount)
 
@@ -180,14 +333,24 @@ def get_session(session_id: str) -> dict[str, Any] | None:
     """Return session data if valid and not expired, else None."""
     _cleanup_expired()
     with _session_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT email, name, expires_at, auth_provider, is_admin, can_manage_users, site_scope
-            FROM sessions
-            WHERE sid = ?
-            """,
-            (session_id,),
-        ).fetchone()
+        if _USE_POSTGRES:
+            row = conn.execute(
+                """
+                SELECT email, name, expires_at, auth_provider, is_admin, can_manage_users, site_scope
+                FROM sessions
+                WHERE sid = %s
+                """,
+                (session_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT email, name, expires_at, auth_provider, is_admin, can_manage_users, site_scope
+                FROM sessions
+                WHERE sid = ?
+                """,
+                (session_id,),
+            ).fetchone()
     if not row:
         return None
     expires_at = datetime.fromisoformat(row["expires_at"])
@@ -214,7 +377,10 @@ def get_session(session_id: str) -> dict[str, Any] | None:
 def delete_session(session_id: str) -> None:
     """Remove a session."""
     with _session_conn() as conn:
-        conn.execute("DELETE FROM sessions WHERE sid = ?", (session_id,))
+        if _USE_POSTGRES:
+            conn.execute("DELETE FROM sessions WHERE sid = %s", (session_id,))
+        else:
+            conn.execute("DELETE FROM sessions WHERE sid = ?", (session_id,))
 
 
 def _token_cipher() -> Fernet:
@@ -241,15 +407,26 @@ def _normalize_site_url(url: str) -> str:
 
 def get_atlassian_connection(email: str) -> dict[str, Any] | None:
     with _session_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT email, atlassian_account_id, atlassian_account_name, cloud_id, site_url,
-                   scope, access_token_encrypted, refresh_token_encrypted, expires_at, updated_at
-            FROM atlassian_connections
-            WHERE email = ?
-            """,
-            (email.lower(),),
-        ).fetchone()
+        if _USE_POSTGRES:
+            row = conn.execute(
+                """
+                SELECT email, atlassian_account_id, atlassian_account_name, cloud_id, site_url,
+                       scope, access_token_encrypted, refresh_token_encrypted, expires_at, updated_at
+                FROM atlassian_connections
+                WHERE email = %s
+                """,
+                (email.lower(),),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT email, atlassian_account_id, atlassian_account_name, cloud_id, site_url,
+                       scope, access_token_encrypted, refresh_token_encrypted, expires_at, updated_at
+                FROM atlassian_connections
+                WHERE email = ?
+                """,
+                (email.lower(),),
+            ).fetchone()
     if not row:
         return None
     return {
@@ -280,12 +457,11 @@ def save_atlassian_connection(
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with _session_conn() as conn:
-        conn.execute(
-            """
+        query = """
             INSERT INTO atlassian_connections (
                 email, atlassian_account_id, atlassian_account_name, cloud_id, site_url,
                 scope, access_token_encrypted, refresh_token_encrypted, expires_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
             ON CONFLICT(email) DO UPDATE SET
                 atlassian_account_id=excluded.atlassian_account_id,
                 atlassian_account_name=excluded.atlassian_account_name,
@@ -296,7 +472,9 @@ def save_atlassian_connection(
                 refresh_token_encrypted=excluded.refresh_token_encrypted,
                 expires_at=excluded.expires_at,
                 updated_at=excluded.updated_at
-            """,
+        """.replace("{placeholder}", "%s" if _USE_POSTGRES else "?")
+        conn.execute(
+            query,
             (
                 email.lower(),
                 atlassian_account_id,
@@ -314,7 +492,10 @@ def save_atlassian_connection(
 
 def delete_atlassian_connection(email: str) -> None:
     with _session_conn() as conn:
-        conn.execute("DELETE FROM atlassian_connections WHERE email = ?", (email.lower(),))
+        if _USE_POSTGRES:
+            conn.execute("DELETE FROM atlassian_connections WHERE email = %s", (email.lower(),))
+        else:
+            conn.execute("DELETE FROM atlassian_connections WHERE email = ?", (email.lower(),))
 
 
 def atlassian_oauth_configured() -> bool:
@@ -495,15 +676,26 @@ def require_tools_access(request: Request) -> dict[str, Any]:
 
 def list_login_audit(*, limit: int = 100) -> list[dict[str, Any]]:
     with _session_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT event_id, email, name, auth_provider, site_scope, source_ip, user_agent, created_at
-            FROM login_audit
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (max(1, int(limit)),),
-        ).fetchall()
+        if _USE_POSTGRES:
+            rows = conn.execute(
+                """
+                SELECT event_id, email, name, auth_provider, site_scope, source_ip, user_agent, created_at
+                FROM login_audit
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT event_id, email, name, auth_provider, site_scope, source_ip, user_agent, created_at
+                FROM login_audit
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
     return [
         {
             "event_id": int(row["event_id"]),

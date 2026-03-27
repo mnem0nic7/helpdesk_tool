@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from config import DATA_DIR
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 
 
@@ -25,14 +26,87 @@ class RequestorSyncStore:
 
     def __init__(self, db_path: str | None = None) -> None:
         self._db_path = db_path or os.path.join(DATA_DIR, "requestor_sync.db")
+        self._use_postgres = postgres_enabled() and db_path is None
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._lock = threading.Lock()
         self._init_db()
 
-    def _conn(self) -> sqlite3.Connection:
+    def _sqlite_conn(self) -> sqlite3.Connection:
         return connect_sqlite(self._db_path)
 
+    def _conn(self):
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres()
+        return self._sqlite_conn()
+
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres or not os.path.exists(self._db_path):
+            return
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM directory_emails").fetchone()
+            if row and int(row["count"]) > 0:
+                return
+        with self._sqlite_conn() as sqlite_conn:
+            directory_rows = sqlite_conn.execute("SELECT * FROM directory_emails").fetchall()
+            link_rows = sqlite_conn.execute("SELECT * FROM jira_requestor_links").fetchall()
+        with self._conn() as conn:
+            if directory_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO directory_emails (
+                        email_key, entra_user_id, display_name, canonical_email, account_class, source_kind, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(email_key, entra_user_id, source_kind) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["email_key"],
+                            row["entra_user_id"],
+                            row["display_name"],
+                            row["canonical_email"],
+                            row["account_class"],
+                            row["source_kind"],
+                            row["updated_at"],
+                        )
+                        for row in directory_rows
+                    ],
+                )
+            if link_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO jira_requestor_links (
+                        email_key, ticket_key, extracted_email, directory_user_id, directory_display_name,
+                        canonical_email, jira_account_id, jira_display_name, match_source, sync_status, message,
+                        first_seen_at, last_seen_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(email_key, ticket_key) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["email_key"],
+                            row["ticket_key"],
+                            row["extracted_email"],
+                            row["directory_user_id"],
+                            row["directory_display_name"],
+                            row["canonical_email"],
+                            row["jira_account_id"],
+                            row["jira_display_name"],
+                            row["match_source"],
+                            row["sync_status"],
+                            row["message"],
+                            row["first_seen_at"],
+                            row["last_seen_at"],
+                        )
+                        for row in link_rows
+                    ],
+                )
+
     def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            self._backfill_from_sqlite_if_needed()
+            return
         with self._conn() as conn:
             conn.executescript(
                 """
@@ -105,17 +179,32 @@ class RequestorSyncStore:
                 conn.execute("DELETE FROM directory_emails")
                 if rows:
                     conn.executemany(
-                        """
-                        INSERT INTO directory_emails (
-                            email_key,
-                            entra_user_id,
-                            display_name,
-                            canonical_email,
-                            account_class,
-                            source_kind,
-                            updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
+                        (
+                            """
+                            INSERT INTO directory_emails (
+                                email_key,
+                                entra_user_id,
+                                display_name,
+                                canonical_email,
+                                account_class,
+                                source_kind,
+                                updated_at
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            """
+                            if self._use_postgres
+                            else
+                            """
+                            INSERT INTO directory_emails (
+                                email_key,
+                                entra_user_id,
+                                display_name,
+                                canonical_email,
+                                account_class,
+                                source_kind,
+                                updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """
+                        ),
                         rows,
                     )
                 conn.commit()
@@ -126,6 +215,14 @@ class RequestorSyncStore:
             return []
         with self._conn() as conn:
             rows = conn.execute(
+                """
+                SELECT email_key, entra_user_id, display_name, canonical_email, account_class, source_kind, updated_at
+                FROM directory_emails
+                WHERE email_key = %s
+                ORDER BY canonical_email ASC, display_name ASC, entra_user_id ASC
+                """,
+                (normalized,),
+            ).fetchall() if self._use_postgres else conn.execute(
                 """
                 SELECT email_key, entra_user_id, display_name, canonical_email, account_class, source_kind, updated_at
                 FROM directory_emails
@@ -189,6 +286,50 @@ class RequestorSyncStore:
                         message,
                         first_seen_at,
                         last_seen_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(email_key, ticket_key) DO UPDATE SET
+                        extracted_email=excluded.extracted_email,
+                        directory_user_id=excluded.directory_user_id,
+                        directory_display_name=excluded.directory_display_name,
+                        canonical_email=excluded.canonical_email,
+                        jira_account_id=excluded.jira_account_id,
+                        jira_display_name=excluded.jira_display_name,
+                        match_source=excluded.match_source,
+                        sync_status=excluded.sync_status,
+                        message=excluded.message,
+                        last_seen_at=excluded.last_seen_at
+                    """,
+                    (
+                        normalized_key,
+                        normalized_ticket,
+                        str(extracted_email or "").strip().lower(),
+                        str(directory_user_id or "").strip(),
+                        str(directory_display_name or "").strip(),
+                        str(canonical_email or "").strip().lower(),
+                        str(jira_account_id or "").strip(),
+                        str(jira_display_name or "").strip(),
+                        str(match_source or "").strip(),
+                        str(sync_status or "").strip(),
+                        str(message or "").strip(),
+                        now,
+                        now,
+                    ),
+                ) if self._use_postgres else conn.execute(
+                    """
+                    INSERT INTO jira_requestor_links (
+                        email_key,
+                        ticket_key,
+                        extracted_email,
+                        directory_user_id,
+                        directory_display_name,
+                        canonical_email,
+                        jira_account_id,
+                        jira_display_name,
+                        match_source,
+                        sync_status,
+                        message,
+                        first_seen_at,
+                        last_seen_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(email_key, ticket_key) DO UPDATE SET
                         extracted_email=excluded.extracted_email,
@@ -229,6 +370,15 @@ class RequestorSyncStore:
                 """
                 SELECT *
                 FROM jira_requestor_links
+                WHERE ticket_key = %s
+                ORDER BY last_seen_at DESC
+                LIMIT 1
+                """,
+                (normalized_ticket,),
+            ).fetchone() if self._use_postgres else conn.execute(
+                """
+                SELECT *
+                FROM jira_requestor_links
                 WHERE ticket_key = ?
                 ORDER BY last_seen_at DESC
                 LIMIT 1
@@ -243,6 +393,16 @@ class RequestorSyncStore:
             return None
         with self._conn() as conn:
             row = conn.execute(
+                """
+                SELECT *
+                FROM jira_requestor_links
+                WHERE email_key = %s
+                  AND jira_account_id <> ''
+                ORDER BY last_seen_at DESC
+                LIMIT 1
+                """,
+                (normalized,),
+            ).fetchone() if self._use_postgres else conn.execute(
                 """
                 SELECT *
                 FROM jira_requestor_links
@@ -277,7 +437,7 @@ class RequestorSyncStore:
             FROM jira_requestor_links
             {where_sql}
             ORDER BY last_seen_at DESC
-            LIMIT ?
+            LIMIT {'%s' if self._use_postgres else '?'}
         """
         params.append(max(1, int(limit)))
         with self._conn() as conn:

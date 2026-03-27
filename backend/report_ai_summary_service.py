@@ -27,6 +27,7 @@ from models import (
 from report_template_store import report_template_store
 from report_workbook_builder import ReportWorkbookBuilder, resolve_report_window_spec
 from site_context import filter_issues_for_scope
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
@@ -109,17 +110,117 @@ class ReportAISummaryService:
 
     def __init__(self, db_path: str | None = None) -> None:
         self._db_path = db_path or _summary_db_path()
+        self._use_postgres = postgres_enabled() and db_path is None
         self._nightly_task: asyncio.Task[None] | None = None
         self._batch_tasks: set[asyncio.Task[Any]] = set()
         self._stop_event: asyncio.Event | None = None
         self._last_nightly_run_day: str | None = None
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _sqlite_connect(self) -> sqlite3.Connection:
         _ensure_data_dir()
         return connect_sqlite(self._db_path)
 
+    def _connect(self):
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres()
+        return self._sqlite_connect()
+
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres or not Path(self._db_path).exists():
+            return
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM report_ai_summaries").fetchone()
+            if row and int(row["count"]) > 0:
+                return
+        with self._sqlite_connect() as sqlite_conn:
+            summary_rows = sqlite_conn.execute("SELECT * FROM report_ai_summaries").fetchall()
+            batch_rows = sqlite_conn.execute("SELECT * FROM report_ai_summary_batches").fetchall()
+            batch_item_rows = sqlite_conn.execute("SELECT * FROM report_ai_summary_batch_items").fetchall()
+        with self._connect() as conn:
+            if summary_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO report_ai_summaries (
+                        site_scope, template_id, template_name, source, status, summary, bullets_json, fallback_used,
+                        model_used, generated_at, template_version, data_version, error, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(site_scope, template_id, source) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["site_scope"],
+                            row["template_id"],
+                            row["template_name"],
+                            row["source"],
+                            row["status"],
+                            row["summary"],
+                            row["bullets_json"],
+                            row["fallback_used"],
+                            row["model_used"],
+                            row["generated_at"],
+                            row["template_version"],
+                            row["data_version"],
+                            row["error"],
+                            row["created_at"],
+                            row["updated_at"],
+                        )
+                        for row in summary_rows
+                    ],
+                )
+            if batch_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO report_ai_summary_batches (
+                        batch_id, site_scope, status, requested_at, started_at, completed_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(batch_id) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["batch_id"],
+                            row["site_scope"],
+                            row["status"],
+                            row["requested_at"],
+                            row["started_at"],
+                            row["completed_at"],
+                        )
+                        for row in batch_rows
+                    ],
+                )
+            if batch_item_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO report_ai_summary_batch_items (
+                        batch_id, template_id, template_name, source, status, summary, bullets_json,
+                        fallback_used, model_used, generated_at, error
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(batch_id, template_id) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["batch_id"],
+                            row["template_id"],
+                            row["template_name"],
+                            row["source"],
+                            row["status"],
+                            row["summary"],
+                            row["bullets_json"],
+                            row["fallback_used"],
+                            row["model_used"],
+                            row["generated_at"],
+                            row["error"],
+                        )
+                        for row in batch_item_rows
+                    ],
+                )
+
     def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            self._backfill_from_sqlite_if_needed()
+            return
         with self._connect() as conn:
             conn.execute(
                 """
@@ -268,12 +369,13 @@ class ReportAISummaryService:
         templates_by_id = {template.id: template for template in templates}
         data_version = self._current_data_version()
         with self._connect() as conn:
-            rows = conn.execute(
-                """
+            query = """
                 SELECT *
                 FROM report_ai_summaries
-                WHERE site_scope = ?
-                """,
+                WHERE site_scope = {placeholder}
+            """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+            rows = conn.execute(
+                query,
                 (site_scope,),
             ).fetchall()
         latest: dict[tuple[str, str], ReportAISummary] = {}
@@ -294,13 +396,14 @@ class ReportAISummaryService:
             return {}
         data_version = self._current_data_version()
         with self._connect() as conn:
-            rows = conn.execute(
-                """
+            query = """
                 SELECT *
                 FROM report_ai_summaries
-                WHERE site_scope = ?
+                WHERE site_scope = {placeholder}
                   AND source = 'manual'
-                """,
+            """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+            rows = conn.execute(
+                query,
                 (site_scope,),
             ).fetchall()
         summaries_by_id = {
@@ -325,8 +428,7 @@ class ReportAISummaryService:
     ) -> ReportAISummary:
         now = _utcnow_iso()
         with self._connect() as conn:
-            conn.execute(
-                """
+            query = """
                 INSERT INTO report_ai_summaries (
                     site_scope,
                     template_id,
@@ -343,7 +445,7 @@ class ReportAISummaryService:
                     error,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
                 ON CONFLICT(site_scope, template_id, source) DO UPDATE SET
                     template_name = excluded.template_name,
                     status = excluded.status,
@@ -356,7 +458,9 @@ class ReportAISummaryService:
                     data_version = excluded.data_version,
                     error = excluded.error,
                     updated_at = excluded.updated_at
-                """,
+            """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+            conn.execute(
+                query,
                 (
                     site_scope,
                     template.id,
@@ -379,10 +483,10 @@ class ReportAISummaryService:
                 """
                 SELECT *
                 FROM report_ai_summaries
-                WHERE site_scope = ?
-                  AND template_id = ?
-                  AND source = ?
-                """,
+                WHERE site_scope = {placeholder}
+                  AND template_id = {placeholder}
+                  AND source = {placeholder}
+                """.replace("{placeholder}", "%s" if self._use_postgres else "?"),
                 (site_scope, template.id, result.source),
             ).fetchone()
         assert row is not None
@@ -392,23 +496,25 @@ class ReportAISummaryService:
         batch_id = uuid.uuid4().hex
         requested_at = _utcnow_iso()
         with self._connect() as conn:
-            conn.execute(
-                """
+            batch_query = """
                 INSERT INTO report_ai_summary_batches (batch_id, site_scope, status, requested_at)
-                VALUES (?, ?, 'queued', ?)
-                """,
+                VALUES ({placeholder}, {placeholder}, 'queued', {placeholder})
+            """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+            conn.execute(
+                batch_query,
                 (batch_id, site_scope, requested_at),
             )
-            conn.executemany(
-                """
+            item_query = """
                 INSERT INTO report_ai_summary_batch_items (
                     batch_id,
                     template_id,
                     template_name,
                     source,
                     status
-                ) VALUES (?, ?, ?, 'manual', 'queued')
-                """,
+                ) VALUES ({placeholder}, {placeholder}, {placeholder}, 'manual', 'queued')
+            """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+            conn.executemany(
+                item_query,
                 [(batch_id, template.id, template.name) for template in templates],
             )
         return ReportAISummaryBatchStartResponse(
@@ -428,14 +534,15 @@ class ReportAISummaryService:
         completed_at: str | None = None,
     ) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
+            query = """
                 UPDATE report_ai_summary_batches
-                SET status = ?,
-                    started_at = COALESCE(?, started_at),
-                    completed_at = COALESCE(?, completed_at)
-                WHERE batch_id = ?
-                """,
+                SET status = {placeholder},
+                    started_at = COALESCE({placeholder}, started_at),
+                    completed_at = COALESCE({placeholder}, completed_at)
+                WHERE batch_id = {placeholder}
+            """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+            conn.execute(
+                query,
                 (status, started_at, completed_at, batch_id),
             )
 
@@ -453,19 +560,20 @@ class ReportAISummaryService:
         error: str = "",
     ) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
+            query = """
                 UPDATE report_ai_summary_batch_items
-                SET status = ?,
-                    summary = ?,
-                    bullets_json = ?,
-                    fallback_used = ?,
-                    model_used = ?,
-                    generated_at = ?,
-                    error = ?
-                WHERE batch_id = ?
-                  AND template_id = ?
-                """,
+                SET status = {placeholder},
+                    summary = {placeholder},
+                    bullets_json = {placeholder},
+                    fallback_used = {placeholder},
+                    model_used = {placeholder},
+                    generated_at = {placeholder},
+                    error = {placeholder}
+                WHERE batch_id = {placeholder}
+                  AND template_id = {placeholder}
+            """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+            conn.execute(
+                query,
                 (
                     status,
                     summary,
@@ -494,24 +602,26 @@ class ReportAISummaryService:
 
     def get_batch_status(self, batch_id: str, site_scope: str) -> ReportAISummaryBatchStatus:
         with self._connect() as conn:
-            batch_row = conn.execute(
-                """
+            batch_query = """
                 SELECT *
                 FROM report_ai_summary_batches
-                WHERE batch_id = ?
-                  AND site_scope = ?
-                """,
+                WHERE batch_id = {placeholder}
+                  AND site_scope = {placeholder}
+            """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+            batch_row = conn.execute(
+                batch_query,
                 (batch_id, site_scope),
             ).fetchone()
             if batch_row is None:
                 raise KeyError(batch_id)
-            item_rows = conn.execute(
-                """
+            item_query = """
                 SELECT *
                 FROM report_ai_summary_batch_items
-                WHERE batch_id = ?
-                ORDER BY template_name COLLATE NOCASE
-                """,
+                WHERE batch_id = {placeholder}
+                ORDER BY lower(template_name)
+            """.replace("{placeholder}", "%s" if self._use_postgres else "?")
+            item_rows = conn.execute(
+                item_query,
                 (batch_id,),
             ).fetchall()
         return self._batch_status_from_rows(batch_row, item_rows)

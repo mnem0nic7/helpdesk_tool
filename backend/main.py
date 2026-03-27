@@ -23,7 +23,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from auth import get_session
-from config import APP_SECRET_KEY, TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES
+from config import APP_SECRET_KEY, AZURE_FINOPS_DUCKDB_PATH, TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES
+from postgres_utils import postgres_status
+from redis_utils import redis_state_store
 from routes_metrics import router as metrics_router
 from routes_tickets import router as tickets_router
 from routes_actions import router as actions_router
@@ -200,6 +202,9 @@ def _build_readiness_payload(app: FastAPI) -> dict[str, Any]:
     azure_status = azure_cache.status()
     kb_status = _get_kb_seed_status(app)
     runtime_status = runtime_role_manager.status()
+    postgres_component = postgres_status()
+    redis_component = redis_state_store.status()
+    duckdb_ready = os.path.exists(AZURE_FINOPS_DUCKDB_PATH)
 
     issue_ready = bool(issue_status.get("initialized"))
     issue_message = "Issue cache ready"
@@ -235,6 +240,19 @@ def _build_readiness_payload(app: FastAPI) -> dict[str, Any]:
             "knowledge_base": {
                 "ready": bool(kb_status.get("ready")),
                 "message": str(kb_status.get("message") or ""),
+            },
+            "postgres": {
+                "ready": bool(postgres_component.get("ready")),
+                "message": str(postgres_component.get("message") or ""),
+            },
+            "redis": {
+                "ready": bool(redis_component.get("ready")),
+                "message": str(redis_component.get("message") or ""),
+            },
+            "duckdb": {
+                "ready": duckdb_ready,
+                "path": AZURE_FINOPS_DUCKDB_PATH,
+                "message": "DuckDB file ready" if duckdb_ready else "DuckDB file missing",
             },
         },
     }

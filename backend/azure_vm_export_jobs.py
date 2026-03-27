@@ -20,6 +20,7 @@ from azure_cache import azure_cache
 from config import AZURE_VM_EXPORT_RETENTION_DAYS, DATA_DIR
 from email_service import send_email
 from site_context import get_site_origin
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
@@ -43,10 +44,11 @@ def _safe_excel_text(value: Any) -> str:
 
 
 class AzureVMExportJobManager:
-    """SQLite-backed FIFO queue for long-running Azure VM cost exports."""
+    """Postgres-aware FIFO queue for long-running Azure VM cost exports."""
 
     def __init__(self, db_path: str | None = None) -> None:
         self._db_path = db_path or os.path.join(DATA_DIR, "azure_vm_export_jobs.db")
+        self._use_postgres = postgres_enabled() and db_path is None
         self._file_dir = os.path.join(DATA_DIR, _WORKBOOK_SUBDIR)
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         os.makedirs(self._file_dir, exist_ok=True)
@@ -57,35 +59,98 @@ class AzureVMExportJobManager:
         self._cleanup_expired_files()
 
     def _conn(self) -> sqlite3.Connection:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres()
         return connect_sqlite(self._db_path)
+
+    def _placeholder(self) -> str:
+        return "%s" if self._use_postgres else "?"
+
+    def _create_schema(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS export_jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                recipient_email TEXT NOT NULL,
+                requester_name TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                lookback_days INTEGER NOT NULL,
+                filters_json TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT,
+                progress_current INTEGER NOT NULL DEFAULT 0,
+                progress_total INTEGER NOT NULL DEFAULT 0,
+                progress_message TEXT NOT NULL DEFAULT '',
+                file_name TEXT,
+                file_path TEXT,
+                file_size INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                notified_at TEXT,
+                notification_error TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_export_jobs_status_requested_at "
+            "ON export_jobs(status, requested_at)"
+        )
+
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres or not os.path.exists(self._db_path):
+            return
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM export_jobs").fetchone()
+            if row and int(row["count"]) > 0:
+                return
+        with connect_sqlite(self._db_path) as sqlite_conn:
+            rows = sqlite_conn.execute("SELECT * FROM export_jobs").fetchall()
+        with self._conn() as conn:
+            if rows:
+                placeholder = self._placeholder()
+                conn.executemany(
+                    """
+                    INSERT INTO export_jobs (
+                        job_id, status, recipient_email, requester_name, scope,
+                        lookback_days, filters_json, requested_at, started_at, completed_at,
+                        progress_current, progress_total, progress_message, file_name,
+                        file_path, file_size, error, notified_at, notification_error
+                    ) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                    ON CONFLICT(job_id) DO NOTHING
+                    """.format(placeholder=placeholder),
+                    [
+                        (
+                            row["job_id"],
+                            row["status"],
+                            row["recipient_email"],
+                            row["requester_name"],
+                            row["scope"],
+                            row["lookback_days"],
+                            row["filters_json"],
+                            row["requested_at"],
+                            row["started_at"],
+                            row["completed_at"],
+                            row["progress_current"],
+                            row["progress_total"],
+                            row["progress_message"],
+                            row["file_name"],
+                            row["file_path"],
+                            row["file_size"],
+                            row["error"],
+                            row["notified_at"],
+                            row["notification_error"],
+                        )
+                        for row in rows
+                    ],
+                )
 
     def _init_db(self) -> None:
         with self._conn() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS export_jobs (
-                    job_id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    recipient_email TEXT NOT NULL,
-                    requester_name TEXT NOT NULL,
-                    scope TEXT NOT NULL,
-                    lookback_days INTEGER NOT NULL,
-                    filters_json TEXT NOT NULL,
-                    requested_at TEXT NOT NULL,
-                    started_at TEXT,
-                    completed_at TEXT,
-                    progress_current INTEGER NOT NULL DEFAULT 0,
-                    progress_total INTEGER NOT NULL DEFAULT 0,
-                    progress_message TEXT NOT NULL DEFAULT '',
-                    file_name TEXT,
-                    file_path TEXT,
-                    file_size INTEGER NOT NULL DEFAULT 0,
-                    error TEXT,
-                    notified_at TEXT,
-                    notification_error TEXT
-                )
-                """
-            )
+            self._create_schema(conn)
+            if self._use_postgres:
+                self._backfill_from_sqlite_if_needed()
             conn.commit()
 
     def _coerce_job(self, row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
@@ -126,10 +191,11 @@ class AzureVMExportJobManager:
     def _update_job(self, job_id: str, **fields: Any) -> None:
         if not fields:
             return
-        assignments = ", ".join(f"{key} = ?" for key in fields)
+        placeholder = self._placeholder()
+        assignments = ", ".join(f"{key} = {placeholder}" for key in fields)
         values = list(fields.values()) + [job_id]
         with self._conn() as conn:
-            conn.execute(f"UPDATE export_jobs SET {assignments} WHERE job_id = ?", values)
+            conn.execute(f"UPDATE export_jobs SET {assignments} WHERE job_id = {placeholder}", values)
             conn.commit()
 
     def _requeue_running_jobs(self) -> None:
@@ -156,10 +222,10 @@ class AzureVMExportJobManager:
                 SELECT job_id, file_path
                 FROM export_jobs
                 WHERE completed_at IS NOT NULL
-                  AND completed_at < ?
+                  AND completed_at < {placeholder}
                   AND file_path IS NOT NULL
                   AND file_path != ''
-                """,
+                """.format(placeholder=self._placeholder()),
                 (cutoff,),
             ).fetchall()
             for row in rows:
@@ -175,8 +241,8 @@ class AzureVMExportJobManager:
                     SET file_path = NULL,
                         file_name = NULL,
                         file_size = 0
-                    WHERE job_id = ?
-                    """,
+                    WHERE job_id = {placeholder}
+                    """.format(placeholder=self._placeholder()),
                     (str(row["job_id"]),),
                 )
             conn.commit()
@@ -214,8 +280,8 @@ class AzureVMExportJobManager:
                     progress_total,
                     progress_message
                 )
-                VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, 0, 0, 'Queued')
-                """,
+                VALUES ({placeholder}, 'queued', {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, 0, 0, 'Queued')
+                """.format(placeholder=self._placeholder()),
                 (
                     job_id,
                     recipient_email,
@@ -247,7 +313,10 @@ class AzureVMExportJobManager:
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
-            row = conn.execute("SELECT * FROM export_jobs WHERE job_id = ?", (job_id,)).fetchone()
+            row = conn.execute(
+                f"SELECT * FROM export_jobs WHERE job_id = {self._placeholder()}",
+                (job_id,),
+            ).fetchone()
         return self._coerce_job(row)
 
     def job_belongs_to(self, job_id: str, email: str, *, is_admin: bool = False) -> bool:
@@ -292,14 +361,14 @@ class AzureVMExportJobManager:
                     """
                     UPDATE export_jobs
                     SET status = 'running',
-                        started_at = ?,
+                        started_at = {placeholder},
                         completed_at = NULL,
                         progress_current = 0,
                         progress_total = 0,
                         progress_message = 'Starting export',
                         error = ''
-                    WHERE job_id = ?
-                    """,
+                    WHERE job_id = {placeholder}
+                    """.format(placeholder=self._placeholder()),
                     (_utcnow().isoformat(), job_id),
                 )
                 conn.commit()

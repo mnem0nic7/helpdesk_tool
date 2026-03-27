@@ -165,7 +165,7 @@ async function downloadGet(
   const a = document.createElement("a");
   a.href = urlObject;
   const contentDisposition = res.headers.get("content-disposition");
-  const match = contentDisposition?.match(/filename=\"?([^\"]+)\"?/);
+  const match = contentDisposition?.match(/filename="?([^"]+)"?/);
   a.download = match?.[1] ?? fallbackFilename;
   document.body.appendChild(a);
   a.click();

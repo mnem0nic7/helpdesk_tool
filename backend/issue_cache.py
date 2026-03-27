@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import os
+from queue import Empty, Queue
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from typing import Any
 from config import DATA_DIR, JIRA_PROJECT
 from ai_background_worker import background_ai_worker
 from jira_client import JiraClient
+from redis_utils import redis_state_store
 from request_type import extract_request_type_name_from_fields, has_request_type
 from site_context import SiteScope, filter_issues_for_scope
 from sqlite_utils import connect_sqlite
@@ -40,6 +42,8 @@ _AUTO_TRIAGE_ONE_TIME_BACKFILL_METADATA_KEY = (
     "auto_triage_backfill_older_than_24h_processed_v1"
 )
 _AUTO_TRIAGE_ONE_TIME_BACKFILL_HOURS = 24
+_REDIS_ISSUES_HASH = "issue_cache:issues"
+_REDIS_METADATA_KEY = "issue_cache:metadata"
 
 
 class IssueCache:
@@ -78,6 +82,10 @@ class IssueCache:
 
         # SQLite persistence
         self._db_path = db_path or os.path.join(DATA_DIR, "issues_cache.db")
+        self._use_redis_store = redis_state_store.configured
+        self._flush_queue: Queue[tuple[str, list[Any]]] | None = None
+        self._flush_stop = threading.Event()
+        self._flush_thread: threading.Thread | None = None
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._init_db()
         self._restore_last_refresh()
@@ -86,9 +94,111 @@ class IssueCache:
         # _ensure_initialized() uses this to decide whether to wait for the
         # background task or load synchronously (test / standalone usage).
         self._start_background_called = False
+        if self._use_redis_store:
+            self._flush_queue = Queue()
+            self._flush_thread = threading.Thread(target=self._flush_worker, daemon=True)
+            self._flush_thread.start()
 
     def _conn(self) -> sqlite3.Connection:
         return connect_sqlite(self._db_path, row_factory=None)
+
+    def _flush_worker(self) -> None:
+        assert self._flush_queue is not None
+        while not self._flush_stop.is_set():
+            try:
+                op, payload = self._flush_queue.get(timeout=0.25)
+            except Empty:
+                continue
+            try:
+                if op == "upsert":
+                    self._write_issues_to_store(payload)
+                elif op == "delete":
+                    self._delete_keys_from_store([str(item or "") for item in payload])
+                elif op == "replace":
+                    self._replace_store_snapshot()
+            except Exception:
+                logger.exception("Issue cache flush worker failed processing %s", op)
+
+    def _enqueue_store_op(self, op: str, payload: list[Any]) -> None:
+        if not self._use_redis_store or self._flush_queue is None:
+            if op == "upsert":
+                self._write_issues_to_store(payload)
+            elif op == "delete":
+                self._delete_keys_from_store([str(item or "") for item in payload])
+            elif op == "replace":
+                self._replace_store_snapshot()
+            return
+        self._flush_queue.put((op, payload))
+
+    def _write_issues_to_store(self, issues: list[dict[str, Any]]) -> None:
+        if self._use_redis_store:
+            mapping = {
+                str(issue.get("key") or "").strip().upper(): issue
+                for issue in issues
+                if str(issue.get("key") or "").strip()
+            }
+            if mapping:
+                redis_state_store.hset_many_json(_REDIS_ISSUES_HASH, mapping)
+            return
+        with self._conn() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO issues (key, data, excluded) VALUES (?, ?, ?)",
+                [
+                    (
+                        issue.get("key", ""),
+                        json.dumps(issue),
+                        int(JiraClient.is_excluded(issue)),
+                    )
+                    for issue in issues
+                ],
+            )
+
+    def _delete_keys_from_store(self, keys: list[str]) -> None:
+        normalized = [str(key or "").strip().upper() for key in keys if str(key or "").strip()]
+        if not normalized:
+            return
+        if self._use_redis_store:
+            redis_state_store.hdel(_REDIS_ISSUES_HASH, *normalized)
+            return
+        with self._conn() as conn:
+            conn.executemany("DELETE FROM issues WHERE key = ?", [(key,) for key in normalized])
+
+    def _replace_store_snapshot(self) -> None:
+        if self._use_redis_store:
+            redis_state_store.delete(_REDIS_ISSUES_HASH)
+            redis_state_store.hset_many_json(
+                _REDIS_ISSUES_HASH,
+                {
+                    key: issue
+                    for key, issue in self._all_issues.items()
+                },
+            )
+            return
+        with self._conn() as conn:
+            conn.execute("DELETE FROM issues")
+            conn.executemany(
+                "INSERT INTO issues (key, data, excluded) VALUES (?, ?, ?)",
+                [
+                    (key, json.dumps(issue), int(key not in self._issues))
+                    for key, issue in self._all_issues.items()
+                ],
+            )
+
+    def _backfill_redis_from_sqlite_if_needed(self) -> None:
+        if not self._use_redis_store or not os.path.exists(self._db_path):
+            return
+        if redis_state_store.hgetall(_REDIS_ISSUES_HASH):
+            return
+        with self._conn() as conn:
+            rows = conn.execute("SELECT key, data FROM issues").fetchall()
+            metadata_row = conn.execute("SELECT value FROM metadata WHERE key = 'last_refresh'").fetchone()
+        if rows:
+            redis_state_store.hset_many(
+                _REDIS_ISSUES_HASH,
+                {str(key): str(data) for key, data in rows},
+            )
+        if metadata_row and metadata_row[0]:
+            redis_state_store.hset(_REDIS_METADATA_KEY, "last_refresh", str(metadata_row[0]))
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -320,8 +430,7 @@ class IssueCache:
             in_all = key in self._all_issues
             self._all_issues.pop(key, None)
             self._issues.pop(key, None)
-        with self._conn() as conn:
-            conn.execute("DELETE FROM issues WHERE key = ?", (key,))
+        self._enqueue_store_op("delete", [key])
         if in_all:
             logger.info("Cache: evicted issue %s", key)
         return in_all
@@ -386,8 +495,7 @@ class IssueCache:
                 for key in missing_keys:
                     self._all_issues.pop(key, None)
                     self._issues.pop(key, None)
-            with self._conn() as conn:
-                conn.executemany("DELETE FROM issues WHERE key = ?", [(k,) for k in missing_keys])
+            self._enqueue_store_op("delete", missing_keys)
 
         if not refreshed_issues:
             return []
@@ -415,6 +523,9 @@ class IssueCache:
 
     def _init_db(self) -> None:
         """Create the SQLite tables if they don't exist."""
+        if self._use_redis_store:
+            self._backfill_redis_from_sqlite_if_needed()
+            return
         with self._conn() as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS issues "
@@ -429,6 +540,9 @@ class IssueCache:
         """Write _last_refresh timestamp to the metadata table."""
         if not self._last_refresh:
             return
+        if self._use_redis_store:
+            redis_state_store.hset(_REDIS_METADATA_KEY, "last_refresh", self._last_refresh.isoformat())
+            return
         with self._conn() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_refresh', ?)",
@@ -438,19 +552,28 @@ class IssueCache:
     def _restore_last_refresh(self) -> None:
         """Read the persisted last_refresh timestamp from the metadata table."""
         try:
-            with self._conn() as conn:
-                row = conn.execute(
-                    "SELECT value FROM metadata WHERE key = 'last_refresh'"
-                ).fetchone()
-            if row:
-                self._last_refresh = datetime.fromisoformat(row[0])
+            if self._use_redis_store:
+                raw = redis_state_store.hget(_REDIS_METADATA_KEY, "last_refresh")
+                if raw:
+                    self._last_refresh = datetime.fromisoformat(raw)
+            else:
+                with self._conn() as conn:
+                    row = conn.execute(
+                        "SELECT value FROM metadata WHERE key = 'last_refresh'"
+                    ).fetchone()
+                if row:
+                    self._last_refresh = datetime.fromisoformat(row[0])
         except Exception:
             pass  # Non-fatal — will fall back to full startup lookback
 
     def _load_from_db(self) -> bool:
         """Populate in-memory dicts from SQLite. Returns True if rows existed."""
-        with self._conn() as conn:
-            rows = conn.execute("SELECT key, data, excluded FROM issues").fetchall()
+        if self._use_redis_store:
+            raw_rows = redis_state_store.hgetall(_REDIS_ISSUES_HASH)
+            rows = [(key, data, int(JiraClient.is_excluded(json.loads(data)))) for key, data in raw_rows.items()]
+        else:
+            with self._conn() as conn:
+                rows = conn.execute("SELECT key, data, excluded FROM issues").fetchall()
         if not rows:
             return False
         new_all: dict[str, dict[str, Any]] = {}
@@ -469,8 +592,7 @@ class IssueCache:
             self._issues = new_filtered
             self._initialized = True
         if dropped_keys:
-            with self._conn() as conn:
-                conn.executemany("DELETE FROM issues WHERE key = ?", [(key,) for key in dropped_keys])
+            self._enqueue_store_op("delete", dropped_keys)
             logger.info(
                 "Cache: dropped %d non-tracked issues from SQLite restore: %s",
                 len(dropped_keys),
@@ -488,31 +610,15 @@ class IssueCache:
 
     def _save_all_to_db(self) -> None:
         """Replace entire DB contents with current in-memory state."""
-        with self._conn() as conn:
-            conn.execute("DELETE FROM issues")
-            conn.executemany(
-                "INSERT INTO issues (key, data, excluded) VALUES (?, ?, ?)",
-                [
-                    (key, json.dumps(issue), int(key not in self._issues))
-                    for key, issue in self._all_issues.items()
-                ],
-            )
+        self._replace_store_snapshot()
         logger.info("Cache: wrote %d issues to SQLite", len(self._all_issues))
 
     def _upsert_to_db(self, issues: list[dict[str, Any]]) -> None:
         """Upsert a batch of issues into SQLite."""
-        with self._conn() as conn:
-            conn.executemany(
-                "INSERT OR REPLACE INTO issues (key, data, excluded) VALUES (?, ?, ?)",
-                [
-                    (
-                        issue.get("key", ""),
-                        json.dumps(issue),
-                        int(JiraClient.is_excluded(issue)),
-                    )
-                    for issue in issues
-                ],
-            )
+        if self._use_redis_store:
+            self._enqueue_store_op("upsert", issues)
+        else:
+            self._write_issues_to_store(issues)
         logger.info("Cache: upserted %d issues to SQLite", len(issues))
 
     def _prune_non_tracked_issues(self) -> list[str]:
@@ -527,8 +633,7 @@ class IssueCache:
                 self._all_issues.pop(key, None)
                 self._issues.pop(key, None)
         if dropped_keys:
-            with self._conn() as conn:
-                conn.executemany("DELETE FROM issues WHERE key = ?", [(key,) for key in dropped_keys])
+            self._enqueue_store_op("delete", dropped_keys)
             logger.info(
                 "Cache: pruned %d non-tracked issues: %s",
                 len(dropped_keys),
@@ -1169,7 +1274,6 @@ class IssueCache:
         else:
             logger.info("Cache: follower cold start — full Jira fetch required")
             await loop.run_in_executor(None, self._full_fetch)
-        await loop.run_in_executor(None, self._backfill_recent_followup_authority_from_cache)
 
     async def _init_and_refresh_loop(self) -> None:
         """Load from SQLite then run the periodic refresh loop."""

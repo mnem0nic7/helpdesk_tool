@@ -15,6 +15,7 @@ from typing import Any
 from azure_cache import azure_cache
 from config import DATA_DIR, USER_EXIT_AGENT_STEP_LEASE_SECONDS
 from models import UserExitWorkflowStatus
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 from user_admin_jobs import user_admin_jobs
 from user_admin_providers import UserAdminProviderError, user_admin_providers
@@ -70,20 +71,148 @@ class UserExitWorkflowError(RuntimeError):
 
 
 class UserExitWorkflowManager:
-    """SQLite-backed orchestrator for primary-site exit workflows."""
+    """Postgres-aware orchestrator for primary-site exit workflows."""
 
     def __init__(self, db_path: str | None = None) -> None:
         self._db_path = db_path or os.path.join(DATA_DIR, "user_exit_workflows.db")
+        self._use_postgres = postgres_enabled() and db_path is None
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._lock = threading.Lock()
         self._bg_task: asyncio.Task[None] | None = None
         self._init_db()
         self._requeue_incomplete_state()
 
-    def _conn(self) -> sqlite3.Connection:
+    def _sqlite_conn(self) -> sqlite3.Connection:
         return connect_sqlite(self._db_path)
 
+    def _conn(self):
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres()
+        return self._sqlite_conn()
+
+    def _placeholder(self) -> str:
+        return "%s" if self._use_postgres else "?"
+
+    def _sql(self, statement: str) -> str:
+        return statement.replace("?", self._placeholder()) if self._use_postgres else statement
+
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres or not os.path.exists(self._db_path):
+            return
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM user_exit_workflows").fetchone()
+            if row and int(row["count"]) > 0:
+                return
+        with self._sqlite_conn() as sqlite_conn:
+            workflow_rows = sqlite_conn.execute("SELECT * FROM user_exit_workflows").fetchall()
+            step_rows = sqlite_conn.execute("SELECT * FROM user_exit_steps").fetchall()
+            manual_task_rows = sqlite_conn.execute("SELECT * FROM user_exit_manual_tasks").fetchall()
+        with self._conn() as conn:
+            if workflow_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO user_exit_workflows (
+                        workflow_id, user_id, user_display_name, user_principal_name, requested_by_email,
+                        requested_by_name, status, profile_key, on_prem_required,
+                        requires_on_prem_username_override, on_prem_sam_account_name,
+                        on_prem_distinguished_name, created_at, started_at, completed_at, error
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT(workflow_id) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["workflow_id"],
+                            row["user_id"],
+                            row["user_display_name"],
+                            row["user_principal_name"],
+                            row["requested_by_email"],
+                            row["requested_by_name"],
+                            row["status"],
+                            row["profile_key"],
+                            row["on_prem_required"],
+                            row["requires_on_prem_username_override"],
+                            row["on_prem_sam_account_name"],
+                            row["on_prem_distinguished_name"],
+                            row["created_at"],
+                            row["started_at"],
+                            row["completed_at"],
+                            row["error"],
+                        )
+                        for row in workflow_rows
+                    ],
+                )
+            if step_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO user_exit_steps (
+                        step_id, workflow_id, step_key, label, provider, status, order_index, profile_key,
+                        payload_json, summary, error, before_summary_json, after_summary_json,
+                        assigned_agent_id, lease_expires_at, heartbeat_at, created_at, started_at,
+                        completed_at, retry_count
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT(step_id) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["step_id"],
+                            row["workflow_id"],
+                            row["step_key"],
+                            row["label"],
+                            row["provider"],
+                            row["status"],
+                            row["order_index"],
+                            row["profile_key"],
+                            row["payload_json"],
+                            row["summary"],
+                            row["error"],
+                            row["before_summary_json"],
+                            row["after_summary_json"],
+                            row["assigned_agent_id"],
+                            row["lease_expires_at"],
+                            row["heartbeat_at"],
+                            row["created_at"],
+                            row["started_at"],
+                            row["completed_at"],
+                            row["retry_count"],
+                        )
+                        for row in step_rows
+                    ],
+                )
+            if manual_task_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO user_exit_manual_tasks (
+                        task_id, workflow_id, label, status, notes, created_at, completed_at,
+                        completed_by_email, completed_by_name
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(task_id) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["task_id"],
+                            row["workflow_id"],
+                            row["label"],
+                            row["status"],
+                            row["notes"],
+                            row["created_at"],
+                            row["completed_at"],
+                            row["completed_by_email"],
+                            row["completed_by_name"],
+                        )
+                        for row in manual_task_rows
+                    ],
+                )
+
     def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            self._backfill_from_sqlite_if_needed()
+            return
         with self._conn() as conn:
             conn.executescript(
                 """
@@ -325,14 +454,16 @@ class UserExitWorkflowManager:
     def _active_workflow_summary_for_user(self, user_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
             row = conn.execute(
-                """
+                self._sql(
+                    """
                 SELECT *
                 FROM user_exit_workflows
                 WHERE user_id = ?
                   AND status IN ('queued', 'running', 'awaiting_manual')
                 ORDER BY created_at DESC
                 LIMIT 1
-                """,
+                """
+                ),
                 (user_id,),
             ).fetchone()
         return self._workflow_summary_row(row)
@@ -385,7 +516,7 @@ class UserExitWorkflowManager:
             "active_workflow": self._active_workflow_summary_for_user(user_id),
         }
 
-    def _workflow_summary_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _workflow_summary_row(self, row: Any | None) -> dict[str, Any] | None:
         if not row:
             return None
         return {
@@ -403,7 +534,7 @@ class UserExitWorkflowManager:
             "error": str(row["error"] or ""),
         }
 
-    def _step_row(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _step_row(self, row: Any) -> dict[str, Any]:
         return {
             "step_id": str(row["step_id"] or ""),
             "step_key": str(row["step_key"] or ""),
@@ -426,7 +557,7 @@ class UserExitWorkflowManager:
             "retry_count": int(row["retry_count"] or 0),
         }
 
-    def _manual_task_row(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _manual_task_row(self, row: Any) -> dict[str, Any]:
         return {
             "task_id": str(row["task_id"] or ""),
             "label": str(row["label"] or ""),
@@ -451,27 +582,31 @@ class UserExitWorkflowManager:
     def get_workflow(self, workflow_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
             workflow_row = conn.execute(
-                "SELECT * FROM user_exit_workflows WHERE workflow_id = ?",
+                self._sql("SELECT * FROM user_exit_workflows WHERE workflow_id = ?"),
                 (workflow_id,),
             ).fetchone()
             if not workflow_row:
                 return None
             step_rows = conn.execute(
-                """
+                self._sql(
+                    """
                 SELECT *
                 FROM user_exit_steps
                 WHERE workflow_id = ?
                 ORDER BY order_index ASC
-                """,
+                """
+                ),
                 (workflow_id,),
             ).fetchall()
             task_rows = conn.execute(
-                """
+                self._sql(
+                    """
                 SELECT *
                 FROM user_exit_manual_tasks
                 WHERE workflow_id = ?
                 ORDER BY created_at ASC
-                """,
+                """
+                ),
                 (workflow_id,),
             ).fetchall()
         workflow = dict(self._workflow_summary_row(workflow_row) or {})
@@ -520,7 +655,8 @@ class UserExitWorkflowManager:
 
         with self._conn() as conn:
             conn.execute(
-                """
+                self._sql(
+                    """
                 INSERT INTO user_exit_workflows (
                     workflow_id,
                     user_id,
@@ -537,7 +673,8 @@ class UserExitWorkflowManager:
                     created_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
-                """,
+                """
+                ),
                 (
                     workflow_id,
                     user_id,
@@ -558,7 +695,8 @@ class UserExitWorkflowManager:
                 if step["step_key"] == "exit_on_prem_deprovision":
                     payload["on_prem_sam_account_name"] = on_prem_override or payload.get("on_prem_sam_account_name") or ""
                 conn.execute(
-                    """
+                    self._sql(
+                        """
                     INSERT INTO user_exit_steps (
                         step_id,
                         workflow_id,
@@ -572,7 +710,8 @@ class UserExitWorkflowManager:
                         created_at
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                    """
+                    ),
                     (
                         uuid.uuid4().hex,
                         workflow_id,
@@ -588,7 +727,8 @@ class UserExitWorkflowManager:
                 )
             for label in self._manual_task_labels(user_admin_providers.get_user_detail(user_id)):
                 conn.execute(
-                    """
+                    self._sql(
+                        """
                     INSERT INTO user_exit_manual_tasks (
                         task_id,
                         workflow_id,
@@ -597,7 +737,8 @@ class UserExitWorkflowManager:
                         created_at
                     )
                     VALUES (?, ?, ?, 'pending', ?)
-                    """,
+                    """
+                    ),
                     (
                         uuid.uuid4().hex,
                         workflow_id,
@@ -616,7 +757,8 @@ class UserExitWorkflowManager:
         with self._lock:
             with self._conn() as conn:
                 row = conn.execute(
-                    """
+                    self._sql(
+                        """
                     SELECT s.*
                     FROM user_exit_steps s
                     JOIN user_exit_workflows w
@@ -630,32 +772,37 @@ class UserExitWorkflowManager:
                         WHERE prior.workflow_id = s.workflow_id
                           AND prior.order_index < s.order_index
                           AND prior.status NOT IN ('completed', 'skipped')
-                      )
+                    )
                     ORDER BY w.created_at ASC, s.order_index ASC
                     LIMIT 1
                     """
+                    )
                 ).fetchone()
                 if not row:
                     return None
                 step_id = str(row["step_id"] or "")
                 now = _utcnow().isoformat()
                 conn.execute(
-                    """
+                    self._sql(
+                        """
                     UPDATE user_exit_steps
                     SET status = 'running',
                         started_at = COALESCE(started_at, ?)
                     WHERE step_id = ?
-                    """,
+                    """
+                    ),
                     (now, step_id),
                 )
                 conn.execute(
-                    """
+                    self._sql(
+                        """
                     UPDATE user_exit_workflows
                     SET status = 'running',
                         started_at = COALESCE(started_at, ?),
                         error = ''
                     WHERE workflow_id = ?
-                    """,
+                    """
+                    ),
                     (now, str(row["workflow_id"] or "")),
                 )
                 conn.commit()
@@ -738,19 +885,21 @@ class UserExitWorkflowManager:
     def _update_workflow(self, workflow_id: str, **fields: Any) -> None:
         if not fields:
             return
-        assignments = ", ".join(f"{key} = ?" for key in fields)
+        placeholder = self._placeholder()
+        assignments = ", ".join(f"{key} = {placeholder}" for key in fields)
         values = list(fields.values()) + [workflow_id]
         with self._conn() as conn:
-            conn.execute(f"UPDATE user_exit_workflows SET {assignments} WHERE workflow_id = ?", values)
+            conn.execute(f"UPDATE user_exit_workflows SET {assignments} WHERE workflow_id = {placeholder}", values)
             conn.commit()
 
     def _update_step(self, step_id: str, **fields: Any) -> None:
         if not fields:
             return
-        assignments = ", ".join(f"{key} = ?" for key in fields)
+        placeholder = self._placeholder()
+        assignments = ", ".join(f"{key} = {placeholder}" for key in fields)
         values = list(fields.values()) + [step_id]
         with self._conn() as conn:
-            conn.execute(f"UPDATE user_exit_steps SET {assignments} WHERE step_id = ?", values)
+            conn.execute(f"UPDATE user_exit_steps SET {assignments} WHERE step_id = {placeholder}", values)
             conn.commit()
 
     def _process_local_step(self, workflow: dict[str, Any], step: dict[str, Any]) -> None:
@@ -824,14 +973,16 @@ class UserExitWorkflowManager:
     def _requeue_expired_agent_steps(self) -> None:
         with self._conn() as conn:
             rows = conn.execute(
-                """
+                self._sql(
+                    """
                 SELECT step_id
                 FROM user_exit_steps
                 WHERE provider = 'windows_agent'
                   AND status = 'running'
                   AND lease_expires_at IS NOT NULL
                   AND lease_expires_at < ?
-                """,
+                """
+                ),
                 (_utcnow().isoformat(),),
             ).fetchall()
             step_ids = [str(row["step_id"] or "") for row in rows]
@@ -839,7 +990,8 @@ class UserExitWorkflowManager:
                 return
             for step_id in step_ids:
                 conn.execute(
-                    """
+                    self._sql(
+                        """
                     UPDATE user_exit_steps
                     SET status = 'queued',
                         assigned_agent_id = '',
@@ -848,7 +1000,8 @@ class UserExitWorkflowManager:
                         summary = '',
                         error = ''
                     WHERE step_id = ?
-                    """,
+                    """
+                    ),
                     (step_id,),
                 )
             conn.commit()
@@ -859,7 +1012,7 @@ class UserExitWorkflowManager:
 
     def _workflow_id_for_step(self, step_id: str) -> str:
         with self._conn() as conn:
-            row = conn.execute("SELECT workflow_id FROM user_exit_steps WHERE step_id = ?", (step_id,)).fetchone()
+            row = conn.execute(self._sql("SELECT workflow_id FROM user_exit_steps WHERE step_id = ?"), (step_id,)).fetchone()
         return str(row["workflow_id"] or "") if row else ""
 
     async def start_worker(self) -> None:
@@ -939,7 +1092,7 @@ class UserExitWorkflowManager:
             raise UserExitWorkflowError("Workflow not found")
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM user_exit_manual_tasks WHERE workflow_id = ? AND task_id = ?",
+                self._sql("SELECT * FROM user_exit_manual_tasks WHERE workflow_id = ? AND task_id = ?"),
                 (workflow_id, task_id),
             ).fetchone()
             if not row:
@@ -948,7 +1101,8 @@ class UserExitWorkflowManager:
                 return workflow
             completed_at = _utcnow().isoformat()
             conn.execute(
-                """
+                self._sql(
+                    """
                 UPDATE user_exit_manual_tasks
                 SET status = 'completed',
                     notes = ?,
@@ -956,7 +1110,8 @@ class UserExitWorkflowManager:
                     completed_by_email = ?,
                     completed_by_name = ?
                 WHERE task_id = ?
-                """,
+                """
+                ),
                 (notes, completed_at, actor_email, actor_name, task_id),
             )
             conn.commit()
@@ -986,7 +1141,8 @@ class UserExitWorkflowManager:
         with self._lock:
             with self._conn() as conn:
                 rows = conn.execute(
-                    """
+                    self._sql(
+                        """
                     SELECT s.*, w.user_id, w.user_display_name, w.user_principal_name
                     FROM user_exit_steps s
                     JOIN user_exit_workflows w
@@ -1003,8 +1159,9 @@ class UserExitWorkflowManager:
                       )
                     ORDER BY w.created_at ASC, s.order_index ASC
                     """
+                    )
                 ).fetchall()
-                chosen: sqlite3.Row | None = None
+                chosen: Any | None = None
                 for row in rows:
                     profile_key = str(row["profile_key"] or "").strip().lower()
                     if normalized_profiles and profile_key and profile_key not in normalized_profiles:
@@ -1016,7 +1173,8 @@ class UserExitWorkflowManager:
                 lease_expires_at = (_utcnow() + timedelta(seconds=max(30, USER_EXIT_AGENT_STEP_LEASE_SECONDS))).isoformat()
                 now = _utcnow().isoformat()
                 conn.execute(
-                    """
+                    self._sql(
+                        """
                     UPDATE user_exit_steps
                     SET status = 'running',
                         assigned_agent_id = ?,
@@ -1024,17 +1182,20 @@ class UserExitWorkflowManager:
                         heartbeat_at = ?,
                         lease_expires_at = ?
                     WHERE step_id = ?
-                    """,
+                    """
+                    ),
                     (agent_id, now, now, lease_expires_at, str(chosen["step_id"] or "")),
                 )
                 conn.execute(
-                    """
+                    self._sql(
+                        """
                     UPDATE user_exit_workflows
                     SET status = 'running',
                         started_at = COALESCE(started_at, ?),
                         error = ''
                     WHERE workflow_id = ?
-                    """,
+                    """
+                    ),
                     (now, str(chosen["workflow_id"] or "")),
                 )
                 conn.commit()
@@ -1057,7 +1218,7 @@ class UserExitWorkflowManager:
     def heartbeat_agent_step(self, *, step_id: str, agent_id: str) -> None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT assigned_agent_id, status FROM user_exit_steps WHERE step_id = ?",
+                self._sql("SELECT assigned_agent_id, status FROM user_exit_steps WHERE step_id = ?"),
                 (step_id,),
             ).fetchone()
             if not row:
@@ -1067,12 +1228,14 @@ class UserExitWorkflowManager:
             now = _utcnow().isoformat()
             lease_expires_at = (_utcnow() + timedelta(seconds=max(30, USER_EXIT_AGENT_STEP_LEASE_SECONDS))).isoformat()
             conn.execute(
-                """
+                self._sql(
+                    """
                 UPDATE user_exit_steps
                 SET heartbeat_at = ?,
                     lease_expires_at = ?
                 WHERE step_id = ?
-                """,
+                """
+                ),
                 (now, lease_expires_at, step_id),
             )
             conn.commit()

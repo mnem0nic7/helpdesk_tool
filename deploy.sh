@@ -286,6 +286,28 @@ service_is_running() {
     [[ -n "$(service_container_id "$1")" ]]
 }
 
+wait_for_service_healthy() {
+    local service="$1"
+    local timeout="${2:-120}"
+    local start_time container_id status
+    start_time="$(date +%s)"
+    echo ">>> Waiting for ${service} to become healthy..."
+    while true; do
+        container_id="$(service_container_id "$service")"
+        if [[ -n "$container_id" ]]; then
+            status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+            if [[ "$status" == "healthy" || "$status" == "running" ]]; then
+                return 0
+            fi
+        fi
+        if (( $(date +%s) - start_time >= timeout )); then
+            echo "ERROR: ${service} did not become healthy within ${timeout}s."
+            return 1
+        fi
+        sleep 2
+    done
+}
+
 legacy_service_is_running() {
     [[ -n "$(legacy_service_container_id "$1")" ]]
 }
@@ -590,42 +612,72 @@ prepare_runtime_state_for_bootstrap() {
     local service="$1"
     docker compose run --rm --no-deps -T "$service" python3 - <<'PY'
 import os
-import sqlite3
 from pathlib import Path
 
-data_dir = Path(os.environ.get("DATA_DIR", "") or "/app/data")
-db_path = data_dir / "runtime_state.db"
-db_path.parent.mkdir(parents=True, exist_ok=True)
-conn = sqlite3.connect(str(db_path))
-try:
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS runtime_leader_state (
-            singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-            desired_leader_color TEXT NOT NULL DEFAULT '',
-            lease_owner_color TEXT NOT NULL DEFAULT '',
-            lease_expires_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT ''
+database_url = (os.environ.get("DATABASE_URL") or "").strip()
+if database_url:
+    from psycopg import connect
+
+    with connect(database_url) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_leader_state (
+                singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                desired_leader_color TEXT NOT NULL DEFAULT '',
+                lease_owner_color TEXT NOT NULL DEFAULT '',
+                lease_expires_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
         )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO runtime_leader_state (
-            singleton_id, desired_leader_color, lease_owner_color, lease_expires_at, updated_at
-        ) VALUES (1, 'legacy', '', '', datetime('now'))
-        ON CONFLICT(singleton_id) DO UPDATE SET
-            desired_leader_color = 'legacy',
-            lease_owner_color = '',
-            lease_expires_at = '',
-            updated_at = datetime('now')
-        """
-    )
-    conn.commit()
-finally:
-    conn.close()
+        conn.execute(
+            """
+            INSERT INTO runtime_leader_state (
+                singleton_id, desired_leader_color, lease_owner_color, lease_expires_at, updated_at
+            ) VALUES (1, 'legacy', '', '', NOW()::text)
+            ON CONFLICT(singleton_id) DO UPDATE SET
+                desired_leader_color = 'legacy',
+                lease_owner_color = '',
+                lease_expires_at = '',
+                updated_at = NOW()::text
+            """
+        )
+else:
+    import sqlite3
+
+    data_dir = Path(os.environ.get("DATA_DIR", "") or "/app/data")
+    db_path = data_dir / "runtime_state.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_leader_state (
+                singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                desired_leader_color TEXT NOT NULL DEFAULT '',
+                lease_owner_color TEXT NOT NULL DEFAULT '',
+                lease_expires_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO runtime_leader_state (
+                singleton_id, desired_leader_color, lease_owner_color, lease_expires_at, updated_at
+            ) VALUES (1, 'legacy', '', '', datetime('now'))
+            ON CONFLICT(singleton_id) DO UPDATE SET
+                desired_leader_color = 'legacy',
+                lease_owner_color = '',
+                lease_expires_at = '',
+                updated_at = datetime('now')
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
 PY
 }
 
@@ -675,6 +727,11 @@ if [[ "$CADDY_IMAGE_REQUIRED" == "1" ]]; then
     echo ">>> Building caddy image..."
     build_services caddy
 fi
+
+echo ">>> Starting shared data services..."
+start_services postgres redis
+wait_for_service_healthy postgres 120
+wait_for_service_healthy redis 60
 
 echo ">>> Building inactive app color (${TARGET_COLOR})..."
 build_services "$TARGET_BACKEND_SERVICE" "$TARGET_FRONTEND_SERVICE"

@@ -34,6 +34,7 @@ from config import (
     AZURE_VM_EXPORT_SHARED_MAX_RUNTIME_SECONDS,
     DATA_DIR,
 )
+from redis_utils import redis_state_store
 from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
@@ -123,6 +124,8 @@ _SHARED_ACCOUNT_MARKERS = (
     "support",
     "helpdesk",
 )
+_REDIS_SNAPSHOTS_HASH = "azure_cache:snapshots"
+_REDIS_DATASET_STATUS_HASH = "azure_cache:dataset_status"
 
 
 class AzureCache:
@@ -131,6 +134,7 @@ class AzureCache:
     def __init__(self, db_path: str | None = None) -> None:
         self._client = AzureClient()
         self._db_path = db_path or os.path.join(DATA_DIR, "azure_cache.db")
+        self._use_redis_store = redis_state_store.configured
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._lock = threading.Lock()
         self._snapshots: dict[str, Any] = {}
@@ -158,6 +162,9 @@ class AzureCache:
         return connect_sqlite(self._db_path)
 
     def _init_db(self) -> None:
+        if self._use_redis_store:
+            self._backfill_redis_from_sqlite_if_needed()
+            return
         with self._conn() as conn:
             conn.execute(
                 """
@@ -180,24 +187,35 @@ class AzureCache:
             conn.commit()
 
     def _load_from_db(self) -> None:
-        with self._conn() as conn:
-            for row in conn.execute("SELECT name, payload, updated_at FROM snapshots"):
-                try:
-                    self._snapshots[str(row["name"])] = json.loads(str(row["payload"]))
-                except json.JSONDecodeError:
-                    logger.warning("Skipping invalid Azure snapshot %s", row["name"])
-            for row in conn.execute("SELECT dataset_key, updated_at, error FROM dataset_status"):
-                dataset_key = str(row["dataset_key"])
-                if dataset_key in self._dataset_state:
-                    self._dataset_state[dataset_key]["last_refresh"] = row["updated_at"]
-                    self._dataset_state[dataset_key]["error"] = row["error"] or None
+        if self._use_redis_store:
+            for name, payload in redis_state_store.hgetall_json(_REDIS_SNAPSHOTS_HASH).items():
+                self._snapshots[str(name)] = payload
+            for dataset_key, payload in redis_state_store.hgetall_json(_REDIS_DATASET_STATUS_HASH).items():
+                if dataset_key in self._dataset_state and isinstance(payload, dict):
+                    self._dataset_state[dataset_key]["last_refresh"] = payload.get("updated_at")
+                    self._dataset_state[dataset_key]["error"] = payload.get("error") or None
+        else:
+            with self._conn() as conn:
+                for row in conn.execute("SELECT name, payload, updated_at FROM snapshots"):
+                    try:
+                        self._snapshots[str(row["name"])] = json.loads(str(row["payload"]))
+                    except json.JSONDecodeError:
+                        logger.warning("Skipping invalid Azure snapshot %s", row["name"])
+                for row in conn.execute("SELECT dataset_key, updated_at, error FROM dataset_status"):
+                    dataset_key = str(row["dataset_key"])
+                    if dataset_key in self._dataset_state:
+                        self._dataset_state[dataset_key]["last_refresh"] = row["updated_at"]
+                        self._dataset_state[dataset_key]["error"] = row["error"] or None
         for dataset_key in self._dataset_state:
             self._dataset_state[dataset_key]["item_count"] = self._dataset_item_count(dataset_key)
         self._initialized = any(state["last_refresh"] for state in self._dataset_state.values())
 
     def _persist_snapshot(self, name: str, payload: Any) -> None:
-        serialized = json.dumps(payload)
         updated_at = datetime.now(timezone.utc).isoformat()
+        if self._use_redis_store:
+            redis_state_store.hset_json(_REDIS_SNAPSHOTS_HASH, name, payload)
+            return
+        serialized = json.dumps(payload)
         with self._conn() as conn:
             conn.execute(
                 """
@@ -212,6 +230,13 @@ class AzureCache:
             conn.commit()
 
     def _persist_dataset_status(self, dataset_key: str, updated_at: str | None, error: str | None) -> None:
+        if self._use_redis_store:
+            redis_state_store.hset_json(
+                _REDIS_DATASET_STATUS_HASH,
+                dataset_key,
+                {"updated_at": updated_at, "error": error or ""},
+            )
+            return
         with self._conn() as conn:
             conn.execute(
                 """
@@ -224,6 +249,28 @@ class AzureCache:
                 (dataset_key, updated_at, error or ""),
             )
             conn.commit()
+
+    def _backfill_redis_from_sqlite_if_needed(self) -> None:
+        if not self._use_redis_store or not os.path.exists(self._db_path):
+            return
+        if redis_state_store.hgetall(_REDIS_SNAPSHOTS_HASH):
+            return
+        with self._conn() as conn:
+            snapshot_rows = conn.execute("SELECT name, payload FROM snapshots").fetchall()
+            status_rows = conn.execute("SELECT dataset_key, updated_at, error FROM dataset_status").fetchall()
+        if snapshot_rows:
+            redis_state_store.hset_many(_REDIS_SNAPSHOTS_HASH, {str(row["name"]): str(row["payload"]) for row in snapshot_rows})
+        if status_rows:
+            redis_state_store.hset_many_json(
+                _REDIS_DATASET_STATUS_HASH,
+                {
+                    str(row["dataset_key"]): {
+                        "updated_at": row["updated_at"],
+                        "error": row["error"] or "",
+                    }
+                    for row in status_rows
+                },
+            )
 
     def _dataset_item_count(self, dataset_key: str) -> int:
         count = 0

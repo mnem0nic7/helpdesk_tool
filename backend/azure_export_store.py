@@ -17,9 +17,33 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 
 _ALLOWED_PARSE_STATUSES = {"discovered", "staged", "parsed", "quarantined", "failed"}
+_DELIVERY_COLUMNS = (
+    "delivery_id",
+    "dataset",
+    "scope_key",
+    "delivery_date",
+    "run_id",
+    "delivery_key",
+    "landing_path",
+    "manifest_path",
+    "parse_status",
+    "row_count",
+    "discovered_at",
+    "parsed_at",
+    "error_message",
+    "summary_json",
+    "source_etag",
+    "source_size_bytes",
+    "parser_version",
+    "schema_signature",
+    "schema_compatible",
+    "created_at",
+    "updated_at",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,17 +134,80 @@ class ExportDeliveryMetadata:
 
 
 class AzureExportStore:
-    """SQLite-backed delivery metadata, staged models, and quarantine store."""
+    """Postgres-aware delivery metadata, staged models, and quarantine store."""
 
     def __init__(self, db_path: str | Path | None = None) -> None:
         self._db_path = str(db_path or (_default_data_dir() / "azure_export_deliveries.db"))
+        self._use_postgres = postgres_enabled() and db_path is None
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _conn(self) -> sqlite3.Connection:
+    def _sqlite_conn(self) -> sqlite3.Connection:
         return connect_sqlite(self._db_path)
 
+    def _conn(self):
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres()
+        return self._sqlite_conn()
+
+    def _placeholder(self) -> str:
+        return "%s" if self._use_postgres else "?"
+
+    def _sql(self, statement: str) -> str:
+        return statement.replace("?", self._placeholder()) if self._use_postgres else statement
+
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres or not os.path.exists(self._db_path):
+            return
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM export_deliveries").fetchone()
+            if row and int(row["count"]) > 0:
+                return
+        with self._sqlite_conn() as sqlite_conn:
+            delivery_rows = sqlite_conn.execute("SELECT * FROM export_deliveries").fetchall()
+            stage_rows = sqlite_conn.execute("SELECT * FROM export_stage_models").fetchall()
+            quarantine_rows = sqlite_conn.execute("SELECT * FROM export_quarantine").fetchall()
+        with self._conn() as conn:
+            if delivery_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO export_deliveries (
+                        delivery_id, dataset, scope_key, delivery_date, run_id, delivery_key, landing_path,
+                        manifest_path, parse_status, row_count, discovered_at, parsed_at, error_message,
+                        summary_json, source_etag, source_size_bytes, parser_version, schema_signature,
+                        schema_compatible, created_at, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT(delivery_id) DO NOTHING
+                    """,
+                    [tuple(row[column] for column in _DELIVERY_COLUMNS) for row in delivery_rows],
+                )
+            if stage_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO export_stage_models (delivery_key, stage_model_json, updated_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT(delivery_key) DO NOTHING
+                    """,
+                    [(row["delivery_key"], row["stage_model_json"], row["updated_at"]) for row in stage_rows],
+                )
+            if quarantine_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO export_quarantine (delivery_key, manifest_json, content, recorded_at)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT(delivery_key) DO NOTHING
+                    """,
+                    [(row["delivery_key"], row["manifest_json"], row["content"], row["recorded_at"]) for row in quarantine_rows],
+                )
+
     def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            self._backfill_from_sqlite_if_needed()
+            return
         with self._conn() as conn:
             conn.execute(
                 """
@@ -254,9 +341,12 @@ class AzureExportStore:
         if not payload["landing_path"]:
             raise ValueError("landing_path is required")
 
+        values = tuple(payload[column] for column in _DELIVERY_COLUMNS)
+
         with self._conn() as conn:
             conn.execute(
-                """
+                self._sql(
+                    """
                 INSERT INTO export_deliveries (
                     delivery_id,
                     dataset,
@@ -281,27 +371,7 @@ class AzureExportStore:
                     updated_at
                 )
                 VALUES (
-                    :delivery_id,
-                    :dataset,
-                    :scope_key,
-                    :delivery_date,
-                    :run_id,
-                    :delivery_key,
-                    :landing_path,
-                    :manifest_path,
-                    :parse_status,
-                    :row_count,
-                    :discovered_at,
-                    :parsed_at,
-                    :error_message,
-                    :summary_json,
-                    :source_etag,
-                    :source_size_bytes,
-                    :parser_version,
-                    :schema_signature,
-                    :schema_compatible,
-                    :created_at,
-                    :updated_at
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(landing_path) DO UPDATE SET
                     dataset = excluded.dataset,
@@ -322,8 +392,9 @@ class AzureExportStore:
                     schema_signature = excluded.schema_signature,
                     schema_compatible = excluded.schema_compatible,
                     updated_at = excluded.updated_at
-                """,
-                payload,
+                """
+                ),
+                values,
             )
             conn.commit()
         return self.get_delivery_by_path(payload["landing_path"]) or {}
@@ -331,7 +402,7 @@ class AzureExportStore:
     def get_delivery(self, delivery_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM export_deliveries WHERE delivery_id = ?",
+                self._sql("SELECT * FROM export_deliveries WHERE delivery_id = ?"),
                 (_coerce_text(delivery_id),),
             ).fetchone()
         return self._coerce_record(row)
@@ -339,7 +410,7 @@ class AzureExportStore:
     def get_delivery_by_path(self, landing_path: str | Path) -> dict[str, Any] | None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM export_deliveries WHERE landing_path = ?",
+                self._sql("SELECT * FROM export_deliveries WHERE landing_path = ?"),
                 (_coerce_path(landing_path),),
             ).fetchone()
         return self._coerce_record(row)
@@ -347,7 +418,7 @@ class AzureExportStore:
     def get_delivery_by_key(self, delivery_key: str) -> dict[str, Any] | None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM export_deliveries WHERE delivery_key = ?",
+                self._sql("SELECT * FROM export_deliveries WHERE delivery_key = ?"),
                 (_coerce_text(delivery_key),),
             ).fetchone()
         return self._coerce_record(row)
@@ -362,13 +433,13 @@ class AzureExportStore:
         clauses = []
         params: list[Any] = []
         if dataset is not None:
-            clauses.append("dataset = ?")
+            clauses.append(f"dataset = {self._placeholder()}")
             params.append(dataset)
         if scope_key is not None:
-            clauses.append("scope_key = ?")
+            clauses.append(f"scope_key = {self._placeholder()}")
             params.append(scope_key)
         if parse_status is not None:
-            clauses.append("parse_status = ?")
+            clauses.append(f"parse_status = {self._placeholder()}")
             params.append(self._validate_status(parse_status))
 
         sql = "SELECT * FROM export_deliveries"
@@ -436,13 +507,14 @@ class AzureExportStore:
 
         updates["updated_at"] = _utcnow()
 
-        assignments = ", ".join(f"{column} = :{column}" for column in updates)
-        updates["delivery_id"] = delivery_id
+        placeholder = self._placeholder()
+        assignments = ", ".join(f"{column} = {placeholder}" for column in updates)
+        values = list(updates.values()) + [delivery_id]
 
         with self._conn() as conn:
             conn.execute(
-                f"UPDATE export_deliveries SET {assignments} WHERE delivery_id = :delivery_id",
-                updates,
+                f"UPDATE export_deliveries SET {assignments} WHERE delivery_id = {placeholder}",
+                values,
             )
             conn.commit()
         return self.get_delivery(delivery_id)
@@ -501,13 +573,15 @@ class AzureExportStore:
     def record_stage_model(self, delivery_key: str, staged_model: dict[str, Any]) -> None:
         with self._conn() as conn:
             conn.execute(
-                """
+                self._sql(
+                    """
                 INSERT INTO export_stage_models (delivery_key, stage_model_json, updated_at)
                 VALUES (?, ?, ?)
                 ON CONFLICT(delivery_key) DO UPDATE SET
                     stage_model_json = excluded.stage_model_json,
                     updated_at = excluded.updated_at
-                """,
+                """
+                ),
                 (_coerce_text(delivery_key), json.dumps(staged_model, sort_keys=True), _utcnow()),
             )
             conn.commit()
@@ -515,7 +589,7 @@ class AzureExportStore:
     def get_stage_model(self, delivery_key: str) -> dict[str, Any] | None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT stage_model_json FROM export_stage_models WHERE delivery_key = ?",
+                self._sql("SELECT stage_model_json FROM export_stage_models WHERE delivery_key = ?"),
                 (_coerce_text(delivery_key),),
             ).fetchone()
         if row is None:
@@ -527,14 +601,16 @@ class AzureExportStore:
         payload = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else str(content)
         with self._conn() as conn:
             conn.execute(
-                """
+                self._sql(
+                    """
                 INSERT INTO export_quarantine (delivery_key, manifest_json, content, recorded_at)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(delivery_key) DO UPDATE SET
                     manifest_json = excluded.manifest_json,
                     content = excluded.content,
                     recorded_at = excluded.recorded_at
-                """,
+                """
+                ),
                 (delivery_key, json.dumps(manifest, sort_keys=True), payload, _utcnow()),
             )
             conn.commit()
@@ -542,7 +618,7 @@ class AzureExportStore:
     def get_quarantine(self, delivery_key: str) -> dict[str, Any] | None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT manifest_json, content, recorded_at FROM export_quarantine WHERE delivery_key = ?",
+                self._sql("SELECT manifest_json, content, recorded_at FROM export_quarantine WHERE delivery_key = ?"),
                 (_coerce_text(delivery_key),),
             ).fetchone()
         if row is None:

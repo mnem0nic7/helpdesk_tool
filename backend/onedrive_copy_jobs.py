@@ -21,6 +21,7 @@ from config import (
     ONEDRIVE_COPY_MAX_RETRIES,
     ONEDRIVE_COPY_RETRY_DELAY_BASE_SECONDS,
 )
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ def _utcnow() -> datetime:
 
 
 class OneDriveCopyJobManager:
-    """SQLite-backed FIFO queue for OneDrive copy jobs."""
+    """Postgres-aware FIFO queue for OneDrive copy jobs."""
 
     def __init__(
         self,
@@ -60,6 +61,7 @@ class OneDriveCopyJobManager:
         client_factory: Callable[[], AzureClient] | None = None,
     ) -> None:
         self._db_path = db_path or os.path.join(DATA_DIR, "onedrive_copy_jobs.db")
+        self._use_postgres = postgres_enabled() and db_path is None
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._lock = threading.Lock()
         self._bg_task: asyncio.Task[None] | None = None
@@ -69,9 +71,19 @@ class OneDriveCopyJobManager:
         self._cleanup_expired_jobs()
 
     def _conn(self) -> sqlite3.Connection:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres()
         return connect_sqlite(self._db_path)
 
+    def _placeholder(self) -> str:
+        return "%s" if self._use_postgres else "?"
+
     def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            self._backfill_from_sqlite_if_needed()
+            return
         with self._conn() as conn:
             conn.executescript(
                 """
@@ -132,6 +144,150 @@ class OneDriveCopyJobManager:
             )
             conn.commit()
 
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres or not os.path.exists(self._db_path):
+            return
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM onedrive_copy_jobs) AS job_count,
+                    (SELECT COUNT(*) FROM onedrive_copy_job_events) AS event_count,
+                    (SELECT COUNT(*) FROM onedrive_copy_saved_upns) AS saved_count
+                """
+            ).fetchone()
+            if rows and all(int(rows[key] or 0) > 0 for key in ("job_count", "event_count", "saved_count")):
+                return
+        with connect_sqlite(self._db_path) as sqlite_conn:
+            job_rows = sqlite_conn.execute("SELECT * FROM onedrive_copy_jobs").fetchall()
+            event_rows = sqlite_conn.execute("SELECT * FROM onedrive_copy_job_events").fetchall()
+            saved_rows = sqlite_conn.execute("SELECT * FROM onedrive_copy_saved_upns").fetchall()
+        with self._conn() as conn:
+            if job_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO onedrive_copy_jobs (
+                        job_id,
+                        site_scope,
+                        status,
+                        phase,
+                        requested_by_email,
+                        requested_by_name,
+                        source_upn,
+                        destination_upn,
+                        destination_folder,
+                        test_mode,
+                        test_file_limit,
+                        exclude_system_folders,
+                        requested_at,
+                        started_at,
+                        completed_at,
+                        progress_current,
+                        progress_total,
+                        progress_message,
+                        total_folders_found,
+                        total_files_found,
+                        folders_created,
+                        files_dispatched,
+                        files_failed,
+                        source_drive_id,
+                        destination_drive_id,
+                        destination_top_folder_id,
+                        error
+                    )
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT(job_id) DO NOTHING
+                    """,
+                    [
+                        tuple(row[column] for column in (
+                            "job_id",
+                            "site_scope",
+                            "status",
+                            "phase",
+                            "requested_by_email",
+                            "requested_by_name",
+                            "source_upn",
+                            "destination_upn",
+                            "destination_folder",
+                            "test_mode",
+                            "test_file_limit",
+                            "exclude_system_folders",
+                            "requested_at",
+                            "started_at",
+                            "completed_at",
+                            "progress_current",
+                            "progress_total",
+                            "progress_message",
+                            "total_folders_found",
+                            "total_files_found",
+                            "folders_created",
+                            "files_dispatched",
+                            "files_failed",
+                            "source_drive_id",
+                            "destination_drive_id",
+                            "destination_top_folder_id",
+                            "error",
+                        ))
+                        for row in job_rows
+                    ],
+                )
+            if event_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO onedrive_copy_job_events (
+                        job_id,
+                        level,
+                        message,
+                        created_at
+                    )
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    [
+                        (
+                            row["job_id"],
+                            row["level"],
+                            row["message"],
+                            row["created_at"],
+                        )
+                        for row in event_rows
+                    ],
+                )
+            if saved_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO onedrive_copy_saved_upns (
+                        normalized_upn,
+                        display_name,
+                        principal_name,
+                        mail,
+                        source_hint,
+                        created_at,
+                        updated_at,
+                        last_used_at,
+                        last_used_by_email
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(normalized_upn) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["normalized_upn"],
+                            row["display_name"],
+                            row["principal_name"],
+                            row["mail"],
+                            row["source_hint"],
+                            row["created_at"],
+                            row["updated_at"],
+                            row["last_used_at"],
+                            row["last_used_by_email"],
+                        )
+                        for row in saved_rows
+                    ],
+                )
+            conn.commit()
+
     @staticmethod
     def _normalize_upn(value: str) -> str:
         return str(value or "").strip().lower()
@@ -155,6 +311,7 @@ class OneDriveCopyJobManager:
         mail = str(mail or "").strip()
         used_by_email = str(used_by_email or "").strip().lower()
         normalized_source = "entra" if str(source_hint or "").strip().lower() == "entra" else "manual"
+        placeholder = self._placeholder()
         with self._conn() as conn:
             conn.execute(
                 """
@@ -169,7 +326,7 @@ class OneDriveCopyJobManager:
                     last_used_at,
                     last_used_by_email
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES ({0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0})
                 ON CONFLICT(normalized_upn) DO UPDATE SET
                     display_name = CASE
                         WHEN excluded.display_name <> '' THEN excluded.display_name
@@ -193,7 +350,7 @@ class OneDriveCopyJobManager:
                         WHEN excluded.last_used_by_email <> '' THEN excluded.last_used_by_email
                         ELSE onedrive_copy_saved_upns.last_used_by_email
                     END
-                """,
+                """.format(placeholder),
                 (
                     normalized_upn,
                     display_name,
@@ -247,6 +404,7 @@ class OneDriveCopyJobManager:
 
     def _cleanup_expired_jobs(self) -> None:
         cutoff = (_utcnow() - timedelta(days=ONEDRIVE_COPY_JOB_RETENTION_DAYS)).isoformat()
+        placeholder = self._placeholder()
         with self._conn() as conn:
             expired_ids = [
                 str(row["job_id"])
@@ -255,14 +413,20 @@ class OneDriveCopyJobManager:
                     SELECT job_id
                     FROM onedrive_copy_jobs
                     WHERE completed_at IS NOT NULL
-                      AND completed_at < ?
-                    """,
+                      AND completed_at < {0}
+                    """.format(placeholder),
                     (cutoff,),
                 ).fetchall()
             ]
             if expired_ids:
-                conn.executemany("DELETE FROM onedrive_copy_job_events WHERE job_id = ?", [(job_id,) for job_id in expired_ids])
-                conn.executemany("DELETE FROM onedrive_copy_jobs WHERE job_id = ?", [(job_id,) for job_id in expired_ids])
+                conn.executemany(
+                    f"DELETE FROM onedrive_copy_job_events WHERE job_id = {placeholder}",
+                    [(job_id,) for job_id in expired_ids],
+                )
+                conn.executemany(
+                    f"DELETE FROM onedrive_copy_jobs WHERE job_id = {placeholder}",
+                    [(job_id,) for job_id in expired_ids],
+                )
             conn.commit()
 
     def _requeue_running_jobs(self) -> None:
@@ -286,31 +450,32 @@ class OneDriveCopyJobManager:
         normalized_level = str(level or "info").strip().lower()
         if normalized_level not in {"info", "warning", "error"}:
             normalized_level = "info"
+        placeholder = self._placeholder()
         with self._conn() as conn:
             conn.execute(
                 """
                 INSERT INTO onedrive_copy_job_events (job_id, level, message, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
+                VALUES ({0}, {0}, {0}, {0})
+                """.format(placeholder),
                 (job_id, normalized_level, str(message or ""), _utcnow().isoformat()),
             )
             conn.execute(
                 """
                 DELETE FROM onedrive_copy_job_events
-                WHERE job_id = ?
+                WHERE job_id = {0}
                   AND event_id NOT IN (
                     SELECT event_id
                     FROM onedrive_copy_job_events
-                    WHERE job_id = ?
+                    WHERE job_id = {0}
                     ORDER BY event_id DESC
-                    LIMIT ?
+                    LIMIT {1}
                   )
-                """,
+                """.format(placeholder, self._placeholder()),
                 (job_id, job_id, _EVENT_LOG_LIMIT),
             )
             conn.commit()
 
-    def _coerce_job(self, row: sqlite3.Row | None, *, include_events: bool = False) -> dict[str, Any] | None:
+    def _coerce_job(self, row: sqlite3.Row | dict[str, Any] | None, *, include_events: bool = False) -> dict[str, Any] | None:
         if not row:
             return None
         payload = dict(row)
@@ -348,10 +513,11 @@ class OneDriveCopyJobManager:
     def _update_job(self, job_id: str, **fields: Any) -> None:
         if not fields:
             return
-        assignments = ", ".join(f"{key} = ?" for key in fields)
+        placeholder = self._placeholder()
+        assignments = ", ".join(f"{key} = {placeholder}" for key in fields)
         values = list(fields.values()) + [job_id]
         with self._conn() as conn:
-            conn.execute(f"UPDATE onedrive_copy_jobs SET {assignments} WHERE job_id = ?", values)
+            conn.execute(f"UPDATE onedrive_copy_jobs SET {assignments} WHERE job_id = {placeholder}", values)
             conn.commit()
 
     def create_job(
@@ -381,6 +547,7 @@ class OneDriveCopyJobManager:
 
         job_id = uuid.uuid4().hex
         requested_at = _utcnow().isoformat()
+        placeholder = self._placeholder()
         with self._conn() as conn:
             conn.execute(
                 """
@@ -400,8 +567,10 @@ class OneDriveCopyJobManager:
                     requested_at,
                     progress_message
                 )
-                VALUES (?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Queued')
-                """,
+                VALUES (
+                    {0}, {0}, 'queued', 'queued', {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, 'Queued'
+                )
+                """.format(placeholder),
                 (
                     job_id,
                     str(site_scope or "primary"),
@@ -449,20 +618,25 @@ class OneDriveCopyJobManager:
         }
 
     def get_job(self, job_id: str, *, include_events: bool = False) -> dict[str, Any] | None:
+        placeholder = self._placeholder()
         with self._conn() as conn:
-            row = conn.execute("SELECT * FROM onedrive_copy_jobs WHERE job_id = ?", (job_id,)).fetchone()
+            row = conn.execute(
+                f"SELECT * FROM onedrive_copy_jobs WHERE job_id = {placeholder}",
+                (job_id,),
+            ).fetchone()
         return self._coerce_job(row, include_events=include_events)
 
     def get_job_events(self, job_id: str) -> list[dict[str, Any]]:
+        placeholder = self._placeholder()
         with self._conn() as conn:
             rows = conn.execute(
                 """
                 SELECT event_id, level, message, created_at
                 FROM onedrive_copy_job_events
-                WHERE job_id = ?
+                WHERE job_id = {0}
                 ORDER BY event_id DESC
-                LIMIT ?
-                """,
+                LIMIT {1}
+                """.format(placeholder, self._placeholder()),
                 (job_id, _EVENT_LOG_LIMIT),
             ).fetchall()
         return [
@@ -476,14 +650,15 @@ class OneDriveCopyJobManager:
         ]
 
     def list_jobs(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        placeholder = self._placeholder()
         with self._conn() as conn:
             rows = conn.execute(
                 """
                 SELECT *
                 FROM onedrive_copy_jobs
                 ORDER BY requested_at DESC
-                LIMIT ?
-                """,
+                LIMIT {0}
+                """.format(placeholder),
                 (max(1, int(limit)),),
             ).fetchall()
         return [self._coerce_job(row, include_events=False) for row in rows if row]
@@ -505,6 +680,7 @@ class OneDriveCopyJobManager:
 
     def _claim_next_job(self) -> dict[str, Any] | None:
         with self._lock:
+            placeholder = self._placeholder()
             with self._conn() as conn:
                 row = conn.execute(
                     """
@@ -523,14 +699,14 @@ class OneDriveCopyJobManager:
                     UPDATE onedrive_copy_jobs
                     SET status = 'running',
                         phase = 'resolving_drives',
-                        started_at = ?,
+                        started_at = {0},
                         completed_at = NULL,
                         progress_current = 0,
                         progress_total = 0,
                         progress_message = 'Resolving OneDrive IDs',
                         error = ''
-                    WHERE job_id = ?
-                    """,
+                    WHERE job_id = {0}
+                    """.format(placeholder),
                     (_utcnow().isoformat(), job_id),
                 )
                 conn.commit()

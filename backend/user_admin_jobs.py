@@ -16,6 +16,7 @@ from typing import Any
 from azure_cache import azure_cache
 from config import DATA_DIR
 from models import UserAdminActionType
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 from user_admin_providers import UserAdminProviderError, user_admin_providers
 
@@ -46,10 +47,11 @@ def _sanitize_for_storage(value: Any) -> Any:
 
 
 class UserAdminJobManager:
-    """SQLite-backed FIFO queue for user-management jobs with audit history."""
+    """Postgres-aware FIFO queue for user-management jobs with audit history."""
 
     def __init__(self, db_path: str | None = None) -> None:
         self._db_path = db_path or os.path.join(DATA_DIR, "user_admin_jobs.db")
+        self._use_postgres = postgres_enabled() and db_path is None
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._lock = threading.Lock()
         self._bg_task: asyncio.Task[None] | None = None
@@ -58,10 +60,135 @@ class UserAdminJobManager:
         self._init_db()
         self._requeue_running_jobs()
 
-    def _conn(self) -> sqlite3.Connection:
+    def _placeholder(self) -> str:
+        return "%s" if self._use_postgres else "?"
+
+    def _sqlite_conn(self) -> sqlite3.Connection:
         return connect_sqlite(self._db_path)
 
+    def _conn(self) -> sqlite3.Connection:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres()
+        return self._sqlite_conn()
+
+    def _backfill_from_sqlite_if_needed(self) -> None:
+        if not self._use_postgres or not os.path.exists(self._db_path):
+            return
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM user_admin_jobs").fetchone()
+            if row and int(row["count"]) > 0:
+                return
+        with self._sqlite_conn() as sqlite_conn:
+            jobs = sqlite_conn.execute("SELECT * FROM user_admin_jobs").fetchall()
+            results = sqlite_conn.execute("SELECT * FROM user_admin_job_results").fetchall()
+            audit_rows = sqlite_conn.execute("SELECT * FROM user_admin_audit").fetchall()
+        with self._conn() as conn:
+            if jobs:
+                conn.executemany(
+                    """
+                    INSERT INTO user_admin_jobs (
+                        job_id, status, action_type, provider, target_user_ids_json,
+                        params_json, requested_by_email, requested_by_name, requested_at,
+                        started_at, completed_at, progress_current, progress_total,
+                        progress_message, success_count, failure_count, error
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(job_id) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["job_id"],
+                            row["status"],
+                            row["action_type"],
+                            row["provider"],
+                            row["target_user_ids_json"],
+                            row["params_json"],
+                            row["requested_by_email"],
+                            row["requested_by_name"],
+                            row["requested_at"],
+                            row["started_at"],
+                            row["completed_at"],
+                            row["progress_current"],
+                            row["progress_total"],
+                            row["progress_message"],
+                            row["success_count"],
+                            row["failure_count"],
+                            row["error"],
+                        )
+                        for row in jobs
+                    ],
+                )
+            if results:
+                conn.executemany(
+                    """
+                    INSERT INTO user_admin_job_results (
+                        id, job_id, target_user_id, target_display_name, provider,
+                        success, summary, error, before_summary_json, after_summary_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(id) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["id"],
+                            row["job_id"],
+                            row["target_user_id"],
+                            row["target_display_name"],
+                            row["provider"],
+                            row["success"],
+                            row["summary"],
+                            row["error"],
+                            row["before_summary_json"],
+                            row["after_summary_json"],
+                            row["created_at"],
+                        )
+                        for row in results
+                    ],
+                )
+                conn.execute(
+                    """
+                    SELECT setval(
+                        pg_get_serial_sequence('user_admin_job_results', 'id'),
+                        COALESCE((SELECT MAX(id) FROM user_admin_job_results), 1),
+                        true
+                    )
+                    """
+                )
+            if audit_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO user_admin_audit (
+                        audit_id, job_id, actor_email, actor_name, target_user_id,
+                        target_display_name, provider, action_type, params_summary_json,
+                        before_summary_json, after_summary_json, status, error, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(audit_id) DO NOTHING
+                    """,
+                    [
+                        (
+                            row["audit_id"],
+                            row["job_id"],
+                            row["actor_email"],
+                            row["actor_name"],
+                            row["target_user_id"],
+                            row["target_display_name"],
+                            row["provider"],
+                            row["action_type"],
+                            row["params_summary_json"],
+                            row["before_summary_json"],
+                            row["after_summary_json"],
+                            row["status"],
+                            row["error"],
+                            row["created_at"],
+                        )
+                        for row in audit_rows
+                    ],
+                )
+
     def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            self._backfill_from_sqlite_if_needed()
+            return
         with self._conn() as conn:
             conn.executescript(
                 """
@@ -123,7 +250,7 @@ class UserAdminJobManager:
             )
             conn.commit()
 
-    def _coerce_job(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _coerce_job(self, row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
         if not row:
             return None
         payload = dict(row)
@@ -176,10 +303,11 @@ class UserAdminJobManager:
     def _update_job(self, job_id: str, **fields: Any) -> None:
         if not fields:
             return
-        assignments = ", ".join(f"{key} = ?" for key in fields)
+        placeholder = self._placeholder()
+        assignments = ", ".join(f"{key} = {placeholder}" for key in fields)
         values = list(fields.values()) + [job_id]
         with self._conn() as conn:
-            conn.execute(f"UPDATE user_admin_jobs SET {assignments} WHERE job_id = ?", values)
+            conn.execute(f"UPDATE user_admin_jobs SET {assignments} WHERE job_id = {placeholder}", values)
             conn.commit()
 
     def _requeue_running_jobs(self) -> None:
@@ -235,8 +363,8 @@ class UserAdminJobManager:
                     progress_total,
                     progress_message
                 )
-                VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, 0, ?, 'Queued')
-                """,
+                VALUES ({placeholder}, 'queued', {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, 0, {placeholder}, 'Queued')
+                """.format(placeholder=self._placeholder()),
                 (
                     job_id,
                     str(action_type),
@@ -274,7 +402,10 @@ class UserAdminJobManager:
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
-            row = conn.execute("SELECT * FROM user_admin_jobs WHERE job_id = ?", (job_id,)).fetchone()
+            row = conn.execute(
+                f"SELECT * FROM user_admin_jobs WHERE job_id = {self._placeholder()}",
+                (job_id,),
+            ).fetchone()
         return self._coerce_job(row)
 
     def get_job_results(self, job_id: str) -> list[dict[str, Any]]:
@@ -283,9 +414,9 @@ class UserAdminJobManager:
                 """
                 SELECT *
                 FROM user_admin_job_results
-                WHERE job_id = ?
+                WHERE job_id = {placeholder}
                 ORDER BY id ASC
-                """,
+                """.format(placeholder=self._placeholder()),
                 (job_id,),
             ).fetchall()
         results = [self._row_to_result(row, include_one_time_secret=True) for row in rows]
@@ -307,10 +438,10 @@ class UserAdminJobManager:
                     """
                     SELECT *
                     FROM user_admin_audit
-                    WHERE target_user_id = ?
+                    WHERE target_user_id = {placeholder}
                     ORDER BY created_at DESC
-                    LIMIT ?
-                    """,
+                    LIMIT {placeholder}
+                    """.format(placeholder=self._placeholder()),
                     (target_user_id, limit),
                 ).fetchall()
             else:
@@ -319,8 +450,8 @@ class UserAdminJobManager:
                     SELECT *
                     FROM user_admin_audit
                     ORDER BY created_at DESC
-                    LIMIT ?
-                    """,
+                    LIMIT {placeholder}
+                    """.format(placeholder=self._placeholder()),
                     (limit,),
                 ).fetchall()
         results: list[dict[str, Any]] = []
@@ -410,15 +541,15 @@ class UserAdminJobManager:
                     """
                     UPDATE user_admin_jobs
                     SET status = 'running',
-                        started_at = ?,
+                        started_at = {placeholder},
                         completed_at = NULL,
                         progress_current = 0,
                         progress_message = 'Starting job',
                         success_count = 0,
                         failure_count = 0,
                         error = ''
-                    WHERE job_id = ?
-                    """,
+                    WHERE job_id = {placeholder}
+                    """.format(placeholder=self._placeholder()),
                     (_utcnow().isoformat(), job_id),
                 )
                 conn.commit()
@@ -458,8 +589,8 @@ class UserAdminJobManager:
                     after_summary_json,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                """.format(placeholder=self._placeholder()),
                 (
                     job_id,
                     target_user_id,
@@ -510,8 +641,8 @@ class UserAdminJobManager:
                     error,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                """.format(placeholder=self._placeholder()),
                 (
                     str(uuid.uuid4()),
                     job_id,
@@ -536,7 +667,7 @@ class UserAdminJobManager:
             return dict(self._pending_params[job_id])
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT params_json FROM user_admin_jobs WHERE job_id = ?",
+                f"SELECT params_json FROM user_admin_jobs WHERE job_id = {self._placeholder()}",
                 (job_id,),
             ).fetchone()
         if not row:

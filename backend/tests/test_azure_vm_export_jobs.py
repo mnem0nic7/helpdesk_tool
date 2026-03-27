@@ -2,9 +2,126 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from azure_vm_export_jobs import AzureVMExportJobManager
+
+
+def _create_export_jobs_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS export_jobs (
+            job_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            recipient_email TEXT NOT NULL,
+            requester_name TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            lookback_days INTEGER NOT NULL,
+            filters_json TEXT NOT NULL,
+            requested_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            progress_current INTEGER NOT NULL DEFAULT 0,
+            progress_total INTEGER NOT NULL DEFAULT 0,
+            progress_message TEXT NOT NULL DEFAULT '',
+            file_name TEXT,
+            file_path TEXT,
+            file_size INTEGER NOT NULL DEFAULT 0,
+            error TEXT,
+            notified_at TEXT,
+            notification_error TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_export_jobs_status_requested_at "
+        "ON export_jobs(status, requested_at)"
+    )
+
+
+def test_postgres_mode_backfills_legacy_jobs_and_requeues_running_jobs(tmp_path, monkeypatch):
+    legacy_db_path = tmp_path / "azure_vm_export_jobs.db"
+    pg_db_path = tmp_path / "azure_vm_export_jobs_postgres.db"
+
+    legacy_manager = AzureVMExportJobManager(db_path=str(legacy_db_path))
+    with legacy_manager._conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO export_jobs (
+                job_id,
+                status,
+                recipient_email,
+                requester_name,
+                scope,
+                lookback_days,
+                filters_json,
+                requested_at,
+                started_at,
+                progress_current,
+                progress_total,
+                progress_message
+            )
+            VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?, 2, 10, 'Working')
+            """,
+            (
+                "job-running",
+                "user@example.com",
+                "Example User",
+                "all",
+                30,
+                "{}",
+                datetime.now(timezone.utc).isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+
+    monkeypatch.setattr("azure_vm_export_jobs.DATA_DIR", tmp_path)
+    monkeypatch.setattr("azure_vm_export_jobs.postgres_enabled", lambda: True)
+    monkeypatch.setattr("azure_vm_export_jobs.ensure_postgres_schema", lambda: None)
+    monkeypatch.setattr(AzureVMExportJobManager, "_placeholder", lambda self: "?")
+
+    def fake_connect_postgres(*, row_factory=sqlite3.Row):
+        conn = sqlite3.connect(pg_db_path)
+        if row_factory is not None:
+            conn.row_factory = row_factory
+        return conn
+
+    monkeypatch.setattr("azure_vm_export_jobs.connect_postgres", fake_connect_postgres)
+
+    manager = AzureVMExportJobManager()
+    job = manager.get_job("job-running")
+
+    assert manager._use_postgres is True
+    assert job is not None
+    assert job["status"] == "queued"
+    assert job["progress_current"] == 0
+    assert job["progress_message"] == "Re-queued after restart"
+    assert job["recipient_email"] == "user@example.com"
+
+
+def test_explicit_db_path_keeps_sqlite_fallback_when_postgres_is_enabled(tmp_path, monkeypatch):
+    monkeypatch.setattr("azure_vm_export_jobs.postgres_enabled", lambda: True)
+
+    def fail_connect_postgres(*args, **kwargs):
+        raise AssertionError("connect_postgres should not be used when db_path is explicit")
+
+    monkeypatch.setattr("azure_vm_export_jobs.connect_postgres", fail_connect_postgres)
+
+    manager = AzureVMExportJobManager(db_path=str(tmp_path / "azure_vm_export_jobs.db"))
+
+    assert manager._use_postgres is False
+    job = manager.create_job(
+        recipient_email="user@example.com",
+        requester_name="Example User",
+        scope="filtered",
+        lookback_days=30,
+        filters={"search": "wvd"},
+    )
+
+    assert job["status"] == "queued"
+    assert manager.get_job(job["job_id"]) is not None
 
 
 def test_create_job_persists_export_request(tmp_path):
