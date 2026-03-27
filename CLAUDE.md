@@ -1,143 +1,147 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file captures working memory for agents editing this repository.
 
 ## Project Overview
 
-OIT Helpdesk Dashboard — a full-stack Jira helpdesk analytics tool with AI-powered ticket triage and custom SLA tracking. FastAPI backend connects to Jira Cloud, caches issues in SQLite, computes metrics, runs AI triage, and serves a React SPA.
+This repo is no longer just a Jira dashboard. It is a multi-surface operations portal with:
+
+- A FastAPI backend in `backend/` that serves Jira helpdesk workflows, Azure operational data, alerts, reporting, knowledge-base features, and user lifecycle automation.
+- A React SPA in `frontend/` that renders different navigation trees depending on the active site scope.
+- A separate `azure_ingestion_platform/` starter service for multi-tenant Azure ingestion experiments.
+- A `windows_agent/` PowerShell agent for Windows exit-workflow automation.
+
+The shipped app title is still `OIT Helpdesk Dashboard API`, but the product surface now includes the Azure portal experience.
+
+## Repo Map
+
+- `backend/`: main FastAPI application, background workers, caches, routers, report builders, and data services.
+- `frontend/`: React 19 + Vite SPA for the primary, OasisDev, and Azure site scopes.
+- `azure_ingestion_platform/`: separate FastAPI/Postgres ingestion platform with its own README, tests, and Docker compose file.
+- `windows_agent/`: Windows exit agent scripts and sample config.
+- `docs/`: plans, specs, runbooks, governance notes, and templates.
+- `e2e/`: Playwright test project.
+- `private/`: private assets such as KB seed archives; assume contents are sensitive.
+- `data/`: local runtime databases and caches used by the main app.
 
 ## Commands
 
-### Backend (run from `backend/`)
+### Main app backend
+
+Run from `backend/` unless noted otherwise:
+
 ```bash
-python main.py                                    # Dev server (port 8000, auto-reload if DASHBOARD_DEV=1)
-pytest tests/                                     # Run all tests
-pytest tests/test_metrics.py::TestParseDt::test_valid_iso  # Single test
+python main.py
+pytest tests/
+pytest tests/test_routes_azure.py
 ```
 
-### Frontend (run from `frontend/`)
+### Frontend
+
+Run from `frontend/`:
+
 ```bash
-npm run dev          # Vite dev server (port 5173, proxies /api → localhost:8000)
-npm run build        # TypeScript check + production build
-npm run test:run     # Single test run (CI)
-npm test             # Watch mode
-npm run lint         # ESLint
+npm run dev
+npm run build
+npm run test:run
+npm run lint
 ```
 
-### Docker (from project root)
+### Full local dev
+
+Run from repo root:
+
 ```bash
-docker compose up -d       # Start Caddy (TLS) + Dashboard
-docker compose down        # Stop all
-./deploy.sh                # Full deploy: build, restart, health check
-./deploy.sh --no-cache     # Rebuild without Docker cache
-./release.sh -m "message"  # Stage, commit, push, and redeploy
+./start.sh
+docker compose up -d
+docker compose down
+./deploy.sh
+./release.sh -m "message"
 ```
 
-## Architecture
+### E2E
 
+Run from `e2e/`:
+
+```bash
+npm test
+npm run test:headed
 ```
-Browser → Caddy (:443, TLS) → nginx (:80, static + /api proxy) → uvicorn (:8000, FastAPI)
+
+### Azure ingestion platform
+
+Run from `azure_ingestion_platform/`:
+
+```bash
+docker compose up --build
+cd /workspace/altlassian
+DATABASE_URL=sqlite+pysqlite:///./azure_ingestion_platform_test.db ./.venv/bin/pytest -q azure_ingestion_platform/tests
 ```
 
-**Docker**: Multi-stage build — Node 20 builds frontend, Python 3.12-slim runs backend. Supervisord manages nginx + uvicorn in a single container. Caddy runs as a separate container for HTTPS.
+## Runtime Architecture
 
-**Dev mode**: Vite dev server proxies `/api/` to `localhost:8000` (configured in `vite.config.ts`).
+### Main application
 
-### Backend (`backend/`)
+- `backend/main.py` wires all routers and owns lifecycle startup/shutdown.
+- The backend starts leader-only background services such as Jira cache refresh, Azure cache refresh, cost-export processing, Azure alert polling, report AI summary generation, user admin jobs, and exit workflows.
+- The frontend is a Vite-built SPA served by nginx in containers.
+- `docker-compose.yml` runs blue/green backend and frontend pairs behind Caddy, plus Postgres and Redis.
 
-| Module | Role |
-|--------|------|
-| `main.py` | FastAPI app, CORS, auth middleware, router registration, lifespan (cache start/stop) |
-| `config.py` | Loads `.env` — Jira creds, AI keys, DATA_DIR, APP_SECRET_KEY |
-| `auth.py` | Microsoft Entra (Azure AD) SSO authentication, session management with periodic cleanup |
-| `jira_client.py` | Jira REST API v3 wrapper (search, transitions, comments, assignments, request types) |
-| `issue_cache.py` | SQLite-backed cache with async 10-min background refresh. Auto-triage on new tickets. Singleton `cache` |
-| `metrics.py` | Pure functions computing KPIs, volumes, age buckets, TTR from issue dicts |
-| `ai_client.py` | OpenAI/Anthropic abstraction for triage analysis |
-| `triage_store.py` | SQLite persistence for triage suggestions and change log |
-| `sla_engine.py` | Custom SLA config store, business hours calculator, SLA computation engine |
-| `models.py` | Pydantic models for all API request/response types |
-| `routes_metrics.py` | Dashboard metrics, legacy JSM SLA endpoints |
-| `routes_tickets.py` | Ticket list, single ticket, input validation |
-| `routes_actions.py` | Bulk operations (status, assign, priority, comment) |
-| `routes_export.py` | Excel export |
-| `routes_cache.py` | Cache refresh triggers |
-| `routes_chart.py` | Grouped and time series chart data |
-| `routes_triage.py` | AI triage: analyze, apply, dismiss, run-all with progress tracking |
-| `routes_sla.py` | Custom SLA metrics and configuration endpoints |
-| `routes_auth.py` | Auth login/callback/logout/me |
+### Storage
 
-### Frontend (`frontend/src/`)
+- PostgreSQL is the primary shared database when `DATABASE_URL` is configured.
+- Redis is used for shared runtime state and coordination.
+- SQLite files under `data/` still exist for local persistence and dual-write compatibility.
+- DuckDB is used for Azure FinOps reporting data.
 
-- **State**: React Query (`@tanstack/react-query`) for server state; URL search params for filters
-- **API layer**: `lib/api.ts` — centralized fetch helpers (`fetchJSON`, `postJSON`) and typed endpoint methods
-- **Pages**: Dashboard, Tickets, Manage, SLA Tracker, Visualizations, Reports, AI Triage, AI Change Log
-- **Charts**: Recharts — components in `components/charts/`
-- **Styling**: Tailwind CSS 4 (Vite plugin)
-- **Auth**: Layout.tsx gates rendering on auth check — shows spinner until resolved, redirects if unauthenticated
+## Site Scopes
 
-### Testing
+Host-aware scope lives in `backend/site_context.py`.
 
-**Backend tests** (`backend/tests/`):
-- `conftest.py` provides: `sample_issues` (6 fixtures), `mock_cache` (MagicMock), `test_client` (monkeypatches cache + includes auth session cookie)
-- Time-frozen at `FROZEN_NOW = 2026-03-04T12:00:00Z` for deterministic assertions
-- `pyproject.toml`: asyncio_mode = "auto", function-scoped fixtures
+- `primary`: default OIT helpdesk surface.
+- `oasisdev`: helpdesk surface constrained to OasisDev issues.
+- `azure`: Azure Control Center surface with Azure-only pages and no Jira issue list.
 
-**Frontend tests** (`frontend/src/__tests__/`):
-- `test-utils.tsx` exports custom `render()` wrapping components in QueryClientProvider + BrowserRouter
-- `test-setup.ts` loads `@testing-library/jest-dom/vitest` matchers
-- Environment: jsdom, global test APIs enabled in `vitest.config.ts`
+Frontend routing switches on `getSiteBranding()` in `frontend/src/App.tsx`. Do not assume one static nav tree.
 
-## Key Conventions
+## Backend Areas
 
-- All API routes use `/api/` prefix
-- Backend uses snake_case everywhere; frontend API types mirror this
-- Route files follow `routes_{domain}.py` naming pattern
-- Each router uses `APIRouter(prefix="/api")` or `APIRouter(prefix="/api/{domain}")`
-- Environment config via `backend/.env` (never committed — see `.env.example`)
-- `CORS_ORIGIN` env var adds a production origin to the allow-list
-- Caddy uses `tls internal` (self-signed) since this is an internal network app at `it-app.movedocs.com`
+- Jira/helpdesk: `issue_cache.py`, `jira_client.py`, `routes_tickets.py`, `routes_actions.py`, `routes_metrics.py`, `routes_triage.py`, `sla_engine.py`.
+- Azure operations: `azure_cache.py`, `routes_azure.py`, `routes_azure_alerts.py`, `azure_finops*.py`, `azure_cost_exports.py`, `azure_vm_export_jobs.py`.
+- Knowledge base and tooling: `knowledge_base.py`, `routes_kb.py`, `routes_tools.py`.
+- User lifecycle: `user_admin_jobs.py`, `routes_user_admin.py`, `user_exit_workflows.py`, `routes_user_exit.py`.
+- Reporting and exports: `report_workbook_builder.py`, `report_ai_summary_service.py`, `routes_export.py`.
 
-## Business Rules
+## Frontend Notes
 
-### Exclusion Rule
-Issues with "oasisdev" (case-insensitive) in labels or summary are excluded from all metrics, SLA, triage, and analysis. The cache maintains both filtered and unfiltered views. **All code paths must use `get_filtered_issues()` for user-facing data** — `get_all_issues()` is only for export.
+- Stack: React 19, React Router 7, React Query 5, Tailwind CSS 4, Recharts 3.
+- `frontend/vite.config.ts` proxies `/api` to `http://localhost:8000` in local dev.
+- Pages under `frontend/src/pages/` are split between helpdesk and Azure surfaces.
+- The layout and branding logic determine which routes appear; check `frontend/src/components/Layout.tsx` and `frontend/src/lib/siteContext.ts`.
 
-### AI Auto-Triage
-- Priority changes auto-apply at **>= 70% confidence**
-- Request type changes auto-apply at **>= 90% confidence**
-- Model configured via `AUTO_TRIAGE_MODEL` env var
-- Background processing with progress tracking via `/api/triage/run-status`
-- Modes: Run Remaining (unprocessed only), Test (10 tickets), Reprocess Done, Rerun All
-- All changes logged to `auto_triage_log` table and visible on AI Change Log page
-- Local cache (in-memory + SQLite) updated after each Jira write
+## Testing Notes
 
-### Stale Threshold
-A ticket is "stale" when it's open and not updated in **1+ calendar days**. Defined by `_STALE_DAYS = 1` in `metrics.py`.
+- Backend tests live in `backend/tests/`.
+- Frontend tests live in `frontend/src/__tests__/` and use Vitest + Testing Library.
+- E2E coverage lives in `e2e/tests/`.
+- When changing Azure routes or cache shape, look for paired backend and frontend tests before adding new coverage.
 
-### Custom SLA System (`sla_engine.py`)
-- **First Response**: time from ticket creation to first comment by non-reporter (agent)
-- **Resolution**: time from creation to resolution date
-- Computed in **business hours** — configurable via `/api/sla/config/settings`
-- Defaults: Mon-Fri, 8am-8pm ET (covers Eastern through Pacific US timezones)
-- Default targets: 2h first response, 9h (1 business day) resolution
-- Targets configurable per **priority** or **request type** with fallback to default
-- Target lookup priority: priority-specific > request_type-specific > default
-- Config stored in SQLite (`sla_config.db`), editable from SLA Settings modal in UI
+## Working Conventions
 
-## Security
+- Backend uses snake_case JSON; frontend API types mirror that shape closely in `frontend/src/lib/api.ts`.
+- All API routes are under `/api`.
+- Prefer updating existing docs under `docs/` when behavior changes materially.
+- Keep host/scope behavior in mind before changing filtering logic or navigation.
+- Avoid assuming Jira data is available on the Azure site scope.
 
-- Auth middleware protects all `/api/*` paths except public auth endpoints
-- Trailing slash bypass prevented (`path.rstrip("/")`)
-- Jira key validation via regex (`^[A-Z][A-Z0-9_]+-\d+$`) prevents path traversal
-- Exception details sanitized in error responses
-- Expired sessions cleaned up periodically
-- Security headers added via nginx (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
-- `APP_SECRET_KEY` warns on startup if using insecure default
+## Important Business Rules
 
-## UI Patterns
+- Issues tagged as OasisDev are filtered out of the primary helpdesk scope and shown only in the OasisDev scope.
+- The Azure scope should not surface Jira issue lists.
+- Knowledge-base seed import runs asynchronously on startup and reports readiness through app state.
+- Blue/green runtime coordination exists; some background services should only run on the elected leader instance.
 
-- **Infinite scroll**: Pages with large tables (SLA, AI Log, Tickets) show 100 rows initially, load more on scroll via IntersectionObserver with 200px rootMargin
-- **Sorting**: Clickable column headers with asc/desc toggle; priority uses semantic order (Highest → Lowest)
-- **Filtering**: Text search + dropdown filters + toggle buttons (Open Only, Stale)
-- **Jira links**: Ticket keys link to Jira when `jira_base_url` is available from cache status
+## Recent Report Notes
+
+- The report builder preview now includes an `Export Current View` action in `frontend/src/pages/ReportsPage.tsx`; it reuses the existing report export API and should export the current filters, selected columns, sort, and grouping.
+- Master workbook dashboard AI summaries are written per KPI row in `backend/report_workbook_builder.py`; keep each metric's paragraph and bullets in one wrapped cell so summaries do not spill into adjacent metric rows.

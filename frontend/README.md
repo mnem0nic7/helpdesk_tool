@@ -1,73 +1,68 @@
-# React + TypeScript + Vite
+# Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React 19 + Vite SPA for the Altlassian operations portal.
 
-Currently, two official plugins are available:
+This frontend serves multiple product surfaces from one codebase:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Primary OIT helpdesk dashboard
+- OasisDev helpdesk scope
+- Azure Control Center
 
-## React Compiler
+Routing switches at runtime based on site branding in `src/lib/siteContext.ts` and `src/App.tsx`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Stack
 
-## Expanding the ESLint configuration
+- React 19
+- React Router 7
+- React Query 5
+- Tailwind CSS 4
+- Recharts 3
+- Vitest + Testing Library
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Commands
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+From `frontend/`:
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run dev
+npm run build
+npm run test:run
+npm test
+npm run lint
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Local development
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+- Vite runs on `http://localhost:5173`
+- `/api` requests proxy to `http://localhost:8000`
+- The backend must be running for most page flows to work
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+The simplest full-stack local workflow from the repo root is:
+
+```bash
+./start.sh
 ```
+
+## Structure
+
+- `src/App.tsx`: top-level route selection for helpdesk vs Azure surfaces
+- `src/components/`: shared layout, tables, forms, charts, and reusable UI
+- `src/pages/`: page-level route components
+- `src/lib/api.ts`: typed API client and response models
+- `src/__tests__/`: page and component tests
+
+## Testing guidance
+
+- Use `npm run test:run` for CI-style execution
+- Use `npm test` for watch mode while iterating
+- Add or update tests when changing API contracts, route behavior, filters, or chart-driven interactions
+
+## Build notes
+
+- `npm run build` performs the TypeScript project build and the Vite production bundle
+- Vendor chunking is customized in `vite.config.ts` for router, React Query, React Table, and Recharts dependencies
+
+## Reports page notes
+
+- `src/pages/ReportsPage.tsx` owns the report builder, saved templates, preview table, AI summary display, and export actions.
+- The preview section includes an `Export Current View` button that exports the currently selected columns, active filters, sort, and grouping by reusing the same report export API as the page-level export action.
