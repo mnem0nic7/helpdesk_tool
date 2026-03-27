@@ -669,8 +669,12 @@ def test_master_workbook_uses_manual_ai_summaries_when_all_included_templates_ha
     dashboard = workbook["Executive Dashboard"]
 
     assert dashboard["G6"].value == "AI Summary & Explanation"
-    assert dashboard["G7"].value == "SLA Compliance Rate: SLA performance improved across the current reporting window."
-    assert dashboard["G8"].value == "• Resolution compliance is trending in the right direction."
+    assert dashboard["G7"].value == (
+        "SLA Compliance Rate: SLA performance improved across the current reporting window.\n"
+        "• Resolution compliance is trending in the right direction.\n"
+        "• Breach volume is concentrated in a small set of tickets."
+    )
+    assert "Resolution compliance is trending in the right direction." not in str(dashboard["G8"].value or "")
 
 
 def test_master_workbook_uses_available_ai_summaries_for_selected_reports_even_if_one_is_missing(tmp_path: Path):
@@ -731,8 +735,92 @@ def test_master_workbook_uses_available_ai_summaries_for_selected_reports_even_i
     workbook = load_workbook(path)
     dashboard = workbook["Executive Dashboard"]
 
-    assert dashboard["G7"].value == "SLA Compliance Rate: SLA performance improved across the current reporting window."
-    assert dashboard["G8"].value == "• Resolution compliance is trending in the right direction."
+    assert dashboard["G7"].value == (
+        "SLA Compliance Rate: SLA performance improved across the current reporting window.\n"
+        "• Resolution compliance is trending in the right direction."
+    )
+    assert "Resolution compliance is trending in the right direction." not in str(dashboard["G8"].value or "")
+
+
+def test_master_workbook_combines_first_response_and_follow_up_ai_summaries_into_one_metric_row(tmp_path: Path):
+    builder = ReportWorkbookBuilder(
+        all_issues=[
+            _make_issue(
+                key="OIT-AI-3",
+                created="2026-03-21T00:00:00+00:00",
+                updated="2026-03-22T00:00:00+00:00",
+                resolved="2026-03-22T00:00:00+00:00",
+                status="Resolved",
+                status_category="Done",
+                sla_response_status="Met",
+                sla_resolution_status="Met",
+            )
+        ],
+        site_scope="primary",
+        today=date(2026, 3, 24),
+        enable_changelog_fetch=False,
+    )
+    first_response_template = _make_template(
+        id="tpl-ai-fr",
+        name="First Response Time",
+        category="Executive",
+        group_by="sla_first_response_status",
+        sort_field="created",
+    )
+    follow_up_template = _make_template(
+        id="tpl-ai-follow-up",
+        name="Response & Daily Follow-Up",
+        category="Executive",
+        group_by="response_followup_status",
+        sort_field="created",
+    )
+    first_response_summary = ReportAISummary(
+        template_id=first_response_template.id,
+        template_name=first_response_template.name,
+        site_scope="primary",
+        source="manual",
+        status="ready",
+        summary="First response remained within target for the week.",
+        bullets=["Only a small number of tickets required response follow-up."],
+        fallback_used=False,
+        model_used="qwen2.5:7b",
+        generated_at="2026-03-24T00:00:00+00:00",
+        template_version=first_response_template.updated_at,
+        data_version="2026-03-24T00:00:00+00:00",
+        error="",
+    )
+    follow_up_summary = ReportAISummary(
+        template_id=follow_up_template.id,
+        template_name=follow_up_template.name,
+        site_scope="primary",
+        source="manual",
+        status="ready",
+        summary="Daily follow-up coverage needs closer watch on aging tickets.",
+        bullets=["The small backlog still has enough churn to monitor daily."],
+        fallback_used=False,
+        model_used="qwen2.5:7b",
+        generated_at="2026-03-24T00:00:00+00:00",
+        template_version=follow_up_template.updated_at,
+        data_version="2026-03-24T00:00:00+00:00",
+        error="",
+    )
+    path = tmp_path / "master-ai-summary-response.xlsx"
+
+    builder.build_master_report(
+        path=str(path),
+        templates=[first_response_template, follow_up_template],
+        ai_template_summaries=[first_response_summary, follow_up_summary],
+    )
+
+    workbook = load_workbook(path)
+    dashboard = workbook["Executive Dashboard"]
+
+    assert dashboard["G9"].value == (
+        "First Response Time: First response remained within target for the week.\n"
+        "• Only a small number of tickets required response follow-up.\n\n"
+        "Response & Daily Follow-Up: Daily follow-up coverage needs closer watch on aging tickets.\n"
+        "• The small backlog still has enough churn to monitor daily."
+    )
 
 
 def test_dashboard_context_and_findings_use_7_day_primary_metrics():

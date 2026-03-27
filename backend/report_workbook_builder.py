@@ -2381,43 +2381,62 @@ class ReportWorkbookBuilder:
             "format": formats["kpi_bad"],
         })
 
-        ai_summary_templates = [
-            template
-            for template in included_templates
-            if template.id in ai_summaries_by_id and ai_summaries_by_id[template.id].summary
-        ]
-        findings = (
-            self._build_ai_summary_lines(
-                [ai_summaries_by_id[template.id] for template in ai_summary_templates],
-                templates=ai_summary_templates,
-            )
-            if ai_summary_templates
-            else self._build_key_findings(context, anomaly=anomaly)
+        finding_rows = self._build_master_dashboard_ai_rows(
+            context,
+            included_templates=included_templates,
+            ai_summaries_by_id=ai_summaries_by_id,
+            anomaly=anomaly,
         )
-        for offset, finding in enumerate(findings, start=1):
+        for offset, finding in enumerate(finding_rows, start=1):
             row_idx = start_row + offset
             worksheet.write(row_idx, 6, finding, formats["finding_text"])
-            worksheet.set_row(row_idx, 42)
+            line_count = max(1, str(finding or "").count("\n") + 1)
+            worksheet.set_row(row_idx, min(108, max(42, 16 * line_count + 8)))
 
         worksheet.set_column(5, 5, 12)
         worksheet.set_column(6, 6, 58)
 
-    def _build_ai_summary_lines(
+    def _render_ai_summary_block(self, template: ReportTemplate, summary: ReportAISummary) -> str:
+        title = str(summary.template_name or template.name).strip() or template.name
+        lines = [f"{title}: {summary.summary}"]
+        lines.extend(
+            f"• {bullet}"
+            for bullet in summary.bullets[:3]
+            if str(bullet or "").strip()
+        )
+        return "\n".join(lines)
+
+    def _build_master_dashboard_ai_rows(
         self,
-        summaries: Sequence[ReportAISummary],
+        context: dict[str, Any],
         *,
-        templates: Sequence[ReportTemplate],
+        included_templates: Sequence[ReportTemplate],
+        ai_summaries_by_id: dict[str, ReportAISummary],
+        anomaly: TrendAnomaly | None,
     ) -> list[str]:
-        summary_lookup = {summary.template_id: summary for summary in summaries}
-        lines: list[str] = []
-        for template in templates:
-            summary = summary_lookup.get(template.id)
+        findings = self._build_key_findings(context, anomaly=anomaly)
+        row_blocks: dict[int, list[str]] = defaultdict(list)
+        metric_row_for_kind = {
+            "sla": 0,
+            "mttr": 1,
+            "first_response": 2,
+            "follow_up": 2,
+            "backlog": 3,
+            "ticket_volume": 4,
+        }
+        for template in included_templates:
+            summary = ai_summaries_by_id.get(template.id)
             if summary is None or not summary.summary:
                 continue
-            lines.append(f"{template.name}: {summary.summary}")
-            for bullet in summary.bullets[:3]:
-                lines.append(f"• {bullet}")
-        return lines
+            config = template.config if isinstance(template.config, ReportConfig) else ReportConfig()
+            row_idx = metric_row_for_kind.get(_report_kind(template.name, config))
+            if row_idx is None:
+                continue
+            row_blocks[row_idx].append(self._render_ai_summary_block(template, summary))
+
+        for row_idx, blocks in row_blocks.items():
+            findings[row_idx] = "\n\n".join(blocks)
+        return findings
 
     def _build_key_findings(self, context: dict[str, Any], *, anomaly: TrendAnomaly | None) -> list[str]:
         def _group_row(rows: Sequence[dict[str, Any]], label: str) -> dict[str, Any] | None:
