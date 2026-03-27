@@ -599,6 +599,103 @@ class TestIssueToRow:
         assert row["last_support_touch_date"] == "2026-03-02T22:00:00+00:00"
         assert row["support_touch_count"] == 2
 
+    def test_response_followup_prefers_explicit_outreach_comment_for_first_contact(self, freeze_time):
+        issue = {
+            "key": "OIT-701A",
+            "fields": {
+                "summary": "First outreach note should drive first contact",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-02T12:00:00+00:00",
+                "resolutiondate": "2026-03-02T12:00:00+00:00",
+                "customfield_11266": {
+                    "completedCycles": [
+                        {
+                            "breached": False,
+                            "stopTime": {"iso8601": "2026-03-02T08:10:00+00:00"},
+                        }
+                    ]
+                },
+                "comment": {
+                    "total": 3,
+                    "comments": [
+                        {
+                            "created": "2026-03-02T08:05:00+00:00",
+                            "updated": "2026-03-02T08:05:00+00:00",
+                            "author": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                            "body": "Any update?",
+                            "public": True,
+                        },
+                        {
+                            "created": "2026-03-02T08:10:00+00:00",
+                            "updated": "2026-03-02T08:10:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                            "body": "Acknowledged, investigating now.",
+                            "public": True,
+                        },
+                        {
+                            "created": "2026-03-02T08:22:00+00:00",
+                            "updated": "2026-03-02T08:22:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                            "body": "Reached out to the user and left voicemail.",
+                            "public": False,
+                        },
+                    ],
+                },
+            },
+        }
+
+        row = issue_to_row(issue)
+
+        assert row["first_response_2h_status"] == "Met"
+        assert row["first_response_authoritative"] is True
+        assert row["first_contact_date"] == "2026-03-02T08:22:00+00:00"
+
+    def test_response_followup_keeps_sla_first_contact_when_comment_payload_is_partial(self, freeze_time):
+        issue = {
+            "key": "OIT-701B",
+            "fields": {
+                "summary": "Partial comments should not override the SLA contact time",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "Incident"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-02T12:00:00+00:00",
+                "resolutiondate": "2026-03-02T12:00:00+00:00",
+                "customfield_11266": {
+                    "completedCycles": [
+                        {
+                            "breached": False,
+                            "stopTime": {"iso8601": "2026-03-02T08:10:00+00:00"},
+                        }
+                    ]
+                },
+                "comment": {
+                    "total": 4,
+                    "comments": [
+                        {
+                            "created": "2026-03-02T08:22:00+00:00",
+                            "updated": "2026-03-02T08:22:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex"},
+                            "body": "Reached out to the user and left voicemail.",
+                            "public": False,
+                        },
+                    ],
+                },
+            },
+        }
+
+        row = issue_to_row(issue)
+
+        assert row["first_response_2h_status"] == "Met"
+        assert row["first_contact_date"] == "2026-03-02T08:10:00+00:00"
+
     def test_response_followup_breaches_when_first_response_misses_two_hours(self, freeze_time):
         issue = {
             "key": "OIT-702",

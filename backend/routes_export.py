@@ -149,7 +149,7 @@ FIELD_META: dict[str, dict[str, str]] = {
     "assignee_account_id": {"label": "Assignee ID", "description": "Assignee Atlassian account ID"},
     "reporter": {"label": "Reporter", "description": "Person who created the ticket"},
     "created": {"label": "Created", "description": "Date ticket was created"},
-    "first_contact_date": {"label": "First Contact", "description": "Exact timestamp of the first support response used for response-SLA review"},
+    "first_contact_date": {"label": "First Contact", "description": "Exact timestamp of the earliest support outreach note, falling back to Jira first-response timing"},
     "updated": {"label": "Updated", "description": "Date ticket was last updated"},
     "resolved": {"label": "Resolved", "description": "Date ticket was resolved"},
     "request_type": {"label": "Request Type", "description": "JSM request type"},

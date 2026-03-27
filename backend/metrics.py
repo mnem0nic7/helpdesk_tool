@@ -116,6 +116,15 @@ _OCC_TICKET_ID_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bOCC\s+Ticket\s+ID\s*:\s*([A-Z0-9][A-Z0-9_-]*)", re.I),
     re.compile(r"\bOCC\b[^\r\n]{0,120}?\bTicket\s+Id\s*:\s*([A-Z0-9][A-Z0-9_-]*)", re.I),
 )
+_FIRST_CONTACT_OUTREACH_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(reached|reach|reaching)\s+out\b", re.I),
+    re.compile(r"\b(contacted|contacting|made\s+contact)\b", re.I),
+    re.compile(r"\b(called|calling|phoned|phoning)\b", re.I),
+    re.compile(r"\b(spoke\s+with|spoke\s+to|connected\s+with)\b", re.I),
+    re.compile(r"\b(emailed|emailing|sent\s+(?:an?\s+)?email)\b", re.I),
+    re.compile(r"\b(left|leaving)\s+(?:a\s+)?voicemail\b", re.I),
+    re.compile(r"\b(sent|sending)\s+(?:a\s+)?(?:message|text|teams\s+message)\b", re.I),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1223,6 +1232,44 @@ def _comment_payload_is_complete(fields: dict[str, Any]) -> bool:
     return total <= len(comments)
 
 
+def _support_comment_events(
+    fields: dict[str, Any],
+    *,
+    reporter_account_id: str,
+    public_only: bool | None = None,
+) -> list[dict[str, Any]]:
+    support_events: list[dict[str, Any]] = []
+    for event in _comment_events(fields):
+        if public_only is not None and bool(event.get("is_public")) != public_only:
+            continue
+        if reporter_account_id and event["author_account_id"] == reporter_account_id:
+            continue
+        if "[movedocs fallback audit]" in str(event["body_text"] or "").lower():
+            continue
+        support_events.append(event)
+    return support_events
+
+
+def _comment_indicates_outreach(body_text: str) -> bool:
+    normalized = str(body_text or "").strip()
+    if not normalized:
+        return False
+    return any(pattern.search(normalized) for pattern in _FIRST_CONTACT_OUTREACH_PATTERNS)
+
+
+def _preferred_first_contact_from_support_comments(
+    support_events: list[dict[str, Any]],
+    *,
+    comments_complete: bool,
+) -> str:
+    if not comments_complete:
+        return ""
+    for event in support_events:
+        if _comment_indicates_outreach(event["body_text"]):
+            return _iso_to_utc_seconds(event["created_raw"])
+    return ""
+
+
 def _authoritative_public_support_events(
     fields: dict[str, Any],
     *,
@@ -1230,16 +1277,7 @@ def _authoritative_public_support_events(
 ) -> tuple[list[dict[str, Any]], bool]:
     if not _comment_payload_is_complete(fields):
         return [], False
-    support_events = [
-        event
-        for event in _comment_events(fields)
-        if (
-            event.get("is_public")
-            and (not reporter_account_id or event["author_account_id"] != reporter_account_id)
-            and "[movedocs fallback audit]" not in str(event["body_text"] or "").lower()
-        )
-    ]
-    return support_events, True
+    return _support_comment_events(fields, reporter_account_id=reporter_account_id, public_only=True), True
 
 
 def _followup_field_value(fields: dict[str, Any], field_id: str) -> Any:
@@ -1323,12 +1361,18 @@ def _response_followup_compliance(
         }
 
     is_open = resolved_dt is None
+    comments_complete = _comment_payload_is_complete(fields)
+    support_events = _support_comment_events(fields, reporter_account_id=reporter_account_id)
     authoritative = _authoritative_followup(fields)
     authoritative_public_events, authoritative_public_comments_available = (
         _authoritative_public_support_events(
             fields,
             reporter_account_id=reporter_account_id,
         )
+    )
+    preferred_first_contact_raw = _preferred_first_contact_from_support_comments(
+        support_events,
+        comments_complete=comments_complete,
     )
     first_response_status = _normalized_first_response_status(
         sla_first_response_status,
@@ -1360,14 +1404,6 @@ def _response_followup_compliance(
             first_contact_raw = _iso_to_utc_seconds(last_touch_raw)
         used_authoritative_followup = True
     else:
-        support_events = [
-            event
-            for event in _comment_events(fields)
-            if (
-                (not reporter_account_id or event["author_account_id"] != reporter_account_id)
-                and "[movedocs fallback audit]" not in str(event["body_text"] or "").lower()
-            )
-        ]
         if not first_contact_raw and support_events:
             first_contact_raw = _iso_to_utc_seconds(support_events[0]["created_raw"])
         last_touch_raw = _iso_to_utc_seconds(support_events[-1]["created_raw"]) if support_events else ""
@@ -1392,6 +1428,9 @@ def _response_followup_compliance(
         elif first_response_status == "Running":
             daily_followup_status = "Running"
         used_authoritative_followup = False
+
+    if preferred_first_contact_raw:
+        first_contact_raw = preferred_first_contact_raw
 
     if first_response_status == "BREACHED" or daily_followup_status == "BREACHED":
         overall_status = "BREACHED"

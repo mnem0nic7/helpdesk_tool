@@ -314,6 +314,78 @@ class TestReportPreview:
         assert row["created"] == "2026-03-02T08:00:00+00:00"
         assert row["first_contact_date"] == "2026-03-02T09:00:07+00:00"
 
+    def test_preview_prefers_outreach_comment_for_first_contact_when_available(self, test_client, mock_cache):
+        issue = {
+            "key": "OIT-780A",
+            "fields": {
+                "summary": "Outreach note should drive first contact",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "High"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex-agent"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": {"name": "Done"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-02T12:00:00+00:00",
+                "resolutiondate": "2026-03-02T12:00:00+00:00",
+                "labels": [],
+                "components": [],
+                "customfield_10010": None,
+                "customfield_11239": "Service requests",
+                "customfield_11266": {
+                    "completedCycles": [
+                        {
+                            "breached": False,
+                            "stopTime": {"iso8601": "2026-03-02T08:10:00+00:00"},
+                        }
+                    ]
+                },
+                "customfield_11264": None,
+                "customfield_10700": [],
+                "attachment": [],
+                "comment": {
+                    "total": 3,
+                    "comments": [
+                        {
+                            "created": "2026-03-02T08:05:00+00:00",
+                            "updated": "2026-03-02T08:05:00+00:00",
+                            "author": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                            "body": "Any update?",
+                            "public": True,
+                        },
+                        {
+                            "created": "2026-03-02T08:10:00+00:00",
+                            "updated": "2026-03-02T08:10:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex-agent"},
+                            "body": "Acknowledged, investigating now.",
+                            "public": True,
+                        },
+                        {
+                            "created": "2026-03-02T08:22:00+00:00",
+                            "updated": "2026-03-02T08:22:00+00:00",
+                            "author": {"displayName": "Alex Agent", "accountId": "acc-alex-agent"},
+                            "body": "Reached out to the user and left voicemail.",
+                            "public": False,
+                        },
+                    ],
+                },
+            },
+        }
+        mock_cache.get_all_issues.return_value = [issue]
+        mock_cache.get_filtered_issues.return_value = [issue]
+
+        resp = test_client.post("/api/report/preview", json={
+            "filters": {},
+            "columns": ["key", "created", "first_contact_date"],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": False,
+        })
+        assert resp.status_code == 200
+        row = resp.json()["rows"][0]
+        assert row["first_contact_date"] == "2026-03-02T08:22:00+00:00"
+
     def test_grouped_preview_supports_response_followup_compliance(self, test_client, mock_cache):
         issue = {
             "key": "OIT-778",

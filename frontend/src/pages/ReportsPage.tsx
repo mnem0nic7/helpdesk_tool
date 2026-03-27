@@ -52,7 +52,7 @@ const FIELD_META: Record<string, FieldInfo> = {
   reporter:                  { label: "Reporter",          description: "Ticket creator",                     category: "people" },
   last_comment_author:       { label: "Last Commenter",    description: "Author of the latest comment",       category: "people" },
   created:                   { label: "Created",           description: "Creation date",                      category: "dates" },
-  first_contact_date:        { label: "First Contact",     description: "Exact timestamp of the first support response", category: "dates" },
+  first_contact_date:        { label: "First Contact",     description: "Exact timestamp of the earliest support outreach note", category: "dates" },
   updated:                   { label: "Updated",           description: "Last update date",                   category: "dates" },
   resolved:                  { label: "Resolved",          description: "Resolution date",                    category: "dates" },
   last_comment_date:         { label: "Last Comment",      description: "Latest comment timestamp",           category: "dates" },
