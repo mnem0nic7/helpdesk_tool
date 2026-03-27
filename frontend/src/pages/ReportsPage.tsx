@@ -2209,20 +2209,44 @@ export default function ReportsPage() {
               </svg>
             )}
           </div>
-          {preview && !reportWindowValidationError && (
-            <div className="flex items-center gap-4 text-[11px] tabular-nums">
-              <span className="text-gray-400">
-                Showing <span className="font-semibold text-gray-600">{Math.min(preview.rows.length, 100)}</span> of{" "}
-                <span className="font-semibold text-gray-600">{preview.total_count.toLocaleString()}</span>{" "}
-                {preview.grouped ? "groups" : "tickets"}
-              </span>
-              {!preview.grouped && preview.total_count > 100 && (
-                <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 border border-amber-200/60">
-                  Preview limited to 100 rows
-                </span>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={exporting || Boolean(reportWindowValidationError)}
+              title="Export the current filters, columns, sort, and grouping."
+              className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-gray-700 shadow-sm transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {exporting ? (
+                <>
+                  <svg className="h-3.5 w-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Exporting...
+                </>
+              ) : (
+                <>
+                  <DownloadIcon className="h-3.5 w-3.5" />
+                  Export Current View
+                </>
               )}
-            </div>
-          )}
+            </button>
+            {preview && !reportWindowValidationError && (
+              <div className="flex flex-wrap items-center justify-end gap-3 text-[11px] tabular-nums">
+                <span className="text-gray-400">
+                  Showing <span className="font-semibold text-gray-600">{Math.min(preview.rows.length, 100)}</span> of{" "}
+                  <span className="font-semibold text-gray-600">{preview.total_count.toLocaleString()}</span>{" "}
+                  {preview.grouped ? "groups" : "tickets"}
+                </span>
+                {!preview.grouped && preview.total_count > 100 && (
+                  <span className="rounded border border-amber-200/60 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">
+                    Preview limited to 100 rows
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Table */}
