@@ -19,6 +19,37 @@ _MIGRATIONS_APPLIED = False
 _MIGRATIONS_DIR = Path(__file__).resolve().parent / "storage_migrations"
 
 
+class PostgresConnectionAdapter:
+    """Provide a sqlite-like connection surface on top of psycopg."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def __enter__(self) -> "PostgresConnectionAdapter":
+        self._connection.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> Any:
+        return self._connection.__exit__(exc_type, exc, tb)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+    def execute(self, query: str, params: Any | None = None) -> Any:
+        if params is None:
+            return self._connection.execute(query)
+        return self._connection.execute(query, params)
+
+    def executemany(self, query: str, seq_of_params: Any) -> Any:
+        cursor = self._connection.cursor()
+        try:
+            cursor.executemany(query, seq_of_params)
+        except Exception:
+            cursor.close()
+            raise
+        return cursor
+
+
 def postgres_enabled() -> bool:
     return bool(DATABASE_URL)
 
@@ -29,7 +60,7 @@ def connect_postgres(*, row_factory: Any | None = dict_row):
     kwargs: dict[str, Any] = {"connect_timeout": max(1, int(DATABASE_CONNECT_TIMEOUT_SECONDS))}
     if row_factory is not None:
         kwargs["row_factory"] = row_factory
-    return connect(DATABASE_URL, **kwargs)
+    return PostgresConnectionAdapter(connect(DATABASE_URL, **kwargs))
 
 
 def ensure_postgres_schema() -> None:
