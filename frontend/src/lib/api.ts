@@ -255,6 +255,7 @@ export interface TicketRow {
   reporter: string;
   reporter_account_id?: string;
   created: string;
+  first_contact_date?: string;
   updated: string;
   resolved: string;
   request_type: string;

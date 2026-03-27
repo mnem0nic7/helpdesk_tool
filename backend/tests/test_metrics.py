@@ -11,6 +11,7 @@ from metrics import (
     matches_libra_support_filter,
     map_status_bucket,
     _is_open,
+    extract_sla_info,
     extract_sla_status,
     compute_headline_metrics,
     compute_monthly_volumes,
@@ -155,6 +156,25 @@ class TestExtractSlaStatus:
     def test_empty(self):
         assert extract_sla_status(None) == ""
         assert extract_sla_status({}) == ""
+
+
+class TestExtractSlaInfo:
+    def test_completed_cycle_includes_completion_timestamp(self):
+        sla = {
+            "completedCycles": [
+                {
+                    "breached": False,
+                    "stopTime": {"iso8601": "2026-03-02T09:00:07+00:00"},
+                    "elapsedTime": {"millis": 3_607_000},
+                }
+            ]
+        }
+
+        info = extract_sla_info(sla)
+
+        assert info["status"] == "Met"
+        assert info["completed_at"] == "2026-03-02T09:00:07+00:00"
+        assert info["elapsed_millis"] == 3_607_000
 
 
 # ===== compute_headline_metrics =====
@@ -545,6 +565,7 @@ class TestIssueToRow:
 
         assert row["response_followup_status"] == "Met"
         assert row["first_response_2h_status"] == "Met"
+        assert row["first_contact_date"] == "2026-03-02T09:00:00+00:00"
         assert row["daily_followup_status"] == "Met"
         assert row["last_support_touch_date"] == "2026-03-02T22:00:00+00:00"
         assert row["support_touch_count"] == 2
@@ -695,7 +716,14 @@ class TestIssueToRow:
                 "created": "2026-03-02T08:00:00+00:00",
                 "updated": "2026-03-03T05:00:00+00:00",
                 "resolutiondate": "2026-03-03T05:00:00+00:00",
-                "customfield_11266": {"completedCycles": [{"breached": False}]},
+                "customfield_11266": {
+                    "completedCycles": [
+                        {
+                            "breached": False,
+                            "stopTime": {"iso8601": "2026-03-02T09:00:07+00:00"},
+                        }
+                    ]
+                },
                 "customfield_20001": {"value": "Met"},
                 "customfield_20002": "2026-03-02T22:00:00+00:00",
                 "customfield_20003": 2,
@@ -711,6 +739,7 @@ class TestIssueToRow:
         assert row["first_response_2h_status"] == "Met"
         assert row["daily_followup_status"] == "Met"
         assert row["response_followup_status"] == "Met"
+        assert row["first_contact_date"] == "2026-03-02T09:00:07+00:00"
         assert row["last_support_touch_date"] == "2026-03-02T22:00:00+00:00"
         assert row["support_touch_count"] == 2
         assert row["first_response_authoritative"] is True
@@ -799,5 +828,6 @@ class TestIssueToRow:
 
         assert row["first_response_2h_status"] == "Met"
         assert row["first_response_authoritative"] is True
+        assert row["first_contact_date"] == "2026-03-02T08:45:00+00:00"
         assert row["daily_followup_status"] == "Running"
         assert row["followup_authoritative"] is True

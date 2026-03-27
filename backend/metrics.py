@@ -184,6 +184,16 @@ def parse_dt(s: str | None) -> Optional[datetime]:
         return None
 
 
+def _iso_to_utc_seconds(value: Any) -> str:
+    """Normalize a datetime-like value to an ISO UTC string without micros."""
+    if isinstance(value, dict):
+        value = value.get("iso8601") or value.get("jira") or value.get("friendly") or ""
+    dt = parse_dt(str(value or "").strip())
+    if not dt:
+        return ""
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
 def safe_get(d: dict[str, Any], *keys: str, default: Any = "") -> Any:
     """Safely traverse nested dicts, returning *default* on any missing key."""
     current: Any = d
@@ -237,12 +247,14 @@ def extract_sla_info(sla_field: Any) -> dict[str, Any]:
       - ``breach_time``: ISO-8601 string of when the SLA breaches/breached, or ""
       - ``remaining_millis``: milliseconds remaining (negative if breached), or None
       - ``elapsed_millis``: milliseconds elapsed on the timer, or None
+      - ``completed_at``: ISO-8601 string of when the SLA cycle completed, or ""
     """
     empty: dict[str, Any] = {
         "status": "",
         "breach_time": "",
         "remaining_millis": None,
         "elapsed_millis": None,
+        "completed_at": "",
     }
     if not sla_field or not isinstance(sla_field, dict):
         return empty
@@ -252,14 +264,16 @@ def extract_sla_info(sla_field: Any) -> dict[str, Any]:
     if completed:
         last = completed[-1]
         status = "BREACHED" if last.get("breached") else "Met"
-        breach_time = (last.get("breachTime") or {}).get("iso8601", "")
+        breach_time = _iso_to_utc_seconds(last.get("breachTime"))
         elapsed = last.get("elapsedTime", {}).get("millis")
         remaining = last.get("remainingTime", {}).get("millis")
+        completed_at = _iso_to_utc_seconds(last.get("stopTime") or last.get("completedTime"))
         return {
             "status": status,
             "breach_time": breach_time,
             "remaining_millis": remaining,
             "elapsed_millis": elapsed,
+            "completed_at": completed_at,
         }
 
     # Ongoing cycle
@@ -271,7 +285,7 @@ def extract_sla_info(sla_field: Any) -> dict[str, Any]:
             status = "Paused"
         else:
             status = "Running"
-        breach_time = (ongoing.get("breachTime") or {}).get("iso8601", "")
+        breach_time = _iso_to_utc_seconds(ongoing.get("breachTime"))
         elapsed = (ongoing.get("elapsedTime") or {}).get("millis")
         remaining = (ongoing.get("remainingTime") or {}).get("millis")
         return {
@@ -279,6 +293,7 @@ def extract_sla_info(sla_field: Any) -> dict[str, Any]:
             "breach_time": breach_time,
             "remaining_millis": remaining,
             "elapsed_millis": elapsed,
+            "completed_at": "",
         }
 
     return empty
@@ -967,6 +982,7 @@ def issue_to_row(
     touch_compliance = _response_followup_compliance(
         fields,
         sla_first_response_status=sla_fr["status"],
+        sla_first_response_completed_at=sla_fr["completed_at"],
         reporter_account_id=reporter_id,
         created_dt=created_dt,
         resolved_dt=resolved_dt,
@@ -987,6 +1003,7 @@ def issue_to_row(
         "reporter_account_id": reporter_id,
         "occ_ticket_id": extract_occ_ticket_id_from_fields(fields),
         "created": created_str,
+        "first_contact_date": touch_compliance["first_contact_date"],
         "updated": updated_str,
         "resolved": resolved_str,
         "request_type": request_type,
@@ -1263,7 +1280,7 @@ def _authoritative_followup(fields: dict[str, Any]) -> dict[str, Any]:
     return {
         "available": True,
         "daily_followup_status": status,
-        "last_support_touch_date": last_touch_raw,
+        "last_support_touch_date": _iso_to_utc_seconds(last_touch_raw),
         "support_touch_count": touch_count,
     }
 
@@ -1272,6 +1289,7 @@ def _response_followup_compliance(
     fields: dict[str, Any],
     *,
     sla_first_response_status: str,
+    sla_first_response_completed_at: str,
     reporter_account_id: str,
     created_dt: datetime | None,
     resolved_dt: datetime | None,
@@ -1282,6 +1300,7 @@ def _response_followup_compliance(
             "overall_status": "(none)",
             "first_response_status": "(none)",
             "daily_followup_status": "(none)",
+            "first_contact_date": "",
             "last_support_touch_date": "",
             "support_touch_count": 0,
             "used_authoritative_followup": False,
@@ -1302,22 +1321,28 @@ def _response_followup_compliance(
         now=now,
         resolved_dt=resolved_dt,
     )
+    first_contact_raw = _iso_to_utc_seconds(sla_first_response_completed_at)
     used_authoritative_first_response = bool(str(sla_first_response_status or "").strip())
     if not used_authoritative_first_response and authoritative_public_comments_available:
         response_deadline = created_dt + timedelta(hours=2)
         if authoritative_public_events:
             first_touch_dt = authoritative_public_events[0]["created_dt"]
+            first_contact_raw = _iso_to_utc_seconds(authoritative_public_events[0]["created_raw"])
             first_response_status = "Met" if first_touch_dt <= response_deadline else "BREACHED"
         elif is_open and now <= response_deadline:
             first_response_status = "Running"
         else:
             first_response_status = "BREACHED"
         used_authoritative_first_response = True
+    elif not first_contact_raw and authoritative_public_events:
+        first_contact_raw = _iso_to_utc_seconds(authoritative_public_events[0]["created_raw"])
 
     if authoritative["available"]:
         daily_followup_status = authoritative["daily_followup_status"]
         last_touch_raw = authoritative["last_support_touch_date"]
         touch_count = authoritative["support_touch_count"]
+        if not first_contact_raw and touch_count == 1 and last_touch_raw:
+            first_contact_raw = _iso_to_utc_seconds(last_touch_raw)
         used_authoritative_followup = True
     else:
         support_events = [
@@ -1328,7 +1353,9 @@ def _response_followup_compliance(
                 and "[movedocs fallback audit]" not in str(event["body_text"] or "").lower()
             )
         ]
-        last_touch_raw = support_events[-1]["created_raw"] if support_events else ""
+        if not first_contact_raw and support_events:
+            first_contact_raw = _iso_to_utc_seconds(support_events[0]["created_raw"])
+        last_touch_raw = _iso_to_utc_seconds(support_events[-1]["created_raw"]) if support_events else ""
         touch_count = len(support_events)
         cadence_deadline_seconds = 24 * 3600
         daily_followup_status = "Running" if is_open else "BREACHED"
@@ -1362,7 +1389,8 @@ def _response_followup_compliance(
         "overall_status": overall_status,
         "first_response_status": first_response_status,
         "daily_followup_status": daily_followup_status,
-        "last_support_touch_date": last_touch_raw,
+        "first_contact_date": first_contact_raw,
+        "last_support_touch_date": _iso_to_utc_seconds(last_touch_raw),
         "support_touch_count": touch_count,
         "used_authoritative_followup": used_authoritative_followup,
         "used_authoritative_first_response": used_authoritative_first_response,

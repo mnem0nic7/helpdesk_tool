@@ -214,6 +214,54 @@ class TestReportPreview:
         row = resp.json()["rows"][0]
         assert row["occ_ticket_id"] == "LIBRA-SR-075203"
 
+    def test_preview_includes_first_contact_when_requested(self, test_client, mock_cache):
+        issue = {
+            "key": "OIT-780",
+            "fields": {
+                "summary": "Needs response timeline",
+                "status": {"name": "Resolved", "statusCategory": {"name": "Done"}},
+                "priority": {"name": "High"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex-agent"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": {"name": "Done"},
+                "created": "2026-03-02T08:00:00+00:00",
+                "updated": "2026-03-02T12:00:00+00:00",
+                "resolutiondate": "2026-03-02T12:00:00+00:00",
+                "labels": [],
+                "components": [],
+                "customfield_10010": None,
+                "customfield_11239": "Service requests",
+                "customfield_11266": {
+                    "completedCycles": [
+                        {
+                            "breached": False,
+                            "stopTime": {"iso8601": "2026-03-02T09:00:07+00:00"},
+                        }
+                    ]
+                },
+                "customfield_11264": None,
+                "customfield_10700": [],
+                "attachment": [],
+                "comment": {"total": 0, "comments": []},
+            },
+        }
+        mock_cache.get_all_issues.return_value = [issue]
+        mock_cache.get_filtered_issues.return_value = [issue]
+
+        resp = test_client.post("/api/report/preview", json={
+            "filters": {},
+            "columns": ["key", "created", "first_contact_date"],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": False,
+        })
+        assert resp.status_code == 200
+        row = resp.json()["rows"][0]
+        assert row["created"] == "2026-03-02T08:00:00+00:00"
+        assert row["first_contact_date"] == "2026-03-02T09:00:07+00:00"
+
     def test_grouped_preview_supports_response_followup_compliance(self, test_client, mock_cache):
         issue = {
             "key": "OIT-778",
@@ -711,6 +759,50 @@ class TestReportExport:
         assert detail_sheet["B13"].value == "OCC Ticket ID"
         assert detail_sheet["A14"].value == "OIT-OCC-1"
         assert detail_sheet["B14"].value == "LIBRA-SR-075203"
+
+    def test_detail_export_includes_first_contact_column(self, test_client, mock_cache, monkeypatch):
+        monkeypatch.setattr("routes_export._today_utc", lambda: date(2026, 3, 10))
+
+        issue = _make_workload_issue(
+            key="OIT-FC-1",
+            summary="Investigate response breach",
+            status="Resolved",
+            status_category="Done",
+            assignee="Taylor Ops",
+            created="2026-03-09T08:00:00+00:00",
+            updated="2026-03-09T10:30:00+00:00",
+            resolved="2026-03-09T10:30:00+00:00",
+            oasisdev=False,
+        )
+        issue["fields"]["customfield_11266"] = {
+            "completedCycles": [
+                {
+                    "breached": False,
+                    "stopTime": {"iso8601": "2026-03-09T09:15:42+00:00"},
+                }
+            ]
+        }
+        mock_cache.get_all_issues.return_value = [issue]
+        mock_cache.get_filtered_issues.return_value = [issue]
+
+        resp = test_client.post("/api/report/export", json={
+            "filters": {},
+            "columns": ["key", "created", "first_contact_date"],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": False,
+        })
+        assert resp.status_code == 200
+
+        workbook = load_workbook(BytesIO(resp.content))
+        detail_sheet = workbook["30 Day"]
+        assert detail_sheet["A13"].value == "Key"
+        assert detail_sheet["B13"].value == "Created"
+        assert detail_sheet["C13"].value == "First Contact"
+        assert detail_sheet["A14"].value == "OIT-FC-1"
+        assert detail_sheet["B14"].value == "2026-03-09T08:00:00+00:00"
+        assert detail_sheet["C14"].value == "2026-03-09T09:15:42+00:00"
 
 
 class TestReportTemplates:

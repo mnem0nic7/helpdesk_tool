@@ -100,6 +100,7 @@ class TicketRow(BaseModel):
     reporter_account_id: str = ""
     occ_ticket_id: str = ""
     created: str
+    first_contact_date: str = ""
     updated: str
     resolved: str
     request_type: str

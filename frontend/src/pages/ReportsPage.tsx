@@ -52,6 +52,7 @@ const FIELD_META: Record<string, FieldInfo> = {
   reporter:                  { label: "Reporter",          description: "Ticket creator",                     category: "people" },
   last_comment_author:       { label: "Last Commenter",    description: "Author of the latest comment",       category: "people" },
   created:                   { label: "Created",           description: "Creation date",                      category: "dates" },
+  first_contact_date:        { label: "First Contact",     description: "Exact timestamp of the first support response", category: "dates" },
   updated:                   { label: "Updated",           description: "Last update date",                   category: "dates" },
   resolved:                  { label: "Resolved",          description: "Resolution date",                    category: "dates" },
   last_comment_date:         { label: "Last Comment",      description: "Latest comment timestamp",           category: "dates" },
@@ -154,7 +155,7 @@ const PRESETS: Preset[] = [
     icon: "alert",
     accent: "amber",
     filters: {},
-    columns: ["key", "summary", "status", "priority", "assignee", "sla_first_response_status", "sla_resolution_status", "created"],
+    columns: ["key", "summary", "status", "priority", "assignee", "sla_first_response_status", "created", "first_contact_date", "sla_resolution_status"],
     sort_field: "created",
     sort_dir: "desc",
     group_by: null,
@@ -211,8 +212,7 @@ function formatCellValue(value: unknown, field?: string): string {
   if (Array.isArray(value)) return value.join(", ") || "\u2014";
   // Format date strings
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
-    const d = new Date(value);
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    return formatUtcDateTime(value);
   }
   return String(value);
 }
@@ -252,6 +252,22 @@ function windowModeLabel(mode: ReportConfig["window_mode"]): string {
   if (mode === "7d") return "7 Day";
   if (mode === "30d") return "30 Day";
   return "Custom Range";
+}
+
+function formatUtcDateTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZone: "UTC",
+    timeZoneName: "short",
+  });
 }
 
 function formatWindowRange(start: string, end: string): string {
@@ -588,9 +604,19 @@ function CellContent({ value, field }: { value: unknown; field: string }) {
   }
 
   // Date fields
-  if ((field === "created" || field === "updated" || field === "resolved") && str && /^\d{4}-\d{2}-\d{2}T/.test(str)) {
-    const d = new Date(str);
-    return <span className="tabular-nums text-gray-600 text-xs">{d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>;
+  if (
+    (
+      field === "created" ||
+      field === "first_contact_date" ||
+      field === "updated" ||
+      field === "resolved" ||
+      field === "last_comment_date" ||
+      field === "last_support_touch_date"
+    ) &&
+    str &&
+    /^\d{4}-\d{2}-\d{2}T/.test(str)
+  ) {
+    return <span className="tabular-nums text-gray-600 text-xs">{formatUtcDateTime(str)}</span>;
   }
 
   // Group header in aggregated view
