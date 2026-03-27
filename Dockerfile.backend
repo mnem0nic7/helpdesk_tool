@@ -10,6 +10,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         fonts-dejavu-core \
+        libpq5 \
         libreoffice-calc \
         libreoffice-common \
         libreoffice-core \
