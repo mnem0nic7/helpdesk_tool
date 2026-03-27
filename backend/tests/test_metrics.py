@@ -524,6 +524,35 @@ class TestIssueToRow:
         row = issue_to_row(issue)
         assert row["occ_ticket_id"] == "LIBRA-SR-075203"
 
+    def test_extracts_occ_ticket_id_from_comment_history(self, freeze_time):
+        issue = {
+            "key": "OIT-557",
+            "fields": {
+                "description": "PhishER alert copied into Jira.",
+                "comment": {
+                    "total": 2,
+                    "comments": [
+                        {
+                            "created": "2026-03-27T17:07:33+00:00",
+                            "updated": "2026-03-27T17:07:33+00:00",
+                            "author": {"displayName": "OSIJIRAOCC", "accountId": "acc-occ"},
+                            "body": "Successfully OCC ticket Created with Ticket Id: LIBRA-SR-075206",
+                            "public": True,
+                        },
+                        {
+                            "created": "2026-03-27T17:08:51+00:00",
+                            "updated": "2026-03-27T17:08:51+00:00",
+                            "author": {"displayName": "OSIJIRAOCC", "accountId": "acc-occ"},
+                            "body": "Acknowledged",
+                            "public": True,
+                        },
+                    ],
+                },
+            },
+        }
+        row = issue_to_row(issue)
+        assert row["occ_ticket_id"] == "LIBRA-SR-075206"
+
     def test_response_followup_marks_ticket_met_when_response_and_cadence_hold(self, freeze_time):
         issue = {
             "key": "OIT-701",

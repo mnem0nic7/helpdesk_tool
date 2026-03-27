@@ -215,13 +215,52 @@ def test_upsert_issue_stores_occ_ticket_id_from_description(tmp_path):
     assert restored._all_issues["OIT-210"]["fields"]["_movedocs_occ_ticket_id"] == "LIBRA-SR-075203"
 
 
+def test_upsert_issue_stores_occ_ticket_id_from_comment_history(tmp_path):
+    db_path = tmp_path / "issues.db"
+    cache = IssueCache(str(db_path))
+    cache._initialized = True
+
+    issue = _issue("OIT-210A", "Imported from OCC reply")
+    issue["fields"]["comment"] = {
+        "total": 1,
+        "comments": [
+            {
+                "created": "2026-03-27T17:07:33+00:00",
+                "updated": "2026-03-27T17:07:33+00:00",
+                "author": {"displayName": "OSIJIRAOCC", "accountId": "acc-occ"},
+                "body": "Successfully OCC ticket Created with Ticket Id: LIBRA-SR-075206",
+                "public": True,
+            }
+        ],
+    }
+
+    cache.upsert_issue(issue)
+
+    assert cache._all_issues["OIT-210A"]["fields"]["_movedocs_occ_ticket_id"] == "LIBRA-SR-075206"
+
+    restored = IssueCache(str(db_path))
+    assert restored._load_from_db() is True
+    assert restored._all_issues["OIT-210A"]["fields"]["_movedocs_occ_ticket_id"] == "LIBRA-SR-075206"
+
+
 def test_occ_ticket_id_backfill_updates_cached_legacy_issues_once(tmp_path):
     db_path = tmp_path / "issues.db"
     cache = IssueCache(str(db_path))
     cache._initialized = True
 
     legacy_issue = _issue("OIT-211", "Legacy OCC ticket")
-    legacy_issue["fields"]["description"] = "Please see OCC Ticket ID: libra-sr-000111 for the source alert."
+    legacy_issue["fields"]["comment"] = {
+        "total": 1,
+        "comments": [
+            {
+                "created": "2026-03-27T17:07:33+00:00",
+                "updated": "2026-03-27T17:07:33+00:00",
+                "author": {"displayName": "OSIJIRAOCC", "accountId": "acc-occ"},
+                "body": "Successfully OCC ticket Created with Ticket Id: libra-sr-000111",
+                "public": True,
+            }
+        ],
+    }
     cache._all_issues = {legacy_issue["key"]: legacy_issue}
     cache._issues = dict(cache._all_issues)
 

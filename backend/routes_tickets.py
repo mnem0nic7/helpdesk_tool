@@ -26,7 +26,13 @@ from config import JIRA_BASE_URL, JIRA_PROJECT
 from issue_cache import cache
 from jira_client import JiraClient, validate_jira_key
 from jira_write_service import add_fallback_internal_audit_note, get_jira_write_context, prepend_fallback_actor_line
-from metrics import _is_open, is_excluded_from_stale, issue_to_row, matches_libra_support_filter
+from metrics import (
+    _is_open,
+    is_excluded_from_stale,
+    issue_to_row,
+    matches_libra_support_filter,
+    sync_occ_ticket_id_field,
+)
 from models import TicketCommentRequest, TicketCreateRequest, TicketRefreshRequest, TicketTransitionRequest, TicketUpdateRequest
 from requestor_sync_service import requestor_sync_service
 from request_type import extract_request_type_name_from_fields
@@ -298,8 +304,14 @@ def _get_user_display_name(account_id: str | None) -> str:
 def _load_ticket_detail(key: str, issue: dict[str, Any] | None = None) -> dict[str, Any]:
     issue = issue or _client.get_issue(key)
     requestor_result = requestor_sync_service.maybe_reconcile_issue(issue)
-    cache.upsert_issue(issue)
     comments = _client.get_request_comments(key)
+    issue_fields = issue.setdefault("fields", {})
+    issue_fields["comment"] = {
+        "comments": comments,
+        "total": len(comments),
+    }
+    sync_occ_ticket_id_field(issue_fields)
+    cache.upsert_issue(issue)
     return _ticket_detail(issue, comments, requestor_identity=requestor_result["requestor_identity"])
 
 

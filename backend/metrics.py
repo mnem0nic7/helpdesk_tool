@@ -112,7 +112,10 @@ _ONBOARDING_OFFBOARDING_MARKERS: tuple[str, ...] = (
 LIBRA_SUPPORT_LABEL = "libra_support"
 LibraSupportFilter = Literal["all", "libra_support", "non_libra_support"]
 LOCAL_OCC_TICKET_ID_FIELD = "_movedocs_occ_ticket_id"
-_OCC_TICKET_ID_RE = re.compile(r"\bOCC\s+Ticket\s+ID\s*:\s*([A-Z0-9][A-Z0-9_-]*)", re.I)
+_OCC_TICKET_ID_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bOCC\s+Ticket\s+ID\s*:\s*([A-Z0-9][A-Z0-9_-]*)", re.I),
+    re.compile(r"\bOCC\b[^\r\n]{0,120}?\bTicket\s+Id\s*:\s*([A-Z0-9][A-Z0-9_-]*)", re.I),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1093,32 +1096,44 @@ def extract_occ_ticket_id_from_text(text: str) -> str:
     """Extract a normalized OCC ticket id from free-form ticket text."""
     if not text:
         return ""
-    match = _OCC_TICKET_ID_RE.search(text)
-    if not match:
-        return ""
-    return str(match.group(1) or "").strip(" \t|,.;:").upper()
+    for pattern in _OCC_TICKET_ID_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return str(match.group(1) or "").strip(" \t|,.;:").upper()
+    return ""
+
+
+def _derived_occ_ticket_id_from_fields(fields: dict[str, Any]) -> str:
+    description_match = extract_occ_ticket_id_from_text(_extract_description(fields, max_len=0))
+    if description_match:
+        return description_match
+
+    comment_obj = fields.get("comment", {})
+    comments = comment_obj.get("comments", []) if isinstance(comment_obj, dict) else []
+    for comment in comments:
+        comment_match = extract_occ_ticket_id_from_text(_comment_text(comment))
+        if comment_match:
+            return comment_match
+    return ""
 
 
 def extract_occ_ticket_id_from_fields(fields: dict[str, Any]) -> str:
-    """Return the stored OCC ticket id or derive it from the Jira description."""
+    """Return the stored OCC ticket id or derive it from ticket text/history."""
     stored = str(fields.get(LOCAL_OCC_TICKET_ID_FIELD) or "").strip()
     if stored:
         return stored
-    return extract_occ_ticket_id_from_text(_extract_description(fields, max_len=0))
+    return _derived_occ_ticket_id_from_fields(fields)
 
 
 def sync_occ_ticket_id_field(fields: dict[str, Any]) -> bool:
-    """Refresh the cached OCC ticket id field from the current description text."""
+    """Refresh the cached OCC ticket id field from current ticket text/history."""
     current = str(fields.get(LOCAL_OCC_TICKET_ID_FIELD) or "").strip()
-    extracted = extract_occ_ticket_id_from_text(_extract_description(fields, max_len=0))
+    extracted = _derived_occ_ticket_id_from_fields(fields)
     if extracted:
         if extracted != current:
             fields[LOCAL_OCC_TICKET_ID_FIELD] = extracted
             return True
         return False
-    if current:
-        fields.pop(LOCAL_OCC_TICKET_ID_FIELD, None)
-        return True
     return False
 
 
@@ -1163,7 +1178,7 @@ def _comment_events(fields: dict[str, Any]) -> list[dict[str, Any]]:
     comments = comment_obj.get("comments", []) if isinstance(comment_obj, dict) else []
     events: list[dict[str, Any]] = []
     for comment in comments:
-        created_raw = comment.get("created") or comment.get("updated") or ""
+        created_raw = _iso_to_utc_seconds(comment.get("created") or comment.get("updated") or "")
         created_dt = parse_dt(created_raw)
         if not created_dt:
             continue

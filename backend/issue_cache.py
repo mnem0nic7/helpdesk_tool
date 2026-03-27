@@ -44,7 +44,7 @@ _AUTO_TRIAGE_ONE_TIME_BACKFILL_METADATA_KEY = (
 )
 _AUTO_TRIAGE_ONE_TIME_BACKFILL_HOURS = 24
 _OCC_TICKET_ID_ONE_TIME_BACKFILL_METADATA_KEY = (
-    "occ_ticket_id_backfill_from_cached_descriptions_v1"
+    "occ_ticket_id_backfill_from_cached_ticket_text_v2"
 )
 _REDIS_ISSUES_HASH = "issue_cache:issues"
 _REDIS_METADATA_KEY = "issue_cache:metadata"

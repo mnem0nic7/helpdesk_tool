@@ -648,6 +648,41 @@ class TestTicketDetailAndActions:
         assert data["issue_links"][0]["key"] == "OIT-456"
         mock_cache.upsert_issue.assert_called_once_with(issue)
 
+    def test_get_ticket_detail_persists_occ_ticket_id_from_request_comments(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        issue["fields"]["description"] = _adf("Imported alert without OCC id in the body.")
+        occ_comments = _request_comments()
+        occ_comments[0]["body"] = "Successfully OCC ticket Created with Ticket Id: LIBRA-SR-075206"
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
+        monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: occ_comments)
+        monkeypatch.setattr(
+            routes_tickets.requestor_sync_service,
+            "maybe_reconcile_issue",
+            lambda issue: {
+                "updated": False,
+                "message": "",
+                "requestor_identity": {
+                    "extracted_email": "",
+                    "directory_match": False,
+                    "jira_account_id": "",
+                    "jira_status": "unmatched",
+                    "message": "",
+                },
+            },
+        )
+
+        resp = test_client.get("/api/tickets/OIT-123")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ticket"]["occ_ticket_id"] == "LIBRA-SR-075206"
+        assert issue["fields"]["_movedocs_occ_ticket_id"] == "LIBRA-SR-075206"
+        assert issue["fields"]["comment"]["total"] == len(occ_comments)
+        mock_cache.upsert_issue.assert_called_once_with(issue)
+
     def test_get_ticket_detail_aliases_generated_attachment_names(self, test_client, monkeypatch):
         import routes_tickets
 
@@ -867,7 +902,10 @@ class TestTicketDetailAndActions:
         assert resp.json()["updated"] is True
         assert resp.json()["message"] == "Matched from OCC creator name and synced reporter to Raza Abidi."
         assert resp.json()["detail"]["ticket"]["reporter"] == "Raza Abidi"
-        mock_cache.upsert_issue.assert_called_once_with(issue_after)
+        cached_issue = mock_cache.upsert_issue.call_args.args[0]
+        assert cached_issue["fields"]["reporter"] == {"displayName": "Raza Abidi", "accountId": "acct-raza"}
+        assert cached_issue["fields"]["comment"]["total"] == 1
+        assert cached_issue["fields"]["_movedocs_occ_ticket_id"] == "LIBRA-SR-074744"
 
     def test_sync_ticket_reporter_uses_requestor_sync_when_email_path_exists(self, test_client, monkeypatch):
         import routes_tickets

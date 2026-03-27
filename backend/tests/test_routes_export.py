@@ -214,6 +214,58 @@ class TestReportPreview:
         row = resp.json()["rows"][0]
         assert row["occ_ticket_id"] == "LIBRA-SR-075203"
 
+    def test_preview_includes_occ_ticket_id_from_comment_history_when_requested(self, test_client, mock_cache):
+        issue = {
+            "key": "OIT-779A",
+            "fields": {
+                "summary": "Imported from OCC comment",
+                "description": "Awaiting OCC reference.",
+                "status": {"name": "Open", "statusCategory": {"name": "To Do"}},
+                "priority": {"name": "Medium"},
+                "assignee": {"displayName": "Alex Agent", "accountId": "acc-alex-agent"},
+                "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
+                "issuetype": {"name": "[System] Service request"},
+                "resolution": None,
+                "created": "2026-03-02T10:00:00+00:00",
+                "updated": "2026-03-02T10:00:00+00:00",
+                "resolutiondate": None,
+                "labels": [],
+                "components": [],
+                "customfield_10010": None,
+                "customfield_11239": "Service requests",
+                "customfield_11266": None,
+                "customfield_11264": None,
+                "customfield_10700": [],
+                "attachment": [],
+                "comment": {
+                    "total": 1,
+                    "comments": [
+                        {
+                            "created": "2026-03-27T17:07:33+00:00",
+                            "updated": "2026-03-27T17:07:33+00:00",
+                            "author": {"displayName": "OSIJIRAOCC", "accountId": "acc-occ"},
+                            "body": "Successfully OCC ticket Created with Ticket Id: LIBRA-SR-075206",
+                            "public": True,
+                        }
+                    ],
+                },
+            },
+        }
+        mock_cache.get_all_issues.return_value = [issue]
+        mock_cache.get_filtered_issues.return_value = [issue]
+
+        resp = test_client.post("/api/report/preview", json={
+            "filters": {},
+            "columns": ["key", "occ_ticket_id"],
+            "sort_field": "created",
+            "sort_dir": "desc",
+            "group_by": None,
+            "include_excluded": False,
+        })
+        assert resp.status_code == 200
+        row = resp.json()["rows"][0]
+        assert row["occ_ticket_id"] == "LIBRA-SR-075206"
+
     def test_preview_includes_first_contact_when_requested(self, test_client, mock_cache):
         issue = {
             "key": "OIT-780",
