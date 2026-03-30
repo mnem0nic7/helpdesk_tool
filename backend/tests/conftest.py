@@ -420,8 +420,19 @@ def test_client(mock_cache, freeze_time, monkeypatch):
         "management_supported": False,
         "note": "",
     }
+    mock_user_admin_providers.list_mailbox_rules.return_value = {
+        "mailbox": "test@example.com",
+        "display_name": "Test User",
+        "principal_name": "test@example.com",
+        "primary_address": "test@example.com",
+        "provider_enabled": True,
+        "note": "No Inbox rules were found for this mailbox.",
+        "rule_count": 0,
+        "rules": [],
+    }
     mock_user_admin_providers.list_devices.return_value = []
     monkeypatch.setattr(user_admin_providers_module, "user_admin_providers", mock_user_admin_providers)
+    monkeypatch.setattr(routes_tools, "user_admin_providers", mock_user_admin_providers)
     monkeypatch.setattr(routes_user_admin, "user_admin_providers", mock_user_admin_providers)
 
     mock_user_exit_workflows = MagicMock()

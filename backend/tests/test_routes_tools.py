@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from auth import create_session
+from user_admin_providers import UserAdminProviderError
 
 
 def test_tools_routes_are_not_available_on_oasis(test_client):
@@ -336,3 +337,64 @@ def test_login_audit_route_returns_recent_logins_for_allowed_users(test_client):
     assert payload
     assert payload[0]["email"]
     assert payload[0]["created_at"]
+
+
+def test_list_mailbox_rules_is_available_on_primary_and_azure(test_client, monkeypatch):
+    import routes_tools
+
+    mock_providers = MagicMock()
+    mock_providers.list_mailbox_rules.return_value = {
+        "mailbox": "ada@example.com",
+        "display_name": "Ada Lovelace",
+        "principal_name": "ada@example.com",
+        "primary_address": "ada@example.com",
+        "provider_enabled": True,
+        "note": "Rules are listed read-only from the mailbox Inbox.",
+        "rule_count": 1,
+        "rules": [
+            {
+                "id": "rule-1",
+                "display_name": "Move GitHub alerts",
+                "sequence": 1,
+                "is_enabled": True,
+                "has_error": False,
+                "stop_processing_rules": True,
+                "conditions_summary": ["From addresses: alerts@github.com"],
+                "exceptions_summary": [],
+                "actions_summary": ["Move to folder: GitHub", "Stop processing more rules"],
+            }
+        ],
+    }
+    monkeypatch.setattr(routes_tools, "user_admin_providers", mock_providers)
+
+    primary = test_client.get(
+        "/api/tools/mailbox-rules?mailbox=ada@example.com",
+        headers={"host": "it-app.movedocs.com"},
+    )
+    azure = test_client.get(
+        "/api/tools/mailbox-rules?mailbox=ada@example.com",
+        headers={"host": "azure.movedocs.com"},
+    )
+
+    assert primary.status_code == 200
+    assert primary.json()["rule_count"] == 1
+    assert primary.json()["rules"][0]["display_name"] == "Move GitHub alerts"
+    assert azure.status_code == 200
+    assert azure.json()["principal_name"] == "ada@example.com"
+    assert mock_providers.list_mailbox_rules.call_count == 2
+
+
+def test_list_mailbox_rules_returns_provider_errors(test_client, monkeypatch):
+    import routes_tools
+
+    mock_providers = MagicMock()
+    mock_providers.list_mailbox_rules.side_effect = UserAdminProviderError("Graph denied access to message rules")
+    monkeypatch.setattr(routes_tools, "user_admin_providers", mock_providers)
+
+    resp = test_client.get(
+        "/api/tools/mailbox-rules?mailbox=ada@example.com",
+        headers={"host": "it-app.movedocs.com"},
+    )
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "Graph denied access to message rules"

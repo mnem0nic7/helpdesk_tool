@@ -145,3 +145,5 @@ Frontend routing switches on `getSiteBranding()` in `frontend/src/App.tsx`. Do n
 
 - The report builder preview now includes an `Export Current View` action in `frontend/src/pages/ReportsPage.tsx`; it reuses the existing report export API and should export the current filters, selected columns, sort, and grouping.
 - Master workbook dashboard AI summaries are written per KPI row in `backend/report_workbook_builder.py`; keep each metric's paragraph and bullets in one wrapped cell so summaries do not spill into adjacent metric rows.
+- The shared Tools surface on `it-app.movedocs.com` and `azure.movedocs.com` now includes read-only mailbox Inbox rule lookup in addition to OneDrive copy and login audit; keep that behavior documented through `backend/routes_tools.py`, `backend/user_admin_providers.py`, and `frontend/src/pages/ToolsPage.tsx`.
+- The Azure Virtual Desktops search box should keep local input state and preserve previous query results during refetch so typing does not remount the page or drop focus.

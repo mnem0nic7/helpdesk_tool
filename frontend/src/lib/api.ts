@@ -1391,6 +1391,29 @@ export interface AppLoginAuditEvent {
   created_at: string;
 }
 
+export interface MailboxRule {
+  id: string;
+  display_name: string;
+  sequence: number | null;
+  is_enabled: boolean;
+  has_error: boolean;
+  stop_processing_rules: boolean;
+  conditions_summary: string[];
+  exceptions_summary: string[];
+  actions_summary: string[];
+}
+
+export interface MailboxRulesStatus {
+  mailbox: string;
+  display_name: string;
+  principal_name: string;
+  primary_address: string;
+  provider_enabled: boolean;
+  note: string;
+  rule_count: number;
+  rules: MailboxRule[];
+}
+
 export interface OneDriveCopyJobStatus {
   job_id: string;
   site_scope: string;
@@ -2854,6 +2877,10 @@ export const api = {
 
   listLoginAudit(limit = 100): Promise<AppLoginAuditEvent[]> {
     return fetchJSON<AppLoginAuditEvent[]>(`/api/tools/onedrive-copy/login-audit${buildQuery({ limit })}`);
+  },
+
+  listMailboxRules(mailbox: string): Promise<MailboxRulesStatus> {
+    return fetchJSON<MailboxRulesStatus>(`/api/tools/mailbox-rules${buildQuery({ mailbox })}`);
   },
 
   getAzureGroups(search = ""): Promise<AzureDirectoryObject[]> {

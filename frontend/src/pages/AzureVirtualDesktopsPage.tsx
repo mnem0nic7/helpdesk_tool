@@ -804,7 +804,7 @@ function AzureVirtualDesktopDetailDrawer({
 
 export default function AzureVirtualDesktopsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const search = searchParams.get("search") || "";
+  const [search, setSearch] = useState(() => searchParams.get("search") || "");
   const removalOnly = searchParams.get("removalOnly") === "1";
   const underUtilizedOnly = searchParams.get("underUtilized") === "1";
   const overUtilizedOnly = searchParams.get("overUtilized") === "1";
@@ -824,6 +824,7 @@ export default function AzureVirtualDesktopsPage() {
         under_utilized_only: underUtilizedOnly,
         over_utilized_only: overUtilizedOnly,
       }),
+    placeholderData: (prev) => prev,
   });
   const desktopDetailQuery = useQuery({
     queryKey: ["azure", "virtual-desktops", "detail", selectedDesktopId],
@@ -855,6 +856,11 @@ export default function AzureVirtualDesktopsPage() {
     ? sorted.find((row) => row.id === selectedDesktopId) || rows.find((row) => row.id === selectedDesktopId) || null
     : null;
   const selectedRows = sorted.filter((row) => selectedDesktopIds.includes(row.id));
+
+  useEffect(() => {
+    const routeSearch = searchParams.get("search") || "";
+    setSearch((current) => (current === routeSearch ? current : routeSearch));
+  }, [searchParams]);
 
   function updateRouteParams(next: {
     search?: string | null;
@@ -894,7 +900,7 @@ export default function AzureVirtualDesktopsPage() {
     );
   }
 
-  if (isLoading) {
+  if (isLoading && !data) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
         <div className="flex items-center gap-3 text-sm text-slate-500">
@@ -1016,7 +1022,11 @@ export default function AzureVirtualDesktopsPage() {
             className="min-w-[18rem] flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm placeholder-slate-400 focus:border-blue-500 focus:outline-none"
             placeholder="Search desktop, assigned user, host pool, reason, or utilization..."
             value={search}
-            onChange={(event) => updateRouteParams({ search: event.target.value, desktopId: null })}
+            onChange={(event) => {
+              const nextSearch = event.target.value;
+              setSearch(nextSearch);
+              updateRouteParams({ search: nextSearch, desktopId: null });
+            }}
           />
           <label className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
             <input

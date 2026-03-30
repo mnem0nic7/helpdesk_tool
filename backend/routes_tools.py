@@ -10,14 +10,16 @@ from auth import list_login_audit, require_tools_access
 from azure_cache import azure_cache
 from models import (
     AppLoginAuditEventResponse,
+    MailboxRulesResponse,
     OneDriveCopyJobCreateRequest,
     OneDriveCopyJobResponse,
     OneDriveCopyUserOptionResponse,
 )
 from onedrive_copy_jobs import onedrive_copy_jobs
 from site_context import get_current_site_scope
+from user_admin_providers import UserAdminProviderError, user_admin_providers
 
-router = APIRouter(prefix="/api/tools/onedrive-copy")
+router = APIRouter(prefix="/api/tools")
 
 
 def _ensure_tools_site() -> str:
@@ -68,7 +70,7 @@ def _find_exact_entra_user(upn: str) -> dict[str, Any] | None:
     return None
 
 
-@router.get("/users", response_model=list[OneDriveCopyUserOptionResponse])
+@router.get("/onedrive-copy/users", response_model=list[OneDriveCopyUserOptionResponse])
 def search_onedrive_copy_users(
     search: str = Query(default=""),
     limit: int = Query(default=20, ge=1, le=50),
@@ -107,7 +109,7 @@ def search_onedrive_copy_users(
     return [OneDriveCopyUserOptionResponse.model_validate(row) for row in normalized_options[:limit]]
 
 
-@router.post("/jobs", response_model=OneDriveCopyJobResponse, status_code=202)
+@router.post("/onedrive-copy/jobs", response_model=OneDriveCopyJobResponse, status_code=202)
 def create_onedrive_copy_job(
     body: OneDriveCopyJobCreateRequest,
     session: dict[str, Any] = Depends(_require_tools_session),
@@ -141,7 +143,7 @@ def create_onedrive_copy_job(
     return OneDriveCopyJobResponse.model_validate(job)
 
 
-@router.get("/jobs", response_model=list[OneDriveCopyJobResponse])
+@router.get("/onedrive-copy/jobs", response_model=list[OneDriveCopyJobResponse])
 def list_onedrive_copy_jobs(
     limit: int = Query(default=100, ge=1, le=200),
     _session: dict[str, Any] = Depends(_require_tools_session),
@@ -149,7 +151,7 @@ def list_onedrive_copy_jobs(
     return [OneDriveCopyJobResponse.model_validate(job) for job in onedrive_copy_jobs.list_jobs(limit=limit)]
 
 
-@router.get("/jobs/{job_id}", response_model=OneDriveCopyJobResponse)
+@router.get("/onedrive-copy/jobs/{job_id}", response_model=OneDriveCopyJobResponse)
 def get_onedrive_copy_job(
     job_id: str,
     _session: dict[str, Any] = Depends(_require_tools_session),
@@ -160,9 +162,20 @@ def get_onedrive_copy_job(
     return OneDriveCopyJobResponse.model_validate(job)
 
 
-@router.get("/login-audit", response_model=list[AppLoginAuditEventResponse])
+@router.get("/onedrive-copy/login-audit", response_model=list[AppLoginAuditEventResponse])
 def get_login_audit(
     limit: int = Query(default=100, ge=1, le=200),
     _session: dict[str, Any] = Depends(_require_tools_session),
 ) -> list[AppLoginAuditEventResponse]:
     return [AppLoginAuditEventResponse.model_validate(row) for row in list_login_audit(limit=limit)]
+
+
+@router.get("/mailbox-rules", response_model=MailboxRulesResponse)
+def list_mailbox_rules(
+    mailbox: str = Query(..., min_length=3, max_length=320),
+    _session: dict[str, Any] = Depends(_require_tools_session),
+) -> MailboxRulesResponse:
+    try:
+        return MailboxRulesResponse.model_validate(user_admin_providers.list_mailbox_rules(mailbox))
+    except UserAdminProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

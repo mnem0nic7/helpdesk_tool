@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from dataclasses import dataclass
 from typing import Any
@@ -117,6 +118,124 @@ def _license_display_name(item: dict[str, Any]) -> str:
     if not sku_part_number:
         return str(item.get("skuId") or "")
     return sku_part_number.replace("_", " ").title()
+
+
+def _message_rule_label(key: str) -> str:
+    words = re.sub(r"(?<!^)(?=[A-Z])", " ", str(key or "")).strip().replace("_", " ")
+    if not words:
+        return ""
+    label = words[0].upper() + words[1:]
+    return label.replace("Id", "ID")
+
+
+def _message_rule_recipient_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return str(value or "").strip()
+    email = value.get("emailAddress")
+    if isinstance(email, dict):
+        address = str(email.get("address") or "").strip()
+        name = str(email.get("name") or "").strip()
+        if address and name and name.lower() != address.lower():
+            return f"{name} <{address}>"
+        return address or name
+    for key in ("address", "mail", "userPrincipalName", "displayName", "name", "id"):
+        text = str(value.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _message_rule_value_texts(value: Any) -> list[str]:
+    if value is None or value is False:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, (int, float)):
+        return [str(value)]
+    if isinstance(value, list):
+        results: list[str] = []
+        for item in value:
+            for text in _message_rule_value_texts(item):
+                if text and text not in results:
+                    results.append(text)
+        return results
+    if isinstance(value, dict):
+        recipient_text = _message_rule_recipient_text(value)
+        if recipient_text:
+            return [recipient_text]
+        minimum = value.get("minimumSize")
+        maximum = value.get("maximumSize")
+        if minimum is not None or maximum is not None:
+            if minimum is not None and maximum is not None:
+                return [f"{minimum} to {maximum}"]
+            if minimum is not None:
+                return [f">= {minimum}"]
+            return [f"<= {maximum}"]
+        results: list[str] = []
+        for nested_key, nested_value in value.items():
+            if nested_key.startswith("@odata"):
+                continue
+            nested_label = _message_rule_label(nested_key)
+            for text in _message_rule_value_texts(nested_value):
+                if not text:
+                    continue
+                entry = f"{nested_label}: {text}" if nested_label else text
+                if entry not in results:
+                    results.append(entry)
+        return results
+    return [str(value)]
+
+
+def _summarize_message_rule_section(section: Any, *, section_name: str) -> list[str]:
+    if not isinstance(section, dict):
+        return []
+    results: list[str] = []
+    for key, value in section.items():
+        if key.startswith("@odata") or value in (None, "", [], {}, False):
+            continue
+        label = _message_rule_label(key)
+        if section_name == "actions" and key == "stopProcessingRules" and value is True:
+            results.append("Stop processing more rules")
+            continue
+        if isinstance(value, bool):
+            if value:
+                results.append(label)
+            continue
+        values = _message_rule_value_texts(value)
+        if not values:
+            continue
+        joined = ", ".join(values)
+        summary = f"{label}: {joined}" if label else joined
+        if summary not in results:
+            results.append(summary)
+    return results
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_mailbox_rule(item: dict[str, Any]) -> dict[str, Any]:
+    conditions = item.get("conditions") if isinstance(item.get("conditions"), dict) else {}
+    exceptions = item.get("exceptions") if isinstance(item.get("exceptions"), dict) else {}
+    actions = item.get("actions") if isinstance(item.get("actions"), dict) else {}
+    return {
+        "id": str(item.get("id") or ""),
+        "display_name": str(item.get("displayName") or ""),
+        "sequence": _coerce_optional_int(item.get("sequence")),
+        "is_enabled": bool(item.get("isEnabled")),
+        "has_error": bool(item.get("hasError")),
+        "stop_processing_rules": bool(actions.get("stopProcessingRules")),
+        "conditions_summary": _summarize_message_rule_section(conditions, section_name="conditions"),
+        "exceptions_summary": _summarize_message_rule_section(exceptions, section_name="exceptions"),
+        "actions_summary": _summarize_message_rule_section(actions, section_name="actions"),
+    }
 
 
 @dataclass
@@ -676,6 +795,49 @@ class MailboxAdminProvider:
             "note": note,
         }
 
+    def list_mailbox_rules(self, mailbox_identifier: str) -> dict[str, Any]:
+        mailbox = str(mailbox_identifier or "").strip()
+        if not mailbox:
+            raise UserAdminProviderError("mailbox is required")
+        if not self.enabled:
+            return {
+                "mailbox": mailbox,
+                "display_name": "",
+                "principal_name": mailbox,
+                "primary_address": "",
+                "provider_enabled": False,
+                "note": "Mailbox rule lookup requires a configured Microsoft Graph connection.",
+                "rule_count": 0,
+                "rules": [],
+            }
+
+        user = _safe_graph_call(
+            self.client.graph_request,
+            "GET",
+            f"users/{mailbox}",
+            params={"$select": "id,displayName,mail,userPrincipalName"},
+        )
+        user_id = str(user.get("id") or mailbox).strip()
+        rows = _safe_graph_call(
+            self.client.graph_paged_get,
+            f"users/{user_id}/mailFolders/inbox/messageRules",
+            params={"$top": "999"},
+        )
+        rules = [_normalize_mailbox_rule(item) for item in rows if isinstance(item, dict) and str(item.get("id") or "").strip()]
+        rules.sort(key=lambda item: (item.get("sequence") is None, item.get("sequence") or 0, str(item.get("display_name") or "").lower()))
+
+        primary_address = str(user.get("mail") or user.get("userPrincipalName") or mailbox)
+        return {
+            "mailbox": mailbox,
+            "display_name": str(user.get("displayName") or ""),
+            "principal_name": str(user.get("userPrincipalName") or mailbox),
+            "primary_address": primary_address,
+            "provider_enabled": True,
+            "note": "Rules are listed read-only from the mailbox Inbox." if rules else "No Inbox rules were found for this mailbox.",
+            "rule_count": len(rules),
+            "rules": rules,
+        }
+
     def execute(self, action_type: UserAdminActionType, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
         del action_type, user_id, params
         raise UserAdminProviderError(
@@ -877,6 +1039,9 @@ class UserAdminProviderRegistry:
 
     def get_mailbox(self, user_id: str) -> dict[str, Any]:
         return self.mailbox.get_mailbox(user_id)
+
+    def list_mailbox_rules(self, mailbox_identifier: str) -> dict[str, Any]:
+        return self.mailbox.list_mailbox_rules(mailbox_identifier)
 
     def list_devices(self, user_id: str) -> list[dict[str, Any]]:
         return self.device_management.list_devices(user_id)

@@ -9,6 +9,7 @@ The main application lives in `backend/` and `frontend/`. The repo also includes
 - Primary helpdesk dashboard for OIT ticket operations, SLA tracking, AI triage, reporting, alerts, and knowledge-base tooling.
 - OasisDev-hosted helpdesk view that reuses the same application with scope-aware filtering.
 - Azure Control Center for Azure inventory, cost, identity, VM and virtual desktop analysis, alerts, and optimization workflows.
+- Shared operator tools on the primary and Azure hosts for OneDrive copy jobs, login audit review, and read-only mailbox Inbox rule lookup.
 
 ## Repository layout
 
@@ -108,8 +109,10 @@ docker compose up --build
 ## Implementation notes
 
 - The frontend switches between helpdesk and Azure route trees based on site branding and request host.
+- The shared `/tools` surface is available on the primary and Azure hosts and now includes mailbox Inbox rule lookup alongside OneDrive copy and login audit.
 - The backend serves all app surfaces from one FastAPI service and starts several background workers for caches, alerts, exports, reporting, and lifecycle automation.
 - PostgreSQL and Redis are the intended shared services for the main app, while local development may still use SQLite-backed data under `data/`.
+- The Azure Virtual Desktops page keeps its search input in local state while syncing route params so filtered refetches do not tear down the page and steal focus.
 
 ## Reporting notes
 

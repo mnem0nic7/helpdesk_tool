@@ -11,12 +11,22 @@ const { mockApi } = vi.hoisted(() => ({
     getOneDriveCopyJob: vi.fn(),
     createOneDriveCopyJob: vi.fn(),
     listLoginAudit: vi.fn(),
+    listMailboxRules: vi.fn(),
   },
 }));
 
 vi.mock("../lib/api.ts", () => ({
   api: mockApi,
   default: mockApi,
+}));
+
+vi.mock("../lib/siteContext.ts", () => ({
+  getSiteBranding: () => ({
+    scope: "primary",
+    appName: "OIT Helpdesk",
+    dashboardName: "OIT Dashboard",
+    alertPrefix: "OIT",
+  }),
 }));
 
 const baseJob = {
@@ -57,7 +67,7 @@ const baseJob = {
 describe("ToolsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    window.history.replaceState({}, "", "https://it-app.movedocs.com/tools");
+    window.history.replaceState({}, "", "/tools");
     mockApi.getMe.mockResolvedValue({
       email: "gallison@movedocs.com",
       name: "Gallison",
@@ -92,6 +102,18 @@ describe("ToolsPage", () => {
           },
         ];
       }
+      if (query.includes("ada")) {
+        return [
+          {
+            id: "user-ada",
+            display_name: "Ada Mailbox",
+            principal_name: "ada@example.com",
+            mail: "ada@example.com",
+            enabled: true,
+            source: "entra" as const,
+          },
+        ];
+      }
       return [];
     });
     mockApi.listOneDriveCopyJobs.mockResolvedValue([baseJob]);
@@ -108,6 +130,28 @@ describe("ToolsPage", () => {
         created_at: "2026-03-26T19:00:00Z",
       },
     ]);
+    mockApi.listMailboxRules.mockResolvedValue({
+      mailbox: "ada@example.com",
+      display_name: "Ada Mailbox",
+      principal_name: "ada@example.com",
+      primary_address: "ada@example.com",
+      provider_enabled: true,
+      note: "Rules are listed read-only from the mailbox Inbox.",
+      rule_count: 1,
+      rules: [
+        {
+          id: "rule-1",
+          display_name: "Move GitHub alerts",
+          sequence: 1,
+          is_enabled: true,
+          has_error: false,
+          stop_processing_rules: true,
+          conditions_summary: ["From addresses: alerts@github.com"],
+          exceptions_summary: [],
+          actions_summary: ["Move to folder: GitHub", "Stop processing more rules"],
+        },
+      ],
+    });
     mockApi.createOneDriveCopyJob.mockResolvedValue({
       ...baseJob,
       status: "queued",
@@ -123,10 +167,11 @@ describe("ToolsPage", () => {
     render(<ToolsPage />);
 
     expect(await screen.findByText("Copy a full OneDrive to another user")).toBeInTheDocument();
+    expect(screen.getByText("List Inbox rules for a provided mailbox")).toBeInTheDocument();
     expect(screen.getByText("Recent OneDrive copy jobs")).toBeInTheDocument();
     expect(await screen.findByText(/Graph copy requests finish server-side/i)).toBeInTheDocument();
     expect(screen.getByText("Recent app sign-ins")).toBeInTheDocument();
-    expect(screen.getByText("Tech User")).toBeInTheDocument();
+    expect(screen.getAllByText("Tech User").length).toBeGreaterThan(0);
     expect(screen.getByText("source@example.com to dest@example.com")).toBeInTheDocument();
   });
 
@@ -135,12 +180,14 @@ describe("ToolsPage", () => {
 
     await screen.findByText("Copy a full OneDrive to another user");
 
-    fireEvent.change(screen.getByLabelText("Source user UPN"), { target: { value: "source@example.com" } });
-    expect(await screen.findByText("Source User")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Source User/i }));
-    fireEvent.change(screen.getByLabelText("Destination user UPN"), { target: { value: "dest@example.com" } });
-    expect(await screen.findByText("Dest User")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Dest User/i }));
+    const sourceInput = screen.getByLabelText("Source user UPN");
+    fireEvent.focus(sourceInput);
+    fireEvent.change(sourceInput, { target: { value: "source@example.com" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Source User/i }));
+    const destinationInput = screen.getByLabelText("Destination user UPN");
+    fireEvent.focus(destinationInput);
+    fireEvent.change(destinationInput, { target: { value: "dest@example.com" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Dest User/i }));
     fireEvent.change(screen.getByLabelText("Destination folder name"), { target: { value: "CopiedFiles" } });
     fireEvent.click(screen.getByRole("button", { name: "Queue OneDrive Copy" }));
 
@@ -154,5 +201,24 @@ describe("ToolsPage", () => {
         exclude_system_folders: true,
       });
     });
+  });
+
+  it("loads mailbox rules for the selected mailbox", async () => {
+    render(<ToolsPage />);
+
+    await screen.findByText("List Inbox rules for a provided mailbox");
+
+    const mailboxInput = screen.getByLabelText("Mailbox UPN or email");
+    fireEvent.focus(mailboxInput);
+    fireEvent.change(mailboxInput, { target: { value: "ada@example.com" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Ada Mailbox/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Load mailbox rules" }));
+
+    await waitFor(() => {
+      expect(mockApi.listMailboxRules).toHaveBeenCalledWith("ada@example.com");
+    });
+
+    expect(await screen.findByText("Move GitHub alerts")).toBeInTheDocument();
+    expect(screen.getByText("From addresses: alerts@github.com")).toBeInTheDocument();
   });
 });

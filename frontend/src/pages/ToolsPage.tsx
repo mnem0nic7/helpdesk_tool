@@ -1,6 +1,12 @@
 import { useEffect, useState, useDeferredValue } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type AppLoginAuditEvent, type OneDriveCopyJobStatus, type OneDriveCopyUserOption } from "../lib/api.ts";
+import {
+  api,
+  type AppLoginAuditEvent,
+  type MailboxRulesStatus,
+  type OneDriveCopyJobStatus,
+  type OneDriveCopyUserOption,
+} from "../lib/api.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
 
 const EXCLUDED_ROOT_FOLDERS = [
@@ -201,6 +207,134 @@ function LoginAuditPanel({ events }: { events: AppLoginAuditEvent[] }) {
   );
 }
 
+function RuleSummaryStrip({
+  label,
+  items,
+  toneClass,
+}: {
+  label: string;
+  items: string[];
+  toneClass: string;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="flex flex-wrap gap-2">
+        {items.map((item, index) => (
+          <span key={`${label}-${index}-${item}`} className={`rounded-full border px-3 py-1 text-xs ${toneClass}`}>
+            {item}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MailboxRulesResults({
+  data,
+  isLoading,
+  errorMessage,
+  onRefresh,
+  isRefreshing,
+}: {
+  data: MailboxRulesStatus | undefined;
+  isLoading: boolean;
+  errorMessage: string;
+  onRefresh: () => void;
+  isRefreshing: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+        Loading mailbox rules...
+      </div>
+    );
+  }
+
+  if (errorMessage) {
+    return <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMessage}</div>;
+  }
+
+  if (!data) {
+    return (
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+        Select a mailbox and load its Inbox rules to inspect enabled rules, actions, and exceptions.
+      </div>
+    );
+  }
+
+  const enabledCount = data.rules.filter((rule) => rule.is_enabled).length;
+  const disabledCount = data.rules.filter((rule) => !rule.is_enabled).length;
+  const errorCount = data.rules.filter((rule) => rule.has_error).length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mailbox rules</div>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-900">{data.display_name || data.primary_address || data.mailbox}</h2>
+          <p className="mt-1 text-sm text-slate-500">{data.primary_address || data.principal_name || data.mailbox}</p>
+        </div>
+        <button type="button" onClick={onRefresh} className={buttonClass("secondary", isRefreshing)}>
+          Refresh
+        </button>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-4">
+        <CountCard label="Total Rules" value={data.rule_count.toLocaleString()} />
+        <CountCard label="Enabled" value={enabledCount.toLocaleString()} tone="text-emerald-700" />
+        <CountCard label="Disabled" value={disabledCount.toLocaleString()} tone={disabledCount > 0 ? "text-slate-700" : "text-slate-900"} />
+        <CountCard label="Errors" value={errorCount.toLocaleString()} tone={errorCount > 0 ? "text-red-700" : "text-slate-900"} />
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">{data.note}</div>
+
+      {data.rules.length > 0 ? (
+        <div className="space-y-3">
+          {data.rules.map((rule) => (
+            <div key={rule.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-lg font-semibold text-slate-900">{rule.display_name || "Unnamed rule"}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Sequence {rule.sequence ?? "-"} • {rule.id}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-wide">
+                  <span className={`rounded-full px-2.5 py-1 ${rule.is_enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
+                    {rule.is_enabled ? "Enabled" : "Disabled"}
+                  </span>
+                  {rule.has_error ? <span className="rounded-full bg-red-100 px-2.5 py-1 text-red-700">Error</span> : null}
+                  {rule.stop_processing_rules ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-amber-700">Stop processing</span> : null}
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <RuleSummaryStrip
+                  label="Conditions"
+                  items={rule.conditions_summary}
+                  toneClass="border-sky-200 bg-sky-50 text-sky-900"
+                />
+                <RuleSummaryStrip
+                  label="Actions"
+                  items={rule.actions_summary}
+                  toneClass="border-emerald-200 bg-emerald-50 text-emerald-900"
+                />
+                <RuleSummaryStrip
+                  label="Exceptions"
+                  items={rule.exceptions_summary}
+                  toneClass="border-amber-200 bg-amber-50 text-amber-900"
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function DirectoryComboboxField({
   label,
   value,
@@ -387,16 +521,21 @@ export default function ToolsPage() {
   const queryClient = useQueryClient();
   const [sourceUpnInput, setSourceUpnInput] = useState("");
   const [destinationUpnInput, setDestinationUpnInput] = useState("");
+  const [mailboxInput, setMailboxInput] = useState("");
   const [selectedSource, setSelectedSource] = useState<ToolUserPickerOption | null>(null);
   const [selectedDestination, setSelectedDestination] = useState<ToolUserPickerOption | null>(null);
+  const [selectedMailbox, setSelectedMailbox] = useState<ToolUserPickerOption | null>(null);
   const [destinationFolder, setDestinationFolder] = useState("");
   const [testMode, setTestMode] = useState(false);
   const [testFileLimit, setTestFileLimit] = useState("25");
   const [excludeSystemFolders, setExcludeSystemFolders] = useState(true);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeMailboxLookup, setActiveMailboxLookup] = useState<string | null>(null);
   const [formError, setFormError] = useState("");
+  const [mailboxFormError, setMailboxFormError] = useState("");
   const deferredSourceSearch = useDeferredValue(sourceUpnInput);
   const deferredDestinationSearch = useDeferredValue(destinationUpnInput);
+  const deferredMailboxSearch = useDeferredValue(mailboxInput);
 
   const meQuery = useQuery({
     queryKey: ["auth", "me"],
@@ -419,8 +558,16 @@ export default function ToolsPage() {
     staleTime: 30_000,
   });
 
+  const mailboxSearchQuery = useQuery({
+    queryKey: ["mailbox-rules", "users", deferredMailboxSearch],
+    queryFn: () => api.searchOneDriveCopyUsers(deferredMailboxSearch.trim(), 8),
+    enabled: canAccessTools,
+    staleTime: 30_000,
+  });
+
   const sourceOptions = buildPickerOptions(sourceUpnInput, sourceSearchQuery.data);
   const destinationOptions = buildPickerOptions(destinationUpnInput, destinationSearchQuery.data);
+  const mailboxOptions = buildPickerOptions(mailboxInput, mailboxSearchQuery.data);
 
   const jobsQuery = useQuery({
     queryKey: ["onedrive-copy", "jobs"],
@@ -454,6 +601,14 @@ export default function ToolsPage() {
     enabled: canAccessTools,
     staleTime: 15_000,
     refetchInterval: 30_000,
+  });
+
+  const mailboxRulesQuery = useQuery({
+    queryKey: ["mailbox-rules", activeMailboxLookup],
+    queryFn: () => api.listMailboxRules(activeMailboxLookup as string),
+    enabled: canAccessTools && !!activeMailboxLookup,
+    retry: false,
+    staleTime: 15_000,
   });
 
   const createJobMutation = useMutation({
@@ -529,6 +684,48 @@ export default function ToolsPage() {
     setDestinationUpnInput(option.canonical_upn);
     setFormError("");
   }
+
+  function handleMailboxInputChange(value: string) {
+    setMailboxInput(value);
+    setMailboxFormError("");
+    if (selectedMailbox && normalizeUpn(value) !== normalizeUpn(selectedMailbox.canonical_upn)) {
+      setSelectedMailbox(null);
+    }
+  }
+
+  function handleMailboxSelect(option: ToolUserPickerOption) {
+    setSelectedMailbox(option);
+    setMailboxInput(option.canonical_upn);
+    setMailboxFormError("");
+  }
+
+  function submitMailboxLookup() {
+    if (!canAccessTools) {
+      setMailboxFormError("Tools access is restricted.");
+      return;
+    }
+    const mailbox = selectedMailbox?.canonical_upn.trim() || mailboxInput.trim();
+    if (!mailbox || !looksLikeUpn(mailbox)) {
+      setMailboxFormError("Select a mailbox from the dropdown or enter a valid UPN/email before loading rules.");
+      return;
+    }
+    setMailboxFormError("");
+    if (activeMailboxLookup && normalizeUpn(activeMailboxLookup) === normalizeUpn(mailbox)) {
+      void mailboxRulesQuery.refetch();
+      return;
+    }
+    setActiveMailboxLookup(mailbox);
+  }
+
+  const mailboxApiError =
+    mailboxRulesQuery.error instanceof Error &&
+    activeMailboxLookup &&
+    normalizeUpn(mailboxInput || activeMailboxLookup) === normalizeUpn(activeMailboxLookup)
+      ? mailboxRulesQuery.error.message
+      : "";
+  const mailboxLookupError = mailboxFormError || mailboxApiError;
+  const canLookupMailboxRules =
+    (selectedMailbox !== null || looksLikeUpn(mailboxInput)) && !mailboxRulesQuery.isFetching;
 
   return (
     <div className="space-y-6">
@@ -753,6 +950,52 @@ export default function ToolsPage() {
               Select a job from the table to inspect progress, counts, and the event log.
             </section>
           )}
+
+          <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mailbox Rules</div>
+                <h2 className="mt-1 text-2xl font-semibold text-slate-900">List Inbox rules for a provided mailbox</h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Use the shared operator Graph connection to inspect a mailbox&apos;s Inbox rules, including rule order, enabled state, actions, and exceptions.
+                </p>
+              </div>
+              <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700">Read only</span>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <DirectoryComboboxField
+                label="Mailbox UPN or email"
+                value={mailboxInput}
+                onInputChange={handleMailboxInputChange}
+                onSelect={handleMailboxSelect}
+                selected={selectedMailbox}
+                loading={mailboxSearchQuery.isLoading}
+                options={mailboxOptions}
+                placeholder="alerts@example.com"
+                emptyMessage="No saved or Entra matches found yet. Enter a valid UPN/email to use it directly."
+              />
+              <button
+                type="button"
+                onClick={submitMailboxLookup}
+                disabled={!canLookupMailboxRules}
+                className={buttonClass("primary", !canLookupMailboxRules)}
+              >
+                {mailboxRulesQuery.isFetching ? "Loading rules..." : "Load mailbox rules"}
+              </button>
+            </div>
+
+            <MailboxRulesResults
+              data={mailboxRulesQuery.data}
+              isLoading={mailboxRulesQuery.isLoading}
+              errorMessage={mailboxLookupError}
+              onRefresh={() => {
+                void mailboxRulesQuery.refetch();
+              }}
+              isRefreshing={mailboxRulesQuery.isFetching}
+            />
+          </section>
+
           <LoginAuditPanel events={loginAuditQuery.data ?? []} />
         </div>
       </section>

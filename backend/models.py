@@ -770,6 +770,33 @@ class AppLoginAuditEventResponse(BaseModel):
     created_at: str
 
 
+class MailboxRuleResponse(BaseModel):
+    """One normalized inbox rule returned by the shared Tools surface."""
+
+    id: str
+    display_name: str = ""
+    sequence: Optional[int] = None
+    is_enabled: bool = False
+    has_error: bool = False
+    stop_processing_rules: bool = False
+    conditions_summary: list[str] = Field(default_factory=list)
+    exceptions_summary: list[str] = Field(default_factory=list)
+    actions_summary: list[str] = Field(default_factory=list)
+
+
+class MailboxRulesResponse(BaseModel):
+    """Inbox rule listing payload for a provided mailbox identifier."""
+
+    mailbox: str
+    display_name: str = ""
+    principal_name: str = ""
+    primary_address: str = ""
+    provider_enabled: bool = False
+    note: str = ""
+    rule_count: int = 0
+    rules: list[MailboxRuleResponse] = Field(default_factory=list)
+
+
 class OneDriveCopyJobResponse(BaseModel):
     """Status payload for one OneDrive copy background job."""
 
