@@ -222,6 +222,15 @@ def _env_json_object(name: str) -> dict[str, object]:
     return payload
 
 
+def _default_azure_finops_duckdb_path() -> str:
+    base_path = os.path.join(DATA_DIR, "azure_finops.duckdb")
+    if not APP_RUNTIME_BLUEGREEN_ENABLED:
+        return base_path
+    if APP_RUNTIME_COLOR not in {"blue", "green"}:
+        return base_path
+    return os.path.join(DATA_DIR, f"azure_finops_{APP_RUNTIME_COLOR}.duckdb")
+
+
 # Local AI provider (Ollama)
 OLLAMA_ENABLED: bool = _env_bool("OLLAMA_ENABLED", "0")
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -287,7 +296,7 @@ AZURE_COST_EXPORT_MANIFEST_DB_PATH: str = os.getenv(
 )
 AZURE_FINOPS_DUCKDB_PATH: str = os.getenv(
     "AZURE_FINOPS_DUCKDB_PATH",
-    os.path.join(DATA_DIR, "azure_finops.duckdb"),
+    _default_azure_finops_duckdb_path(),
 )
 AZURE_FINOPS_AI_PRICING: dict[str, object] = _env_json_object("AZURE_FINOPS_AI_PRICING_JSON")
 AZURE_FINOPS_AI_TEAM_MAPPINGS: dict[str, object] = _env_json_object("AZURE_FINOPS_AI_TEAM_MAPPINGS_JSON")

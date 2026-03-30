@@ -92,7 +92,7 @@ DATABASE_URL=sqlite+pysqlite:///./azure_ingestion_platform_test.db ./.venv/bin/p
 - PostgreSQL is the primary shared database when `DATABASE_URL` is configured.
 - Redis is used for shared runtime state and coordination.
 - SQLite files under `data/` still exist for local persistence and dual-write compatibility.
-- DuckDB is used for Azure FinOps reporting data.
+- DuckDB is used for Azure FinOps reporting data. In blue/green Docker mode, default each runtime color to its own DuckDB file unless `AZURE_FINOPS_DUCKDB_PATH` is explicitly overridden on purpose.
 
 ## Site Scopes
 
@@ -147,3 +147,4 @@ Frontend routing switches on `getSiteBranding()` in `frontend/src/App.tsx`. Do n
 - Master workbook dashboard AI summaries are written per KPI row in `backend/report_workbook_builder.py`; keep each metric's paragraph and bullets in one wrapped cell so summaries do not spill into adjacent metric rows.
 - The shared Tools surface on `it-app.movedocs.com` and `azure.movedocs.com` now includes read-only mailbox Inbox rule lookup in addition to OneDrive copy and login audit; keep that behavior documented through `backend/routes_tools.py`, `backend/user_admin_providers.py`, and `frontend/src/pages/ToolsPage.tsx`.
 - The Azure Virtual Desktops search box should keep local input state and preserve previous query results during refetch so typing does not remount the page or drop focus.
+- A March 30, 2026 outage came from blue and green backend containers contending for the same Azure FinOps DuckDB file during restart. Keep the color-scoped DuckDB default in mind when touching blue/green config or FinOps storage initialization.

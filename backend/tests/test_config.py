@@ -54,6 +54,32 @@ def test_cost_export_config_defaults_and_bool_parsing(monkeypatch):
     assert config.AZURE_COST_EXPORT_QUARANTINE_DIR == "/tmp/azure-data/azure_cost_exports/_quarantine"
 
 
+def test_bluegreen_runtime_uses_color_scoped_finops_duckdb_by_default(monkeypatch):
+    monkeypatch.setenv("APP_SECRET_KEY", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("DATA_DIR", "/tmp/azure-data")
+    monkeypatch.setenv("APP_RUNTIME_BLUEGREEN_ENABLED", "true")
+    monkeypatch.setenv("APP_RUNTIME_COLOR", "green")
+    monkeypatch.delenv("AZURE_FINOPS_DUCKDB_PATH", raising=False)
+
+    config = _reload_config()
+
+    assert config.AZURE_FINOPS_DUCKDB_PATH == "/tmp/azure-data/azure_finops_green.duckdb"
+
+
+def test_bluegreen_runtime_keeps_explicit_finops_duckdb_override(monkeypatch):
+    monkeypatch.setenv("APP_SECRET_KEY", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("DATA_DIR", "/tmp/azure-data")
+    monkeypatch.setenv("APP_RUNTIME_BLUEGREEN_ENABLED", "true")
+    monkeypatch.setenv("APP_RUNTIME_COLOR", "blue")
+    monkeypatch.setenv("AZURE_FINOPS_DUCKDB_PATH", "/tmp/custom-finops.duckdb")
+
+    config = _reload_config()
+
+    assert config.AZURE_FINOPS_DUCKDB_PATH == "/tmp/custom-finops.duckdb"
+
+
 def test_reporting_handoff_config_defaults_and_overrides(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "")
     monkeypatch.setenv("APP_ENV", "test")

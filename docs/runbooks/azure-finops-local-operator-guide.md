@@ -28,6 +28,7 @@ Operational stores:
   - allocation rules and runs
   - persisted recommendations
   - AI usage records
+  - in blue/green Docker deploys, each runtime color should use its own DuckDB file unless an explicit override is intentionally coordinating access
 
 Primary backend components:
 
@@ -229,8 +230,9 @@ Check:
 
 1. export ingestion is enabled and parsed deliveries exist
 2. DuckDB path is writable
-3. `/api/azure/finops/status` shows available data
-4. `/api/azure/finops/validation` shows whether signoff is blocked by missing deliveries, freshness warnings, or reconciliation drift
+3. in blue/green Docker mode, confirm `APP_RUNTIME_COLOR` is not sharing the same DuckDB path with the other color unless that path is intentionally read-only or otherwise coordinated
+4. `/api/azure/finops/status` shows available data
+5. `/api/azure/finops/validation` shows whether signoff is blocked by missing deliveries, freshness warnings, or reconciliation drift
 
 ### Recommendation counts look wrong
 

@@ -112,6 +112,7 @@ docker compose up --build
 - The shared `/tools` surface is available on the primary and Azure hosts and now includes mailbox Inbox rule lookup alongside OneDrive copy and login audit.
 - The backend serves all app surfaces from one FastAPI service and starts several background workers for caches, alerts, exports, reporting, and lifecycle automation.
 - PostgreSQL and Redis are the intended shared services for the main app, while local development may still use SQLite-backed data under `data/`.
+- In blue/green Docker deployments, Azure FinOps DuckDB defaults to color-scoped files like `azure_finops_blue.duckdb` and `azure_finops_green.duckdb` so the two runtimes do not fight over the same lock.
 - The Azure Virtual Desktops page keeps its search input in local state while syncing route params so filtered refetches do not tear down the page and steal focus.
 
 ## Reporting notes
