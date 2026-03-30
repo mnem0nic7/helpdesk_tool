@@ -7,6 +7,7 @@ import re
 import secrets
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 from azure_cache import azure_cache
 from azure_client import AzureApiError, AzureClient
@@ -187,9 +188,23 @@ def _message_rule_value_texts(value: Any) -> list[str]:
     return [str(value)]
 
 
-def _summarize_message_rule_section(section: Any, *, section_name: str) -> list[str]:
+def _mail_folder_label(item: dict[str, Any]) -> str:
+    display_name = str(item.get("displayName") or "").strip()
+    if display_name:
+        return display_name
+    well_known_name = str(item.get("wellKnownName") or "").strip()
+    return _message_rule_label(well_known_name)
+
+
+def _summarize_message_rule_section(
+    section: Any,
+    *,
+    section_name: str,
+    folder_labels: dict[str, str] | None = None,
+) -> list[str]:
     if not isinstance(section, dict):
         return []
+    resolved_folder_labels = folder_labels or {}
     results: list[str] = []
     for key, value in section.items():
         if key.startswith("@odata") or value in (None, "", [], {}, False):
@@ -197,6 +212,15 @@ def _summarize_message_rule_section(section: Any, *, section_name: str) -> list[
         label = _message_rule_label(key)
         if section_name == "actions" and key == "stopProcessingRules" and value is True:
             results.append("Stop processing more rules")
+            continue
+        if section_name == "actions" and key in {"moveToFolder", "copyToFolder"}:
+            folder_id = str(value or "").strip()
+            if not folder_id:
+                continue
+            folder_text = resolved_folder_labels.get(folder_id, folder_id)
+            summary = f"{label}: {folder_text}" if label else folder_text
+            if summary not in results:
+                results.append(summary)
             continue
         if isinstance(value, bool):
             if value:
@@ -221,7 +245,7 @@ def _coerce_optional_int(value: Any) -> int | None:
         return None
 
 
-def _normalize_mailbox_rule(item: dict[str, Any]) -> dict[str, Any]:
+def _normalize_mailbox_rule(item: dict[str, Any], *, folder_labels: dict[str, str] | None = None) -> dict[str, Any]:
     conditions = item.get("conditions") if isinstance(item.get("conditions"), dict) else {}
     exceptions = item.get("exceptions") if isinstance(item.get("exceptions"), dict) else {}
     actions = item.get("actions") if isinstance(item.get("actions"), dict) else {}
@@ -234,7 +258,11 @@ def _normalize_mailbox_rule(item: dict[str, Any]) -> dict[str, Any]:
         "stop_processing_rules": bool(actions.get("stopProcessingRules")),
         "conditions_summary": _summarize_message_rule_section(conditions, section_name="conditions"),
         "exceptions_summary": _summarize_message_rule_section(exceptions, section_name="exceptions"),
-        "actions_summary": _summarize_message_rule_section(actions, section_name="actions"),
+        "actions_summary": _summarize_message_rule_section(
+            actions,
+            section_name="actions",
+            folder_labels=folder_labels,
+        ),
     }
 
 
@@ -747,6 +775,56 @@ class MailboxAdminProvider:
     def supported_actions(self) -> list[UserAdminActionType]:
         return []
 
+    def _resolve_mail_folder_labels(self, user_id: str, rows: list[dict[str, Any]]) -> dict[str, str]:
+        folder_ids: list[str] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            actions = item.get("actions") if isinstance(item.get("actions"), dict) else {}
+            for key in ("moveToFolder", "copyToFolder"):
+                folder_id = str(actions.get(key) or "").strip()
+                if folder_id and folder_id not in folder_ids:
+                    folder_ids.append(folder_id)
+        if not folder_ids:
+            return {}
+
+        resolved_labels: dict[str, str] = {}
+        for start in range(0, len(folder_ids), 20):
+            batch_folder_ids = folder_ids[start:start + 20]
+            requests_payload = [
+                {
+                    "id": str(index),
+                    "method": "GET",
+                    "url": (
+                        f"/users/{quote(user_id, safe='')}/mailFolders/{quote(folder_id, safe='')}"
+                        "?$select=id,displayName,wellKnownName"
+                    ),
+                }
+                for index, folder_id in enumerate(batch_folder_ids)
+            ]
+            try:
+                batch_response = _safe_graph_call(self.client.graph_batch_request, requests_payload)
+            except UserAdminProviderError:
+                logger.warning("Mailbox folder label lookup failed for %s; using raw folder IDs instead", user_id)
+                return {}
+
+            responses = batch_response.get("responses") if isinstance(batch_response, dict) else []
+            response_map = {str(index): folder_id for index, folder_id in enumerate(batch_folder_ids)}
+            for response in responses or []:
+                if not isinstance(response, dict):
+                    continue
+                folder_id = response_map.get(str(response.get("id") or ""))
+                if not folder_id:
+                    continue
+                status = int(response.get("status") or 0)
+                if status >= 400:
+                    continue
+                body = response.get("body") if isinstance(response.get("body"), dict) else {}
+                label = _mail_folder_label(body)
+                if label:
+                    resolved_labels[folder_id] = label
+        return resolved_labels
+
     def get_mailbox(self, user_id: str) -> dict[str, Any]:
         user = _safe_graph_call(
             self.client.graph_request,
@@ -823,7 +901,12 @@ class MailboxAdminProvider:
             f"users/{user_id}/mailFolders/inbox/messageRules",
             params={"$top": "999"},
         )
-        rules = [_normalize_mailbox_rule(item) for item in rows if isinstance(item, dict) and str(item.get("id") or "").strip()]
+        folder_labels = self._resolve_mail_folder_labels(user_id, rows)
+        rules = [
+            _normalize_mailbox_rule(item, folder_labels=folder_labels)
+            for item in rows
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        ]
         rules.sort(key=lambda item: (item.get("sequence") is None, item.get("sequence") or 0, str(item.get("display_name") or "").lower()))
 
         primary_address = str(user.get("mail") or user.get("userPrincipalName") or mailbox)
