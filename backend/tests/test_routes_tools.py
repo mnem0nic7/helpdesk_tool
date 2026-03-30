@@ -398,3 +398,26 @@ def test_list_mailbox_rules_returns_provider_errors(test_client, monkeypatch):
 
     assert resp.status_code == 502
     assert resp.json()["detail"] == "Graph denied access to message rules"
+
+
+def test_list_mailbox_rules_translates_graph_message_rule_permission_errors(test_client, monkeypatch):
+    import routes_tools
+
+    mock_providers = MagicMock()
+    mock_providers.list_mailbox_rules.side_effect = UserAdminProviderError(
+        "GET https://graph.microsoft.com/v1.0/users/example/mailFolders/inbox/messageRules failed (403): "
+        '{"error":{"code":"ErrorAccessDenied","message":"Access is denied. Check credentials and try again."}}'
+    )
+    monkeypatch.setattr(routes_tools, "user_admin_providers", mock_providers)
+
+    resp = test_client.get(
+        "/api/tools/mailbox-rules?mailbox=ada@example.com",
+        headers={"host": "it-app.movedocs.com"},
+    )
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == (
+        "Mailbox rule lookup is not enabled for the shared Graph app yet. "
+        "The Entra app registration needs Microsoft Graph application permission "
+        "MailboxSettings.Read with admin consent before this tool can list Inbox rules."
+    )

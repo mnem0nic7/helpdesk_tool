@@ -38,6 +38,21 @@ def _normalized_upn(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def _friendly_mailbox_rules_error(message: str) -> str:
+    text = str(message or "").strip()
+    if (
+        "mailFolders/inbox/messageRules" in text
+        and "ErrorAccessDenied" in text
+        and "(403)" in text
+    ):
+        return (
+            "Mailbox rule lookup is not enabled for the shared Graph app yet. "
+            "The Entra app registration needs Microsoft Graph application permission "
+            "MailboxSettings.Read with admin consent before this tool can list Inbox rules."
+        )
+    return text
+
+
 def _normalize_user_option(row: dict[str, Any], *, source: str) -> dict[str, Any] | None:
     principal_name = str(row.get("principal_name") or "").strip()
     mail = str(row.get("mail") or "").strip()
@@ -178,4 +193,4 @@ def list_mailbox_rules(
     try:
         return MailboxRulesResponse.model_validate(user_admin_providers.list_mailbox_rules(mailbox))
     except UserAdminProviderError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=_friendly_mailbox_rules_error(str(exc))) from exc
