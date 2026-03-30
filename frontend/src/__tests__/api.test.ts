@@ -129,13 +129,11 @@ describe("error handling", () => {
     mockFetch(
       {
         detail:
-          "Component changes must use an existing Jira component for this project. Unknown component(s): Made Up Component.",
+          "Creating a new Jira component requires OIT project-admin access. Choose an existing component or retry with a Jira project-admin identity.",
       },
       400,
     );
-    await expect(api.updateTicket("OIT-1", { components: ["Made Up Component"] })).rejects.toThrow(
-      "Component changes must use an existing Jira component for this project.",
-    );
+    await expect(api.updateTicket("OIT-1", { components: ["Made Up Component"] })).rejects.toThrow("Creating a new Jira component requires OIT project-admin access.");
   });
 
   it("logs auth bootstrap failures and still returns null", async () => {

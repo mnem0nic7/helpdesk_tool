@@ -994,7 +994,7 @@ export default function TicketWorkbenchDrawer({
                       ))}
                     </datalist>
                     <div className="mt-1 text-xs text-slate-500">
-                      Existing Jira components only. Separate multiple applications with commas.
+                      Existing Jira components are suggested. New components require Jira project-admin access.
                     </div>
                   </label>
 

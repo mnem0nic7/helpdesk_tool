@@ -834,17 +834,12 @@ async def update_ticket(
                 name for name in component_names if name.casefold() not in editable_component_ids_by_name
             ]
             if unknown_components:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Component changes must use an existing Jira component for this project. "
-                        f"Unknown component(s): {', '.join(unknown_components)}."
-                    ),
+                ctx.client.update_components(key, component_names)
+            else:
+                ctx.client.update_components_by_id(
+                    key,
+                    [editable_component_ids_by_name[name.casefold()] for name in component_names],
                 )
-            ctx.client.update_components_by_id(
-                key,
-                [editable_component_ids_by_name[name.casefold()] for name in component_names],
-            )
             audit_lines.append(
                 f"Components updated to {', '.join(component_names) if component_names else '(none)'}"
             )
@@ -868,8 +863,8 @@ async def update_ticket(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Component changes must use an existing Jira component for this project. "
-                    "Choose one from the suggestions and try again."
+                    "Creating a new Jira component requires OIT project-admin access. "
+                    "Choose an existing component or retry with a Jira project-admin identity."
                 ),
             ) from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc

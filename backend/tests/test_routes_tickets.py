@@ -1144,7 +1144,35 @@ class TestTicketDetailAndActions:
         assert resp.json()["work_category"] == "Operations"
         assert resp.json()["description"] == "Updated description"
 
-    def test_update_ticket_rejects_unknown_component_names(self, test_client, monkeypatch):
+    def test_update_ticket_uses_name_updates_for_unknown_component_names(self, test_client, monkeypatch):
+        import routes_tickets
+
+        issue = _detail_issue()
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_editable_components",
+            lambda key: [{"id": "200", "name": "Portal"}, {"id": "201", "name": "VPN"}],
+        )
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: issue)
+        monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: _request_comments())
+        update_components_by_id = MagicMock()
+        update_components = MagicMock()
+        monkeypatch.setattr(routes_tickets._client, "update_components_by_id", update_components_by_id)
+        monkeypatch.setattr(routes_tickets._client, "update_components", update_components)
+
+        resp = test_client.put(
+            "/api/tickets/OIT-123",
+            json={
+                "components": ["Portal", "Made Up Component"],
+            },
+        )
+
+        assert resp.status_code == 200
+        update_components_by_id.assert_not_called()
+        update_components.assert_called_once_with("OIT-123", ["Portal", "Made Up Component"])
+
+    def test_update_ticket_translates_component_create_permission_error(self, test_client, monkeypatch):
         import routes_tickets
 
         monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
@@ -1153,8 +1181,13 @@ class TestTicketDetailAndActions:
             "get_editable_components",
             lambda key: [{"id": "200", "name": "Portal"}, {"id": "201", "name": "VPN"}],
         )
-        update_components_by_id = MagicMock()
-        monkeypatch.setattr(routes_tickets._client, "update_components_by_id", update_components_by_id)
+
+        def _raise_permission_error(key, value):
+            raise Exception(
+                "400 Bad Request — Jira error: {'errorMessages': [], 'errors': {'components': 'You do not have permission to create new components. Contact your project admin or Jira admin for assistance.'}}"
+            )
+
+        monkeypatch.setattr(routes_tickets._client, "update_components", _raise_permission_error)
 
         resp = test_client.put(
             "/api/tickets/OIT-123",
@@ -1166,9 +1199,8 @@ class TestTicketDetailAndActions:
         assert resp.status_code == 400
         assert (
             resp.json()["detail"]
-            == "Component changes must use an existing Jira component for this project. Unknown component(s): Made Up Component."
+            == "Creating a new Jira component requires OIT project-admin access. Choose an existing component or retry with a Jira project-admin identity."
         )
-        update_components_by_id.assert_not_called()
 
     def test_transition_ticket_updates_status(self, test_client, mock_cache, monkeypatch):
         import routes_tickets
