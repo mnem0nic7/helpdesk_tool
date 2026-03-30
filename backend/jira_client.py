@@ -595,6 +595,31 @@ class JiraClient:
             {"components": [{"name": name} for name in component_names]},
         )
 
+    def update_components_by_id(self, key: str, component_ids: list[str]) -> None:
+        """PUT /rest/api/3/issue/{key} to change issue components by Jira component ID."""
+        self.update_issue_fields(
+            key,
+            {"components": [{"id": component_id} for component_id in component_ids]},
+        )
+
+    def get_editable_components(self, key: str) -> list[dict[str, str]]:
+        """Return editable Jira components for the issue from editmeta."""
+        validate_jira_key(key)
+        url = f"{self.base_url}/rest/api/3/issue/{key}/editmeta"
+        resp = self.session.get(url, timeout=self._TIMEOUT)
+        self._raise_for_status(resp)
+        payload = resp.json()
+        field = ((payload.get("fields") or {}).get("components") or {})
+        result: list[dict[str, str]] = []
+        for component in field.get("allowedValues") or []:
+            if not isinstance(component, dict):
+                continue
+            component_id = str(component.get("id") or "").strip()
+            component_name = str(component.get("name") or "").strip()
+            if component_id and component_name:
+                result.append({"id": component_id, "name": component_name})
+        return result
+
     def update_work_category(self, key: str, work_category: str | None) -> None:
         """PUT /rest/api/3/issue/{key} to change the work category field."""
         self.update_issue_fields(key, {"customfield_11239": work_category})

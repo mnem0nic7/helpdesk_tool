@@ -1074,7 +1074,16 @@ class TestTicketDetailAndActions:
         monkeypatch.setattr(routes_tickets._client, "assign_issue", lambda key, value: calls.append(("assignee", key, value)))
         monkeypatch.setattr(routes_tickets._client, "update_reporter", lambda key, value: calls.append(("reporter", key, value)))
         monkeypatch.setattr(routes_tickets._client, "set_request_type", lambda key, value: calls.append(("request_type", key, value)))
-        monkeypatch.setattr(routes_tickets._client, "update_components", lambda key, value: calls.append(("components", key, value)))
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_editable_components",
+            lambda key: [{"id": "200", "name": "Portal"}, {"id": "201", "name": "VPN"}],
+        )
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "update_components_by_id",
+            lambda key, value: calls.append(("components", key, value)),
+        )
         monkeypatch.setattr(routes_tickets._client, "update_work_category", lambda key, value: calls.append(("work_category", key, value)))
         monkeypatch.setattr(
             routes_tickets._client,
@@ -1112,7 +1121,7 @@ class TestTicketDetailAndActions:
             ("assignee", "OIT-123", "acc-bob"),
             ("reporter", "OIT-123", "acct-raza"),
             ("request_type", "OIT-123", "122"),
-            ("components", "OIT-123", ["Portal", "VPN"]),
+            ("components", "OIT-123", ["200", "201"]),
             ("work_category", "OIT-123", "Operations"),
         ]
         assert ("OIT-123", "summary", "Updated summary") in [c.args for c in mock_cache.update_cached_field.call_args_list]
@@ -1134,6 +1143,32 @@ class TestTicketDetailAndActions:
         assert resp.json()["ticket"]["components"] == ["Portal", "VPN"]
         assert resp.json()["work_category"] == "Operations"
         assert resp.json()["description"] == "Updated description"
+
+    def test_update_ticket_rejects_unknown_component_names(self, test_client, monkeypatch):
+        import routes_tickets
+
+        monkeypatch.setattr(routes_tickets, "key_is_visible_in_scope", lambda key: True)
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_editable_components",
+            lambda key: [{"id": "200", "name": "Portal"}, {"id": "201", "name": "VPN"}],
+        )
+        update_components_by_id = MagicMock()
+        monkeypatch.setattr(routes_tickets._client, "update_components_by_id", update_components_by_id)
+
+        resp = test_client.put(
+            "/api/tickets/OIT-123",
+            json={
+                "components": ["Portal", "Made Up Component"],
+            },
+        )
+
+        assert resp.status_code == 400
+        assert (
+            resp.json()["detail"]
+            == "Component changes must use an existing Jira component for this project. Unknown component(s): Made Up Component."
+        )
+        update_components_by_id.assert_not_called()
 
     def test_transition_ticket_updates_status(self, test_client, mock_cache, monkeypatch):
         import routes_tickets

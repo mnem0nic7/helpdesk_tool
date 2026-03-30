@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { api } from "../lib/api.ts";
 
-const logClientError = vi.fn();
+const { logClientError } = vi.hoisted(() => ({
+  logClientError: vi.fn(),
+}));
 
 vi.mock("../lib/errorLogging.ts", () => ({
   logClientError,
@@ -121,6 +123,19 @@ describe("error handling", () => {
   it("throws on 4xx/5xx", async () => {
     mockFetch({ detail: "Not found" }, 404);
     await expect(api.getMetrics()).rejects.toThrow("failed (404)");
+  });
+
+  it("surfaces backend detail strings for ticket update failures", async () => {
+    mockFetch(
+      {
+        detail:
+          "Component changes must use an existing Jira component for this project. Unknown component(s): Made Up Component.",
+      },
+      400,
+    );
+    await expect(api.updateTicket("OIT-1", { components: ["Made Up Component"] })).rejects.toThrow(
+      "Component changes must use an existing Jira component for this project.",
+    );
   });
 
   it("logs auth bootstrap failures and still returns null", async () => {

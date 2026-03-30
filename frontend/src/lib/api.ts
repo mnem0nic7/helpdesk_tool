@@ -11,6 +11,22 @@ import { logClientError } from "./errorLogging.ts";
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
+async function buildErrorMessage(method: string, url: string, res: Response): Promise<string> {
+  const text = await res.text();
+  let detail = text || res.statusText || "Request failed";
+  if (text) {
+    try {
+      const payload = JSON.parse(text) as { detail?: unknown };
+      if (typeof payload.detail === "string" && payload.detail.trim()) {
+        detail = payload.detail.trim();
+      }
+    } catch {
+      // Keep the raw response body when it is not JSON.
+    }
+  }
+  return `${method} ${url} failed (${res.status}): ${detail}`;
+}
+
 async function fetchJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (res.status === 401) {
@@ -18,8 +34,7 @@ async function fetchJSON<T>(url: string): Promise<T> {
     throw new Error("Not authenticated");
   }
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GET ${url} failed (${res.status}): ${text}`);
+    throw new Error(await buildErrorMessage("GET", url, res));
   }
   return res.json() as Promise<T>;
 }
@@ -31,8 +46,7 @@ async function fetchBlob(url: string): Promise<Blob> {
     throw new Error("Not authenticated");
   }
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GET ${url} failed (${res.status}): ${text}`);
+    throw new Error(await buildErrorMessage("GET", url, res));
   }
   return res.blob();
 }
@@ -44,8 +58,7 @@ async function fetchText(url: string): Promise<string> {
     throw new Error("Not authenticated");
   }
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GET ${url} failed (${res.status}): ${text}`);
+    throw new Error(await buildErrorMessage("GET", url, res));
   }
   return res.text();
 }
@@ -61,8 +74,7 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
     throw new Error("Not authenticated");
   }
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`POST ${url} failed (${res.status}): ${text}`);
+    throw new Error(await buildErrorMessage("POST", url, res));
   }
   return res.json() as Promise<T>;
 }
@@ -78,8 +90,7 @@ async function putJSON<T>(url: string, body: unknown): Promise<T> {
     throw new Error("Not authenticated");
   }
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`PUT ${url} failed (${res.status}): ${text}`);
+    throw new Error(await buildErrorMessage("PUT", url, res));
   }
   return res.json() as Promise<T>;
 }
@@ -93,8 +104,7 @@ async function deleteJSON(url: string): Promise<void> {
     throw new Error("Not authenticated");
   }
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`DELETE ${url} failed (${res.status}): ${text}`);
+    throw new Error(await buildErrorMessage("DELETE", url, res));
   }
 }
 
@@ -109,8 +119,7 @@ async function downloadPost(url: string, body: unknown, fallbackFilename: string
     throw new Error("Not authenticated");
   }
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Export failed (${res.status}): ${text}`);
+    throw new Error(await buildErrorMessage("POST", url, res));
   }
   const blob = await res.blob();
   const urlObject = URL.createObjectURL(blob);
@@ -157,8 +166,7 @@ async function downloadGet(
     throw new Error("Not authenticated");
   }
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Export failed (${res.status}): ${text}`);
+    throw new Error(await buildErrorMessage("GET", url, res));
   }
   const blob = await res.blob();
   const urlObject = URL.createObjectURL(blob);
