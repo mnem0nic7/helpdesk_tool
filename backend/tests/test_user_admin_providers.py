@@ -81,7 +81,7 @@ def test_list_mailbox_rules_resolves_move_to_folder_names():
             {
                 "id": "0",
                 "method": "GET",
-                "url": "/users/user-1/mailFolders/folder-1?$select=id,displayName,wellKnownName",
+                "url": "/users/user-1/mailFolders/folder-1?$select=id,displayName,parentFolderId",
             }
         ]
     ]

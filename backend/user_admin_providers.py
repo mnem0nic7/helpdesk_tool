@@ -192,8 +192,7 @@ def _mail_folder_label(item: dict[str, Any]) -> str:
     display_name = str(item.get("displayName") or "").strip()
     if display_name:
         return display_name
-    well_known_name = str(item.get("wellKnownName") or "").strip()
-    return _message_rule_label(well_known_name)
+    return ""
 
 
 def _summarize_message_rule_section(
@@ -797,7 +796,7 @@ class MailboxAdminProvider:
                     "method": "GET",
                     "url": (
                         f"/users/{quote(user_id, safe='')}/mailFolders/{quote(folder_id, safe='')}"
-                        "?$select=id,displayName,wellKnownName"
+                        "?$select=id,displayName,parentFolderId"
                     ),
                 }
                 for index, folder_id in enumerate(batch_folder_ids)
