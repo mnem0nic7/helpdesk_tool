@@ -509,6 +509,30 @@ describe("TicketWorkbenchDrawer", () => {
     ]);
   });
 
+  it("opens cleanly after an initial closed render", async () => {
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <TicketWorkbenchDrawer
+        ticketKey={null}
+        initialTicket={null}
+        onClose={onClose}
+      />,
+    );
+
+    expect(screen.queryByTestId("ticket-workbench-drawer")).not.toBeInTheDocument();
+
+    rerender(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={onClose}
+      />,
+    );
+
+    await screen.findByText("Ticket Actions");
+    expect(mockApi.getTicketComponents).toHaveBeenCalledWith("OIT-1");
+  });
+
   it("uses a wrapping summary editor and normalizes pasted line breaks before saving", async () => {
     mockApi.updateTicket.mockResolvedValue({
       ...ticketDetail,

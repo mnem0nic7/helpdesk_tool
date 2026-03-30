@@ -648,24 +648,7 @@ export default function TicketWorkbenchDrawer({
     },
   });
 
-  if (!ticketKey) return null;
-
   const ticket = detail?.ticket ?? initialTicket;
-  const sortedAssignees = [...assignees].sort((a: Assignee, b: Assignee) =>
-    a.display_name.localeCompare(b.display_name)
-  );
-  const sortedReporterOptions = [...reporterOptions].sort((a: Assignee, b: Assignee) =>
-    a.display_name.localeCompare(b.display_name)
-  );
-  const sortedRequestTypes = [...requestTypes].sort((a: RequestTypeOption, b: RequestTypeOption) =>
-    a.name.localeCompare(b.name)
-  );
-  const visibleRequestTypes = fallbackRequestTypeOption
-    ? [...sortedRequestTypes, fallbackRequestTypeOption].sort((a, b) => a.name.localeCompare(b.name))
-    : sortedRequestTypes;
-  const sortedPriorities = [...priorities].sort((a: PriorityOption, b: PriorityOption) =>
-    a.name.localeCompare(b.name)
-  );
   const componentOptions = useMemo(() => {
     const names = new Set<string>();
     for (const component of editableComponents) {
@@ -682,6 +665,24 @@ export default function TicketWorkbenchDrawer({
     }
     return [...names].sort((a, b) => a.localeCompare(b));
   }, [editableComponents, ticket?.components]);
+
+  if (!ticketKey) return null;
+
+  const sortedAssignees = [...assignees].sort((a: Assignee, b: Assignee) =>
+    a.display_name.localeCompare(b.display_name)
+  );
+  const sortedReporterOptions = [...reporterOptions].sort((a: Assignee, b: Assignee) =>
+    a.display_name.localeCompare(b.display_name)
+  );
+  const sortedRequestTypes = [...requestTypes].sort((a: RequestTypeOption, b: RequestTypeOption) =>
+    a.name.localeCompare(b.name)
+  );
+  const visibleRequestTypes = fallbackRequestTypeOption
+    ? [...sortedRequestTypes, fallbackRequestTypeOption].sort((a, b) => a.name.localeCompare(b.name))
+    : sortedRequestTypes;
+  const sortedPriorities = [...priorities].sort((a: PriorityOption, b: PriorityOption) =>
+    a.name.localeCompare(b.name)
+  );
   const workCategoryOptions = filterOptions?.work_categories ?? [];
   const currentStatusLabel = (ticket?.status ?? "").trim();
   const currentStatusKey = normalizeStatusLabel(currentStatusLabel);
