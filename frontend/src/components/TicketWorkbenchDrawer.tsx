@@ -273,6 +273,13 @@ export default function TicketWorkbenchDrawer({
     enabled: !!ticketKey,
   });
 
+  const { data: editableComponents = [] } = useQuery({
+    queryKey: ["ticket-components", ticketKey],
+    queryFn: () => api.getTicketComponents(ticketKey ?? ""),
+    staleTime: 60 * 1000,
+    enabled: !!ticketKey,
+  });
+
   const { data: technicianScores = [], isLoading: isLoadingTechnicianScores } = useQuery({
     queryKey: ["technician-scores", ticketKey],
     queryFn: () => api.getTechnicianScores({ key: ticketKey ?? "" }),
@@ -514,6 +521,7 @@ export default function TicketWorkbenchDrawer({
     queryClient.invalidateQueries({ queryKey: ["tickets"] });
     queryClient.invalidateQueries({ queryKey: ["manage-tickets"] });
     queryClient.invalidateQueries({ queryKey: ["filter-options"] });
+    queryClient.invalidateQueries({ queryKey: ["ticket-components", ticketKey] });
     setFeedback(message);
     setErrorText(null);
   }
@@ -658,7 +666,22 @@ export default function TicketWorkbenchDrawer({
   const sortedPriorities = [...priorities].sort((a: PriorityOption, b: PriorityOption) =>
     a.name.localeCompare(b.name)
   );
-  const componentOptions = filterOptions?.components ?? [];
+  const componentOptions = useMemo(() => {
+    const names = new Set<string>();
+    for (const component of editableComponents) {
+      const name = component.trim();
+      if (name) {
+        names.add(name);
+      }
+    }
+    for (const component of ticket?.components ?? []) {
+      const name = component.trim();
+      if (name) {
+        names.add(name);
+      }
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [editableComponents, ticket?.components]);
   const workCategoryOptions = filterOptions?.work_categories ?? [];
   const currentStatusLabel = (ticket?.status ?? "").trim();
   const currentStatusKey = normalizeStatusLabel(currentStatusLabel);

@@ -2529,6 +2529,11 @@ export const api = {
     return fetchJSON<TicketDetail>(`/api/tickets/${encodeURIComponent(key)}`);
   },
 
+  /** Fetch the editable Jira component names for a single ticket. */
+  getTicketComponents(key: string): Promise<string[]> {
+    return fetchJSON<string[]>(`/api/tickets/${encodeURIComponent(key)}/components`);
+  },
+
   /** Refresh the currently displayed ticket rows from live Jira data. */
   refreshVisibleTickets(keys: string[]): Promise<VisibleTicketRefreshResponse> {
     return postJSON<VisibleTicketRefreshResponse>("/api/tickets/refresh-visible", { keys });

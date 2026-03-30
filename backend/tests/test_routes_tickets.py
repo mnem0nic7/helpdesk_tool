@@ -816,6 +816,25 @@ class TestTicketDetailAndActions:
             {"id": "122", "name": "Business Application Support", "description": "Apps"}
         ]
 
+    def test_get_ticket_components_returns_editable_component_names(self, test_client, monkeypatch):
+        import routes_tickets
+
+        monkeypatch.setattr(routes_tickets, "_ensure_ticket_visible", lambda key: None)
+        monkeypatch.setattr(
+            routes_tickets._client,
+            "get_editable_components",
+            lambda key: [
+                {"id": "1", "name": "VPN"},
+                {"id": "2", "name": "Portal"},
+                {"id": "3", "name": "Underwriting"},
+            ],
+        )
+
+        resp = test_client.get("/api/tickets/OIT-123/components")
+
+        assert resp.status_code == 200
+        assert resp.json() == ["Portal", "Underwriting", "VPN"]
+
     def test_search_users_returns_sorted_jira_matches(self, test_client, monkeypatch):
         import routes_tickets
 

@@ -550,6 +550,26 @@ async def get_statuses(key: str) -> list[dict[str, Any]]:
     ]
 
 
+@router.get("/tickets/{key}/components")
+async def get_ticket_components(key: str) -> list[str]:
+    """Return editable Jira component names for a given issue."""
+    try:
+        validate_jira_key(key)
+        _ensure_ticket_visible(key)
+        components = _client.get_editable_components(key)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid issue key: {key}")
+    except Exception:
+        logger.exception("Failed to load editable components for ticket %s", key)
+        raise HTTPException(status_code=404, detail=f"Could not get editable components for {key}")
+    names = {
+        str(component.get("name") or "").strip()
+        for component in components
+        if str(component.get("name") or "").strip()
+    }
+    return sorted(names)
+
+
 @router.post("/tickets/refresh-visible")
 async def refresh_visible_tickets(body: TicketRefreshRequest) -> dict[str, Any]:
     """Refresh the currently displayed ticket rows from live Jira data."""

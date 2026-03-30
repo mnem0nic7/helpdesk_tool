@@ -6,6 +6,7 @@ import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     getTicket: vi.fn(),
+    getTicketComponents: vi.fn(),
     getFilterOptions: vi.fn(),
     getAssignees: vi.fn(),
     searchUsers: vi.fn(),
@@ -136,6 +137,7 @@ describe("TicketWorkbenchDrawer", () => {
       value: 1400,
     });
     mockApi.getTicket.mockResolvedValue(ticketDetail);
+    mockApi.getTicketComponents.mockResolvedValue(["Portal", "VPN", "Underwriting"]);
     mockApi.getFilterOptions.mockResolvedValue({
       statuses: [],
       priorities: [],
@@ -329,7 +331,7 @@ describe("TicketWorkbenchDrawer", () => {
     await waitFor(() => {
       expect(mockApi.syncTicketRequestor).toHaveBeenCalledWith("OIT-1");
     });
-    expect(await screen.findByText("Reporter synced to Grace Hopper.")).toBeInTheDocument();
+    expect((await screen.findAllByText("Reporter synced to Grace Hopper.")).length).toBeGreaterThan(0);
   });
 
   it("shows ignored mailbox requestors as manual review instead of a synced match", async () => {
@@ -357,7 +359,7 @@ describe("TicketWorkbenchDrawer", () => {
 
     await screen.findByText("Requestor Reconciliation");
     expect(screen.getByText("Ignored Mailbox")).toBeInTheDocument();
-    expect(screen.getByText(/emailquarantine@librasolutionsgroup\.com/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/emailquarantine@librasolutionsgroup\.com/i).length).toBeGreaterThan(0);
     expect(screen.queryByText("Office 365 Match")).not.toBeInTheDocument();
     expect(screen.getAllByText(/Reporter was left unchanged\. Use the reporter search/i).length).toBeGreaterThan(0);
   });
@@ -484,6 +486,29 @@ describe("TicketWorkbenchDrawer", () => {
     });
   });
 
+  it("shows Jira editable components in the application suggestions", async () => {
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Ticket Actions");
+
+    await waitFor(() => {
+      expect(mockApi.getTicketComponents).toHaveBeenCalledWith("OIT-1");
+    });
+
+    const options = document.querySelectorAll("#ticket-application-options option");
+    expect(Array.from(options).map((option) => option.getAttribute("value"))).toEqual([
+      "Portal",
+      "Underwriting",
+      "VPN",
+    ]);
+  });
+
   it("uses a wrapping summary editor and normalizes pasted line breaks before saving", async () => {
     mockApi.updateTicket.mockResolvedValue({
       ...ticketDetail,
@@ -503,6 +528,7 @@ describe("TicketWorkbenchDrawer", () => {
 
     const summaryField = await screen.findByLabelText("Summary");
     expect(summaryField.tagName).toBe("TEXTAREA");
+    await screen.findByDisplayValue("Printer is offline");
 
     fireEvent.change(summaryField, {
       target: { value: "Printer is offline\nplease investigate asap" },
