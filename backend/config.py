@@ -163,7 +163,7 @@ ATLASSIAN_ADMIN_GROUPS: list[str] = _env_csv("ATLASSIAN_ADMIN_GROUPS") or [
 TOOLS_ALLOWED_IDENTIFIERS: list[str] = _env_csv("TOOLS_ALLOWED_IDENTIFIERS") or [
     "gallison",
     "wberry",
-]
+]  # deprecated; the Tools surface is available to all authenticated users
 APP_RUNTIME_BLUEGREEN_ENABLED: bool = os.getenv("APP_RUNTIME_BLUEGREEN_ENABLED", "0").strip().lower() in {
     "1",
     "true",

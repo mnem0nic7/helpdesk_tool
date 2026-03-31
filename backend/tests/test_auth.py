@@ -97,12 +97,12 @@ class TestAllowedUsers:
         monkeypatch.setattr(auth, "ALLOWED_USERS", "Alice@Example.COM")
         assert auth.is_allowed_user("alice@example.com") is True
 
-    def test_tools_access_matches_localpart_or_exact_email(self, monkeypatch):
+    def test_tools_access_allows_any_authenticated_email(self):
         import auth
-        monkeypatch.setattr(auth, "TOOLS_ALLOWED_IDENTIFIERS", ["gallison", "wberry@example.com"])
         assert auth.user_can_access_tools("gallison@movedocs.com") is True
         assert auth.user_can_access_tools("wberry@example.com") is True
-        assert auth.user_can_access_tools("someone@example.com") is False
+        assert auth.user_can_access_tools("someone@example.com") is True
+        assert auth.user_can_access_tools("") is False
 
 
 # ---------------------------------------------------------------------------

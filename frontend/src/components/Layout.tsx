@@ -14,7 +14,6 @@ interface NavItem {
   label: string;
   icon: string;
   primaryOnly?: boolean;
-  requiresToolsAccess?: boolean;
 }
 
 const helpdeskNavItems: NavItem[] = [
@@ -27,7 +26,7 @@ const helpdeskNavItems: NavItem[] = [
   { to: "/triage", label: "AI Triage", icon: "\u25C6" },
   { to: "/ai-log", label: "AI Log", icon: "\u25CB" },
   { to: "/alerts", label: "Alerts", icon: "\u25B3" },
-  { to: "/tools", label: "Tools", icon: "\u2692", primaryOnly: true, requiresToolsAccess: true },
+  { to: "/tools", label: "Tools", icon: "\u2692", primaryOnly: true },
   { to: "/users", label: "Users", icon: "\u25C7", primaryOnly: true },
   { to: "/knowledge-base", label: "Knowledge Base", icon: "\u25A9", primaryOnly: true },
 ];
@@ -41,7 +40,7 @@ const azureNavItems: NavItem[] = [
   { to: "/storage", label: "Storage", icon: "storage" },
   { to: "/identity", label: "Identity", icon: "identity" },
   { to: "/users", label: "Users", icon: "users" },
-  { to: "/tools", label: "Tools", icon: "tools", requiresToolsAccess: true },
+  { to: "/tools", label: "Tools", icon: "tools" },
   { to: "/cost", label: "Cost", icon: "cost" },
   { to: "/allocations", label: "Allocation", icon: "allocation" },
   { to: "/ai-costs", label: "AI Cost", icon: "ai-costs" },
@@ -216,7 +215,7 @@ export default function Layout() {
         {/* Navigation */}
         <nav className="flex-1 space-y-1 px-3 py-4">
           {navItems
-            .filter((item) => (!item.primaryOnly || branding.scope === "primary") && (!item.requiresToolsAccess || !!user.can_access_tools))
+            .filter((item) => (!item.primaryOnly || branding.scope === "primary"))
             .map(({ to, label, icon }) => (
               <NavLink
                 key={to}

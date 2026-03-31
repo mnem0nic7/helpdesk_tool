@@ -31,7 +31,6 @@ from config import (
     ENTRA_CLIENT_SECRET,
     ALLOWED_USERS,
     ADMIN_USERS,
-    TOOLS_ALLOWED_IDENTIFIERS,
 )
 
 logger = logging.getLogger(__name__)
@@ -589,12 +588,7 @@ def is_admin_user(email: str) -> bool:
 
 
 def user_can_access_tools(email: str) -> bool:
-    normalized_email = str(email or "").strip().lower()
-    if not normalized_email:
-        return False
-    localpart = normalized_email.split("@", 1)[0]
-    allowed = {identifier.strip().lower() for identifier in TOOLS_ALLOWED_IDENTIFIERS if identifier.strip()}
-    return normalized_email in allowed or localpart in allowed
+    return bool(str(email or "").strip())
 
 
 def session_is_admin(session: dict[str, Any] | None) -> bool:
@@ -620,9 +614,7 @@ def session_can_manage_users(session: dict[str, Any] | None) -> bool:
 
 
 def session_can_access_tools(session: dict[str, Any] | None) -> bool:
-    if not session:
-        return False
-    return user_can_access_tools(str(session.get("email") or ""))
+    return bool(session)
 
 
 def require_admin(request: Request) -> dict[str, Any]:
@@ -662,16 +654,8 @@ def require_authenticated_user(request: Request) -> dict[str, Any]:
 
 
 def require_tools_access(request: Request) -> dict[str, Any]:
-    """FastAPI dependency: require explicit access to the Tools surface."""
-    from fastapi import HTTPException as _HTTPException
-
-    sid = request.cookies.get("session_id", "")
-    session = get_session(sid) if sid else None
-    if not session:
-        raise _HTTPException(status_code=401, detail="Not authenticated")
-    if not session_can_access_tools(session):
-        raise _HTTPException(status_code=403, detail="Tools access is restricted")
-    return session
+    """FastAPI dependency: require an authenticated session for the Tools surface."""
+    return require_authenticated_user(request)
 
 
 def list_login_audit(*, limit: int = 100) -> list[dict[str, Any]]:

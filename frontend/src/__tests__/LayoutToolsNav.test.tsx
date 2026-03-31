@@ -4,6 +4,8 @@ import { screen } from "@testing-library/react";
 import { render } from "../test-utils.tsx";
 import Layout from "../components/Layout.tsx";
 
+type MockScope = "primary" | "azure" | "oasisdev";
+
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     getMe: vi.fn(),
@@ -11,9 +13,30 @@ const { mockApi } = vi.hoisted(() => ({
   },
 }));
 
+let mockBrandingScope: MockScope = "primary";
+
 vi.mock("../lib/api.ts", () => ({
   api: mockApi,
   default: mockApi,
+}));
+
+vi.mock("../lib/siteContext.ts", () => ({
+  getSiteBranding: () => {
+    if (mockBrandingScope === "azure") {
+      return {
+        scope: "azure",
+        appName: "Azure Control Center",
+        dashboardName: "Azure Dashboard",
+        alertPrefix: "Azure",
+      };
+    }
+    return {
+      scope: mockBrandingScope,
+      appName: "OIT Helpdesk",
+      dashboardName: "OIT Dashboard",
+      alertPrefix: "OIT",
+    };
+  },
 }));
 
 vi.mock("../components/CacheStatusBar.tsx", () => ({
@@ -36,8 +59,9 @@ vi.mock("../lib/errorLogging.ts", () => ({
   logClientError: vi.fn(),
 }));
 
-function renderLayoutAt(url: string) {
-  window.history.replaceState({}, "", url);
+function renderLayoutAt(pathname: string, scope: MockScope) {
+  mockBrandingScope = scope;
+  window.history.replaceState({}, "", pathname);
   return render(
     <Routes>
       <Route element={<Layout />}>
@@ -50,6 +74,7 @@ function renderLayoutAt(url: string) {
 describe("Layout tools navigation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBrandingScope = "primary";
     mockApi.getMe.mockResolvedValue({
       email: "tech@example.com",
       name: "Tech User",
@@ -60,22 +85,22 @@ describe("Layout tools navigation", () => {
   });
 
   it("shows Tools on the primary host", async () => {
-    renderLayoutAt("https://it-app.movedocs.com/");
-    expect(await screen.findByRole("link", { name: "Tools" })).toBeInTheDocument();
+    renderLayoutAt("/", "primary");
+    expect(await screen.findByRole("link", { name: /Tools/ })).toBeInTheDocument();
   });
 
   it("shows Tools on the azure host", async () => {
-    renderLayoutAt("https://azure.movedocs.com/");
-    expect(await screen.findByRole("link", { name: "Tools" })).toBeInTheDocument();
+    renderLayoutAt("/", "azure");
+    expect(await screen.findByRole("link", { name: /Tools/ })).toBeInTheDocument();
   });
 
   it("hides Tools on oasisdev", async () => {
-    renderLayoutAt("https://oasisdev.movedocs.com/");
+    renderLayoutAt("/", "oasisdev");
     await screen.findByText("Page content");
-    expect(screen.queryByRole("link", { name: "Tools" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Tools/ })).not.toBeInTheDocument();
   });
 
-  it("hides Tools when the user is not allowed to access that surface", async () => {
+  it("shows Tools even if the legacy tools-access flag is false", async () => {
     mockApi.getMe.mockResolvedValueOnce({
       email: "someone@example.com",
       name: "Someone",
@@ -84,9 +109,8 @@ describe("Layout tools navigation", () => {
       can_access_tools: false,
     });
 
-    renderLayoutAt("https://it-app.movedocs.com/");
+    renderLayoutAt("/", "primary");
 
-    await screen.findByText("Page content");
-    expect(screen.queryByRole("link", { name: "Tools" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /Tools/ })).toBeInTheDocument();
   });
 });

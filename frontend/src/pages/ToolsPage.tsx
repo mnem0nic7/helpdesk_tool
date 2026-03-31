@@ -542,26 +542,26 @@ export default function ToolsPage() {
     queryFn: () => api.getMe(),
     staleTime: 60_000,
   });
-  const canAccessTools = !!meQuery.data?.can_access_tools;
+  const hasSignedInUser = !!meQuery.data;
 
   const sourceSearchQuery = useQuery({
     queryKey: ["onedrive-copy", "users", deferredSourceSearch],
     queryFn: () => api.searchOneDriveCopyUsers(deferredSourceSearch.trim(), 8),
-    enabled: canAccessTools,
+    enabled: hasSignedInUser,
     staleTime: 30_000,
   });
 
   const destinationSearchQuery = useQuery({
     queryKey: ["onedrive-copy", "users", deferredDestinationSearch],
     queryFn: () => api.searchOneDriveCopyUsers(deferredDestinationSearch.trim(), 8),
-    enabled: canAccessTools,
+    enabled: hasSignedInUser,
     staleTime: 30_000,
   });
 
   const mailboxSearchQuery = useQuery({
     queryKey: ["mailbox-rules", "users", deferredMailboxSearch],
     queryFn: () => api.searchOneDriveCopyUsers(deferredMailboxSearch.trim(), 8),
-    enabled: canAccessTools,
+    enabled: hasSignedInUser,
     staleTime: 30_000,
   });
 
@@ -572,7 +572,7 @@ export default function ToolsPage() {
   const jobsQuery = useQuery({
     queryKey: ["onedrive-copy", "jobs"],
     queryFn: () => api.listOneDriveCopyJobs(100),
-    enabled: canAccessTools,
+    enabled: hasSignedInUser,
     refetchInterval: (query) => {
       const jobs = query.state.data as OneDriveCopyJobStatus[] | undefined;
       return jobs?.some((job) => job.status === "queued" || job.status === "running") ? 3_000 : 15_000;
@@ -588,7 +588,7 @@ export default function ToolsPage() {
   const activeJobQuery = useQuery({
     queryKey: ["onedrive-copy", "jobs", activeJobId],
     queryFn: () => api.getOneDriveCopyJob(activeJobId as string),
-    enabled: canAccessTools && !!activeJobId,
+    enabled: hasSignedInUser && !!activeJobId,
     refetchInterval: (query) => {
       const job = query.state.data as OneDriveCopyJobStatus | undefined;
       return job && (job.status === "queued" || job.status === "running") ? 3_000 : false;
@@ -598,7 +598,7 @@ export default function ToolsPage() {
   const loginAuditQuery = useQuery({
     queryKey: ["onedrive-copy", "login-audit"],
     queryFn: () => api.listLoginAudit(50),
-    enabled: canAccessTools,
+    enabled: hasSignedInUser,
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
@@ -606,7 +606,7 @@ export default function ToolsPage() {
   const mailboxRulesQuery = useQuery({
     queryKey: ["mailbox-rules", activeMailboxLookup],
     queryFn: () => api.listMailboxRules(activeMailboxLookup as string),
-    enabled: canAccessTools && !!activeMailboxLookup,
+    enabled: hasSignedInUser && !!activeMailboxLookup,
     retry: false,
     staleTime: 15_000,
   });
@@ -638,10 +638,6 @@ export default function ToolsPage() {
     !createJobMutation.isPending;
 
   function submitJob() {
-    if (!canAccessTools) {
-      setFormError("Tools access is restricted.");
-      return;
-    }
     if (!selectedSource || !selectedDestination) {
       setFormError("Select both the source and destination users from the dropdown before queueing the job.");
       return;
@@ -700,10 +696,6 @@ export default function ToolsPage() {
   }
 
   function submitMailboxLookup() {
-    if (!canAccessTools) {
-      setMailboxFormError("Tools access is restricted.");
-      return;
-    }
     const mailbox = selectedMailbox?.canonical_upn.trim() || mailboxInput.trim();
     if (!mailbox || !looksLikeUpn(mailbox)) {
       setMailboxFormError("Select a mailbox from the dropdown or enter a valid UPN/email before loading rules.");
@@ -731,19 +723,10 @@ export default function ToolsPage() {
     <div className="space-y-6">
       {meQuery.isLoading ? (
         <section className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
-          Loading tools access...
+          Loading tools...
         </section>
       ) : null}
-      {!meQuery.isLoading && !canAccessTools ? (
-        <section className="rounded-3xl border border-amber-200 bg-amber-50 p-8 text-center shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Restricted</div>
-          <h1 className="mt-2 text-2xl font-semibold text-amber-950">Tools access is limited</h1>
-          <p className="mt-2 text-sm text-amber-900">
-            This page is currently limited to the approved operator accounts for OneDrive copy and login-audit workflows.
-          </p>
-        </section>
-      ) : null}
-      {canAccessTools ? (
+      {hasSignedInUser ? (
         <>
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -751,7 +734,7 @@ export default function ToolsPage() {
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tools</p>
             <h1 className="mt-1 text-3xl font-bold text-slate-900">{branding.scope === "azure" ? "Azure Tools" : "Helpdesk Tools"}</h1>
             <p className="mt-2 max-w-3xl text-sm text-slate-600">
-              Long-running operator tools for Microsoft 365 and Azure tasks. The OneDrive Copy tool mirrors the existing Graph-based handoff script and keeps a shared job history visible to everyone signed in on this host.
+              Shared tools for Microsoft 365 and Azure tasks. The OneDrive Copy tool mirrors the existing Graph-based handoff script and keeps a shared job history visible to everyone signed in on this host.
             </p>
           </div>
         </div>
@@ -957,7 +940,7 @@ export default function ToolsPage() {
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mailbox Rules</div>
                 <h2 className="mt-1 text-2xl font-semibold text-slate-900">List Inbox rules for a provided mailbox</h2>
                 <p className="mt-2 text-sm text-slate-600">
-                  Use the shared operator Graph connection to inspect a mailbox&apos;s Inbox rules, including rule order, enabled state, actions, and exceptions.
+                  Use the shared Graph connection to inspect a mailbox&apos;s Inbox rules, including rule order, enabled state, actions, and exceptions.
                 </p>
               </div>
               <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700">Read only</span>

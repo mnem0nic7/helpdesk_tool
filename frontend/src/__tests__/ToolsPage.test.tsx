@@ -221,4 +221,19 @@ describe("ToolsPage", () => {
     expect(await screen.findByText("Move GitHub alerts")).toBeInTheDocument();
     expect(screen.getByText("From addresses: alerts@github.com")).toBeInTheDocument();
   });
+
+  it("renders tools for signed-in users even if the legacy tools-access flag is false", async () => {
+    mockApi.getMe.mockResolvedValueOnce({
+      email: "someone@example.com",
+      name: "Someone",
+      is_admin: false,
+      can_manage_users: false,
+      can_access_tools: false,
+    });
+
+    render(<ToolsPage />);
+
+    expect(await screen.findByText("Copy a full OneDrive to another user")).toBeInTheDocument();
+    expect(screen.queryByText("Tools access is limited")).not.toBeInTheDocument();
+  });
 });

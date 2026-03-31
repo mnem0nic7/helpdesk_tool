@@ -319,14 +319,23 @@ def test_list_and_get_onedrive_copy_jobs_are_visible_to_any_authenticated_user(t
     assert detail_resp.json()["events"][0]["level"] == "info"
 
 
-def test_tools_routes_require_explicit_tools_access(test_client):
+def test_tools_routes_allow_any_authenticated_user(test_client):
     sid = create_session("someone@example.com", "Someone Else")
     test_client.cookies.set("session_id", sid)
 
+    resp = test_client.get("/api/tools/onedrive-copy/login-audit?limit=5", headers={"host": "it-app.movedocs.com"})
+
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+def test_tools_routes_require_authentication(test_client):
+    test_client.cookies.clear()
+
     resp = test_client.get("/api/tools/onedrive-copy/jobs", headers={"host": "it-app.movedocs.com"})
 
-    assert resp.status_code == 403
-    assert resp.json()["detail"] == "Tools access is restricted"
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Not authenticated"
 
 
 def test_login_audit_route_returns_recent_logins_for_allowed_users(test_client):
