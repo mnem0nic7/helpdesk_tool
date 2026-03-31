@@ -20,6 +20,7 @@ The shipped app title is still `OIT Helpdesk Dashboard API`, but the product sur
 - `azure_ingestion_platform/`: separate FastAPI/Postgres ingestion platform with its own README, tests, and Docker compose file.
 - `windows_agent/`: Windows exit agent scripts and sample config.
 - `docs/`: plans, specs, runbooks, governance notes, and templates.
+- `.codex/skills/`: repo-local Codex skills for Altlassian-specific workflows.
 - `e2e/`: Playwright test project.
 - `private/`: private assets such as KB seed archives; assume contents are sensitive.
 - `data/`: local runtime databases and caches used by the main app.
@@ -131,6 +132,7 @@ Frontend routing switches on `getSiteBranding()` in `frontend/src/App.tsx`. Do n
 - Backend uses snake_case JSON; frontend API types mirror that shape closely in `frontend/src/lib/api.ts`.
 - All API routes are under `/api`.
 - Prefer updating existing docs under `docs/` when behavior changes materially.
+- AI workflow docs live under `docs/runbooks/ai/`, and their matching repo-local Codex skills live under `.codex/skills/`. Keep the docs canonical and the skills aligned with them.
 - Keep host/scope behavior in mind before changing filtering logic or navigation.
 - Avoid assuming Jira data is available on the Azure site scope.
 
@@ -146,5 +148,6 @@ Frontend routing switches on `getSiteBranding()` in `frontend/src/App.tsx`. Do n
 - The report builder preview now includes an `Export Current View` action in `frontend/src/pages/ReportsPage.tsx`; it reuses the existing report export API and should export the current filters, selected columns, sort, and grouping.
 - Master workbook dashboard AI summaries are written per KPI row in `backend/report_workbook_builder.py`; keep each metric's paragraph and bullets in one wrapped cell so summaries do not spill into adjacent metric rows.
 - The shared Tools surface on `it-app.movedocs.com` and `azure.movedocs.com` is available to all signed-in users, not just a small operator allowlist, and it includes OneDrive copy, login audit, read-only mailbox Inbox rule lookup, and Exchange mailbox delegate lookups for Send on behalf, Send As, and Full Access that use the shared app registration. Keep that access model and feature set aligned across `backend/auth.py`, `backend/routes_tools.py`, `frontend/src/components/Layout.tsx`, and `frontend/src/pages/ToolsPage.tsx`. `TOOLS_ALLOWED_IDENTIFIERS` is now legacy-only config and should not be treated as an active runtime gate.
+- The repo now carries a first-wave AI workflow suite: release/cutover, incident triage, Jira hotfix, Microsoft 365 Tools, closeout, and SLA/reporting review skills under `.codex/skills/`, plus matching human docs and agent playbooks under `docs/runbooks/ai/`. Prefer those playbooks over inventing ad-hoc operational flows.
 - The Azure Virtual Desktops search box should keep local input state and preserve previous query results during refetch so typing does not remount the page or drop focus.
 - A March 30, 2026 outage came from blue and green backend containers contending for the same Azure FinOps DuckDB file during restart. Keep the color-scoped DuckDB default in mind when touching blue/green config or FinOps storage initialization.

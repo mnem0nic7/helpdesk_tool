@@ -1,0 +1,4 @@
+interface:
+  display_name: "Incident Triage"
+  short_description: "Diagnose host-specific outages and runtime faults"
+  default_prompt: "Use $altlassian-incident-triage to diagnose this site issue and identify the likely fault domain."

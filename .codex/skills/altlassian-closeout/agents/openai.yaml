@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Closeout"
+  short_description: "Update memory, docs, verification, and release notes"
+  default_prompt: "Use $altlassian-closeout to finish this change with memory/docs updates and a release-quality summary."

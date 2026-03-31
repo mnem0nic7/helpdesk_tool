@@ -1,0 +1,4 @@
+interface:
+  display_name: "M365 Tools"
+  short_description: "Build and debug Graph and Exchange Tools flows"
+  default_prompt: "Use $altlassian-m365-tools to add or debug a Microsoft 365 tool in this repo."

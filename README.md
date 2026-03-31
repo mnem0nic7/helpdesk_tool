@@ -18,6 +18,7 @@ The main application lives in `backend/` and `frontend/`. The repo also includes
 - `azure_ingestion_platform/`: separate FastAPI/Postgres ingestion platform for multi-tenant Azure collection.
 - `windows_agent/`: PowerShell-based Windows exit workflow agent.
 - `docs/`: plans, specs, governance notes, templates, and runbooks.
+- `.codex/skills/`: repo-local Codex skills for recurring Altlassian workflows.
 - `e2e/`: Playwright end-to-end test project.
 - `scripts/`: repo maintenance and safety scripts.
 
@@ -101,6 +102,7 @@ docker compose up --build
 ## Documentation
 
 - Runbooks: `docs/runbooks/`
+- AI workflow runbooks and agent playbooks: `docs/runbooks/ai/`
 - Governance references: `docs/governance/`
 - Plans: `docs/plans/`
 - Specs: `docs/specs/`
@@ -110,6 +112,7 @@ docker compose up --build
 
 - The frontend switches between helpdesk and Azure route trees based on site branding and request host.
 - The shared `/tools` surface is available to all signed-in users on the primary and Azure hosts and includes OneDrive copy, login audit, mailbox Inbox rule lookup, and Exchange mailbox delegate lookups for Send on behalf, Send As, and Full Access powered by the shared app registration.
+- Repo-specific Codex skills are versioned in `.codex/skills/`, while the human-readable source of truth for those workflows lives in `docs/runbooks/ai/`.
 - The backend serves all app surfaces from one FastAPI service and starts several background workers for caches, alerts, exports, reporting, and lifecycle automation.
 - PostgreSQL and Redis are the intended shared services for the main app, while local development may still use SQLite-backed data under `data/`.
 - In blue/green Docker deployments, Azure FinOps DuckDB defaults to color-scoped files like `azure_finops_blue.duckdb` and `azure_finops_green.duckdb` so the two runtimes do not fight over the same lock.

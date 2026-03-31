@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Cutover"
+  short_description: "Run blue/green releases and post-deploy checks"
+  default_prompt: "Use $altlassian-release-cutover to release this change and verify the active runtime."

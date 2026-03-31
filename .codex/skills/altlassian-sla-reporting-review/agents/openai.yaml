@@ -1,0 +1,4 @@
+interface:
+  display_name: "SLA Reporting Review"
+  short_description: "Audit SLA/reporting behavior and recommend fixes"
+  default_prompt: "Use $altlassian-sla-reporting-review to analyze SLA reporting behavior and suggest improvements."

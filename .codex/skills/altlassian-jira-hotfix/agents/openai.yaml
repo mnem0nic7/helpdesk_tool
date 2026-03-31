@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jira Hotfix"
+  short_description: "Fix Jira-integrated ticket and permission regressions"
+  default_prompt: "Use $altlassian-jira-hotfix to debug this Jira ticket workflow problem and propose a targeted fix."
