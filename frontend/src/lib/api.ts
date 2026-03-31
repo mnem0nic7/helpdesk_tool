@@ -1502,6 +1502,10 @@ export interface EmailgisticsHelperRequest {
   shared_mailbox: string;
 }
 
+export interface EmailgisticsSyncNowRequest {
+  shared_mailbox: string;
+}
+
 export interface EmailgisticsHelperStep {
   key: "full_access" | "send_as" | "addin_group" | "sync_users";
   label: string;
@@ -3024,6 +3028,10 @@ export const api = {
 
   runEmailgisticsHelper(body: EmailgisticsHelperRequest): Promise<EmailgisticsHelperStatus> {
     return postJSON<EmailgisticsHelperStatus>("/api/tools/emailgistics-helper", body);
+  },
+
+  runEmailgisticsSyncNow(body: EmailgisticsSyncNowRequest): Promise<EmailgisticsHelperStatus> {
+    return postJSON<EmailgisticsHelperStatus>("/api/tools/emailgistics-helper/sync-now", body);
   },
 
   getDelegateMailboxJob(job_id: string): Promise<DelegateMailboxJobStatus> {

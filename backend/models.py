@@ -900,6 +900,12 @@ class EmailgisticsHelperRequest(BaseModel):
     shared_mailbox: str = Field(min_length=3, max_length=320)
 
 
+class EmailgisticsSyncNowRequest(BaseModel):
+    """Request body for the Emailgistics sync-only tool action."""
+
+    shared_mailbox: str = Field(min_length=3, max_length=320)
+
+
 class EmailgisticsHelperStepResponse(BaseModel):
     """One step result returned by Emailgistics Helper."""
 

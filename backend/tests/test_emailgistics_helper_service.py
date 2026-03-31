@@ -158,3 +158,45 @@ def test_emailgistics_helper_stops_before_permissions_when_sync_prereqs_fail(mon
     assert result["error"] == "Emailgistics Helper is not fully configured on the app runtime."
     assert result["steps"][0]["status"] == "failed"
     assert call_log == []
+
+
+def test_emailgistics_sync_now_runs_only_sync_script(monkeypatch):
+    call_log: list[str] = []
+    exchange_client = FakeExchangeClient(call_log)
+    service = EmailgisticsHelperService(client=MagicMock(), exchange_client=exchange_client)
+
+    monkeypatch.setattr(
+        service,
+        "_resolve_shared_mailbox",
+        lambda mailbox, *, anchor_mailbox: call_log.append("resolve_shared_mailbox") or {
+            "display_name": "Shared Example",
+            "principal_name": "shared@example.com",
+            "primary_address": "shared@example.com",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_prepare_sync_users_execution",
+        lambda shared_mailbox: call_log.append("prepare_sync") or MagicMock(name="sync_execution"),
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_sync_users_script",
+        lambda shared_mailbox, *, execution=None: call_log.append("run_sync") or {
+            "status": "completed",
+            "message": "Ran Emailgistics sync for shared@example.com.",
+            "output": "Users have been successfully synced.",
+        },
+    )
+
+    result = service.run_sync_only(shared_mailbox="shared@example.com")
+
+    assert result["status"] == "completed"
+    assert result["user_mailbox"] == ""
+    assert [step["status"] for step in result["steps"]] == ["completed"]
+    assert result["sync_output"] == "Users have been successfully synced."
+    assert call_log == [
+        "resolve_shared_mailbox",
+        "prepare_sync",
+        "run_sync",
+    ]

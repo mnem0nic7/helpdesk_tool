@@ -21,6 +21,7 @@ const { mockApi } = vi.hoisted(() => ({
     createDelegateMailboxJob: vi.fn(),
     cancelDelegateMailboxJob: vi.fn(),
     runEmailgisticsHelper: vi.fn(),
+    runEmailgisticsSyncNow: vi.fn(),
   },
 }));
 
@@ -324,6 +325,27 @@ describe("ToolsPage", () => {
         },
       ],
     });
+    mockApi.runEmailgisticsSyncNow.mockResolvedValue({
+      status: "completed",
+      user_mailbox: "",
+      shared_mailbox: "helper-shared@example.com",
+      resolved_user_display_name: "",
+      resolved_user_principal_name: "",
+      resolved_shared_display_name: "Helper Shared",
+      resolved_shared_principal_name: "helper-shared@example.com",
+      addin_group_name: "Emailgistics_UserAddin",
+      note: "Emailgistics sync finished for helper-shared@example.com.",
+      error: "",
+      sync_output: "Users have been successfully synced for helper-shared@example.com.",
+      steps: [
+        {
+          key: "sync_users" as const,
+          label: "Run Emailgistics Sync",
+          status: "completed" as const,
+          message: "Ran Emailgistics sync for helper-shared@example.com.",
+        },
+      ],
+    });
     mockApi.createOneDriveCopyJob.mockResolvedValue({
       ...baseJob,
       status: "queued",
@@ -480,6 +502,28 @@ describe("ToolsPage", () => {
     });
 
     expect(await screen.findByText("Helper Shared")).toBeInTheDocument();
+    expect(screen.getByText("Users have been successfully synced for helper-shared@example.com.")).toBeInTheDocument();
+  });
+
+  it("runs Emailgistics Sync Now for admins", async () => {
+    render(<ToolsPage />);
+
+    await screen.findByText("Grant mailbox access and sync Emailgistics");
+
+    const sharedMailboxInput = screen.getByLabelText("Shared mailbox UPN or email");
+    fireEvent.focus(sharedMailboxInput);
+    fireEvent.change(sharedMailboxInput, { target: { value: "helper-shared@example.com" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Use and save "helper-shared@example.com"/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync Now" }));
+
+    await waitFor(() => {
+      expect(mockApi.runEmailgisticsSyncNow).toHaveBeenCalledWith({
+        shared_mailbox: "helper-shared@example.com",
+      });
+    });
+
+    expect(await screen.findByText("Emailgistics sync finished for helper-shared@example.com.")).toBeInTheDocument();
     expect(screen.getByText("Users have been successfully synced for helper-shared@example.com.")).toBeInTheDocument();
   });
 

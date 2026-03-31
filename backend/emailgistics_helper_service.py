@@ -322,5 +322,52 @@ class EmailgisticsHelperService:
                     break
         return response
 
+    def run_sync_only(self, *, shared_mailbox: str) -> dict[str, Any]:
+        normalized_shared_mailbox = str(shared_mailbox or "").strip()
+        steps = [_step_payload("sync_users")]
+        response: dict[str, Any] = {
+            "status": "failed",
+            "user_mailbox": "",
+            "shared_mailbox": normalized_shared_mailbox,
+            "resolved_user_display_name": "",
+            "resolved_user_principal_name": "",
+            "resolved_shared_display_name": "",
+            "resolved_shared_principal_name": normalized_shared_mailbox,
+            "addin_group_name": self.addin_group_name,
+            "note": "",
+            "error": "",
+            "sync_output": "",
+            "steps": steps,
+        }
+        try:
+            shared = self._resolve_shared_mailbox(
+                normalized_shared_mailbox,
+                anchor_mailbox=normalized_shared_mailbox,
+            )
+            resolved_shared_mailbox = (
+                shared.get("primary_address") or shared.get("principal_name") or normalized_shared_mailbox
+            )
+            response["resolved_shared_display_name"] = shared.get("display_name") or ""
+            response["resolved_shared_principal_name"] = resolved_shared_mailbox
+            sync_execution = self._prepare_sync_users_execution(resolved_shared_mailbox)
+            sync_step = self._run_sync_users_script(
+                resolved_shared_mailbox,
+                execution=sync_execution,
+            )
+            steps[0] = _step_payload(
+                "sync_users",
+                str(sync_step.get("status") or "completed"),
+                str(sync_step.get("message") or ""),
+            )
+            response["sync_output"] = str(sync_step.get("output") or "")
+            response["status"] = "completed"
+            response["note"] = f"Emailgistics sync finished for {resolved_shared_mailbox}."
+        except (EmailgisticsHelperError, ExchangeOnlinePowerShellError) as exc:
+            response["error"] = str(exc)
+            response["note"] = "Emailgistics sync stopped before it could finish."
+            steps[0]["status"] = "failed"
+            steps[0]["message"] = str(exc)
+        return response
+
 
 emailgistics_helper_service = EmailgisticsHelperService(AzureClient())

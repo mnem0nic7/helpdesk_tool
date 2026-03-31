@@ -16,6 +16,7 @@ from models import (
     DelegateMailboxesResponse,
     EmailgisticsHelperRequest,
     EmailgisticsHelperResponse,
+    EmailgisticsSyncNowRequest,
     MailboxDelegatesResponse,
     MailboxRulesResponse,
     OneDriveCopyJobCreateRequest,
@@ -44,7 +45,7 @@ def _require_tools_session(session: dict[str, Any] = Depends(require_tools_acces
 
 def _require_admin_tools_session(session: dict[str, Any] = Depends(_require_tools_session)) -> dict[str, Any]:
     if not session_is_admin(session):
-        raise HTTPException(status_code=403, detail="Admin access is required for Emailgistics Helper")
+        raise HTTPException(status_code=403, detail="Admin access is required for Emailgistics tools")
     return session
 
 
@@ -348,6 +349,18 @@ def run_emailgistics_helper(
     return EmailgisticsHelperResponse.model_validate(
         emailgistics_helper_service.run(
             user_mailbox=body.user_mailbox,
+            shared_mailbox=body.shared_mailbox,
+        )
+    )
+
+
+@router.post("/emailgistics-helper/sync-now", response_model=EmailgisticsHelperResponse)
+def run_emailgistics_sync_now(
+    body: EmailgisticsSyncNowRequest,
+    _session: dict[str, Any] = Depends(_require_admin_tools_session),
+) -> EmailgisticsHelperResponse:
+    return EmailgisticsHelperResponse.model_validate(
+        emailgistics_helper_service.run_sync_only(
             shared_mailbox=body.shared_mailbox,
         )
     )
