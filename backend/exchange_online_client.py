@@ -220,9 +220,10 @@ $mailboxIdentities = @(
     }
   }
 )
+$fullAccessErrors = @()
 $fullAccess = @(
   $mailboxIdentities |
-    Get-EXOMailboxPermission -User $delegateUser |
+    Get-EXOMailboxPermission -User $delegateUser -ErrorAction SilentlyContinue -ErrorVariable +fullAccessErrors |
     Where-Object {
       $_.AccessRights -contains 'FullAccess' -and
       $_.Deny -ne $true -and
@@ -231,6 +232,15 @@ $fullAccess = @(
     } |
     Select-Object -ExpandProperty Identity -Unique
 )
+$unexpectedFullAccessErrors = @(
+  $fullAccessErrors |
+    Where-Object {
+      $_.Exception.Message -notmatch 'No permissions were found for the user:'
+    }
+)
+if ($unexpectedFullAccessErrors.Count -gt 0) {
+  throw $unexpectedFullAccessErrors[0]
+}
 $sendAs = @(
   Get-EXORecipientPermission -Trustee $delegateUser -ResultSize Unlimited |
     Where-Object { $_.AccessRights -contains 'SendAs' -and $_.Deny -ne $true } |
