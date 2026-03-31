@@ -549,3 +549,166 @@ def test_mailbox_delegate_routes_translate_exchange_permission_errors(test_clien
         "Exchange.ManageAsAppV2 with admin consent plus an Exchange RBAC role such as Recipient Management "
         "before this tool can read mailbox delegation."
     )
+
+
+def test_create_delegate_mailbox_job_queues_a_persisted_scan(test_client, monkeypatch):
+    import routes_tools
+
+    mock_manager = MagicMock()
+    mock_manager.create_job.return_value = {
+        "job_id": "delegate-job-1",
+        "site_scope": "primary",
+        "status": "queued",
+        "phase": "queued",
+        "requested_by_email": "test@example.com",
+        "requested_by_name": "Test User",
+        "user": "delegate@example.com",
+        "display_name": "",
+        "principal_name": "delegate@example.com",
+        "primary_address": "delegate@example.com",
+        "provider_enabled": True,
+        "supported_permission_types": ["send_on_behalf", "send_as", "full_access"],
+        "permission_counts": {},
+        "note": "",
+        "mailbox_count": 0,
+        "scanned_mailbox_count": 0,
+        "mailboxes": [],
+        "requested_at": "2026-03-31T18:00:00Z",
+        "started_at": None,
+        "completed_at": None,
+        "progress_current": 0,
+        "progress_total": 0,
+        "progress_message": "Queued",
+        "error": None,
+        "events": [],
+    }
+    mock_saved = MagicMock()
+    mock_cache = MagicMock()
+    mock_cache.list_directory_objects.return_value = []
+    monkeypatch.setattr(routes_tools, "mailbox_delegate_scan_jobs", mock_manager)
+    monkeypatch.setattr(routes_tools, "onedrive_copy_jobs", mock_saved)
+    monkeypatch.setattr(routes_tools, "azure_cache", mock_cache)
+
+    resp = test_client.post(
+        "/api/tools/delegate-mailboxes/jobs",
+        headers={"host": "it-app.movedocs.com"},
+        json={"user": "delegate@example.com"},
+    )
+
+    assert resp.status_code == 202
+    assert resp.json()["job_id"] == "delegate-job-1"
+    mock_manager.create_job.assert_called_once_with(
+        site_scope="primary",
+        user="delegate@example.com",
+        requested_by_email="test@example.com",
+        requested_by_name="Test User",
+    )
+    mock_saved.remember_user_option.assert_called_once_with(
+        "delegate@example.com",
+        principal_name="delegate@example.com",
+        source_hint="manual",
+        used_by_email="test@example.com",
+    )
+
+
+def test_delegate_mailbox_job_routes_list_and_fetch_current_users_jobs(test_client, monkeypatch):
+    import routes_tools
+
+    mock_manager = MagicMock()
+    job_payload = {
+        "job_id": "delegate-job-1",
+        "site_scope": "primary",
+        "status": "running",
+        "phase": "scanning_exchange_permissions",
+        "requested_by_email": "test@example.com",
+        "requested_by_name": "Test User",
+        "user": "delegate@example.com",
+        "display_name": "Delegate User",
+        "principal_name": "delegate@example.com",
+        "primary_address": "delegate@example.com",
+        "provider_enabled": True,
+        "supported_permission_types": ["send_on_behalf", "send_as", "full_access"],
+        "permission_counts": {},
+        "note": "",
+        "mailbox_count": 0,
+        "scanned_mailbox_count": 15,
+        "mailboxes": [],
+        "requested_at": "2026-03-31T18:00:00Z",
+        "started_at": "2026-03-31T18:00:05Z",
+        "completed_at": None,
+        "progress_current": 3,
+        "progress_total": 4,
+        "progress_message": "Checking Exchange permissions for Send As and Full Access",
+        "error": None,
+        "events": [
+            {
+                "event_id": 1,
+                "level": "info",
+                "message": "Queued delegate mailbox scan for delegate@example.com.",
+                "created_at": "2026-03-31T18:00:00Z",
+            }
+        ],
+    }
+    mock_manager.list_jobs_for_user.return_value = [job_payload]
+    mock_manager.get_job.return_value = job_payload
+    mock_manager.job_belongs_to.return_value = True
+    monkeypatch.setattr(routes_tools, "mailbox_delegate_scan_jobs", mock_manager)
+
+    list_resp = test_client.get(
+        "/api/tools/delegate-mailboxes/jobs?limit=5",
+        headers={"host": "it-app.movedocs.com"},
+    )
+    detail_resp = test_client.get(
+        "/api/tools/delegate-mailboxes/jobs/delegate-job-1",
+        headers={"host": "it-app.movedocs.com"},
+    )
+
+    assert list_resp.status_code == 200
+    assert list_resp.json()[0]["job_id"] == "delegate-job-1"
+    assert detail_resp.status_code == 200
+    assert detail_resp.json()["phase"] == "scanning_exchange_permissions"
+    mock_manager.list_jobs_for_user.assert_called_once_with("test@example.com", limit=5)
+    mock_manager.job_belongs_to.assert_called_once_with("delegate-job-1", "test@example.com", is_admin=True)
+
+
+def test_delegate_mailbox_job_detail_rejects_other_users(test_client, monkeypatch):
+    import routes_tools
+
+    mock_manager = MagicMock()
+    mock_manager.get_job.return_value = {
+        "job_id": "delegate-job-1",
+        "site_scope": "primary",
+        "status": "running",
+        "phase": "scanning_exchange_permissions",
+        "requested_by_email": "someone@example.com",
+        "requested_by_name": "Someone",
+        "user": "delegate@example.com",
+        "display_name": "",
+        "principal_name": "delegate@example.com",
+        "primary_address": "delegate@example.com",
+        "provider_enabled": True,
+        "supported_permission_types": ["send_on_behalf", "send_as", "full_access"],
+        "permission_counts": {},
+        "note": "",
+        "mailbox_count": 0,
+        "scanned_mailbox_count": 0,
+        "mailboxes": [],
+        "requested_at": "2026-03-31T18:00:00Z",
+        "started_at": None,
+        "completed_at": None,
+        "progress_current": 0,
+        "progress_total": 4,
+        "progress_message": "Queued",
+        "error": None,
+        "events": [],
+    }
+    mock_manager.job_belongs_to.return_value = False
+    monkeypatch.setattr(routes_tools, "mailbox_delegate_scan_jobs", mock_manager)
+
+    resp = test_client.get(
+        "/api/tools/delegate-mailboxes/jobs/delegate-job-1",
+        headers={"host": "it-app.movedocs.com"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "You do not have access to this mailbox delegate scan job"

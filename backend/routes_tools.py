@@ -10,6 +10,8 @@ from auth import list_login_audit, require_tools_access
 from azure_cache import azure_cache
 from models import (
     AppLoginAuditEventResponse,
+    DelegateMailboxJobCreateRequest,
+    DelegateMailboxJobResponse,
     DelegateMailboxesResponse,
     MailboxDelegatesResponse,
     MailboxRulesResponse,
@@ -17,6 +19,7 @@ from models import (
     OneDriveCopyJobResponse,
     OneDriveCopyUserOptionResponse,
 )
+from mailbox_delegate_scan_jobs import mailbox_delegate_scan_jobs
 from onedrive_copy_jobs import onedrive_copy_jobs
 from site_context import get_current_site_scope
 from user_admin_providers import UserAdminProviderError, user_admin_providers
@@ -70,6 +73,15 @@ def _friendly_mailbox_delegate_error(message: str) -> str:
             "Install pwsh plus the ExchangeOnlineManagement module so the app can read Send As and Full Access."
         )
     return text
+
+
+def _ensure_delegate_scan_job_access(job_id: str, session: dict[str, Any]) -> dict[str, Any]:
+    job = mailbox_delegate_scan_jobs.get_job(job_id, include_events=True)
+    if not job:
+        raise HTTPException(status_code=404, detail="Mailbox delegate scan job was not found")
+    if not mailbox_delegate_scan_jobs.job_belongs_to(job_id, str(session.get("email") or ""), is_admin=bool(session.get("is_admin"))):
+        raise HTTPException(status_code=403, detail="You do not have access to this mailbox delegate scan job")
+    return job
 
 
 def _normalize_user_option(row: dict[str, Any], *, source: str) -> dict[str, Any] | None:
@@ -235,3 +247,57 @@ def list_delegate_mailboxes(
         return DelegateMailboxesResponse.model_validate(user_admin_providers.list_delegate_mailboxes_for_user(user))
     except UserAdminProviderError as exc:
         raise HTTPException(status_code=502, detail=_friendly_mailbox_delegate_error(str(exc))) from exc
+
+
+@router.post("/delegate-mailboxes/jobs", response_model=DelegateMailboxJobResponse, status_code=202)
+def create_delegate_mailbox_job(
+    body: DelegateMailboxJobCreateRequest,
+    session: dict[str, Any] = Depends(_require_tools_session),
+) -> DelegateMailboxJobResponse:
+    scope = get_current_site_scope()
+    try:
+        job = mailbox_delegate_scan_jobs.create_job(
+            site_scope=scope,
+            user=body.user,
+            requested_by_email=str(session.get("email") or ""),
+            requested_by_name=str(session.get("name") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    exact_match = _find_exact_entra_user(body.user)
+    if exact_match:
+        onedrive_copy_jobs.remember_user_option(
+            body.user,
+            display_name=str(exact_match.get("display_name") or ""),
+            principal_name=str(exact_match.get("principal_name") or ""),
+            mail=str(exact_match.get("mail") or ""),
+            source_hint="entra",
+            used_by_email=str(session.get("email") or ""),
+        )
+    else:
+        onedrive_copy_jobs.remember_user_option(
+            body.user,
+            principal_name=body.user,
+            source_hint="manual",
+            used_by_email=str(session.get("email") or ""),
+        )
+    return DelegateMailboxJobResponse.model_validate(job)
+
+
+@router.get("/delegate-mailboxes/jobs", response_model=list[DelegateMailboxJobResponse])
+def list_delegate_mailbox_jobs(
+    limit: int = Query(default=20, ge=1, le=100),
+    session: dict[str, Any] = Depends(_require_tools_session),
+) -> list[DelegateMailboxJobResponse]:
+    jobs = mailbox_delegate_scan_jobs.list_jobs_for_user(str(session.get("email") or ""), limit=limit)
+    return [DelegateMailboxJobResponse.model_validate(job) for job in jobs]
+
+
+@router.get("/delegate-mailboxes/jobs/{job_id}", response_model=DelegateMailboxJobResponse)
+def get_delegate_mailbox_job(
+    job_id: str,
+    session: dict[str, Any] = Depends(_require_tools_session),
+) -> DelegateMailboxJobResponse:
+    job = _ensure_delegate_scan_job_access(job_id, session)
+    return DelegateMailboxJobResponse.model_validate(job)

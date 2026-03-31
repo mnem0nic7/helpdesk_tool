@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type AppLoginAuditEvent,
-  type DelegateMailboxesStatus,
+  type DelegateMailboxJobStatus,
   type MailboxDelegatesStatus,
   type MailboxRulesStatus,
   type OneDriveCopyJobStatus,
@@ -22,6 +22,7 @@ const EXCLUDED_ROOT_FOLDERS = [
 
 const UPN_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const DELEGATE_PERMISSION_TYPES = ["send_on_behalf", "send_as", "full_access"] as const;
+type JobStatusTone = "queued" | "running" | "completed" | "failed";
 
 type PickerOptionSource = OneDriveCopyUserOption["source"] | "manual";
 
@@ -44,7 +45,7 @@ function formatDateTime(value: string | null): string {
   });
 }
 
-function statusTone(status: OneDriveCopyJobStatus["status"]): string {
+function statusTone(status: JobStatusTone): string {
   switch (status) {
     case "completed":
       return "bg-emerald-100 text-emerald-700";
@@ -69,6 +70,25 @@ function phaseLabel(phase: OneDriveCopyJobStatus["phase"]): string {
       return "Dispatching copy";
     default:
       return phase.replace(/_/g, " ");
+  }
+}
+
+function delegateScanPhaseLabel(phase: DelegateMailboxJobStatus["phase"]): string {
+  switch (phase) {
+    case "resolving_user":
+      return "Resolving user";
+    case "scanning_send_on_behalf":
+      return "Scanning send on behalf";
+    case "scanning_exchange_permissions":
+      return "Scanning Exchange permissions";
+    case "merging_results":
+      return "Finalizing results";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    default:
+      return "Queued";
   }
 }
 
@@ -469,13 +489,13 @@ function MailboxDelegatesResults({
 }
 
 function DelegateMailboxesResults({
-  data,
+  job,
   isLoading,
   errorMessage,
   onRefresh,
   isRefreshing,
 }: {
-  data: DelegateMailboxesStatus | undefined;
+  job: DelegateMailboxJobStatus | undefined;
   isLoading: boolean;
   errorMessage: string;
   onRefresh: () => void;
@@ -493,7 +513,7 @@ function DelegateMailboxesResults({
     return <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMessage}</div>;
   }
 
-  if (!data) {
+  if (!job) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
         Enter a user email to find mailboxes where they have Exchange delegate access.
@@ -501,32 +521,86 @@ function DelegateMailboxesResults({
     );
   }
 
+  const percent = job.progress_total > 0 ? Math.round((job.progress_current / job.progress_total) * 100) : 0;
+  const isRunning = job.status === "queued" || job.status === "running";
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Delegate mailbox matches</div>
-          <h2 className="mt-1 text-2xl font-semibold text-slate-900">{data.display_name || data.primary_address || data.user}</h2>
-          <p className="mt-1 text-sm text-slate-500">{data.primary_address || data.principal_name || data.user}</p>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-900">{job.display_name || job.primary_address || job.user}</h2>
+          <p className="mt-1 text-sm text-slate-500">{job.primary_address || job.principal_name || job.user}</p>
         </div>
-        <button type="button" onClick={onRefresh} className={buttonClass("secondary", isRefreshing)}>
-          Refresh
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${statusTone(job.status)}`}>
+            {job.status}
+          </span>
+          <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700">
+            {delegateScanPhaseLabel(job.phase)}
+          </span>
+          <button type="button" onClick={onRefresh} className={buttonClass("secondary", isRefreshing)}>
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <span>Scan progress</span>
+          <span>
+            {job.progress_current}/{job.progress_total}
+          </span>
+        </div>
+        <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+          <div className="h-full rounded-full bg-sky-600 transition-all" style={{ width: `${percent}%` }} />
+        </div>
+        <p className="mt-2 text-sm text-slate-600">{job.progress_message || "Queued"}</p>
       </div>
 
       <div className="grid gap-3 md:grid-cols-5">
-        <CountCard label="Matching Mailboxes" value={data.mailbox_count.toLocaleString()} />
-        <CountCard label="Scanned Mailboxes" value={data.scanned_mailbox_count.toLocaleString()} />
-        <CountCard label="Send On Behalf" value={String(data.permission_counts.send_on_behalf ?? 0)} tone="text-sky-700" />
-        <CountCard label="Send As" value={String(data.permission_counts.send_as ?? 0)} tone="text-violet-700" />
-        <CountCard label="Full Access" value={String(data.permission_counts.full_access ?? 0)} tone="text-emerald-700" />
+        <CountCard label="Matching Mailboxes" value={job.mailbox_count.toLocaleString()} />
+        <CountCard label="Scanned Mailboxes" value={job.scanned_mailbox_count.toLocaleString()} />
+        <CountCard label="Send On Behalf" value={String(job.permission_counts.send_on_behalf ?? 0)} tone="text-sky-700" />
+        <CountCard label="Send As" value={String(job.permission_counts.send_as ?? 0)} tone="text-violet-700" />
+        <CountCard label="Full Access" value={String(job.permission_counts.full_access ?? 0)} tone="text-emerald-700" />
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">{data.note}</div>
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+        {job.note || "Most delegate scans finish in 20-90 seconds. Large tenants can take up to about 4 minutes before the job times out."}
+      </div>
 
-      {data.mailboxes.length > 0 ? (
+      <div className="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+        Most delegate scans finish in 20-90 seconds. Large tenants can take up to about 4 minutes because the app has to sweep Exchange mailbox metadata plus delegate permissions.
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Requested By</div>
+          <div className="mt-1 font-medium text-slate-900">{job.requested_by_name || job.requested_by_email}</div>
+          <div className="text-xs text-slate-500">{job.requested_by_email}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Timing</div>
+          <div className="mt-1">Requested: {formatDateTime(job.requested_at)}</div>
+          <div>Started: {formatDateTime(job.started_at)}</div>
+          <div>Completed: {formatDateTime(job.completed_at)}</div>
+        </div>
+      </div>
+
+      {job.error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{job.error}</div>
+      ) : null}
+
+      {isRunning ? (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+          This scan keeps running on the server even if you leave the page. Come back later and the latest running job or your most recent finished job will still be here.
+        </div>
+      ) : null}
+
+      {job.mailboxes.length > 0 ? (
         <div className="space-y-3">
-          {data.mailboxes.map((mailbox) => (
+          {job.mailboxes.map((mailbox) => (
             <div
               key={mailbox.identity || mailbox.primary_address || mailbox.principal_name}
               className="rounded-2xl border border-slate-200 bg-white px-4 py-4"
@@ -725,6 +799,83 @@ function OneDriveCopyJobDetail({ job }: { job: OneDriveCopyJobStatus }) {
   );
 }
 
+function DelegateMailboxJobHistory({
+  jobs,
+  activeJobId,
+  onSelect,
+  onRefresh,
+  isRefreshing,
+}: {
+  jobs: DelegateMailboxJobStatus[];
+  activeJobId: string | null;
+  onSelect: (jobId: string) => void;
+  onRefresh: () => void;
+  isRefreshing: boolean;
+}) {
+  return (
+    <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Your job history</div>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-900">Recent delegate scan jobs</h2>
+        </div>
+        <button type="button" onClick={onRefresh} className={buttonClass("secondary", isRefreshing)}>
+          Refresh
+        </button>
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200">
+        <table className="min-w-full divide-y divide-slate-200 text-sm">
+          <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="px-4 py-3">User</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Matches</th>
+              <th className="px-4 py-3">Scanned</th>
+              <th className="px-4 py-3">Requested</th>
+              <th className="px-4 py-3">Completed</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {jobs.length > 0 ? (
+              jobs.map((job) => (
+                <tr
+                  key={job.job_id}
+                  className={[
+                    "cursor-pointer transition hover:bg-slate-50",
+                    activeJobId === job.job_id ? "bg-sky-50/60" : "",
+                  ].join(" ")}
+                  onClick={() => onSelect(job.job_id)}
+                >
+                  <td className="px-4 py-3 text-slate-700">
+                    <div className="font-medium text-slate-900">{job.display_name || job.primary_address || job.user}</div>
+                    <div className="text-xs text-slate-500">{job.primary_address || job.principal_name || job.user}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${statusTone(job.status)}`}>
+                      {job.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-slate-700">{job.mailbox_count}</td>
+                  <td className="px-4 py-3 text-slate-700">{job.scanned_mailbox_count}</td>
+                  <td className="px-4 py-3 text-xs text-slate-600">{formatDateTime(job.requested_at)}</td>
+                  <td className="px-4 py-3 text-xs text-slate-600">{formatDateTime(job.completed_at)}</td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
+                  No delegate scan jobs have been submitted yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export default function ToolsPage() {
   const branding = getSiteBranding();
   const queryClient = useQueryClient();
@@ -745,7 +896,7 @@ export default function ToolsPage() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeDelegateMailboxLookup, setActiveDelegateMailboxLookup] = useState<string | null>(null);
   const [activeMailboxLookup, setActiveMailboxLookup] = useState<string | null>(null);
-  const [activeDelegateUserLookup, setActiveDelegateUserLookup] = useState<string | null>(null);
+  const [activeDelegateMailboxJobId, setActiveDelegateMailboxJobId] = useState<string | null>(null);
   const [formError, setFormError] = useState("");
   const [delegateMailboxFormError, setDelegateMailboxFormError] = useState("");
   const [mailboxFormError, setMailboxFormError] = useState("");
@@ -854,12 +1005,35 @@ export default function ToolsPage() {
     staleTime: 15_000,
   });
 
-  const delegateMailboxesQuery = useQuery({
-    queryKey: ["delegate-mailboxes", activeDelegateUserLookup],
-    queryFn: () => api.listDelegateMailboxes(activeDelegateUserLookup as string),
-    enabled: hasSignedInUser && !!activeDelegateUserLookup,
-    retry: false,
-    staleTime: 15_000,
+  const delegateMailboxJobsQuery = useQuery({
+    queryKey: ["delegate-mailboxes", "jobs"],
+    queryFn: () => api.listDelegateMailboxJobs(20),
+    enabled: hasSignedInUser,
+    refetchInterval: (query) => {
+      const jobs = query.state.data as DelegateMailboxJobStatus[] | undefined;
+      return jobs?.some((job) => job.status === "queued" || job.status === "running") ? 3_000 : 15_000;
+    },
+  });
+
+  useEffect(() => {
+    if (!delegateMailboxJobsQuery.data?.length) {
+      return;
+    }
+    if (activeDelegateMailboxJobId && delegateMailboxJobsQuery.data.some((job) => job.job_id === activeDelegateMailboxJobId)) {
+      return;
+    }
+    const runningJob = delegateMailboxJobsQuery.data.find((job) => job.status === "queued" || job.status === "running");
+    setActiveDelegateMailboxJobId((runningJob ?? delegateMailboxJobsQuery.data[0]).job_id);
+  }, [activeDelegateMailboxJobId, delegateMailboxJobsQuery.data]);
+
+  const activeDelegateMailboxJobQuery = useQuery({
+    queryKey: ["delegate-mailboxes", "jobs", activeDelegateMailboxJobId],
+    queryFn: () => api.getDelegateMailboxJob(activeDelegateMailboxJobId as string),
+    enabled: hasSignedInUser && !!activeDelegateMailboxJobId,
+    refetchInterval: (query) => {
+      const job = query.state.data as DelegateMailboxJobStatus | undefined;
+      return job && (job.status === "queued" || job.status === "running") ? 3_000 : false;
+    },
   });
 
   const createJobMutation = useMutation({
@@ -880,6 +1054,22 @@ export default function ToolsPage() {
     },
     onError: (error) => {
       setFormError(error instanceof Error ? error.message : "Failed to queue the OneDrive copy job.");
+    },
+  });
+
+  const createDelegateMailboxJobMutation = useMutation({
+    mutationFn: () =>
+      api.createDelegateMailboxJob({
+        user: selectedDelegateUser?.canonical_upn.trim() || delegateUserInput.trim(),
+      }),
+    onSuccess: async (job) => {
+      setDelegateUserFormError("");
+      setActiveDelegateMailboxJobId(job.job_id);
+      await queryClient.invalidateQueries({ queryKey: ["delegate-mailboxes", "jobs"] });
+      await queryClient.invalidateQueries({ queryKey: ["delegate-mailboxes", "jobs", job.job_id] });
+    },
+    onError: (error) => {
+      setDelegateUserFormError(error instanceof Error ? error.message : "Failed to queue the delegate mailbox scan.");
     },
   });
   const canQueueJob =
@@ -1009,11 +1199,7 @@ export default function ToolsPage() {
       return;
     }
     setDelegateUserFormError("");
-    if (activeDelegateUserLookup && normalizeUpn(activeDelegateUserLookup) === normalizeUpn(user)) {
-      void delegateMailboxesQuery.refetch();
-      return;
-    }
-    setActiveDelegateUserLookup(user);
+    createDelegateMailboxJobMutation.mutate();
   }
 
   const mailboxApiError =
@@ -1029,10 +1215,8 @@ export default function ToolsPage() {
       ? mailboxDelegatesQuery.error.message
       : "";
   const delegateUserApiError =
-    delegateMailboxesQuery.error instanceof Error &&
-    activeDelegateUserLookup &&
-    normalizeUpn(delegateUserInput || activeDelegateUserLookup) === normalizeUpn(activeDelegateUserLookup)
-      ? delegateMailboxesQuery.error.message
+    activeDelegateMailboxJobQuery.error instanceof Error
+      ? activeDelegateMailboxJobQuery.error.message
       : "";
   const mailboxLookupError = mailboxFormError || mailboxApiError;
   const delegateMailboxLookupError = delegateMailboxFormError || delegateMailboxApiError;
@@ -1042,7 +1226,7 @@ export default function ToolsPage() {
   const canLookupMailboxRules =
     (selectedMailbox !== null || looksLikeUpn(mailboxInput)) && !mailboxRulesQuery.isFetching;
   const canLookupDelegateUser =
-    (selectedDelegateUser !== null || looksLikeUpn(delegateUserInput)) && !delegateMailboxesQuery.isFetching;
+    (selectedDelegateUser !== null || looksLikeUpn(delegateUserInput)) && !createDelegateMailboxJobMutation.isPending;
 
   return (
     <div className="space-y-6">
@@ -1231,7 +1415,7 @@ export default function ToolsPage() {
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mailbox Delegation</div>
                 <h2 className="mt-1 text-2xl font-semibold text-slate-900">Find mailboxes where a user has delegate access</h2>
                 <p className="mt-2 text-sm text-slate-600">
-                  Enter a user email to scan Exchange mailboxes and list where that person currently has Send on behalf, Send As, or Full Access through the shared app registration.
+                  Enter a user email to queue an Exchange mailbox scan and list where that person currently has Send on behalf, Send As, or Full Access through the shared app registration. Most runs finish in 20-90 seconds, but larger tenants can take up to about 4 minutes.
                 </p>
               </div>
               <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700">Org scan</span>
@@ -1255,18 +1439,19 @@ export default function ToolsPage() {
                 disabled={!canLookupDelegateUser}
                 className={buttonClass("primary", !canLookupDelegateUser)}
               >
-                {delegateMailboxesQuery.isFetching ? "Scanning mailboxes..." : "Find delegate mailboxes"}
+                {createDelegateMailboxJobMutation.isPending ? "Queueing scan..." : "Find delegate mailboxes"}
               </button>
             </div>
 
             <DelegateMailboxesResults
-              data={delegateMailboxesQuery.data}
-              isLoading={delegateMailboxesQuery.isLoading}
+              job={activeDelegateMailboxJobQuery.data}
+              isLoading={activeDelegateMailboxJobQuery.isLoading}
               errorMessage={delegateUserLookupError}
               onRefresh={() => {
-                void delegateMailboxesQuery.refetch();
+                void delegateMailboxJobsQuery.refetch();
+                void activeDelegateMailboxJobQuery.refetch();
               }}
-              isRefreshing={delegateMailboxesQuery.isFetching}
+              isRefreshing={delegateMailboxJobsQuery.isFetching || activeDelegateMailboxJobQuery.isFetching}
             />
           </section>
 
@@ -1393,6 +1578,16 @@ export default function ToolsPage() {
               </table>
             </div>
           </section>
+
+          <DelegateMailboxJobHistory
+            jobs={delegateMailboxJobsQuery.data ?? []}
+            activeJobId={activeDelegateMailboxJobId}
+            onSelect={setActiveDelegateMailboxJobId}
+            onRefresh={() => {
+              void delegateMailboxJobsQuery.refetch();
+            }}
+            isRefreshing={delegateMailboxJobsQuery.isFetching}
+          />
 
           <LoginAuditPanel events={loginAuditQuery.data ?? []} />
         </div>

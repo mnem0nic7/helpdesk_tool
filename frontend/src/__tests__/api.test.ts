@@ -119,6 +119,30 @@ describe("api POST methods", () => {
   });
 });
 
+describe("tools api methods", () => {
+  it("posts delegate mailbox scan jobs", async () => {
+    mockFetch({ job_id: "delegate-job-1" }, 202);
+    await api.createDelegateMailboxJob({ user: "delegate@example.com" });
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/tools/delegate-mailboxes/jobs");
+    expect(call[1].method).toBe("POST");
+    expect(JSON.parse(call[1].body)).toEqual({ user: "delegate@example.com" });
+  });
+
+  it("fetches delegate mailbox scan jobs and job detail", async () => {
+    mockFetch([]);
+    await api.listDelegateMailboxJobs(12);
+    let url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(url).toContain("/api/tools/delegate-mailboxes/jobs");
+    expect(url).toContain("limit=12");
+
+    mockFetch({ job_id: "delegate-job-1" });
+    await api.getDelegateMailboxJob("delegate-job-1");
+    url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(url).toBe("/api/tools/delegate-mailboxes/jobs/delegate-job-1");
+  });
+});
+
 describe("error handling", () => {
   it("throws on 4xx/5xx", async () => {
     mockFetch({ detail: "Not found" }, 404);

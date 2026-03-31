@@ -6,7 +6,7 @@ import logging
 import re
 import secrets
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote
 
 from azure_cache import azure_cache
@@ -70,6 +70,15 @@ _DEVICE_ACTIONS: list[UserAdminActionType] = [
     "device_reassign_primary_user",
 ]
 _MAILBOX_DELEGATE_PERMISSION_TYPES = ["send_on_behalf", "send_as", "full_access"]
+
+
+def _emit_progress(progress_callback: Callable[[dict[str, Any]], None] | None, **payload: Any) -> None:
+    if not progress_callback:
+        return
+    try:
+        progress_callback(payload)
+    except Exception:
+        logger.warning("Mailbox delegate progress callback failed", exc_info=True)
 
 
 class UserAdminProviderError(RuntimeError):
@@ -1232,7 +1241,12 @@ class MailboxAdminProvider:
             "delegates": delegates,
         }
 
-    def list_delegate_mailboxes_for_user(self, user_identifier: str) -> dict[str, Any]:
+    def list_delegate_mailboxes_for_user(
+        self,
+        user_identifier: str,
+        *,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         user = str(user_identifier or "").strip()
         if not user:
             raise UserAdminProviderError("user is required")
@@ -1250,6 +1264,14 @@ class MailboxAdminProvider:
                 "scanned_mailbox_count": 0,
                 "mailboxes": [],
             }
+
+        _emit_progress(
+            progress_callback,
+            phase="resolving_user",
+            progress_current=1,
+            progress_total=4,
+            progress_message="Resolving the requested user identity",
+        )
 
         resolved_display_name = ""
         resolved_principal_name = user
@@ -1276,6 +1298,14 @@ class MailboxAdminProvider:
             parameters={"ResultSize": 500},
             select=self._EXCHANGE_MAILBOX_SCAN_SELECT,
         )
+        _emit_progress(
+            progress_callback,
+            phase="scanning_send_on_behalf",
+            progress_current=2,
+            progress_total=4,
+            progress_message=f"Scanned {len(rows):,} Exchange mailboxes for Send on behalf",
+            scanned_mailbox_count=len(rows),
+        )
 
         normalized_user = _normalized_mailbox_identifier(user)
         matches: list[dict[str, str]] = []
@@ -1286,6 +1316,14 @@ class MailboxAdminProvider:
                 mailbox_match["permission_types"] = ["send_on_behalf"]
                 matches.append(mailbox_match)
 
+        _emit_progress(
+            progress_callback,
+            phase="scanning_exchange_permissions",
+            progress_current=3,
+            progress_total=4,
+            progress_message="Checking Exchange permissions for Send As and Full Access",
+            scanned_mailbox_count=len(rows),
+        )
         exchange_matches = self._exchange_delegate_mailboxes_for_user(resolved_principal_name or user)
         for row in exchange_matches.get("mailboxes") or []:
             if not isinstance(row, dict):
@@ -1301,6 +1339,14 @@ class MailboxAdminProvider:
         matches = _merge_mailbox_matches(matches)
         permission_counts = _permission_counts(matches)
         scanned_mailbox_count = max(len(rows), int(exchange_matches.get("mailbox_count_scanned") or 0))
+        _emit_progress(
+            progress_callback,
+            phase="merging_results",
+            progress_current=4,
+            progress_total=4,
+            progress_message=f"Finalizing results across {scanned_mailbox_count:,} mailboxes",
+            scanned_mailbox_count=scanned_mailbox_count,
+        )
         return {
             "user": user,
             "display_name": resolved_display_name,

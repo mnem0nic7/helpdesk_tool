@@ -848,6 +848,42 @@ class DelegateMailboxesResponse(BaseModel):
     mailboxes: list[DelegateMailboxResponse] = Field(default_factory=list)
 
 
+class DelegateMailboxJobCreateRequest(BaseModel):
+    """Request body for starting a delegate mailbox background scan."""
+
+    user: str = Field(min_length=3, max_length=320)
+
+
+class DelegateMailboxJobResponse(BaseModel):
+    """Status payload for one delegate mailbox background scan job."""
+
+    job_id: str
+    site_scope: str
+    status: Literal["queued", "running", "completed", "failed"]
+    phase: Literal["queued", "resolving_user", "scanning_send_on_behalf", "scanning_exchange_permissions", "merging_results", "completed", "failed"]
+    requested_by_email: str
+    requested_by_name: str
+    user: str
+    display_name: str = ""
+    principal_name: str = ""
+    primary_address: str = ""
+    provider_enabled: bool = False
+    supported_permission_types: list[str] = Field(default_factory=list)
+    permission_counts: dict[str, int] = Field(default_factory=dict)
+    note: str = ""
+    mailbox_count: int = 0
+    scanned_mailbox_count: int = 0
+    mailboxes: list[DelegateMailboxResponse] = Field(default_factory=list)
+    requested_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    progress_current: int = 0
+    progress_total: int = 0
+    progress_message: str = ""
+    error: Optional[str] = None
+    events: list[OneDriveCopyJobEventResponse] = Field(default_factory=list)
+
+
 class OneDriveCopyJobResponse(BaseModel):
     """Status payload for one OneDrive copy background job."""
 

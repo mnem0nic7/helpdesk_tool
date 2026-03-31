@@ -128,14 +128,19 @@ finally {{
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".ps1", delete=False) as handle:
             handle.write(script)
             script_path = Path(handle.name)
+        timeout_seconds = max(30, int(self.timeout_seconds or 240))
         try:
             completed = subprocess.run(
                 [self.pwsh_path, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(script_path)],
                 capture_output=True,
                 text=True,
-                timeout=max(30, int(self.timeout_seconds or 240)),
+                timeout=timeout_seconds,
                 env=env,
             )
+        except subprocess.TimeoutExpired as exc:
+            raise ExchangeOnlinePowerShellError(
+                f"Exchange Online PowerShell timed out after {timeout_seconds} seconds."
+            ) from exc
         finally:
             script_path.unlink(missing_ok=True)
 

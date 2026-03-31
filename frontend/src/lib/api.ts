@@ -1465,6 +1465,38 @@ export interface DelegateMailboxesStatus {
   mailboxes: DelegateMailboxMatch[];
 }
 
+export interface DelegateMailboxJobRequest {
+  user: string;
+}
+
+export interface DelegateMailboxJobStatus {
+  job_id: string;
+  site_scope: string;
+  status: "queued" | "running" | "completed" | "failed";
+  phase: "queued" | "resolving_user" | "scanning_send_on_behalf" | "scanning_exchange_permissions" | "merging_results" | "completed" | "failed";
+  requested_by_email: string;
+  requested_by_name: string;
+  user: string;
+  display_name: string;
+  principal_name: string;
+  primary_address: string;
+  provider_enabled: boolean;
+  supported_permission_types: string[];
+  permission_counts: Record<string, number>;
+  note: string;
+  mailbox_count: number;
+  scanned_mailbox_count: number;
+  mailboxes: DelegateMailboxMatch[];
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  progress_current: number;
+  progress_total: number;
+  progress_message: string;
+  error: string | null;
+  events: OneDriveCopyJobEvent[];
+}
+
 export interface OneDriveCopyJobStatus {
   job_id: string;
   site_scope: string;
@@ -2945,6 +2977,18 @@ export const api = {
 
   listDelegateMailboxes(user: string): Promise<DelegateMailboxesStatus> {
     return fetchJSON<DelegateMailboxesStatus>(`/api/tools/delegate-mailboxes${buildQuery({ user })}`);
+  },
+
+  createDelegateMailboxJob(body: DelegateMailboxJobRequest): Promise<DelegateMailboxJobStatus> {
+    return postJSON<DelegateMailboxJobStatus>("/api/tools/delegate-mailboxes/jobs", body);
+  },
+
+  listDelegateMailboxJobs(limit = 20): Promise<DelegateMailboxJobStatus[]> {
+    return fetchJSON<DelegateMailboxJobStatus[]>(`/api/tools/delegate-mailboxes/jobs${buildQuery({ limit })}`);
+  },
+
+  getDelegateMailboxJob(job_id: string): Promise<DelegateMailboxJobStatus> {
+    return fetchJSON<DelegateMailboxJobStatus>(`/api/tools/delegate-mailboxes/jobs/${encodeURIComponent(job_id)}`);
   },
 
   getAzureGroups(search = ""): Promise<AzureDirectoryObject[]> {

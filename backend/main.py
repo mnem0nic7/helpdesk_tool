@@ -48,6 +48,7 @@ from azure_cost_exports import azure_cost_export_service
 from issue_cache import cache
 from azure_cache import azure_cache
 from azure_vm_export_jobs import azure_vm_export_jobs
+from mailbox_delegate_scan_jobs import mailbox_delegate_scan_jobs
 from onedrive_copy_jobs import onedrive_copy_jobs
 from report_ai_summary_service import report_ai_summary_service
 from user_admin_jobs import user_admin_jobs
@@ -110,6 +111,7 @@ async def _start_deferred_services(app: FastAPI) -> None:
     starters: tuple[tuple[str, Any], ...] = (
         ("Azure cost export service", azure_cost_export_service.start),
         ("Azure VM export worker", azure_vm_export_jobs.start_worker),
+        ("Mailbox delegate scan worker", mailbox_delegate_scan_jobs.start_worker),
         ("OneDrive copy worker", onedrive_copy_jobs.start_worker),
         ("Report AI summary worker", report_ai_summary_service.start_worker),
         ("User admin worker", user_admin_jobs.start_worker),
@@ -153,6 +155,7 @@ async def _stop_leader_services(app: FastAPI) -> None:
     await user_admin_jobs.stop_worker()
     await report_ai_summary_service.stop_worker()
     await onedrive_copy_jobs.stop_worker()
+    await mailbox_delegate_scan_jobs.stop_worker()
     await ai_work_scheduler.stop_worker()
     await azure_vm_export_jobs.stop_worker()
     await azure_cost_export_service.stop()

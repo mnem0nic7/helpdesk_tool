@@ -14,6 +14,9 @@ const { mockApi } = vi.hoisted(() => ({
     listMailboxRules: vi.fn(),
     listMailboxDelegates: vi.fn(),
     listDelegateMailboxes: vi.fn(),
+    listDelegateMailboxJobs: vi.fn(),
+    getDelegateMailboxJob: vi.fn(),
+    createDelegateMailboxJob: vi.fn(),
   },
 }));
 
@@ -62,6 +65,53 @@ const baseJob = {
       level: "info" as const,
       message: "Queued copy from source@example.com to dest@example.com into 'CopiedFiles'.",
       created_at: "2026-03-26T18:00:00Z",
+    },
+  ],
+};
+
+const baseDelegateScanJob = {
+  job_id: "delegate-job-1",
+  site_scope: "primary" as const,
+  status: "running" as const,
+  phase: "scanning_exchange_permissions" as const,
+  requested_by_email: "gallison@movedocs.com",
+  requested_by_name: "Gallison",
+  user: "delegate@example.com",
+  display_name: "Delegate User",
+  principal_name: "delegate@example.com",
+  primary_address: "delegate@example.com",
+  provider_enabled: true,
+  supported_permission_types: ["send_on_behalf", "send_as", "full_access"],
+  permission_counts: {
+    send_on_behalf: 1,
+    send_as: 1,
+    full_access: 1,
+  },
+  note: "Scanned 10 mailboxes for Send on behalf, Send As, and Full Access.",
+  mailbox_count: 1,
+  scanned_mailbox_count: 10,
+  mailboxes: [
+    {
+      identity: "shared@example.com",
+      display_name: "Shared Mailbox",
+      principal_name: "shared@example.com",
+      primary_address: "shared@example.com",
+      permission_types: ["send_on_behalf", "send_as", "full_access"],
+    },
+  ],
+  requested_at: "2026-03-31T18:00:00Z",
+  started_at: "2026-03-31T18:00:05Z",
+  completed_at: null,
+  progress_current: 3,
+  progress_total: 4,
+  progress_message: "Checking Exchange permissions for Send As and Full Access",
+  error: null,
+  events: [
+    {
+      event_id: 1,
+      level: "info" as const,
+      message: "Queued delegate mailbox scan for delegate@example.com.",
+      created_at: "2026-03-31T18:00:00Z",
     },
   ],
 };
@@ -210,6 +260,21 @@ describe("ToolsPage", () => {
         },
       ],
     });
+    mockApi.listDelegateMailboxJobs.mockResolvedValue([baseDelegateScanJob]);
+    mockApi.getDelegateMailboxJob.mockResolvedValue(baseDelegateScanJob);
+    mockApi.createDelegateMailboxJob.mockResolvedValue({
+      ...baseDelegateScanJob,
+      status: "queued",
+      phase: "queued",
+      progress_current: 0,
+      progress_total: 4,
+      progress_message: "Queued",
+      note: "",
+      mailbox_count: 0,
+      scanned_mailbox_count: 0,
+      mailboxes: [],
+      events: [],
+    });
     mockApi.createOneDriveCopyJob.mockResolvedValue({
       ...baseJob,
       status: "queued",
@@ -229,10 +294,12 @@ describe("ToolsPage", () => {
     expect(screen.getByText("Find mailboxes where a user has delegate access")).toBeInTheDocument();
     expect(screen.getByText("List Inbox rules for a provided mailbox")).toBeInTheDocument();
     expect(screen.getByText("Recent OneDrive copy jobs")).toBeInTheDocument();
+    expect(screen.getByText("Recent delegate scan jobs")).toBeInTheDocument();
     expect(await screen.findByText(/Graph copy requests finish server-side/i)).toBeInTheDocument();
     expect(screen.getByText("Recent app sign-ins")).toBeInTheDocument();
     expect(screen.getAllByText("Tech User").length).toBeGreaterThan(0);
     expect(screen.getByText("source@example.com to dest@example.com")).toBeInTheDocument();
+    expect(screen.getByText(/Most delegate scans finish in 20-90 seconds/i)).toBeInTheDocument();
   });
 
   it("submits the create-job request with the expected default advanced options", async () => {
@@ -297,7 +364,7 @@ describe("ToolsPage", () => {
       expect(mockApi.listMailboxDelegates).toHaveBeenCalledWith("shared@example.com");
     });
 
-    expect(await screen.findByText("Delegate User")).toBeInTheDocument();
+    expect((await screen.findAllByText("Delegate User")).length).toBeGreaterThan(0);
     expect(screen.getByText("Ops User")).toBeInTheDocument();
     expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
   });
@@ -314,7 +381,9 @@ describe("ToolsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Find delegate mailboxes" }));
 
     await waitFor(() => {
-      expect(mockApi.listDelegateMailboxes).toHaveBeenCalledWith("delegate@example.com");
+      expect(mockApi.createDelegateMailboxJob).toHaveBeenCalledWith({
+        user: "delegate@example.com",
+      });
     });
 
     expect(await screen.findByText("Scanned 10 mailboxes for Send on behalf, Send As, and Full Access.")).toBeInTheDocument();

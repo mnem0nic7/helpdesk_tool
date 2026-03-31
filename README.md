@@ -9,7 +9,7 @@ The main application lives in `backend/` and `frontend/`. The repo also includes
 - Primary helpdesk dashboard for OIT ticket operations, SLA tracking, AI triage, reporting, alerts, and knowledge-base tooling.
 - OasisDev-hosted helpdesk view that reuses the same application with scope-aware filtering.
 - Azure Control Center for Azure inventory, cost, identity, VM and virtual desktop analysis, alerts, and optimization workflows.
-- Shared signed-in tools on the primary and Azure hosts for OneDrive copy jobs, login audit review, read-only mailbox Inbox rule lookup, and Exchange mailbox delegate lookups for Send on behalf, Send As, and Full Access.
+- Shared signed-in tools on the primary and Azure hosts for OneDrive copy jobs, login audit review, read-only mailbox Inbox rule lookup, and Exchange mailbox delegate lookups for Send on behalf, Send As, and Full Access, including durable per-user background scans that restore the last or still-running delegate scan when a user returns to the page.
 
 ## Repository layout
 
@@ -112,6 +112,7 @@ docker compose up --build
 
 - The frontend switches between helpdesk and Azure route trees based on site branding and request host.
 - The shared `/tools` surface is available to all signed-in users on the primary and Azure hosts and includes OneDrive copy, login audit, mailbox Inbox rule lookup, and Exchange mailbox delegate lookups for Send on behalf, Send As, and Full Access powered by the shared app registration.
+- The org-wide "find mailboxes where a user has delegate access" workflow is a durable server-side job, not a page-local request. Users should normally expect results in about 20 to 90 seconds, but larger tenants can take up to about 4 minutes because the app has to sweep Exchange mailbox and permission data. Each signed-in user sees their own recent delegate scan jobs and any still-running jobs when they come back to the Tools page.
 - Repo-specific Codex skills are versioned in `.codex/skills/`, while the human-readable source of truth for those workflows lives in `docs/runbooks/ai/`.
 - The backend serves all app surfaces from one FastAPI service and starts several background workers for caches, alerts, exports, reporting, and lifecycle automation.
 - PostgreSQL and Redis are the intended shared services for the main app, while local development may still use SQLite-backed data under `data/`.
