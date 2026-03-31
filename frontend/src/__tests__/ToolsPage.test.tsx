@@ -12,6 +12,8 @@ const { mockApi } = vi.hoisted(() => ({
     createOneDriveCopyJob: vi.fn(),
     listLoginAudit: vi.fn(),
     listMailboxRules: vi.fn(),
+    listMailboxDelegates: vi.fn(),
+    listDelegateMailboxes: vi.fn(),
   },
 }));
 
@@ -152,6 +154,41 @@ describe("ToolsPage", () => {
         },
       ],
     });
+    mockApi.listMailboxDelegates.mockResolvedValue({
+      mailbox: "shared@example.com",
+      display_name: "Shared Mailbox",
+      principal_name: "shared@example.com",
+      primary_address: "shared@example.com",
+      provider_enabled: true,
+      delegation_type: "send_on_behalf",
+      note: "Send on behalf delegates are listed read-only from Exchange Online.",
+      delegate_count: 1,
+      delegates: [
+        {
+          display_name: "Delegate User",
+          principal_name: "delegate@example.com",
+          mail: "delegate@example.com",
+        },
+      ],
+    });
+    mockApi.listDelegateMailboxes.mockResolvedValue({
+      user: "delegate@example.com",
+      display_name: "Delegate User",
+      principal_name: "delegate@example.com",
+      primary_address: "delegate@example.com",
+      provider_enabled: true,
+      delegation_type: "send_on_behalf",
+      note: "Scanned 10 mailboxes for Send on behalf access.",
+      mailbox_count: 1,
+      scanned_mailbox_count: 10,
+      mailboxes: [
+        {
+          display_name: "Shared Mailbox",
+          principal_name: "shared@example.com",
+          primary_address: "shared@example.com",
+        },
+      ],
+    });
     mockApi.createOneDriveCopyJob.mockResolvedValue({
       ...baseJob,
       status: "queued",
@@ -167,6 +204,8 @@ describe("ToolsPage", () => {
     render(<ToolsPage />);
 
     expect(await screen.findByText("Copy a full OneDrive to another user")).toBeInTheDocument();
+    expect(screen.getByText("List Send on behalf delegates for a mailbox")).toBeInTheDocument();
+    expect(screen.getByText("Find mailboxes where a user can send on behalf")).toBeInTheDocument();
     expect(screen.getByText("List Inbox rules for a provided mailbox")).toBeInTheDocument();
     expect(screen.getByText("Recent OneDrive copy jobs")).toBeInTheDocument();
     expect(await screen.findByText(/Graph copy requests finish server-side/i)).toBeInTheDocument();
@@ -208,9 +247,9 @@ describe("ToolsPage", () => {
 
     await screen.findByText("List Inbox rules for a provided mailbox");
 
-    const mailboxInput = screen.getByLabelText("Mailbox UPN or email");
-    fireEvent.focus(mailboxInput);
-    fireEvent.change(mailboxInput, { target: { value: "ada@example.com" } });
+    const mailboxInputs = screen.getAllByLabelText("Mailbox UPN or email");
+    fireEvent.focus(mailboxInputs[1]);
+    fireEvent.change(mailboxInputs[1], { target: { value: "ada@example.com" } });
     fireEvent.click(await screen.findByRole("button", { name: /Ada Mailbox/i }));
     fireEvent.click(screen.getByRole("button", { name: "Load mailbox rules" }));
 
@@ -220,6 +259,43 @@ describe("ToolsPage", () => {
 
     expect(await screen.findByText("Move GitHub alerts")).toBeInTheDocument();
     expect(screen.getByText("From addresses: alerts@github.com")).toBeInTheDocument();
+  });
+
+  it("loads Send on behalf delegates for the selected mailbox", async () => {
+    render(<ToolsPage />);
+
+    await screen.findByText("List Send on behalf delegates for a mailbox");
+
+    const mailboxInputs = screen.getAllByLabelText("Mailbox UPN or email");
+    fireEvent.focus(mailboxInputs[0]);
+    fireEvent.change(mailboxInputs[0], { target: { value: "shared@example.com" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Use and save "shared@example.com"/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Load mailbox delegates" }));
+
+    await waitFor(() => {
+      expect(mockApi.listMailboxDelegates).toHaveBeenCalledWith("shared@example.com");
+    });
+
+    expect(await screen.findByText("Delegate User")).toBeInTheDocument();
+  });
+
+  it("scans for mailboxes where the selected user has Send on behalf access", async () => {
+    render(<ToolsPage />);
+
+    await screen.findByText("Find mailboxes where a user can send on behalf");
+
+    const userInput = screen.getByLabelText("User UPN or email");
+    fireEvent.focus(userInput);
+    fireEvent.change(userInput, { target: { value: "delegate@example.com" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Use and save "delegate@example.com"/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Find delegate mailboxes" }));
+
+    await waitFor(() => {
+      expect(mockApi.listDelegateMailboxes).toHaveBeenCalledWith("delegate@example.com");
+    });
+
+    expect(await screen.findByText("Scanned 10 mailboxes for Send on behalf access.")).toBeInTheDocument();
+    expect(screen.getAllByText("Shared Mailbox").length).toBeGreaterThan(0);
   });
 
   it("renders tools for signed-in users even if the legacy tools-access flag is false", async () => {

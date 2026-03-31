@@ -430,3 +430,108 @@ def test_list_mailbox_rules_translates_graph_message_rule_permission_errors(test
         "The Entra app registration needs Microsoft Graph application permission "
         "MailboxSettings.Read with admin consent before this tool can list Inbox rules."
     )
+
+
+def test_list_mailbox_delegates_is_available_on_primary_and_azure(test_client, monkeypatch):
+    import routes_tools
+
+    mock_providers = MagicMock()
+    mock_providers.list_mailbox_delegates.return_value = {
+        "mailbox": "shared@example.com",
+        "display_name": "Shared Mailbox",
+        "principal_name": "shared@example.com",
+        "primary_address": "shared@example.com",
+        "provider_enabled": True,
+        "delegation_type": "send_on_behalf",
+        "note": "Send on behalf delegates are listed read-only from Exchange Online.",
+        "delegate_count": 1,
+        "delegates": [
+            {
+                "display_name": "Delegate User",
+                "principal_name": "delegate@example.com",
+                "mail": "delegate@example.com",
+            }
+        ],
+    }
+    monkeypatch.setattr(routes_tools, "user_admin_providers", mock_providers)
+
+    primary = test_client.get(
+        "/api/tools/mailbox-delegates?mailbox=shared@example.com",
+        headers={"host": "it-app.movedocs.com"},
+    )
+    azure = test_client.get(
+        "/api/tools/mailbox-delegates?mailbox=shared@example.com",
+        headers={"host": "azure.movedocs.com"},
+    )
+
+    assert primary.status_code == 200
+    assert primary.json()["delegate_count"] == 1
+    assert primary.json()["delegates"][0]["mail"] == "delegate@example.com"
+    assert azure.status_code == 200
+    assert azure.json()["delegation_type"] == "send_on_behalf"
+    assert mock_providers.list_mailbox_delegates.call_count == 2
+
+
+def test_list_delegate_mailboxes_is_available_on_primary_and_azure(test_client, monkeypatch):
+    import routes_tools
+
+    mock_providers = MagicMock()
+    mock_providers.list_delegate_mailboxes_for_user.return_value = {
+        "user": "delegate@example.com",
+        "display_name": "Delegate User",
+        "principal_name": "delegate@example.com",
+        "primary_address": "delegate@example.com",
+        "provider_enabled": True,
+        "delegation_type": "send_on_behalf",
+        "note": "Scanned 15 mailboxes for Send on behalf access.",
+        "mailbox_count": 1,
+        "scanned_mailbox_count": 15,
+        "mailboxes": [
+            {
+                "display_name": "Shared Mailbox",
+                "principal_name": "shared@example.com",
+                "primary_address": "shared@example.com",
+            }
+        ],
+    }
+    monkeypatch.setattr(routes_tools, "user_admin_providers", mock_providers)
+
+    primary = test_client.get(
+        "/api/tools/delegate-mailboxes?user=delegate@example.com",
+        headers={"host": "it-app.movedocs.com"},
+    )
+    azure = test_client.get(
+        "/api/tools/delegate-mailboxes?user=delegate@example.com",
+        headers={"host": "azure.movedocs.com"},
+    )
+
+    assert primary.status_code == 200
+    assert primary.json()["mailbox_count"] == 1
+    assert primary.json()["mailboxes"][0]["primary_address"] == "shared@example.com"
+    assert azure.status_code == 200
+    assert azure.json()["scanned_mailbox_count"] == 15
+    assert mock_providers.list_delegate_mailboxes_for_user.call_count == 2
+
+
+def test_mailbox_delegate_routes_translate_exchange_permission_errors(test_client, monkeypatch):
+    import routes_tools
+
+    mock_providers = MagicMock()
+    mock_providers.list_mailbox_delegates.side_effect = UserAdminProviderError(
+        "POST https://outlook.office365.com/adminapi/v2.0/example/Mailbox failed (403): "
+        '{"error":{"code":"ErrorAccessDenied","message":"Access is denied."}}'
+    )
+    monkeypatch.setattr(routes_tools, "user_admin_providers", mock_providers)
+
+    resp = test_client.get(
+        "/api/tools/mailbox-delegates?mailbox=shared@example.com",
+        headers={"host": "it-app.movedocs.com"},
+    )
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == (
+        "Mailbox delegation lookup is not enabled for the shared Exchange app yet. "
+        "The Entra app registration needs Office 365 Exchange Online application permission "
+        "Exchange.ManageAsAppV2 with admin consent plus an Exchange RBAC role such as Recipient Management "
+        "before this tool can read Send on behalf delegates."
+    )

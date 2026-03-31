@@ -10,6 +10,8 @@ from auth import list_login_audit, require_tools_access
 from azure_cache import azure_cache
 from models import (
     AppLoginAuditEventResponse,
+    DelegateMailboxesResponse,
+    MailboxDelegatesResponse,
     MailboxRulesResponse,
     OneDriveCopyJobCreateRequest,
     OneDriveCopyJobResponse,
@@ -49,6 +51,18 @@ def _friendly_mailbox_rules_error(message: str) -> str:
             "Mailbox rule lookup is not enabled for the shared Graph app yet. "
             "The Entra app registration needs Microsoft Graph application permission "
             "MailboxSettings.Read with admin consent before this tool can list Inbox rules."
+        )
+    return text
+
+
+def _friendly_mailbox_delegate_error(message: str) -> str:
+    text = str(message or "").strip()
+    if "adminapi/v2.0" in text and "(403)" in text:
+        return (
+            "Mailbox delegation lookup is not enabled for the shared Exchange app yet. "
+            "The Entra app registration needs Office 365 Exchange Online application permission "
+            "Exchange.ManageAsAppV2 with admin consent plus an Exchange RBAC role such as Recipient Management "
+            "before this tool can read Send on behalf delegates."
         )
     return text
 
@@ -194,3 +208,25 @@ def list_mailbox_rules(
         return MailboxRulesResponse.model_validate(user_admin_providers.list_mailbox_rules(mailbox))
     except UserAdminProviderError as exc:
         raise HTTPException(status_code=502, detail=_friendly_mailbox_rules_error(str(exc))) from exc
+
+
+@router.get("/mailbox-delegates", response_model=MailboxDelegatesResponse)
+def list_mailbox_delegates(
+    mailbox: str = Query(..., min_length=3, max_length=320),
+    _session: dict[str, Any] = Depends(_require_tools_session),
+) -> MailboxDelegatesResponse:
+    try:
+        return MailboxDelegatesResponse.model_validate(user_admin_providers.list_mailbox_delegates(mailbox))
+    except UserAdminProviderError as exc:
+        raise HTTPException(status_code=502, detail=_friendly_mailbox_delegate_error(str(exc))) from exc
+
+
+@router.get("/delegate-mailboxes", response_model=DelegateMailboxesResponse)
+def list_delegate_mailboxes(
+    user: str = Query(..., min_length=3, max_length=320),
+    _session: dict[str, Any] = Depends(_require_tools_session),
+) -> DelegateMailboxesResponse:
+    try:
+        return DelegateMailboxesResponse.model_validate(user_admin_providers.list_delegate_mailboxes_for_user(user))
+    except UserAdminProviderError as exc:
+        raise HTTPException(status_code=502, detail=_friendly_mailbox_delegate_error(str(exc))) from exc

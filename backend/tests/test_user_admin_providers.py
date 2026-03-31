@@ -97,3 +97,155 @@ def test_list_mailbox_rules_falls_back_to_raw_folder_ids_when_lookup_fails():
         "Move To Folder: folder-1",
         "Stop processing more rules",
     ]
+
+
+class FakeMailboxDelegatesClient:
+    configured = True
+
+    def __init__(self) -> None:
+        self.exchange_calls: list[dict[str, object]] = []
+
+    def exchange_admin_request(
+        self,
+        endpoint: str,
+        *,
+        anchor_mailbox: str,
+        cmdlet_name: str,
+        parameters: dict[str, object] | None = None,
+        select: list[str] | None = None,
+        next_link: str | None = None,
+    ):
+        self.exchange_calls.append(
+            {
+                "endpoint": endpoint,
+                "anchor_mailbox": anchor_mailbox,
+                "cmdlet_name": cmdlet_name,
+                "parameters": parameters,
+                "select": select,
+                "next_link": next_link,
+            }
+        )
+        return {
+            "value": [
+                {
+                    "DisplayName": "Shared Mailbox",
+                    "UserPrincipalName": "shared@example.com",
+                    "PrimarySmtpAddress": "shared@example.com",
+                    "GrantSendOnBehalfTo": [
+                        "delegate@example.com",
+                        "delegate-two@example.com",
+                    ],
+                    "GrantSendOnBehalfToWithDisplayNames": [
+                        "Delegate User",
+                        "Delegate Two <delegate-two@example.com>",
+                    ],
+                }
+            ]
+        }
+
+
+class FakeDelegateMailboxScanClient:
+    configured = True
+
+    def graph_request(self, method: str, path: str, **kwargs):
+        assert method == "GET"
+        assert path == "users/delegate%40example.com"
+        assert kwargs["params"] == {"$select": "displayName,userPrincipalName,mail"}
+        return {
+            "displayName": "Delegate User",
+            "userPrincipalName": "delegate@example.com",
+            "mail": "delegate@example.com",
+        }
+
+    def exchange_admin_paged_request(
+        self,
+        endpoint: str,
+        *,
+        anchor_mailbox: str,
+        cmdlet_name: str,
+        parameters: dict[str, object] | None = None,
+        select: list[str] | None = None,
+    ):
+        assert endpoint == "Mailbox"
+        assert anchor_mailbox == "delegate@example.com"
+        assert cmdlet_name == "Get-Mailbox"
+        assert parameters == {"ResultSize": 500}
+        assert select == [
+            "DisplayName",
+            "UserPrincipalName",
+            "PrimarySmtpAddress",
+            "GrantSendOnBehalfTo",
+        ]
+        return [
+            {
+                "DisplayName": "Shared Mailbox",
+                "UserPrincipalName": "shared@example.com",
+                "PrimarySmtpAddress": "shared@example.com",
+                "GrantSendOnBehalfTo": ["delegate@example.com"],
+            },
+            {
+                "DisplayName": "Another Mailbox",
+                "UserPrincipalName": "another@example.com",
+                "PrimarySmtpAddress": "another@example.com",
+                "GrantSendOnBehalfTo": ["someoneelse@example.com"],
+            },
+        ]
+
+
+def test_list_mailbox_delegates_returns_send_on_behalf_entries():
+    client = FakeMailboxDelegatesClient()
+    provider = MailboxAdminProvider(client=client)
+
+    result = provider.list_mailbox_delegates("shared@example.com")
+
+    assert result["display_name"] == "Shared Mailbox"
+    assert result["delegate_count"] == 2
+    assert result["delegates"] == [
+        {
+            "display_name": "Delegate Two",
+            "principal_name": "delegate-two@example.com",
+            "mail": "delegate-two@example.com",
+        },
+        {
+            "display_name": "Delegate User",
+            "principal_name": "delegate@example.com",
+            "mail": "delegate@example.com",
+        },
+    ]
+    assert client.exchange_calls == [
+        {
+            "endpoint": "Mailbox",
+            "anchor_mailbox": "shared@example.com",
+            "cmdlet_name": "Get-Mailbox",
+            "parameters": {
+                "Identity": "shared@example.com",
+                "IncludeGrantSendOnBehalfToWithDisplayNames": True,
+            },
+            "select": [
+                "DisplayName",
+                "UserPrincipalName",
+                "PrimarySmtpAddress",
+                "GrantSendOnBehalfTo",
+                "GrantSendOnBehalfToWithDisplayNames",
+            ],
+            "next_link": None,
+        }
+    ]
+
+
+def test_list_delegate_mailboxes_for_user_filters_orgwide_mailbox_scan():
+    client = FakeDelegateMailboxScanClient()
+    provider = MailboxAdminProvider(client=client)
+
+    result = provider.list_delegate_mailboxes_for_user("delegate@example.com")
+
+    assert result["display_name"] == "Delegate User"
+    assert result["mailbox_count"] == 1
+    assert result["scanned_mailbox_count"] == 2
+    assert result["mailboxes"] == [
+        {
+            "display_name": "Shared Mailbox",
+            "principal_name": "shared@example.com",
+            "primary_address": "shared@example.com",
+        }
+    ]

@@ -797,6 +797,51 @@ class MailboxRulesResponse(BaseModel):
     rules: list[MailboxRuleResponse] = Field(default_factory=list)
 
 
+class MailboxDelegateEntryResponse(BaseModel):
+    """One Send on behalf delegate entry for a mailbox."""
+
+    display_name: str = ""
+    principal_name: str = ""
+    mail: str = ""
+
+
+class MailboxDelegatesResponse(BaseModel):
+    """Send on behalf delegate listing payload for a provided mailbox identifier."""
+
+    mailbox: str
+    display_name: str = ""
+    principal_name: str = ""
+    primary_address: str = ""
+    provider_enabled: bool = False
+    delegation_type: str = "send_on_behalf"
+    note: str = ""
+    delegate_count: int = 0
+    delegates: list[MailboxDelegateEntryResponse] = Field(default_factory=list)
+
+
+class DelegateMailboxResponse(BaseModel):
+    """One mailbox where the provided user has Send on behalf access."""
+
+    display_name: str = ""
+    principal_name: str = ""
+    primary_address: str = ""
+
+
+class DelegateMailboxesResponse(BaseModel):
+    """Org-wide Send on behalf mailbox matches for a provided user identifier."""
+
+    user: str
+    display_name: str = ""
+    principal_name: str = ""
+    primary_address: str = ""
+    provider_enabled: bool = False
+    delegation_type: str = "send_on_behalf"
+    note: str = ""
+    mailbox_count: int = 0
+    scanned_mailbox_count: int = 0
+    mailboxes: list[DelegateMailboxResponse] = Field(default_factory=list)
+
+
 class OneDriveCopyJobResponse(BaseModel):
     """Status payload for one OneDrive copy background job."""
 

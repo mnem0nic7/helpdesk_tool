@@ -265,6 +265,66 @@ def _normalize_mailbox_rule(item: dict[str, Any], *, folder_labels: dict[str, st
     }
 
 
+def _normalized_mailbox_identifier(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _exchange_string_list(value: Any) -> list[str]:
+    results: list[str] = []
+    for item in value or []:
+        text = str(item or "").strip()
+        if text:
+            results.append(text)
+    return results
+
+
+def _mailbox_delegate_display_name(raw_value: str, *, mail: str) -> str:
+    text = str(raw_value or "").strip()
+    if not text:
+        return ""
+    if text.endswith(">") and "<" in text:
+        prefix, _, suffix = text.rpartition("<")
+        candidate_mail = suffix[:-1].strip()
+        if candidate_mail and _normalized_mailbox_identifier(candidate_mail) == _normalized_mailbox_identifier(mail):
+            text = prefix.strip().strip('"')
+    if _normalized_mailbox_identifier(text) == _normalized_mailbox_identifier(mail):
+        return ""
+    return text
+
+
+def _exchange_send_on_behalf_delegates(item: dict[str, Any]) -> list[dict[str, str]]:
+    delegates = _exchange_string_list(item.get("GrantSendOnBehalfTo"))
+    delegate_display_names = _exchange_string_list(item.get("GrantSendOnBehalfToWithDisplayNames"))
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for index, delegate in enumerate(delegates):
+        normalized_delegate = _normalized_mailbox_identifier(delegate)
+        if not normalized_delegate or normalized_delegate in seen:
+            continue
+        seen.add(normalized_delegate)
+        display_name = ""
+        if index < len(delegate_display_names):
+            display_name = _mailbox_delegate_display_name(delegate_display_names[index], mail=delegate)
+        results.append(
+            {
+                "display_name": display_name,
+                "principal_name": delegate,
+                "mail": delegate,
+            }
+        )
+    return results
+
+
+def _exchange_mailbox_match(item: dict[str, Any]) -> dict[str, str]:
+    primary_address = str(item.get("PrimarySmtpAddress") or item.get("UserPrincipalName") or "").strip()
+    principal_name = str(item.get("UserPrincipalName") or primary_address).strip()
+    return {
+        "display_name": str(item.get("DisplayName") or primary_address or principal_name).strip(),
+        "principal_name": principal_name,
+        "primary_address": primary_address or principal_name,
+    }
+
+
 @dataclass
 class EntraAdminProvider:
     client: AzureClient
@@ -766,6 +826,20 @@ class EntraAdminProvider:
 class MailboxAdminProvider:
     client: AzureClient
 
+    _EXCHANGE_MAILBOX_SELECT = [
+        "DisplayName",
+        "UserPrincipalName",
+        "PrimarySmtpAddress",
+        "GrantSendOnBehalfTo",
+        "GrantSendOnBehalfToWithDisplayNames",
+    ]
+    _EXCHANGE_MAILBOX_SCAN_SELECT = [
+        "DisplayName",
+        "UserPrincipalName",
+        "PrimarySmtpAddress",
+        "GrantSendOnBehalfTo",
+    ]
+
     @property
     def enabled(self) -> bool:
         return self.client.configured
@@ -918,6 +992,130 @@ class MailboxAdminProvider:
             "note": "Rules are listed read-only from the mailbox Inbox." if rules else "No Inbox rules were found for this mailbox.",
             "rule_count": len(rules),
             "rules": rules,
+        }
+
+    def list_mailbox_delegates(self, mailbox_identifier: str) -> dict[str, Any]:
+        mailbox = str(mailbox_identifier or "").strip()
+        if not mailbox:
+            raise UserAdminProviderError("mailbox is required")
+        if not self.enabled:
+            return {
+                "mailbox": mailbox,
+                "display_name": "",
+                "principal_name": mailbox,
+                "primary_address": "",
+                "provider_enabled": False,
+                "delegation_type": "send_on_behalf",
+                "note": "Mailbox delegation lookup requires a configured Exchange Online Admin API connection.",
+                "delegate_count": 0,
+                "delegates": [],
+            }
+
+        payload = _safe_graph_call(
+            self.client.exchange_admin_request,
+            "Mailbox",
+            anchor_mailbox=mailbox,
+            cmdlet_name="Get-Mailbox",
+            parameters={
+                "Identity": mailbox,
+                "IncludeGrantSendOnBehalfToWithDisplayNames": True,
+            },
+            select=self._EXCHANGE_MAILBOX_SELECT,
+        )
+        rows = payload.get("value") if isinstance(payload, dict) else []
+        row = next((item for item in rows or [] if isinstance(item, dict)), None)
+        if not row:
+            raise UserAdminProviderError(f"Exchange did not return a mailbox for {mailbox}")
+
+        mailbox_summary = _exchange_mailbox_match(row)
+        delegates = _exchange_send_on_behalf_delegates(row)
+        delegates.sort(key=lambda item: (_normalized_mailbox_identifier(item.get("display_name")), _normalized_mailbox_identifier(item.get("mail"))))
+        return {
+            "mailbox": mailbox,
+            **mailbox_summary,
+            "provider_enabled": True,
+            "delegation_type": "send_on_behalf",
+            "note": (
+                "Send on behalf delegates are listed read-only from Exchange Online."
+                if delegates
+                else "No Send on behalf delegates were found for this mailbox."
+            ),
+            "delegate_count": len(delegates),
+            "delegates": delegates,
+        }
+
+    def list_delegate_mailboxes_for_user(self, user_identifier: str) -> dict[str, Any]:
+        user = str(user_identifier or "").strip()
+        if not user:
+            raise UserAdminProviderError("user is required")
+        if not self.enabled:
+            return {
+                "user": user,
+                "display_name": "",
+                "principal_name": user,
+                "primary_address": user,
+                "provider_enabled": False,
+                "delegation_type": "send_on_behalf",
+                "note": "Mailbox delegation lookup requires a configured Exchange Online Admin API connection.",
+                "mailbox_count": 0,
+                "scanned_mailbox_count": 0,
+                "mailboxes": [],
+            }
+
+        resolved_display_name = ""
+        resolved_principal_name = user
+        resolved_primary_address = user
+        try:
+            user_row = _safe_graph_call(
+                self.client.graph_request,
+                "GET",
+                f"users/{quote(user, safe='')}",
+                params={"$select": "displayName,userPrincipalName,mail"},
+            )
+        except UserAdminProviderError:
+            user_row = {}
+        if isinstance(user_row, dict):
+            resolved_display_name = str(user_row.get("displayName") or "").strip()
+            resolved_principal_name = str(user_row.get("userPrincipalName") or user).strip() or user
+            resolved_primary_address = str(user_row.get("mail") or resolved_principal_name or user).strip() or user
+
+        rows = _safe_graph_call(
+            self.client.exchange_admin_paged_request,
+            "Mailbox",
+            anchor_mailbox=resolved_principal_name or user,
+            cmdlet_name="Get-Mailbox",
+            parameters={"ResultSize": 500},
+            select=self._EXCHANGE_MAILBOX_SCAN_SELECT,
+        )
+
+        normalized_user = _normalized_mailbox_identifier(user)
+        matches: list[dict[str, str]] = []
+        for row in rows:
+            delegates = _exchange_send_on_behalf_delegates(row)
+            if any(_normalized_mailbox_identifier(item.get("mail")) == normalized_user for item in delegates):
+                matches.append(_exchange_mailbox_match(row))
+
+        matches.sort(
+            key=lambda item: (
+                _normalized_mailbox_identifier(item.get("display_name")),
+                _normalized_mailbox_identifier(item.get("primary_address")),
+            )
+        )
+        return {
+            "user": user,
+            "display_name": resolved_display_name,
+            "principal_name": resolved_principal_name,
+            "primary_address": resolved_primary_address,
+            "provider_enabled": True,
+            "delegation_type": "send_on_behalf",
+            "note": (
+                f"Scanned {len(rows):,} mailboxes for Send on behalf access."
+                if matches
+                else f"No Send on behalf mailbox access was found after scanning {len(rows):,} mailboxes."
+            ),
+            "mailbox_count": len(matches),
+            "scanned_mailbox_count": len(rows),
+            "mailboxes": matches,
         }
 
     def execute(self, action_type: UserAdminActionType, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -1124,6 +1322,12 @@ class UserAdminProviderRegistry:
 
     def list_mailbox_rules(self, mailbox_identifier: str) -> dict[str, Any]:
         return self.mailbox.list_mailbox_rules(mailbox_identifier)
+
+    def list_mailbox_delegates(self, mailbox_identifier: str) -> dict[str, Any]:
+        return self.mailbox.list_mailbox_delegates(mailbox_identifier)
+
+    def list_delegate_mailboxes_for_user(self, user_identifier: str) -> dict[str, Any]:
+        return self.mailbox.list_delegate_mailboxes_for_user(user_identifier)
 
     def list_devices(self, user_id: str) -> list[dict[str, Any]]:
         return self.device_management.list_devices(user_id)

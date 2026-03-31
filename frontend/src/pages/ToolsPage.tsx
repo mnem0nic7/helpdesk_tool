@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type AppLoginAuditEvent,
+  type DelegateMailboxesStatus,
+  type MailboxDelegatesStatus,
   type MailboxRulesStatus,
   type OneDriveCopyJobStatus,
   type OneDriveCopyUserOption,
@@ -335,6 +337,149 @@ function MailboxRulesResults({
   );
 }
 
+function MailboxDelegatesResults({
+  data,
+  isLoading,
+  errorMessage,
+  onRefresh,
+  isRefreshing,
+}: {
+  data: MailboxDelegatesStatus | undefined;
+  isLoading: boolean;
+  errorMessage: string;
+  onRefresh: () => void;
+  isRefreshing: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+        Loading mailbox delegates...
+      </div>
+    );
+  }
+
+  if (errorMessage) {
+    return <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMessage}</div>;
+  }
+
+  if (!data) {
+    return (
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+        Select a mailbox and load its Send on behalf delegates.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mailbox delegates</div>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-900">{data.display_name || data.primary_address || data.mailbox}</h2>
+          <p className="mt-1 text-sm text-slate-500">{data.primary_address || data.principal_name || data.mailbox}</p>
+        </div>
+        <button type="button" onClick={onRefresh} className={buttonClass("secondary", isRefreshing)}>
+          Refresh
+        </button>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <CountCard label="Delegates" value={data.delegate_count.toLocaleString()} />
+        <CountCard label="Access Type" value="Send on behalf" />
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">{data.note}</div>
+
+      {data.delegates.length > 0 ? (
+        <div className="space-y-3">
+          {data.delegates.map((delegate) => (
+            <div
+              key={`${delegate.mail}-${delegate.principal_name}`}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-4"
+            >
+              <div className="text-base font-semibold text-slate-900">{delegate.display_name || delegate.mail || delegate.principal_name}</div>
+              <div className="mt-1 text-sm text-slate-500">{delegate.mail || delegate.principal_name}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DelegateMailboxesResults({
+  data,
+  isLoading,
+  errorMessage,
+  onRefresh,
+  isRefreshing,
+}: {
+  data: DelegateMailboxesStatus | undefined;
+  isLoading: boolean;
+  errorMessage: string;
+  onRefresh: () => void;
+  isRefreshing: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+        Scanning mailbox delegation...
+      </div>
+    );
+  }
+
+  if (errorMessage) {
+    return <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMessage}</div>;
+  }
+
+  if (!data) {
+    return (
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+        Enter a user email to find mailboxes where they have Send on behalf access.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Delegate mailbox matches</div>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-900">{data.display_name || data.primary_address || data.user}</h2>
+          <p className="mt-1 text-sm text-slate-500">{data.primary_address || data.principal_name || data.user}</p>
+        </div>
+        <button type="button" onClick={onRefresh} className={buttonClass("secondary", isRefreshing)}>
+          Refresh
+        </button>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <CountCard label="Matching Mailboxes" value={data.mailbox_count.toLocaleString()} />
+        <CountCard label="Scanned Mailboxes" value={data.scanned_mailbox_count.toLocaleString()} />
+        <CountCard label="Access Type" value="Send on behalf" />
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">{data.note}</div>
+
+      {data.mailboxes.length > 0 ? (
+        <div className="space-y-3">
+          {data.mailboxes.map((mailbox) => (
+            <div
+              key={`${mailbox.primary_address}-${mailbox.principal_name}`}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-4"
+            >
+              <div className="text-base font-semibold text-slate-900">
+                {mailbox.display_name || mailbox.primary_address || mailbox.principal_name}
+              </div>
+              <div className="mt-1 text-sm text-slate-500">{mailbox.primary_address || mailbox.principal_name}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function DirectoryComboboxField({
   label,
   value,
@@ -521,21 +666,31 @@ export default function ToolsPage() {
   const queryClient = useQueryClient();
   const [sourceUpnInput, setSourceUpnInput] = useState("");
   const [destinationUpnInput, setDestinationUpnInput] = useState("");
+  const [delegateMailboxInput, setDelegateMailboxInput] = useState("");
   const [mailboxInput, setMailboxInput] = useState("");
+  const [delegateUserInput, setDelegateUserInput] = useState("");
   const [selectedSource, setSelectedSource] = useState<ToolUserPickerOption | null>(null);
   const [selectedDestination, setSelectedDestination] = useState<ToolUserPickerOption | null>(null);
+  const [selectedDelegateMailbox, setSelectedDelegateMailbox] = useState<ToolUserPickerOption | null>(null);
   const [selectedMailbox, setSelectedMailbox] = useState<ToolUserPickerOption | null>(null);
+  const [selectedDelegateUser, setSelectedDelegateUser] = useState<ToolUserPickerOption | null>(null);
   const [destinationFolder, setDestinationFolder] = useState("");
   const [testMode, setTestMode] = useState(false);
   const [testFileLimit, setTestFileLimit] = useState("25");
   const [excludeSystemFolders, setExcludeSystemFolders] = useState(true);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeDelegateMailboxLookup, setActiveDelegateMailboxLookup] = useState<string | null>(null);
   const [activeMailboxLookup, setActiveMailboxLookup] = useState<string | null>(null);
+  const [activeDelegateUserLookup, setActiveDelegateUserLookup] = useState<string | null>(null);
   const [formError, setFormError] = useState("");
+  const [delegateMailboxFormError, setDelegateMailboxFormError] = useState("");
   const [mailboxFormError, setMailboxFormError] = useState("");
+  const [delegateUserFormError, setDelegateUserFormError] = useState("");
   const deferredSourceSearch = useDeferredValue(sourceUpnInput);
   const deferredDestinationSearch = useDeferredValue(destinationUpnInput);
+  const deferredDelegateMailboxSearch = useDeferredValue(delegateMailboxInput);
   const deferredMailboxSearch = useDeferredValue(mailboxInput);
+  const deferredDelegateUserSearch = useDeferredValue(delegateUserInput);
 
   const meQuery = useQuery({
     queryKey: ["auth", "me"],
@@ -565,9 +720,25 @@ export default function ToolsPage() {
     staleTime: 30_000,
   });
 
+  const delegateMailboxSearchQuery = useQuery({
+    queryKey: ["mailbox-delegates", "users", deferredDelegateMailboxSearch],
+    queryFn: () => api.searchOneDriveCopyUsers(deferredDelegateMailboxSearch.trim(), 8),
+    enabled: hasSignedInUser,
+    staleTime: 30_000,
+  });
+
+  const delegateUserSearchQuery = useQuery({
+    queryKey: ["delegate-mailboxes", "users", deferredDelegateUserSearch],
+    queryFn: () => api.searchOneDriveCopyUsers(deferredDelegateUserSearch.trim(), 8),
+    enabled: hasSignedInUser,
+    staleTime: 30_000,
+  });
+
   const sourceOptions = buildPickerOptions(sourceUpnInput, sourceSearchQuery.data);
   const destinationOptions = buildPickerOptions(destinationUpnInput, destinationSearchQuery.data);
+  const delegateMailboxOptions = buildPickerOptions(delegateMailboxInput, delegateMailboxSearchQuery.data);
   const mailboxOptions = buildPickerOptions(mailboxInput, mailboxSearchQuery.data);
+  const delegateUserOptions = buildPickerOptions(delegateUserInput, delegateUserSearchQuery.data);
 
   const jobsQuery = useQuery({
     queryKey: ["onedrive-copy", "jobs"],
@@ -607,6 +778,22 @@ export default function ToolsPage() {
     queryKey: ["mailbox-rules", activeMailboxLookup],
     queryFn: () => api.listMailboxRules(activeMailboxLookup as string),
     enabled: hasSignedInUser && !!activeMailboxLookup,
+    retry: false,
+    staleTime: 15_000,
+  });
+
+  const mailboxDelegatesQuery = useQuery({
+    queryKey: ["mailbox-delegates", activeDelegateMailboxLookup],
+    queryFn: () => api.listMailboxDelegates(activeDelegateMailboxLookup as string),
+    enabled: hasSignedInUser && !!activeDelegateMailboxLookup,
+    retry: false,
+    staleTime: 15_000,
+  });
+
+  const delegateMailboxesQuery = useQuery({
+    queryKey: ["delegate-mailboxes", activeDelegateUserLookup],
+    queryFn: () => api.listDelegateMailboxes(activeDelegateUserLookup as string),
+    enabled: hasSignedInUser && !!activeDelegateUserLookup,
     retry: false,
     staleTime: 15_000,
   });
@@ -695,6 +882,34 @@ export default function ToolsPage() {
     setMailboxFormError("");
   }
 
+  function handleDelegateMailboxInputChange(value: string) {
+    setDelegateMailboxInput(value);
+    setDelegateMailboxFormError("");
+    if (selectedDelegateMailbox && normalizeUpn(value) !== normalizeUpn(selectedDelegateMailbox.canonical_upn)) {
+      setSelectedDelegateMailbox(null);
+    }
+  }
+
+  function handleDelegateMailboxSelect(option: ToolUserPickerOption) {
+    setSelectedDelegateMailbox(option);
+    setDelegateMailboxInput(option.canonical_upn);
+    setDelegateMailboxFormError("");
+  }
+
+  function handleDelegateUserInputChange(value: string) {
+    setDelegateUserInput(value);
+    setDelegateUserFormError("");
+    if (selectedDelegateUser && normalizeUpn(value) !== normalizeUpn(selectedDelegateUser.canonical_upn)) {
+      setSelectedDelegateUser(null);
+    }
+  }
+
+  function handleDelegateUserSelect(option: ToolUserPickerOption) {
+    setSelectedDelegateUser(option);
+    setDelegateUserInput(option.canonical_upn);
+    setDelegateUserFormError("");
+  }
+
   function submitMailboxLookup() {
     const mailbox = selectedMailbox?.canonical_upn.trim() || mailboxInput.trim();
     if (!mailbox || !looksLikeUpn(mailbox)) {
@@ -709,15 +924,61 @@ export default function ToolsPage() {
     setActiveMailboxLookup(mailbox);
   }
 
+  function submitDelegateMailboxLookup() {
+    const mailbox = selectedDelegateMailbox?.canonical_upn.trim() || delegateMailboxInput.trim();
+    if (!mailbox || !looksLikeUpn(mailbox)) {
+      setDelegateMailboxFormError("Select a mailbox from the dropdown or enter a valid UPN/email before loading delegates.");
+      return;
+    }
+    setDelegateMailboxFormError("");
+    if (activeDelegateMailboxLookup && normalizeUpn(activeDelegateMailboxLookup) === normalizeUpn(mailbox)) {
+      void mailboxDelegatesQuery.refetch();
+      return;
+    }
+    setActiveDelegateMailboxLookup(mailbox);
+  }
+
+  function submitDelegateUserLookup() {
+    const user = selectedDelegateUser?.canonical_upn.trim() || delegateUserInput.trim();
+    if (!user || !looksLikeUpn(user)) {
+      setDelegateUserFormError("Select a user from the dropdown or enter a valid UPN/email before scanning delegates.");
+      return;
+    }
+    setDelegateUserFormError("");
+    if (activeDelegateUserLookup && normalizeUpn(activeDelegateUserLookup) === normalizeUpn(user)) {
+      void delegateMailboxesQuery.refetch();
+      return;
+    }
+    setActiveDelegateUserLookup(user);
+  }
+
   const mailboxApiError =
     mailboxRulesQuery.error instanceof Error &&
     activeMailboxLookup &&
     normalizeUpn(mailboxInput || activeMailboxLookup) === normalizeUpn(activeMailboxLookup)
       ? mailboxRulesQuery.error.message
       : "";
+  const delegateMailboxApiError =
+    mailboxDelegatesQuery.error instanceof Error &&
+    activeDelegateMailboxLookup &&
+    normalizeUpn(delegateMailboxInput || activeDelegateMailboxLookup) === normalizeUpn(activeDelegateMailboxLookup)
+      ? mailboxDelegatesQuery.error.message
+      : "";
+  const delegateUserApiError =
+    delegateMailboxesQuery.error instanceof Error &&
+    activeDelegateUserLookup &&
+    normalizeUpn(delegateUserInput || activeDelegateUserLookup) === normalizeUpn(activeDelegateUserLookup)
+      ? delegateMailboxesQuery.error.message
+      : "";
   const mailboxLookupError = mailboxFormError || mailboxApiError;
+  const delegateMailboxLookupError = delegateMailboxFormError || delegateMailboxApiError;
+  const delegateUserLookupError = delegateUserFormError || delegateUserApiError;
+  const canLookupMailboxDelegates =
+    (selectedDelegateMailbox !== null || looksLikeUpn(delegateMailboxInput)) && !mailboxDelegatesQuery.isFetching;
   const canLookupMailboxRules =
     (selectedMailbox !== null || looksLikeUpn(mailboxInput)) && !mailboxRulesQuery.isFetching;
+  const canLookupDelegateUser =
+    (selectedDelegateUser !== null || looksLikeUpn(delegateUserInput)) && !delegateMailboxesQuery.isFetching;
 
   return (
     <div className="space-y-6">
@@ -734,7 +995,7 @@ export default function ToolsPage() {
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tools</p>
             <h1 className="mt-1 text-3xl font-bold text-slate-900">{branding.scope === "azure" ? "Azure Tools" : "Helpdesk Tools"}</h1>
             <p className="mt-2 max-w-3xl text-sm text-slate-600">
-              Shared tools for Microsoft 365 and Azure tasks. The OneDrive Copy tool mirrors the existing Graph-based handoff script and keeps a shared job history visible to everyone signed in on this host.
+              Shared tools for Microsoft 365 and Azure tasks. The OneDrive Copy tool mirrors the existing Graph-based handoff script, and the mailbox cards use the shared app registration to inspect Inbox rules plus Exchange Send on behalf delegation.
             </p>
           </div>
         </div>
@@ -933,6 +1194,96 @@ export default function ToolsPage() {
               Select a job from the table to inspect progress, counts, and the event log.
             </section>
           )}
+
+          <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mailbox Delegation</div>
+                <h2 className="mt-1 text-2xl font-semibold text-slate-900">List Send on behalf delegates for a mailbox</h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Use the shared Exchange app registration to see which users can send on behalf of a mailbox. This is read-only and reflects Exchange Online Send on behalf delegation.
+                </p>
+              </div>
+              <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700">Read only</span>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <DirectoryComboboxField
+                label="Mailbox UPN or email"
+                value={delegateMailboxInput}
+                onInputChange={handleDelegateMailboxInputChange}
+                onSelect={handleDelegateMailboxSelect}
+                selected={selectedDelegateMailbox}
+                loading={delegateMailboxSearchQuery.isLoading}
+                options={delegateMailboxOptions}
+                placeholder="sharedmailbox@example.com"
+                emptyMessage="No saved or Entra matches found yet. Enter a valid UPN/email to use it directly."
+              />
+              <button
+                type="button"
+                onClick={submitDelegateMailboxLookup}
+                disabled={!canLookupMailboxDelegates}
+                className={buttonClass("primary", !canLookupMailboxDelegates)}
+              >
+                {mailboxDelegatesQuery.isFetching ? "Loading delegates..." : "Load mailbox delegates"}
+              </button>
+            </div>
+
+            <MailboxDelegatesResults
+              data={mailboxDelegatesQuery.data}
+              isLoading={mailboxDelegatesQuery.isLoading}
+              errorMessage={delegateMailboxLookupError}
+              onRefresh={() => {
+                void mailboxDelegatesQuery.refetch();
+              }}
+              isRefreshing={mailboxDelegatesQuery.isFetching}
+            />
+          </section>
+
+          <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mailbox Delegation</div>
+                <h2 className="mt-1 text-2xl font-semibold text-slate-900">Find mailboxes where a user can send on behalf</h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Enter a user email to scan Exchange mailboxes and list where that person currently has Send on behalf access through the shared app registration.
+                </p>
+              </div>
+              <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700">Org scan</span>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <DirectoryComboboxField
+                label="User UPN or email"
+                value={delegateUserInput}
+                onInputChange={handleDelegateUserInputChange}
+                onSelect={handleDelegateUserSelect}
+                selected={selectedDelegateUser}
+                loading={delegateUserSearchQuery.isLoading}
+                options={delegateUserOptions}
+                placeholder="delegate@example.com"
+                emptyMessage="No saved or Entra matches found yet. Enter a valid UPN/email to use it directly."
+              />
+              <button
+                type="button"
+                onClick={submitDelegateUserLookup}
+                disabled={!canLookupDelegateUser}
+                className={buttonClass("primary", !canLookupDelegateUser)}
+              >
+                {delegateMailboxesQuery.isFetching ? "Scanning mailboxes..." : "Find delegate mailboxes"}
+              </button>
+            </div>
+
+            <DelegateMailboxesResults
+              data={delegateMailboxesQuery.data}
+              isLoading={delegateMailboxesQuery.isLoading}
+              errorMessage={delegateUserLookupError}
+              onRefresh={() => {
+                void delegateMailboxesQuery.refetch();
+              }}
+              isRefreshing={delegateMailboxesQuery.isFetching}
+            />
+          </section>
 
           <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">

@@ -27,9 +27,11 @@ logger = logging.getLogger(__name__)
 _ARM_BASE = "https://management.azure.com"
 _GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 _LOG_ANALYTICS_BASE = "https://api.loganalytics.azure.com"
+_EXCHANGE_ADMIN_BASE = "https://outlook.office365.com/adminapi/v2.0"
 _ARM_SCOPE = "https://management.azure.com/.default"
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 _LOG_ANALYTICS_SCOPE = "https://api.loganalytics.io/.default"
+_EXCHANGE_SCOPE = "https://outlook.office365.com/.default"
 _TOKEN_SKEW_SECONDS = 60
 _GRAPH_ROOT = "https://graph.microsoft.com"
 _USER_BASE_SELECT = [
@@ -1024,6 +1026,77 @@ Resources
             json_body={"requests": requests_payload},
             headers={"Content-Type": "application/json"},
         )
+
+    @staticmethod
+    def _exchange_anchor_mailbox(anchor_mailbox: str) -> str:
+        normalized = str(anchor_mailbox or "").strip()
+        if not normalized:
+            raise AzureApiError("Exchange Admin API requires a routing mailbox value")
+        for prefix in ("AAD-UPN:", "AAD-SMTP:", "OID:", "MBX:", "APP:"):
+            if normalized.startswith(prefix):
+                return normalized
+        return f"AAD-UPN:{normalized}"
+
+    def exchange_admin_request(
+        self,
+        endpoint: str,
+        *,
+        anchor_mailbox: str,
+        cmdlet_name: str,
+        parameters: dict[str, Any] | None = None,
+        select: list[str] | None = None,
+        next_link: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_endpoint = str(endpoint or "").strip().strip("/")
+        if not normalized_endpoint and not next_link:
+            raise AzureApiError("Exchange Admin API endpoint is required")
+        params = None
+        if not next_link and select:
+            params = {"$select": ",".join(select)}
+        url = str(next_link or "").strip() or f"{_EXCHANGE_ADMIN_BASE}/{ENTRA_TENANT_ID}/{normalized_endpoint}"
+        return self._request(
+            "POST",
+            url,
+            scope=_EXCHANGE_SCOPE,
+            params=params,
+            json_body={
+                "CmdletInput": {
+                    "CmdletName": cmdlet_name,
+                    "Parameters": parameters or {},
+                }
+            },
+            headers={
+                "Content-Type": "application/json",
+                "X-AnchorMailbox": self._exchange_anchor_mailbox(anchor_mailbox),
+            },
+        )
+
+    def exchange_admin_paged_request(
+        self,
+        endpoint: str,
+        *,
+        anchor_mailbox: str,
+        cmdlet_name: str,
+        parameters: dict[str, Any] | None = None,
+        select: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        next_link: str | None = None
+        while True:
+            payload = self.exchange_admin_request(
+                endpoint,
+                anchor_mailbox=anchor_mailbox,
+                cmdlet_name=cmdlet_name,
+                parameters=parameters,
+                select=select,
+                next_link=next_link,
+            )
+            value = payload.get("value")
+            if isinstance(value, list):
+                items.extend([item for item in value if isinstance(item, dict)])
+            next_link = str(payload.get("@odata.nextLink") or "").strip() or None
+            if not next_link:
+                return items
 
     def list_users(self) -> list[dict[str, Any]]:
         full_select = [* _USER_BASE_SELECT, *_USER_OPTIONAL_SELECT]

@@ -1422,6 +1422,43 @@ export interface MailboxRulesStatus {
   rules: MailboxRule[];
 }
 
+export interface MailboxDelegateEntry {
+  display_name: string;
+  principal_name: string;
+  mail: string;
+}
+
+export interface MailboxDelegatesStatus {
+  mailbox: string;
+  display_name: string;
+  principal_name: string;
+  primary_address: string;
+  provider_enabled: boolean;
+  delegation_type: string;
+  note: string;
+  delegate_count: number;
+  delegates: MailboxDelegateEntry[];
+}
+
+export interface DelegateMailboxMatch {
+  display_name: string;
+  principal_name: string;
+  primary_address: string;
+}
+
+export interface DelegateMailboxesStatus {
+  user: string;
+  display_name: string;
+  principal_name: string;
+  primary_address: string;
+  provider_enabled: boolean;
+  delegation_type: string;
+  note: string;
+  mailbox_count: number;
+  scanned_mailbox_count: number;
+  mailboxes: DelegateMailboxMatch[];
+}
+
 export interface OneDriveCopyJobStatus {
   job_id: string;
   site_scope: string;
@@ -2894,6 +2931,14 @@ export const api = {
 
   listMailboxRules(mailbox: string): Promise<MailboxRulesStatus> {
     return fetchJSON<MailboxRulesStatus>(`/api/tools/mailbox-rules${buildQuery({ mailbox })}`);
+  },
+
+  listMailboxDelegates(mailbox: string): Promise<MailboxDelegatesStatus> {
+    return fetchJSON<MailboxDelegatesStatus>(`/api/tools/mailbox-delegates${buildQuery({ mailbox })}`);
+  },
+
+  listDelegateMailboxes(user: string): Promise<DelegateMailboxesStatus> {
+    return fetchJSON<DelegateMailboxesStatus>(`/api/tools/delegate-mailboxes${buildQuery({ user })}`);
   },
 
   getAzureGroups(search = ""): Promise<AzureDirectoryObject[]> {

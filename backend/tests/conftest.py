@@ -430,6 +430,29 @@ def test_client(mock_cache, freeze_time, monkeypatch):
         "rule_count": 0,
         "rules": [],
     }
+    mock_user_admin_providers.list_mailbox_delegates.return_value = {
+        "mailbox": "test@example.com",
+        "display_name": "Test User",
+        "principal_name": "test@example.com",
+        "primary_address": "test@example.com",
+        "provider_enabled": True,
+        "delegation_type": "send_on_behalf",
+        "note": "No Send on behalf delegates were found for this mailbox.",
+        "delegate_count": 0,
+        "delegates": [],
+    }
+    mock_user_admin_providers.list_delegate_mailboxes_for_user.return_value = {
+        "user": "test@example.com",
+        "display_name": "Test User",
+        "principal_name": "test@example.com",
+        "primary_address": "test@example.com",
+        "provider_enabled": True,
+        "delegation_type": "send_on_behalf",
+        "note": "No Send on behalf mailbox access was found after scanning 0 mailboxes.",
+        "mailbox_count": 0,
+        "scanned_mailbox_count": 0,
+        "mailboxes": [],
+    }
     mock_user_admin_providers.list_devices.return_value = []
     monkeypatch.setattr(user_admin_providers_module, "user_admin_providers", mock_user_admin_providers)
     monkeypatch.setattr(routes_tools, "user_admin_providers", mock_user_admin_providers)
