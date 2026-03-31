@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from azure_cache import azure_cache
 from azure_client import AzureApiError, AzureClient
+from exchange_online_client import ExchangeOnlinePowerShellClient, ExchangeOnlinePowerShellError
 from models import UserAdminActionType
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,7 @@ _DEVICE_ACTIONS: list[UserAdminActionType] = [
     "device_remote_lock",
     "device_reassign_primary_user",
 ]
+_MAILBOX_DELEGATE_PERMISSION_TYPES = ["send_on_behalf", "send_as", "full_access"]
 
 
 class UserAdminProviderError(RuntimeError):
@@ -292,10 +294,144 @@ def _mailbox_delegate_display_name(raw_value: str, *, mail: str) -> str:
     return text
 
 
-def _exchange_send_on_behalf_delegates(item: dict[str, Any]) -> list[dict[str, str]]:
+def _delegate_entry_identity(item: dict[str, Any]) -> str:
+    for key in ("identity", "mail", "principal_name", "display_name"):
+        text = str(item.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _build_delegate_entry(*, identity: str = "", display_name: str = "", principal_name: str = "", mail: str = "") -> dict[str, Any]:
+    normalized_identity = str(identity or "").strip()
+    normalized_principal_name = str(principal_name or "").strip()
+    normalized_mail = str(mail or "").strip()
+    normalized_display_name = str(display_name or "").strip()
+    resolved_identity = normalized_identity or normalized_mail or normalized_principal_name or normalized_display_name
+    return {
+        "identity": resolved_identity,
+        "display_name": normalized_display_name,
+        "principal_name": normalized_principal_name,
+        "mail": normalized_mail,
+        "permission_types": [],
+    }
+
+
+def _parse_exchange_trustee(value: Any) -> dict[str, Any]:
+    text = str(value or "").strip()
+    if not text:
+        return _build_delegate_entry()
+    if text.endswith(">") and "<" in text:
+        prefix, _, suffix = text.rpartition("<")
+        candidate_mail = suffix[:-1].strip()
+        display_name = prefix.strip().strip('"')
+        if candidate_mail:
+            return _build_delegate_entry(
+                identity=candidate_mail,
+                display_name=display_name,
+                principal_name=candidate_mail,
+                mail=candidate_mail,
+            )
+    if "@" in text and "\\" not in text and " " not in text:
+        return _build_delegate_entry(
+            identity=text,
+            display_name="",
+            principal_name=text,
+            mail=text,
+        )
+    return _build_delegate_entry(identity=text, display_name=text)
+
+
+def _merge_delegate_permissions(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        identity = _normalized_mailbox_identifier(_delegate_entry_identity(entry))
+        if not identity:
+            continue
+        existing = merged.get(identity)
+        if existing is None:
+            existing = {
+                "identity": str(entry.get("identity") or _delegate_entry_identity(entry) or "").strip(),
+                "display_name": str(entry.get("display_name") or "").strip(),
+                "principal_name": str(entry.get("principal_name") or "").strip(),
+                "mail": str(entry.get("mail") or "").strip(),
+                "permission_types": [],
+            }
+            merged[identity] = existing
+        else:
+            if not existing["display_name"]:
+                existing["display_name"] = str(entry.get("display_name") or "").strip()
+            if not existing["principal_name"]:
+                existing["principal_name"] = str(entry.get("principal_name") or "").strip()
+            if not existing["mail"]:
+                existing["mail"] = str(entry.get("mail") or "").strip()
+        for permission_type in entry.get("permission_types") or []:
+            text = str(permission_type or "").strip()
+            if text and text not in existing["permission_types"]:
+                existing["permission_types"].append(text)
+
+    results = list(merged.values())
+    results.sort(
+        key=lambda item: (
+            _normalized_mailbox_identifier(item.get("display_name") or item.get("mail") or item.get("principal_name") or item.get("identity")),
+            _normalized_mailbox_identifier(item.get("mail") or item.get("principal_name") or item.get("identity")),
+        )
+    )
+    return results
+
+
+def _permission_counts(entries: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {permission_type: 0 for permission_type in _MAILBOX_DELEGATE_PERMISSION_TYPES}
+    for entry in entries:
+        for permission_type in entry.get("permission_types") or []:
+            text = str(permission_type or "").strip()
+            if text in counts:
+                counts[text] += 1
+    return counts
+
+
+def _merge_mailbox_matches(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        identity = _normalized_mailbox_identifier(entry.get("identity") or entry.get("primary_address") or entry.get("principal_name"))
+        if not identity:
+            continue
+        existing = merged.get(identity)
+        if existing is None:
+            existing = {
+                "identity": str(entry.get("identity") or entry.get("primary_address") or entry.get("principal_name") or "").strip(),
+                "display_name": str(entry.get("display_name") or "").strip(),
+                "principal_name": str(entry.get("principal_name") or "").strip(),
+                "primary_address": str(entry.get("primary_address") or "").strip(),
+                "permission_types": [],
+            }
+            merged[identity] = existing
+        else:
+            if not existing["display_name"]:
+                existing["display_name"] = str(entry.get("display_name") or "").strip()
+            if not existing["principal_name"]:
+                existing["principal_name"] = str(entry.get("principal_name") or "").strip()
+            if not existing["primary_address"]:
+                existing["primary_address"] = str(entry.get("primary_address") or "").strip()
+        for permission_type in entry.get("permission_types") or []:
+            text = str(permission_type or "").strip()
+            if text and text not in existing["permission_types"]:
+                existing["permission_types"].append(text)
+
+    results = list(merged.values())
+    results.sort(
+        key=lambda item: (
+            _normalized_mailbox_identifier(item.get("display_name") or item.get("primary_address") or item.get("principal_name") or item.get("identity")),
+            _normalized_mailbox_identifier(item.get("primary_address") or item.get("principal_name") or item.get("identity")),
+        )
+    )
+    return results
+
+
+def _exchange_send_on_behalf_delegates(item: dict[str, Any]) -> list[dict[str, Any]]:
     delegates = _exchange_string_list(item.get("GrantSendOnBehalfTo"))
     delegate_display_names = _exchange_string_list(item.get("GrantSendOnBehalfToWithDisplayNames"))
-    results: list[dict[str, str]] = []
+    results: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, delegate in enumerate(delegates):
         normalized_delegate = _normalized_mailbox_identifier(delegate)
@@ -305,23 +441,26 @@ def _exchange_send_on_behalf_delegates(item: dict[str, Any]) -> list[dict[str, s
         display_name = ""
         if index < len(delegate_display_names):
             display_name = _mailbox_delegate_display_name(delegate_display_names[index], mail=delegate)
-        results.append(
-            {
-                "display_name": display_name,
-                "principal_name": delegate,
-                "mail": delegate,
-            }
+        entry = _build_delegate_entry(
+            identity=delegate,
+            display_name=display_name,
+            principal_name=delegate,
+            mail=delegate,
         )
+        entry["permission_types"] = ["send_on_behalf"]
+        results.append(entry)
     return results
 
 
-def _exchange_mailbox_match(item: dict[str, Any]) -> dict[str, str]:
+def _exchange_mailbox_match(item: dict[str, Any]) -> dict[str, Any]:
     primary_address = str(item.get("PrimarySmtpAddress") or item.get("UserPrincipalName") or "").strip()
     principal_name = str(item.get("UserPrincipalName") or primary_address).strip()
     return {
+        "identity": str(item.get("Identity") or primary_address or principal_name).strip(),
         "display_name": str(item.get("DisplayName") or primary_address or principal_name).strip(),
         "principal_name": principal_name,
         "primary_address": primary_address or principal_name,
+        "permission_types": [],
     }
 
 
@@ -825,6 +964,7 @@ class EntraAdminProvider:
 @dataclass
 class MailboxAdminProvider:
     client: AzureClient
+    exchange_powershell: ExchangeOnlinePowerShellClient | None = None
 
     _EXCHANGE_MAILBOX_SELECT = [
         "DisplayName",
@@ -847,6 +987,10 @@ class MailboxAdminProvider:
     @property
     def supported_actions(self) -> list[UserAdminActionType]:
         return []
+
+    def __post_init__(self) -> None:
+        if self.exchange_powershell is None:
+            self.exchange_powershell = ExchangeOnlinePowerShellClient(self.client)
 
     def _resolve_mail_folder_labels(self, user_id: str, rows: list[dict[str, Any]]) -> dict[str, str]:
         folder_ids: list[str] = []
@@ -994,6 +1138,42 @@ class MailboxAdminProvider:
             "rules": rules,
         }
 
+    def _exchange_delegate_permissions_for_mailbox(self, mailbox_identifier: str) -> dict[str, Any]:
+        try:
+            return self.exchange_powershell.get_mailbox_delegate_permissions(mailbox_identifier) if self.exchange_powershell else {}
+        except ExchangeOnlinePowerShellError as exc:
+            raise UserAdminProviderError(str(exc)) from exc
+
+    def _exchange_delegate_mailboxes_for_user(self, user_identifier: str) -> dict[str, Any]:
+        try:
+            return self.exchange_powershell.get_delegate_mailboxes_for_user(user_identifier) if self.exchange_powershell else {}
+        except ExchangeOnlinePowerShellError as exc:
+            raise UserAdminProviderError(str(exc)) from exc
+
+    def _normalize_send_as_entries(self, rows: Any) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            entry = _parse_exchange_trustee(row.get("Trustee"))
+            if not _delegate_entry_identity(entry):
+                continue
+            entry["permission_types"] = ["send_as"]
+            entries.append(entry)
+        return entries
+
+    def _normalize_full_access_entries(self, rows: Any) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            entry = _parse_exchange_trustee(row.get("User"))
+            if not _delegate_entry_identity(entry):
+                continue
+            entry["permission_types"] = ["full_access"]
+            entries.append(entry)
+        return entries
+
     def list_mailbox_delegates(self, mailbox_identifier: str) -> dict[str, Any]:
         mailbox = str(mailbox_identifier or "").strip()
         if not mailbox:
@@ -1005,8 +1185,9 @@ class MailboxAdminProvider:
                 "principal_name": mailbox,
                 "primary_address": "",
                 "provider_enabled": False,
-                "delegation_type": "send_on_behalf",
-                "note": "Mailbox delegation lookup requires a configured Exchange Online Admin API connection.",
+                "supported_permission_types": list(_MAILBOX_DELEGATE_PERMISSION_TYPES),
+                "permission_counts": _permission_counts([]),
+                "note": "Mailbox delegation lookup requires configured Exchange and Graph connections.",
                 "delegate_count": 0,
                 "delegates": [],
             }
@@ -1028,17 +1209,24 @@ class MailboxAdminProvider:
             raise UserAdminProviderError(f"Exchange did not return a mailbox for {mailbox}")
 
         mailbox_summary = _exchange_mailbox_match(row)
-        delegates = _exchange_send_on_behalf_delegates(row)
-        delegates.sort(key=lambda item: (_normalized_mailbox_identifier(item.get("display_name")), _normalized_mailbox_identifier(item.get("mail"))))
+        send_on_behalf = _exchange_send_on_behalf_delegates(row)
+        exchange_permissions = self._exchange_delegate_permissions_for_mailbox(mailbox_summary.get("principal_name") or mailbox)
+        delegates = _merge_delegate_permissions(
+            send_on_behalf
+            + self._normalize_send_as_entries(exchange_permissions.get("send_as"))
+            + self._normalize_full_access_entries(exchange_permissions.get("full_access"))
+        )
+        permission_counts = _permission_counts(delegates)
         return {
             "mailbox": mailbox,
             **mailbox_summary,
             "provider_enabled": True,
-            "delegation_type": "send_on_behalf",
+            "supported_permission_types": list(_MAILBOX_DELEGATE_PERMISSION_TYPES),
+            "permission_counts": permission_counts,
             "note": (
-                "Send on behalf delegates are listed read-only from Exchange Online."
+                "Mailbox delegates are listed read-only from Exchange Online for Send on behalf, Send As, and Full Access."
                 if delegates
-                else "No Send on behalf delegates were found for this mailbox."
+                else "No Send on behalf, Send As, or Full Access delegates were found for this mailbox."
             ),
             "delegate_count": len(delegates),
             "delegates": delegates,
@@ -1055,8 +1243,9 @@ class MailboxAdminProvider:
                 "principal_name": user,
                 "primary_address": user,
                 "provider_enabled": False,
-                "delegation_type": "send_on_behalf",
-                "note": "Mailbox delegation lookup requires a configured Exchange Online Admin API connection.",
+                "supported_permission_types": list(_MAILBOX_DELEGATE_PERMISSION_TYPES),
+                "permission_counts": _permission_counts([]),
+                "note": "Mailbox delegation lookup requires configured Exchange and Graph connections.",
                 "mailbox_count": 0,
                 "scanned_mailbox_count": 0,
                 "mailboxes": [],
@@ -1093,28 +1282,40 @@ class MailboxAdminProvider:
         for row in rows:
             delegates = _exchange_send_on_behalf_delegates(row)
             if any(_normalized_mailbox_identifier(item.get("mail")) == normalized_user for item in delegates):
-                matches.append(_exchange_mailbox_match(row))
+                mailbox_match = _exchange_mailbox_match(row)
+                mailbox_match["permission_types"] = ["send_on_behalf"]
+                matches.append(mailbox_match)
 
-        matches.sort(
-            key=lambda item: (
-                _normalized_mailbox_identifier(item.get("display_name")),
-                _normalized_mailbox_identifier(item.get("primary_address")),
-            )
-        )
+        exchange_matches = self._exchange_delegate_mailboxes_for_user(resolved_principal_name or user)
+        for row in exchange_matches.get("mailboxes") or []:
+            if not isinstance(row, dict):
+                continue
+            mailbox_match = _exchange_mailbox_match(row)
+            mailbox_match["permission_types"] = [
+                str(permission_type or "").strip()
+                for permission_type in row.get("PermissionTypes") or row.get("permission_types") or []
+                if str(permission_type or "").strip()
+            ]
+            matches.append(mailbox_match)
+
+        matches = _merge_mailbox_matches(matches)
+        permission_counts = _permission_counts(matches)
+        scanned_mailbox_count = max(len(rows), int(exchange_matches.get("mailbox_count_scanned") or 0))
         return {
             "user": user,
             "display_name": resolved_display_name,
             "principal_name": resolved_principal_name,
             "primary_address": resolved_primary_address,
             "provider_enabled": True,
-            "delegation_type": "send_on_behalf",
+            "supported_permission_types": list(_MAILBOX_DELEGATE_PERMISSION_TYPES),
+            "permission_counts": permission_counts,
             "note": (
-                f"Scanned {len(rows):,} mailboxes for Send on behalf access."
+                f"Scanned {scanned_mailbox_count:,} mailboxes for Send on behalf, Send As, and Full Access."
                 if matches
-                else f"No Send on behalf mailbox access was found after scanning {len(rows):,} mailboxes."
+                else f"No delegate mailbox access was found after scanning {scanned_mailbox_count:,} mailboxes."
             ),
             "mailbox_count": len(matches),
-            "scanned_mailbox_count": len(rows),
+            "scanned_mailbox_count": scanned_mailbox_count,
             "mailboxes": matches,
         }
 

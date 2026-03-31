@@ -21,6 +21,7 @@ const EXCLUDED_ROOT_FOLDERS = [
 ];
 
 const UPN_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+const DELEGATE_PERMISSION_TYPES = ["send_on_behalf", "send_as", "full_access"] as const;
 
 type PickerOptionSource = OneDriveCopyUserOption["source"] | "manual";
 
@@ -155,6 +156,61 @@ function sourceBadgeClass(source: PickerOptionSource): string {
     return "bg-violet-100 text-violet-800";
   }
   return "bg-sky-100 text-sky-800";
+}
+
+function delegatePermissionLabel(permissionType: string): string {
+  switch (permissionType) {
+    case "send_on_behalf":
+      return "Send on behalf";
+    case "send_as":
+      return "Send As";
+    case "full_access":
+      return "Full Access";
+    default:
+      return permissionType.replace(/_/g, " ");
+  }
+}
+
+function delegatePermissionBadgeClass(permissionType: string): string {
+  switch (permissionType) {
+    case "send_on_behalf":
+      return "border-sky-200 bg-sky-50 text-sky-900";
+    case "send_as":
+      return "border-violet-200 bg-violet-50 text-violet-900";
+    case "full_access":
+      return "border-emerald-200 bg-emerald-50 text-emerald-900";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-700";
+  }
+}
+
+function orderedPermissionTypes(permissionTypes: string[]): string[] {
+  const ordered: string[] = DELEGATE_PERMISSION_TYPES.filter((permissionType) => permissionTypes.includes(permissionType));
+  for (const permissionType of permissionTypes) {
+    if (!ordered.includes(permissionType)) {
+      ordered.push(permissionType);
+    }
+  }
+  return ordered;
+}
+
+function PermissionBadges({ permissionTypes }: { permissionTypes: string[] }) {
+  const ordered = orderedPermissionTypes(permissionTypes);
+  if (ordered.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {ordered.map((permissionType) => (
+        <span
+          key={permissionType}
+          className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${delegatePermissionBadgeClass(permissionType)}`}
+        >
+          {delegatePermissionLabel(permissionType)}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function CountCard({ label, value, tone = "text-slate-900" }: { label: string; value: string; tone?: string }) {
@@ -365,7 +421,7 @@ function MailboxDelegatesResults({
   if (!data) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-        Select a mailbox and load its Send on behalf delegates.
+        Select a mailbox and load its Exchange delegate access.
       </div>
     );
   }
@@ -383,9 +439,11 @@ function MailboxDelegatesResults({
         </button>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="grid gap-3 md:grid-cols-4">
         <CountCard label="Delegates" value={data.delegate_count.toLocaleString()} />
-        <CountCard label="Access Type" value="Send on behalf" />
+        <CountCard label="Send On Behalf" value={String(data.permission_counts.send_on_behalf ?? 0)} tone="text-sky-700" />
+        <CountCard label="Send As" value={String(data.permission_counts.send_as ?? 0)} tone="text-violet-700" />
+        <CountCard label="Full Access" value={String(data.permission_counts.full_access ?? 0)} tone="text-emerald-700" />
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">{data.note}</div>
@@ -394,11 +452,14 @@ function MailboxDelegatesResults({
         <div className="space-y-3">
           {data.delegates.map((delegate) => (
             <div
-              key={`${delegate.mail}-${delegate.principal_name}`}
+              key={delegate.identity || delegate.mail || delegate.principal_name}
               className="rounded-2xl border border-slate-200 bg-white px-4 py-4"
             >
-              <div className="text-base font-semibold text-slate-900">{delegate.display_name || delegate.mail || delegate.principal_name}</div>
-              <div className="mt-1 text-sm text-slate-500">{delegate.mail || delegate.principal_name}</div>
+              <div className="text-base font-semibold text-slate-900">
+                {delegate.display_name || delegate.mail || delegate.principal_name || delegate.identity}
+              </div>
+              <div className="mt-1 text-sm text-slate-500">{delegate.mail || delegate.principal_name || delegate.identity}</div>
+              <PermissionBadges permissionTypes={delegate.permission_types} />
             </div>
           ))}
         </div>
@@ -435,7 +496,7 @@ function DelegateMailboxesResults({
   if (!data) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-        Enter a user email to find mailboxes where they have Send on behalf access.
+        Enter a user email to find mailboxes where they have Exchange delegate access.
       </div>
     );
   }
@@ -453,10 +514,12 @@ function DelegateMailboxesResults({
         </button>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-5">
         <CountCard label="Matching Mailboxes" value={data.mailbox_count.toLocaleString()} />
         <CountCard label="Scanned Mailboxes" value={data.scanned_mailbox_count.toLocaleString()} />
-        <CountCard label="Access Type" value="Send on behalf" />
+        <CountCard label="Send On Behalf" value={String(data.permission_counts.send_on_behalf ?? 0)} tone="text-sky-700" />
+        <CountCard label="Send As" value={String(data.permission_counts.send_as ?? 0)} tone="text-violet-700" />
+        <CountCard label="Full Access" value={String(data.permission_counts.full_access ?? 0)} tone="text-emerald-700" />
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">{data.note}</div>
@@ -465,13 +528,14 @@ function DelegateMailboxesResults({
         <div className="space-y-3">
           {data.mailboxes.map((mailbox) => (
             <div
-              key={`${mailbox.primary_address}-${mailbox.principal_name}`}
+              key={mailbox.identity || mailbox.primary_address || mailbox.principal_name}
               className="rounded-2xl border border-slate-200 bg-white px-4 py-4"
             >
               <div className="text-base font-semibold text-slate-900">
-                {mailbox.display_name || mailbox.primary_address || mailbox.principal_name}
+                {mailbox.display_name || mailbox.primary_address || mailbox.principal_name || mailbox.identity}
               </div>
-              <div className="mt-1 text-sm text-slate-500">{mailbox.primary_address || mailbox.principal_name}</div>
+              <div className="mt-1 text-sm text-slate-500">{mailbox.primary_address || mailbox.principal_name || mailbox.identity}</div>
+              <PermissionBadges permissionTypes={mailbox.permission_types} />
             </div>
           ))}
         </div>
@@ -995,7 +1059,7 @@ export default function ToolsPage() {
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tools</p>
             <h1 className="mt-1 text-3xl font-bold text-slate-900">{branding.scope === "azure" ? "Azure Tools" : "Helpdesk Tools"}</h1>
             <p className="mt-2 max-w-3xl text-sm text-slate-600">
-              Shared tools for Microsoft 365 and Azure tasks. The OneDrive Copy tool mirrors the existing Graph-based handoff script, and the mailbox cards use the shared app registration to inspect Inbox rules plus Exchange Send on behalf delegation.
+              Shared tools for Microsoft 365 and Azure tasks. The OneDrive Copy tool mirrors the existing Graph-based handoff script, and the mailbox cards use the shared app registration to inspect Inbox rules plus Exchange delegate access for Send on behalf, Send As, and Full Access.
             </p>
           </div>
         </div>
@@ -1116,92 +1180,13 @@ export default function ToolsPage() {
             </div>
           </section>
 
-          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Shared job history</div>
-                <h2 className="mt-1 text-2xl font-semibold text-slate-900">Recent OneDrive copy jobs</h2>
-              </div>
-              <button type="button" onClick={() => jobsQuery.refetch()} className={buttonClass("secondary", jobsQuery.isFetching)}>
-                Refresh
-              </button>
-            </div>
-
-            <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3">Requested By</th>
-                    <th className="px-4 py-3">Source</th>
-                    <th className="px-4 py-3">Destination</th>
-                    <th className="px-4 py-3">Folder</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Phase</th>
-                    <th className="px-4 py-3">Counts</th>
-                    <th className="px-4 py-3">Started</th>
-                    <th className="px-4 py-3">Completed</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {jobsQuery.data && jobsQuery.data.length > 0 ? (
-                    jobsQuery.data.map((job) => (
-                      <tr
-                        key={job.job_id}
-                        className={[
-                          "cursor-pointer transition hover:bg-slate-50",
-                          activeJobId === job.job_id ? "bg-sky-50/60" : "",
-                        ].join(" ")}
-                        onClick={() => setActiveJobId(job.job_id)}
-                      >
-                        <td className="px-4 py-3 text-slate-700">
-                          <div className="font-medium text-slate-900">{job.requested_by_name || job.requested_by_email}</div>
-                          <div className="text-xs text-slate-500">{job.requested_by_email}</div>
-                        </td>
-                        <td className="px-4 py-3 text-slate-700">{job.source_upn}</td>
-                        <td className="px-4 py-3 text-slate-700">{job.destination_upn}</td>
-                        <td className="px-4 py-3 text-slate-700">{job.destination_folder}</td>
-                        <td className="px-4 py-3">
-                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${statusTone(job.status)}`}>
-                            {job.status}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-slate-700">{phaseLabel(job.phase)}</td>
-                        <td className="px-4 py-3 text-xs text-slate-600">
-                          {job.files_dispatched} ok / {job.files_failed} failed
-                        </td>
-                        <td className="px-4 py-3 text-xs text-slate-600">{formatDateTime(job.started_at)}</td>
-                        <td className="px-4 py-3 text-xs text-slate-600">{formatDateTime(job.completed_at)}</td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={9} className="px-4 py-8 text-center text-sm text-slate-500">
-                        No OneDrive copy jobs have been submitted yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </div>
-
-        <div className="space-y-6">
-          {activeJobQuery.data ? (
-            <OneDriveCopyJobDetail job={activeJobQuery.data} />
-          ) : (
-            <section className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
-              Select a job from the table to inspect progress, counts, and the event log.
-            </section>
-          )}
-
           <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mailbox Delegation</div>
-                <h2 className="mt-1 text-2xl font-semibold text-slate-900">List Send on behalf delegates for a mailbox</h2>
+                <h2 className="mt-1 text-2xl font-semibold text-slate-900">List mailbox delegate access for a mailbox</h2>
                 <p className="mt-2 text-sm text-slate-600">
-                  Use the shared Exchange app registration to see which users can send on behalf of a mailbox. This is read-only and reflects Exchange Online Send on behalf delegation.
+                  Use the shared Exchange app registration to see which users currently have Send on behalf, Send As, or Full Access on a mailbox. This is read-only and reflects Exchange Online delegate permissions.
                 </p>
               </div>
               <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700">Read only</span>
@@ -1244,9 +1229,9 @@ export default function ToolsPage() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mailbox Delegation</div>
-                <h2 className="mt-1 text-2xl font-semibold text-slate-900">Find mailboxes where a user can send on behalf</h2>
+                <h2 className="mt-1 text-2xl font-semibold text-slate-900">Find mailboxes where a user has delegate access</h2>
                 <p className="mt-2 text-sm text-slate-600">
-                  Enter a user email to scan Exchange mailboxes and list where that person currently has Send on behalf access through the shared app registration.
+                  Enter a user email to scan Exchange mailboxes and list where that person currently has Send on behalf, Send As, or Full Access through the shared app registration.
                 </p>
               </div>
               <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700">Org scan</span>
@@ -1328,6 +1313,85 @@ export default function ToolsPage() {
               }}
               isRefreshing={mailboxRulesQuery.isFetching}
             />
+          </section>
+        </div>
+
+        <div className="space-y-6">
+          {activeJobQuery.data ? (
+            <OneDriveCopyJobDetail job={activeJobQuery.data} />
+          ) : (
+            <section className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
+              Select a job from the table to inspect progress, counts, and the event log.
+            </section>
+          )}
+
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Shared job history</div>
+                <h2 className="mt-1 text-2xl font-semibold text-slate-900">Recent OneDrive copy jobs</h2>
+              </div>
+              <button type="button" onClick={() => jobsQuery.refetch()} className={buttonClass("secondary", jobsQuery.isFetching)}>
+                Refresh
+              </button>
+            </div>
+
+            <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Requested By</th>
+                    <th className="px-4 py-3">Source</th>
+                    <th className="px-4 py-3">Destination</th>
+                    <th className="px-4 py-3">Folder</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Phase</th>
+                    <th className="px-4 py-3">Counts</th>
+                    <th className="px-4 py-3">Started</th>
+                    <th className="px-4 py-3">Completed</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {jobsQuery.data && jobsQuery.data.length > 0 ? (
+                    jobsQuery.data.map((job) => (
+                      <tr
+                        key={job.job_id}
+                        className={[
+                          "cursor-pointer transition hover:bg-slate-50",
+                          activeJobId === job.job_id ? "bg-sky-50/60" : "",
+                        ].join(" ")}
+                        onClick={() => setActiveJobId(job.job_id)}
+                      >
+                        <td className="px-4 py-3 text-slate-700">
+                          <div className="font-medium text-slate-900">{job.requested_by_name || job.requested_by_email}</div>
+                          <div className="text-xs text-slate-500">{job.requested_by_email}</div>
+                        </td>
+                        <td className="px-4 py-3 text-slate-700">{job.source_upn}</td>
+                        <td className="px-4 py-3 text-slate-700">{job.destination_upn}</td>
+                        <td className="px-4 py-3 text-slate-700">{job.destination_folder}</td>
+                        <td className="px-4 py-3">
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${statusTone(job.status)}`}>
+                            {job.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-slate-700">{phaseLabel(job.phase)}</td>
+                        <td className="px-4 py-3 text-xs text-slate-600">
+                          {job.files_dispatched} ok / {job.files_failed} failed
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-600">{formatDateTime(job.started_at)}</td>
+                        <td className="px-4 py-3 text-xs text-slate-600">{formatDateTime(job.completed_at)}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={9} className="px-4 py-8 text-center text-sm text-slate-500">
+                        No OneDrive copy jobs have been submitted yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <LoginAuditPanel events={loginAuditQuery.data ?? []} />

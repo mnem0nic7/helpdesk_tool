@@ -144,6 +144,29 @@ class FakeMailboxDelegatesClient:
         }
 
 
+class FakeExchangePowerShellMailboxDelegates:
+    def get_mailbox_delegate_permissions(self, mailbox_identifier: str):
+        assert mailbox_identifier == "shared@example.com"
+        return {
+            "send_as": [
+                {
+                    "Trustee": "Delegate Two <delegate-two@example.com>",
+                },
+                {
+                    "Trustee": "sendas@example.com",
+                },
+            ],
+            "full_access": [
+                {
+                    "User": "Delegate User",
+                },
+                {
+                    "User": "fullaccess@example.com",
+                },
+            ],
+        }
+
+
 class FakeDelegateMailboxScanClient:
     configured = True
 
@@ -192,24 +215,81 @@ class FakeDelegateMailboxScanClient:
         ]
 
 
-def test_list_mailbox_delegates_returns_send_on_behalf_entries():
+class FakeExchangePowerShellUserMatches:
+    def get_delegate_mailboxes_for_user(self, user_identifier: str):
+        assert user_identifier == "delegate@example.com"
+        return {
+            "mailbox_count_scanned": 7,
+            "mailboxes": [
+                {
+                    "Identity": "shared@example.com",
+                    "DisplayName": "Shared Mailbox",
+                    "UserPrincipalName": "shared@example.com",
+                    "PrimarySmtpAddress": "shared@example.com",
+                    "PermissionTypes": ["full_access", "send_as"],
+                },
+                {
+                    "Identity": "finance@example.com",
+                    "DisplayName": "Finance Mailbox",
+                    "UserPrincipalName": "finance@example.com",
+                    "PrimarySmtpAddress": "finance@example.com",
+                    "PermissionTypes": ["send_as"],
+                },
+            ],
+        }
+
+
+def test_list_mailbox_delegates_returns_all_supported_delegate_types():
     client = FakeMailboxDelegatesClient()
-    provider = MailboxAdminProvider(client=client)
+    provider = MailboxAdminProvider(
+        client=client,
+        exchange_powershell=FakeExchangePowerShellMailboxDelegates(),
+    )
 
     result = provider.list_mailbox_delegates("shared@example.com")
 
     assert result["display_name"] == "Shared Mailbox"
-    assert result["delegate_count"] == 2
+    assert result["delegate_count"] == 5
+    assert result["permission_counts"] == {
+        "send_on_behalf": 2,
+        "send_as": 2,
+        "full_access": 2,
+    }
     assert result["delegates"] == [
         {
+            "identity": "delegate-two@example.com",
             "display_name": "Delegate Two",
             "principal_name": "delegate-two@example.com",
             "mail": "delegate-two@example.com",
+            "permission_types": ["send_on_behalf", "send_as"],
         },
         {
+            "identity": "Delegate User",
+            "display_name": "Delegate User",
+            "principal_name": "",
+            "mail": "",
+            "permission_types": ["full_access"],
+        },
+        {
+            "identity": "delegate@example.com",
             "display_name": "Delegate User",
             "principal_name": "delegate@example.com",
             "mail": "delegate@example.com",
+            "permission_types": ["send_on_behalf"],
+        },
+        {
+            "identity": "fullaccess@example.com",
+            "display_name": "",
+            "principal_name": "fullaccess@example.com",
+            "mail": "fullaccess@example.com",
+            "permission_types": ["full_access"],
+        },
+        {
+            "identity": "sendas@example.com",
+            "display_name": "",
+            "principal_name": "sendas@example.com",
+            "mail": "sendas@example.com",
+            "permission_types": ["send_as"],
         },
     ]
     assert client.exchange_calls == [
@@ -233,19 +313,36 @@ def test_list_mailbox_delegates_returns_send_on_behalf_entries():
     ]
 
 
-def test_list_delegate_mailboxes_for_user_filters_orgwide_mailbox_scan():
+def test_list_delegate_mailboxes_for_user_merges_send_on_behalf_send_as_and_full_access():
     client = FakeDelegateMailboxScanClient()
-    provider = MailboxAdminProvider(client=client)
+    provider = MailboxAdminProvider(
+        client=client,
+        exchange_powershell=FakeExchangePowerShellUserMatches(),
+    )
 
     result = provider.list_delegate_mailboxes_for_user("delegate@example.com")
 
     assert result["display_name"] == "Delegate User"
-    assert result["mailbox_count"] == 1
-    assert result["scanned_mailbox_count"] == 2
+    assert result["mailbox_count"] == 2
+    assert result["scanned_mailbox_count"] == 7
+    assert result["permission_counts"] == {
+        "send_on_behalf": 1,
+        "send_as": 2,
+        "full_access": 1,
+    }
     assert result["mailboxes"] == [
         {
+            "identity": "finance@example.com",
+            "display_name": "Finance Mailbox",
+            "principal_name": "finance@example.com",
+            "primary_address": "finance@example.com",
+            "permission_types": ["send_as"],
+        },
+        {
+            "identity": "shared@example.com",
             "display_name": "Shared Mailbox",
             "principal_name": "shared@example.com",
             "primary_address": "shared@example.com",
+            "permission_types": ["send_on_behalf", "full_access", "send_as"],
         }
     ]

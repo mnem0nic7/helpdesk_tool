@@ -442,14 +442,21 @@ def test_list_mailbox_delegates_is_available_on_primary_and_azure(test_client, m
         "principal_name": "shared@example.com",
         "primary_address": "shared@example.com",
         "provider_enabled": True,
-        "delegation_type": "send_on_behalf",
-        "note": "Send on behalf delegates are listed read-only from Exchange Online.",
+        "supported_permission_types": ["send_on_behalf", "send_as", "full_access"],
+        "permission_counts": {
+            "send_on_behalf": 1,
+            "send_as": 1,
+            "full_access": 0,
+        },
+        "note": "Mailbox delegates are listed read-only from Exchange Online for Send on behalf, Send As, and Full Access.",
         "delegate_count": 1,
         "delegates": [
             {
+                "identity": "delegate@example.com",
                 "display_name": "Delegate User",
                 "principal_name": "delegate@example.com",
                 "mail": "delegate@example.com",
+                "permission_types": ["send_on_behalf", "send_as"],
             }
         ],
     }
@@ -468,7 +475,7 @@ def test_list_mailbox_delegates_is_available_on_primary_and_azure(test_client, m
     assert primary.json()["delegate_count"] == 1
     assert primary.json()["delegates"][0]["mail"] == "delegate@example.com"
     assert azure.status_code == 200
-    assert azure.json()["delegation_type"] == "send_on_behalf"
+    assert azure.json()["permission_counts"]["send_as"] == 1
     assert mock_providers.list_mailbox_delegates.call_count == 2
 
 
@@ -482,15 +489,22 @@ def test_list_delegate_mailboxes_is_available_on_primary_and_azure(test_client, 
         "principal_name": "delegate@example.com",
         "primary_address": "delegate@example.com",
         "provider_enabled": True,
-        "delegation_type": "send_on_behalf",
-        "note": "Scanned 15 mailboxes for Send on behalf access.",
+        "supported_permission_types": ["send_on_behalf", "send_as", "full_access"],
+        "permission_counts": {
+            "send_on_behalf": 1,
+            "send_as": 1,
+            "full_access": 1,
+        },
+        "note": "Scanned 15 mailboxes for Send on behalf, Send As, and Full Access.",
         "mailbox_count": 1,
         "scanned_mailbox_count": 15,
         "mailboxes": [
             {
+                "identity": "shared@example.com",
                 "display_name": "Shared Mailbox",
                 "principal_name": "shared@example.com",
                 "primary_address": "shared@example.com",
+                "permission_types": ["send_on_behalf", "send_as", "full_access"],
             }
         ],
     }
@@ -533,5 +547,5 @@ def test_mailbox_delegate_routes_translate_exchange_permission_errors(test_clien
         "Mailbox delegation lookup is not enabled for the shared Exchange app yet. "
         "The Entra app registration needs Office 365 Exchange Online application permission "
         "Exchange.ManageAsAppV2 with admin consent plus an Exchange RBAC role such as Recipient Management "
-        "before this tool can read Send on behalf delegates."
+        "before this tool can read mailbox delegation."
     )

@@ -62,7 +62,12 @@ def _friendly_mailbox_delegate_error(message: str) -> str:
             "Mailbox delegation lookup is not enabled for the shared Exchange app yet. "
             "The Entra app registration needs Office 365 Exchange Online application permission "
             "Exchange.ManageAsAppV2 with admin consent plus an Exchange RBAC role such as Recipient Management "
-            "before this tool can read Send on behalf delegates."
+            "before this tool can read mailbox delegation."
+        )
+    if "pwsh is not installed" in text or "ExchangeOnlineManagement" in text or "Connect-ExchangeOnline" in text:
+        return (
+            "Mailbox delegation lookup needs Exchange Online PowerShell support on the app runtime. "
+            "Install pwsh plus the ExchangeOnlineManagement module so the app can read Send As and Full Access."
         )
     return text
 

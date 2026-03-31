@@ -798,44 +798,50 @@ class MailboxRulesResponse(BaseModel):
 
 
 class MailboxDelegateEntryResponse(BaseModel):
-    """One Send on behalf delegate entry for a mailbox."""
+    """One mailbox delegate entry for a mailbox."""
 
+    identity: str = ""
     display_name: str = ""
     principal_name: str = ""
     mail: str = ""
+    permission_types: list[str] = Field(default_factory=list)
 
 
 class MailboxDelegatesResponse(BaseModel):
-    """Send on behalf delegate listing payload for a provided mailbox identifier."""
+    """Mailbox delegate listing payload for a provided mailbox identifier."""
 
     mailbox: str
     display_name: str = ""
     principal_name: str = ""
     primary_address: str = ""
     provider_enabled: bool = False
-    delegation_type: str = "send_on_behalf"
+    supported_permission_types: list[str] = Field(default_factory=list)
+    permission_counts: dict[str, int] = Field(default_factory=dict)
     note: str = ""
     delegate_count: int = 0
     delegates: list[MailboxDelegateEntryResponse] = Field(default_factory=list)
 
 
 class DelegateMailboxResponse(BaseModel):
-    """One mailbox where the provided user has Send on behalf access."""
+    """One mailbox where the provided user has delegate access."""
 
+    identity: str = ""
     display_name: str = ""
     principal_name: str = ""
     primary_address: str = ""
+    permission_types: list[str] = Field(default_factory=list)
 
 
 class DelegateMailboxesResponse(BaseModel):
-    """Org-wide Send on behalf mailbox matches for a provided user identifier."""
+    """Org-wide mailbox delegate matches for a provided user identifier."""
 
     user: str
     display_name: str = ""
     principal_name: str = ""
     primary_address: str = ""
     provider_enabled: bool = False
-    delegation_type: str = "send_on_behalf"
+    supported_permission_types: list[str] = Field(default_factory=list)
+    permission_counts: dict[str, int] = Field(default_factory=dict)
     note: str = ""
     mailbox_count: int = 0
     scanned_mailbox_count: int = 0

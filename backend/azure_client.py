@@ -1098,6 +1098,9 @@ Resources
             if not next_link:
                 return items
 
+    def exchange_access_token(self) -> str:
+        return self._get_token(_EXCHANGE_SCOPE)
+
     def list_users(self) -> list[dict[str, Any]]:
         full_select = [* _USER_BASE_SELECT, *_USER_OPTIONAL_SELECT]
         try:

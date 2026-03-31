@@ -160,14 +160,28 @@ describe("ToolsPage", () => {
       principal_name: "shared@example.com",
       primary_address: "shared@example.com",
       provider_enabled: true,
-      delegation_type: "send_on_behalf",
-      note: "Send on behalf delegates are listed read-only from Exchange Online.",
-      delegate_count: 1,
+      supported_permission_types: ["send_on_behalf", "send_as", "full_access"],
+      permission_counts: {
+        send_on_behalf: 1,
+        send_as: 1,
+        full_access: 1,
+      },
+      note: "Mailbox delegates are listed read-only from Exchange Online for Send on behalf, Send As, and Full Access.",
+      delegate_count: 2,
       delegates: [
         {
+          identity: "delegate@example.com",
           display_name: "Delegate User",
           principal_name: "delegate@example.com",
           mail: "delegate@example.com",
+          permission_types: ["send_on_behalf", "send_as"],
+        },
+        {
+          identity: "ops@example.com",
+          display_name: "Ops User",
+          principal_name: "ops@example.com",
+          mail: "ops@example.com",
+          permission_types: ["full_access"],
         },
       ],
     });
@@ -177,15 +191,22 @@ describe("ToolsPage", () => {
       principal_name: "delegate@example.com",
       primary_address: "delegate@example.com",
       provider_enabled: true,
-      delegation_type: "send_on_behalf",
-      note: "Scanned 10 mailboxes for Send on behalf access.",
+      supported_permission_types: ["send_on_behalf", "send_as", "full_access"],
+      permission_counts: {
+        send_on_behalf: 1,
+        send_as: 1,
+        full_access: 1,
+      },
+      note: "Scanned 10 mailboxes for Send on behalf, Send As, and Full Access.",
       mailbox_count: 1,
       scanned_mailbox_count: 10,
       mailboxes: [
         {
+          identity: "shared@example.com",
           display_name: "Shared Mailbox",
           principal_name: "shared@example.com",
           primary_address: "shared@example.com",
+          permission_types: ["send_on_behalf", "send_as", "full_access"],
         },
       ],
     });
@@ -204,8 +225,8 @@ describe("ToolsPage", () => {
     render(<ToolsPage />);
 
     expect(await screen.findByText("Copy a full OneDrive to another user")).toBeInTheDocument();
-    expect(screen.getByText("List Send on behalf delegates for a mailbox")).toBeInTheDocument();
-    expect(screen.getByText("Find mailboxes where a user can send on behalf")).toBeInTheDocument();
+    expect(screen.getByText("List mailbox delegate access for a mailbox")).toBeInTheDocument();
+    expect(screen.getByText("Find mailboxes where a user has delegate access")).toBeInTheDocument();
     expect(screen.getByText("List Inbox rules for a provided mailbox")).toBeInTheDocument();
     expect(screen.getByText("Recent OneDrive copy jobs")).toBeInTheDocument();
     expect(await screen.findByText(/Graph copy requests finish server-side/i)).toBeInTheDocument();
@@ -261,10 +282,10 @@ describe("ToolsPage", () => {
     expect(screen.getByText("From addresses: alerts@github.com")).toBeInTheDocument();
   });
 
-  it("loads Send on behalf delegates for the selected mailbox", async () => {
+  it("loads mailbox delegates for the selected mailbox", async () => {
     render(<ToolsPage />);
 
-    await screen.findByText("List Send on behalf delegates for a mailbox");
+    await screen.findByText("List mailbox delegate access for a mailbox");
 
     const mailboxInputs = screen.getAllByLabelText("Mailbox UPN or email");
     fireEvent.focus(mailboxInputs[0]);
@@ -277,12 +298,14 @@ describe("ToolsPage", () => {
     });
 
     expect(await screen.findByText("Delegate User")).toBeInTheDocument();
+    expect(screen.getByText("Ops User")).toBeInTheDocument();
+    expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
   });
 
-  it("scans for mailboxes where the selected user has Send on behalf access", async () => {
+  it("scans for mailboxes where the selected user has delegate access", async () => {
     render(<ToolsPage />);
 
-    await screen.findByText("Find mailboxes where a user can send on behalf");
+    await screen.findByText("Find mailboxes where a user has delegate access");
 
     const userInput = screen.getByLabelText("User UPN or email");
     fireEvent.focus(userInput);
@@ -294,8 +317,9 @@ describe("ToolsPage", () => {
       expect(mockApi.listDelegateMailboxes).toHaveBeenCalledWith("delegate@example.com");
     });
 
-    expect(await screen.findByText("Scanned 10 mailboxes for Send on behalf access.")).toBeInTheDocument();
+    expect(await screen.findByText("Scanned 10 mailboxes for Send on behalf, Send As, and Full Access.")).toBeInTheDocument();
     expect(screen.getAllByText("Shared Mailbox").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Send As").length).toBeGreaterThan(0);
   });
 
   it("renders tools for signed-in users even if the legacy tools-access flag is false", async () => {

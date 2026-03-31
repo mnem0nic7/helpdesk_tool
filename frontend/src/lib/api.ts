@@ -1423,9 +1423,11 @@ export interface MailboxRulesStatus {
 }
 
 export interface MailboxDelegateEntry {
+  identity: string;
   display_name: string;
   principal_name: string;
   mail: string;
+  permission_types: string[];
 }
 
 export interface MailboxDelegatesStatus {
@@ -1434,16 +1436,19 @@ export interface MailboxDelegatesStatus {
   principal_name: string;
   primary_address: string;
   provider_enabled: boolean;
-  delegation_type: string;
+  supported_permission_types: string[];
+  permission_counts: Record<string, number>;
   note: string;
   delegate_count: number;
   delegates: MailboxDelegateEntry[];
 }
 
 export interface DelegateMailboxMatch {
+  identity: string;
   display_name: string;
   principal_name: string;
   primary_address: string;
+  permission_types: string[];
 }
 
 export interface DelegateMailboxesStatus {
@@ -1452,7 +1457,8 @@ export interface DelegateMailboxesStatus {
   principal_name: string;
   primary_address: string;
   provider_enabled: boolean;
-  delegation_type: string;
+  supported_permission_types: string[];
+  permission_counts: Record<string, number>;
   note: string;
   mailbox_count: number;
   scanned_mailbox_count: number;
