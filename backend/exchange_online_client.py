@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -21,6 +22,7 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
+_ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 
 class ExchangeOnlinePowerShellError(RuntimeError):
@@ -55,6 +57,14 @@ def _organization_domains(payload: dict[str, Any]) -> list[str]:
             if name and name not in domains:
                 domains.append(name)
     return domains
+
+
+def _sanitize_powershell_error_text(value: str) -> str:
+    text = str(value or "")
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 @dataclass
@@ -177,9 +187,9 @@ finally {{
             script_path.unlink(missing_ok=True)
 
         stdout = (stdout or "").strip()
-        stderr = (stderr or "").strip()
+        stderr = _sanitize_powershell_error_text(stderr or "")
         if process.returncode != 0:
-            message = stderr or stdout or "Unknown Exchange Online PowerShell failure."
+            message = stderr or _sanitize_powershell_error_text(stdout or "") or "Unknown Exchange Online PowerShell failure."
             raise ExchangeOnlinePowerShellError(message[:4000])
         if not stdout:
             return {}
@@ -252,25 +262,97 @@ $fullAccess = @(
         payload = self._run_script(
             """
 $delegateUser = $env:DELEGATE_USER
-$mailboxes = @(
-  Get-EXORecipientPermission -Trustee $delegateUser -ResultSize Unlimited |
-    Where-Object { $_.AccessRights -contains 'SendAs' -and $_.Deny -ne $true } |
-    ForEach-Object {
-      $identity = $_.Identity
+$allMailboxes = @(Get-Mailbox -ResultSize Unlimited)
+$mailboxIdentities = @()
+$mailboxLookup = @{}
+foreach ($mailbox in $allMailboxes) {
+  $identity = $null
+  if ($mailbox.UserPrincipalName) {
+    $identity = $mailbox.UserPrincipalName.ToString()
+    $mailboxLookup[$mailbox.UserPrincipalName.ToString().ToLowerInvariant()] = $mailbox
+  }
+  if ($mailbox.PrimarySmtpAddress) {
+    $primaryAddress = $mailbox.PrimarySmtpAddress.ToString()
+    $mailboxLookup[$primaryAddress.ToLowerInvariant()] = $mailbox
+    if (-not $identity) {
+      $identity = $primaryAddress
+    }
+  }
+  if ($identity) {
+    $mailboxIdentities += $identity
+  }
+}
+$sendAs = @()
+$sendAsErrors = @()
+$batchSize = 50
+for ($offset = 0; $offset -lt $mailboxIdentities.Count; $offset += $batchSize) {
+  $batch = @($mailboxIdentities | Select-Object -Skip $offset -First $batchSize)
+  if ($batch.Count -eq 0) {
+    continue
+  }
+
+  $attempt = 0
+  while ($true) {
+    $attempt++
+    $batchErrors = @()
+    $batchMatches = @(
+      $batch |
+        Get-EXORecipientPermission -Trustee $delegateUser -ResultSize Unlimited -ErrorAction SilentlyContinue -ErrorVariable +batchErrors |
+        Where-Object { $_.AccessRights -contains 'SendAs' -and $_.Deny -ne $true } |
+        Select-Object -ExpandProperty Identity -Unique
+    )
+    $retryableErrors = @(
+      $batchErrors |
+        Where-Object {
+          $_.Exception.Message -match 'Resource temporarily unavailable'
+        }
+    )
+    if ($retryableErrors.Count -gt 0 -and $attempt -lt 3) {
+      Start-Sleep -Seconds 2
+      continue
+    }
+
+    $sendAs += $batchMatches
+    $sendAsErrors += $batchErrors
+    break
+  }
+}
+$sendAs = @($sendAs | Sort-Object -Unique)
+$unexpectedSendAsErrors = @(
+  $sendAsErrors |
+    Where-Object {
+      $_.Exception.Message -notmatch 'No recipient permission entry was found for trustee' -and
+      $_.Exception.Message -notmatch 'There is no existing permission entry found' -and
+      $_.Exception.Message -notmatch 'Resource temporarily unavailable'
+    }
+)
+if ($unexpectedSendAsErrors.Count -gt 0) {
+  throw $unexpectedSendAsErrors[0]
+}
+[pscustomobject]@{
+  mailbox_count_scanned = $allMailboxes.Count
+  mailboxes = @(
+    foreach ($identity in $sendAs) {
+      $mailbox = $null
+      if ($identity) {
+        $mailbox = $mailboxLookup[$identity.ToString().ToLowerInvariant()]
+      }
+      if (-not $mailbox) {
+        $mailbox = Get-Mailbox -Identity $identity
+      }
       [pscustomobject]@{
         Identity = $identity
-        DisplayName = $identity
-        UserPrincipalName = $identity
-        PrimarySmtpAddress = $identity
+        DisplayName = if ($mailbox) { $mailbox.DisplayName } else { $identity }
+        UserPrincipalName = if ($mailbox -and $mailbox.UserPrincipalName) { $mailbox.UserPrincipalName } else { $identity }
+        PrimarySmtpAddress = if ($mailbox -and $mailbox.PrimarySmtpAddress) { $mailbox.PrimarySmtpAddress.ToString() } else { $identity }
         PermissionTypes = @('send_as')
       }
     }
-)
-[pscustomobject]@{
-  mailboxes = $mailboxes
+  )
 } | ConvertTo-Json -Depth 8 -Compress
 """.strip(),
             extra_env={"DELEGATE_USER": user},
+            timeout_seconds=max(EXCHANGE_DELEGATE_SCAN_TIMEOUT_SECONDS, int(self.timeout_seconds or 0)),
             cancel_requested=cancel_requested,
         )
         return payload if isinstance(payload, dict) else {}
