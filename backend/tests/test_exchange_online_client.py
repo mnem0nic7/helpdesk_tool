@@ -21,7 +21,10 @@ def test_get_delegate_mailboxes_for_user_uses_mailbox_identity_pipeline_for_full
     assert result == {"mailbox_count_scanned": 0, "mailboxes": []}
     assert captured["extra_env"] == {"DELEGATE_USER": "delegate@example.com"}
     script_body = str(captured["script_body"])
-    assert "$mailboxIdentities |" in script_body
-    assert "Get-EXOMailboxPermission -User $delegateUser -ErrorAction SilentlyContinue -ErrorVariable +fullAccessErrors" in script_body
+    assert "$batchSize = 50" in script_body
+    assert "Select-Object -Skip $offset -First $batchSize" in script_body
+    assert "Get-EXOMailboxPermission -User $delegateUser -ErrorAction SilentlyContinue -ErrorVariable +batchErrors" in script_body
+    assert "$fullAccessErrors += $batchErrors" in script_body
+    assert "Start-Sleep -Seconds 2" in script_body
     assert "$unexpectedFullAccessErrors" in script_body
     assert "Get-EXOMailboxPermission -User $delegateUser -ResultSize Unlimited" not in script_body

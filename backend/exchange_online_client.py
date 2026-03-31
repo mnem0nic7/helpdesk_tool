@@ -220,22 +220,52 @@ $mailboxIdentities = @(
     }
   }
 )
+$fullAccess = @()
 $fullAccessErrors = @()
-$fullAccess = @(
-  $mailboxIdentities |
-    Get-EXOMailboxPermission -User $delegateUser -ErrorAction SilentlyContinue -ErrorVariable +fullAccessErrors |
-    Where-Object {
-      $_.AccessRights -contains 'FullAccess' -and
-      $_.Deny -ne $true -and
-      $_.IsInherited -ne $true -and
-      $_.User.ToString() -ne 'NT AUTHORITY\\SELF'
-    } |
-    Select-Object -ExpandProperty Identity -Unique
-)
+$batchSize = 50
+for ($offset = 0; $offset -lt $mailboxIdentities.Count; $offset += $batchSize) {
+  $batch = @($mailboxIdentities | Select-Object -Skip $offset -First $batchSize)
+  if ($batch.Count -eq 0) {
+    continue
+  }
+
+  $attempt = 0
+  while ($true) {
+    $attempt++
+    $batchErrors = @()
+    $batchMatches = @(
+      $batch |
+        Get-EXOMailboxPermission -User $delegateUser -ErrorAction SilentlyContinue -ErrorVariable +batchErrors |
+        Where-Object {
+          $_.AccessRights -contains 'FullAccess' -and
+          $_.Deny -ne $true -and
+          $_.IsInherited -ne $true -and
+          $_.User.ToString() -ne 'NT AUTHORITY\\SELF'
+        } |
+        Select-Object -ExpandProperty Identity -Unique
+    )
+    $retryableErrors = @(
+      $batchErrors |
+        Where-Object {
+          $_.Exception.Message -match 'Resource temporarily unavailable'
+        }
+    )
+    if ($retryableErrors.Count -gt 0 -and $attempt -lt 3) {
+      Start-Sleep -Seconds 2
+      continue
+    }
+
+    $fullAccess += $batchMatches
+    $fullAccessErrors += $batchErrors
+    break
+  }
+}
+$fullAccess = @($fullAccess | Sort-Object -Unique)
 $unexpectedFullAccessErrors = @(
   $fullAccessErrors |
     Where-Object {
-      $_.Exception.Message -notmatch 'No permissions were found for the user:'
+      $_.Exception.Message -notmatch 'No permissions were found for the user:' -and
+      $_.Exception.Message -notmatch 'Resource temporarily unavailable'
     }
 )
 if ($unexpectedFullAccessErrors.Count -gt 0) {
