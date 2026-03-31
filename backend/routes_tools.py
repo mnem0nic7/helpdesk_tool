@@ -6,13 +6,16 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from auth import list_login_audit, require_tools_access
+from auth import list_login_audit, require_tools_access, session_is_admin
+from emailgistics_helper_service import emailgistics_helper_service
 from azure_cache import azure_cache
 from models import (
     AppLoginAuditEventResponse,
     DelegateMailboxJobCreateRequest,
     DelegateMailboxJobResponse,
     DelegateMailboxesResponse,
+    EmailgisticsHelperRequest,
+    EmailgisticsHelperResponse,
     MailboxDelegatesResponse,
     MailboxRulesResponse,
     OneDriveCopyJobCreateRequest,
@@ -36,6 +39,12 @@ def _ensure_tools_site() -> str:
 
 def _require_tools_session(session: dict[str, Any] = Depends(require_tools_access)) -> dict[str, Any]:
     _ensure_tools_site()
+    return session
+
+
+def _require_admin_tools_session(session: dict[str, Any] = Depends(_require_tools_session)) -> dict[str, Any]:
+    if not session_is_admin(session):
+        raise HTTPException(status_code=403, detail="Admin access is required for Emailgistics Helper")
     return session
 
 
@@ -329,3 +338,16 @@ def cancel_delegate_mailbox_job(
     if cancelled:
         return {"cancelled": True, "message": "Mailbox delegate scan cancelled."}
     return {"cancelled": False, "message": "Mailbox delegate scan is already finished."}
+
+
+@router.post("/emailgistics-helper", response_model=EmailgisticsHelperResponse)
+def run_emailgistics_helper(
+    body: EmailgisticsHelperRequest,
+    _session: dict[str, Any] = Depends(_require_admin_tools_session),
+) -> EmailgisticsHelperResponse:
+    return EmailgisticsHelperResponse.model_validate(
+        emailgistics_helper_service.run(
+            user_mailbox=body.user_mailbox,
+            shared_mailbox=body.shared_mailbox,
+        )
+    )

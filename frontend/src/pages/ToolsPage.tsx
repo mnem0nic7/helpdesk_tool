@@ -4,6 +4,7 @@ import {
   api,
   type AppLoginAuditEvent,
   type DelegateMailboxJobStatus,
+  type EmailgisticsHelperStatus,
   type MailboxDelegatesStatus,
   type MailboxRulesStatus,
   type OneDriveCopyJobStatus,
@@ -97,6 +98,19 @@ function delegateScanPhaseLabel(phase: DelegateMailboxJobStatus["phase"]): strin
       return "Cancelled";
     default:
       return "Queued";
+  }
+}
+
+function helperStepTone(status: EmailgisticsHelperStatus["steps"][number]["status"]): string {
+  switch (status) {
+    case "completed":
+      return "bg-emerald-100 text-emerald-700";
+    case "already_present":
+      return "bg-sky-100 text-sky-700";
+    case "failed":
+      return "bg-red-100 text-red-700";
+    default:
+      return "bg-slate-100 text-slate-700";
   }
 }
 
@@ -907,6 +921,93 @@ function DelegateMailboxJobHistory({
   );
 }
 
+function EmailgisticsHelperResults({
+  result,
+  isRunning,
+  errorMessage,
+}: {
+  result: EmailgisticsHelperStatus | undefined;
+  isRunning: boolean;
+  errorMessage: string;
+}) {
+  if (isRunning) {
+    return <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">Running Emailgistics Helper...</div>;
+  }
+
+  if (errorMessage) {
+    return <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMessage}</div>;
+  }
+
+  if (!result) {
+    return (
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+        Enter a user mailbox and shared mailbox to grant access, add the Emailgistics add-in group membership, and run the targeted sync.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Emailgistics Helper</div>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-900">{result.resolved_user_display_name || result.resolved_user_principal_name || result.user_mailbox}</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            {result.resolved_user_principal_name || result.user_mailbox}
+            {" -> "}
+            {result.resolved_shared_principal_name || result.shared_mailbox}
+          </p>
+        </div>
+        <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${statusTone(result.status === "completed" ? "completed" : "failed")}`}>
+          {result.status}
+        </span>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-4">
+        {result.steps.map((step) => (
+          <div key={step.key} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{step.label}</div>
+              <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${helperStepTone(step.status)}`}>
+                {step.status === "already_present" ? "already set" : step.status}
+              </span>
+            </div>
+            <div className="mt-2 text-sm text-slate-700">{step.message || "Pending"}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Resolved user</div>
+          <div className="mt-1 font-medium text-slate-900">{result.resolved_user_display_name || result.resolved_user_principal_name || result.user_mailbox}</div>
+          <div className="text-xs text-slate-500">{result.resolved_user_principal_name || result.user_mailbox}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Shared mailbox</div>
+          <div className="mt-1 font-medium text-slate-900">{result.resolved_shared_display_name || result.resolved_shared_principal_name || result.shared_mailbox}</div>
+          <div className="text-xs text-slate-500">{result.resolved_shared_principal_name || result.shared_mailbox}</div>
+        </div>
+      </div>
+
+      <div className={`rounded-2xl border px-4 py-3 text-sm ${result.status === "completed" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+        {result.note || "Emailgistics Helper finished."}
+      </div>
+
+      {result.error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{result.error}</div>
+      ) : null}
+
+      {result.sync_output ? (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Sync output</div>
+          <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-slate-700">{result.sync_output}</pre>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ToolsPage() {
   const branding = getSiteBranding();
   const queryClient = useQueryClient();
@@ -915,11 +1016,15 @@ export default function ToolsPage() {
   const [delegateMailboxInput, setDelegateMailboxInput] = useState("");
   const [mailboxInput, setMailboxInput] = useState("");
   const [delegateUserInput, setDelegateUserInput] = useState("");
+  const [emailgisticsUserInput, setEmailgisticsUserInput] = useState("");
+  const [emailgisticsSharedMailboxInput, setEmailgisticsSharedMailboxInput] = useState("");
   const [selectedSource, setSelectedSource] = useState<ToolUserPickerOption | null>(null);
   const [selectedDestination, setSelectedDestination] = useState<ToolUserPickerOption | null>(null);
   const [selectedDelegateMailbox, setSelectedDelegateMailbox] = useState<ToolUserPickerOption | null>(null);
   const [selectedMailbox, setSelectedMailbox] = useState<ToolUserPickerOption | null>(null);
   const [selectedDelegateUser, setSelectedDelegateUser] = useState<ToolUserPickerOption | null>(null);
+  const [selectedEmailgisticsUser, setSelectedEmailgisticsUser] = useState<ToolUserPickerOption | null>(null);
+  const [selectedEmailgisticsSharedMailbox, setSelectedEmailgisticsSharedMailbox] = useState<ToolUserPickerOption | null>(null);
   const [destinationFolder, setDestinationFolder] = useState("");
   const [testMode, setTestMode] = useState(false);
   const [testFileLimit, setTestFileLimit] = useState("25");
@@ -932,11 +1037,15 @@ export default function ToolsPage() {
   const [delegateMailboxFormError, setDelegateMailboxFormError] = useState("");
   const [mailboxFormError, setMailboxFormError] = useState("");
   const [delegateUserFormError, setDelegateUserFormError] = useState("");
+  const [emailgisticsHelperFormError, setEmailgisticsHelperFormError] = useState("");
+  const [emailgisticsHelperResult, setEmailgisticsHelperResult] = useState<EmailgisticsHelperStatus | undefined>(undefined);
   const deferredSourceSearch = useDeferredValue(sourceUpnInput);
   const deferredDestinationSearch = useDeferredValue(destinationUpnInput);
   const deferredDelegateMailboxSearch = useDeferredValue(delegateMailboxInput);
   const deferredMailboxSearch = useDeferredValue(mailboxInput);
   const deferredDelegateUserSearch = useDeferredValue(delegateUserInput);
+  const deferredEmailgisticsUserSearch = useDeferredValue(emailgisticsUserInput);
+  const deferredEmailgisticsSharedMailboxSearch = useDeferredValue(emailgisticsSharedMailboxInput);
 
   const meQuery = useQuery({
     queryKey: ["auth", "me"],
@@ -979,12 +1088,26 @@ export default function ToolsPage() {
     enabled: hasSignedInUser,
     staleTime: 30_000,
   });
+  const emailgisticsUserSearchQuery = useQuery({
+    queryKey: ["emailgistics-helper", "user", deferredEmailgisticsUserSearch],
+    queryFn: () => api.searchOneDriveCopyUsers(deferredEmailgisticsUserSearch.trim(), 8),
+    enabled: hasSignedInUser && !!meQuery.data?.is_admin,
+    staleTime: 30_000,
+  });
+  const emailgisticsSharedMailboxSearchQuery = useQuery({
+    queryKey: ["emailgistics-helper", "shared-mailbox", deferredEmailgisticsSharedMailboxSearch],
+    queryFn: () => api.searchOneDriveCopyUsers(deferredEmailgisticsSharedMailboxSearch.trim(), 8),
+    enabled: hasSignedInUser && !!meQuery.data?.is_admin,
+    staleTime: 30_000,
+  });
 
   const sourceOptions = buildPickerOptions(sourceUpnInput, sourceSearchQuery.data);
   const destinationOptions = buildPickerOptions(destinationUpnInput, destinationSearchQuery.data);
   const delegateMailboxOptions = buildPickerOptions(delegateMailboxInput, delegateMailboxSearchQuery.data);
   const mailboxOptions = buildPickerOptions(mailboxInput, mailboxSearchQuery.data);
   const delegateUserOptions = buildPickerOptions(delegateUserInput, delegateUserSearchQuery.data);
+  const emailgisticsUserOptions = buildPickerOptions(emailgisticsUserInput, emailgisticsUserSearchQuery.data);
+  const emailgisticsSharedMailboxOptions = buildPickerOptions(emailgisticsSharedMailboxInput, emailgisticsSharedMailboxSearchQuery.data);
 
   const jobsQuery = useQuery({
     queryKey: ["onedrive-copy", "jobs"],
@@ -1153,6 +1276,28 @@ export default function ToolsPage() {
       setDelegateUserFormError(error instanceof Error ? error.message : "Failed to cancel the delegate mailbox scan.");
     },
   });
+  const runEmailgisticsHelperMutation = useMutation({
+    mutationFn: () =>
+      api.runEmailgisticsHelper({
+        user_mailbox: selectedEmailgisticsUser?.canonical_upn.trim() || emailgisticsUserInput.trim(),
+        shared_mailbox:
+          selectedEmailgisticsSharedMailbox?.canonical_upn.trim() || emailgisticsSharedMailboxInput.trim(),
+      }),
+    onMutate: () => {
+      setEmailgisticsHelperFormError("");
+      setEmailgisticsHelperResult(undefined);
+    },
+    onSuccess: (result) => {
+      setEmailgisticsHelperFormError("");
+      setEmailgisticsHelperResult(result);
+    },
+    onError: (error) => {
+      setEmailgisticsHelperFormError(
+        error instanceof Error ? error.message : "Emailgistics Helper failed before it could finish.",
+      );
+      setEmailgisticsHelperResult(undefined);
+    },
+  });
   const canQueueJob =
     !!selectedSource &&
     !!selectedDestination &&
@@ -1245,6 +1390,37 @@ export default function ToolsPage() {
     setDelegateUserFormError("");
   }
 
+  function handleEmailgisticsUserInputChange(value: string) {
+    setEmailgisticsUserInput(value);
+    setEmailgisticsHelperFormError("");
+    if (selectedEmailgisticsUser && normalizeUpn(value) !== normalizeUpn(selectedEmailgisticsUser.canonical_upn)) {
+      setSelectedEmailgisticsUser(null);
+    }
+  }
+
+  function handleEmailgisticsUserSelect(option: ToolUserPickerOption) {
+    setSelectedEmailgisticsUser(option);
+    setEmailgisticsUserInput(option.canonical_upn);
+    setEmailgisticsHelperFormError("");
+  }
+
+  function handleEmailgisticsSharedMailboxInputChange(value: string) {
+    setEmailgisticsSharedMailboxInput(value);
+    setEmailgisticsHelperFormError("");
+    if (
+      selectedEmailgisticsSharedMailbox &&
+      normalizeUpn(value) !== normalizeUpn(selectedEmailgisticsSharedMailbox.canonical_upn)
+    ) {
+      setSelectedEmailgisticsSharedMailbox(null);
+    }
+  }
+
+  function handleEmailgisticsSharedMailboxSelect(option: ToolUserPickerOption) {
+    setSelectedEmailgisticsSharedMailbox(option);
+    setEmailgisticsSharedMailboxInput(option.canonical_upn);
+    setEmailgisticsHelperFormError("");
+  }
+
   function submitMailboxLookup() {
     const mailbox = selectedMailbox?.canonical_upn.trim() || mailboxInput.trim();
     if (!mailbox || !looksLikeUpn(mailbox)) {
@@ -1283,6 +1459,26 @@ export default function ToolsPage() {
     createDelegateMailboxJobMutation.mutate();
   }
 
+  function submitEmailgisticsHelper() {
+    const userMailbox = selectedEmailgisticsUser?.canonical_upn.trim() || emailgisticsUserInput.trim();
+    const sharedMailbox =
+      selectedEmailgisticsSharedMailbox?.canonical_upn.trim() || emailgisticsSharedMailboxInput.trim();
+    if (!userMailbox || !looksLikeUpn(userMailbox)) {
+      setEmailgisticsHelperFormError("Select a valid user mailbox before running Emailgistics Helper.");
+      return;
+    }
+    if (!sharedMailbox || !looksLikeUpn(sharedMailbox)) {
+      setEmailgisticsHelperFormError("Select a valid shared mailbox before running Emailgistics Helper.");
+      return;
+    }
+    if (normalizeUpn(userMailbox) === normalizeUpn(sharedMailbox)) {
+      setEmailgisticsHelperFormError("The user mailbox and shared mailbox must be different.");
+      return;
+    }
+    setEmailgisticsHelperFormError("");
+    runEmailgisticsHelperMutation.mutate();
+  }
+
   const mailboxApiError =
     mailboxRulesQuery.error instanceof Error &&
     activeMailboxLookup &&
@@ -1308,6 +1504,12 @@ export default function ToolsPage() {
     (selectedMailbox !== null || looksLikeUpn(mailboxInput)) && !mailboxRulesQuery.isFetching;
   const canLookupDelegateUser =
     (selectedDelegateUser !== null || looksLikeUpn(delegateUserInput)) && !createDelegateMailboxJobMutation.isPending;
+  const canUseEmailgisticsHelper = !!meQuery.data?.is_admin;
+  const canRunEmailgisticsHelper =
+    canUseEmailgisticsHelper &&
+    (selectedEmailgisticsUser !== null || looksLikeUpn(emailgisticsUserInput)) &&
+    (selectedEmailgisticsSharedMailbox !== null || looksLikeUpn(emailgisticsSharedMailboxInput)) &&
+    !runEmailgisticsHelperMutation.isPending;
 
   return (
     <div className="space-y-6">
@@ -1541,6 +1743,73 @@ export default function ToolsPage() {
               isCancelling={cancelDelegateMailboxJobMutation.isPending}
             />
           </section>
+
+          {canUseEmailgisticsHelper ? (
+            <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Emailgistics Helper</div>
+                  <h2 className="mt-1 text-2xl font-semibold text-slate-900">
+                    Grant mailbox access and sync Emailgistics
+                  </h2>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Admin-only helper that grants a user Full Access and Send As on a shared mailbox, adds them to the
+                    Emailgistics add-in group, and runs the targeted Emailgistics syncUsers PowerShell flow for that
+                    shared mailbox.
+                  </p>
+                </div>
+                <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-700">
+                  Admin only
+                </span>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <DirectoryComboboxField
+                  label="User mailbox UPN or email"
+                  value={emailgisticsUserInput}
+                  onInputChange={handleEmailgisticsUserInputChange}
+                  onSelect={handleEmailgisticsUserSelect}
+                  selected={selectedEmailgisticsUser}
+                  loading={emailgisticsUserSearchQuery.isLoading}
+                  options={emailgisticsUserOptions}
+                  placeholder="analyst@example.com"
+                  emptyMessage="No saved or Entra matches found yet. Enter a valid UPN/email to use it directly."
+                />
+                <DirectoryComboboxField
+                  label="Shared mailbox UPN or email"
+                  value={emailgisticsSharedMailboxInput}
+                  onInputChange={handleEmailgisticsSharedMailboxInputChange}
+                  onSelect={handleEmailgisticsSharedMailboxSelect}
+                  selected={selectedEmailgisticsSharedMailbox}
+                  loading={emailgisticsSharedMailboxSearchQuery.isLoading}
+                  options={emailgisticsSharedMailboxOptions}
+                  placeholder="sharedmailbox@example.com"
+                  emptyMessage="No saved or Entra matches found yet. Enter a valid UPN/email to use it directly."
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={submitEmailgisticsHelper}
+                  disabled={!canRunEmailgisticsHelper}
+                  className={buttonClass("primary", !canRunEmailgisticsHelper)}
+                >
+                  {runEmailgisticsHelperMutation.isPending ? "Running helper..." : "Run Emailgistics Helper"}
+                </button>
+                <span className="text-sm text-slate-500">
+                  This applies the mailbox permissions first, then runs the Emailgistics sync for the selected shared
+                  mailbox.
+                </span>
+              </div>
+
+              <EmailgisticsHelperResults
+                result={emailgisticsHelperResult}
+                isRunning={runEmailgisticsHelperMutation.isPending}
+                errorMessage={emailgisticsHelperFormError}
+              />
+            </section>
+          ) : null}
 
           <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">

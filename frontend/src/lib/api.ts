@@ -1497,6 +1497,33 @@ export interface DelegateMailboxJobStatus {
   events: OneDriveCopyJobEvent[];
 }
 
+export interface EmailgisticsHelperRequest {
+  user_mailbox: string;
+  shared_mailbox: string;
+}
+
+export interface EmailgisticsHelperStep {
+  key: "full_access" | "send_as" | "addin_group" | "sync_users";
+  label: string;
+  status: "pending" | "completed" | "already_present" | "failed";
+  message: string;
+}
+
+export interface EmailgisticsHelperStatus {
+  status: "completed" | "failed";
+  user_mailbox: string;
+  shared_mailbox: string;
+  resolved_user_display_name: string;
+  resolved_user_principal_name: string;
+  resolved_shared_display_name: string;
+  resolved_shared_principal_name: string;
+  addin_group_name: string;
+  note: string;
+  error: string;
+  sync_output: string;
+  steps: EmailgisticsHelperStep[];
+}
+
 export interface OneDriveCopyJobStatus {
   job_id: string;
   site_scope: string;
@@ -2993,6 +3020,10 @@ export const api = {
 
   clearFinishedDelegateMailboxJobs(): Promise<{ deleted_count: number }> {
     return postJSON<{ deleted_count: number }>("/api/tools/delegate-mailboxes/jobs/clear-finished", {});
+  },
+
+  runEmailgisticsHelper(body: EmailgisticsHelperRequest): Promise<EmailgisticsHelperStatus> {
+    return postJSON<EmailgisticsHelperStatus>("/api/tools/emailgistics-helper", body);
   },
 
   getDelegateMailboxJob(job_id: string): Promise<DelegateMailboxJobStatus> {

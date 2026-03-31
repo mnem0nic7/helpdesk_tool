@@ -44,6 +44,7 @@ SOP-Helpdesk
 
 # One-off scripts with hardcoded credentials
 pull_all_fields.py
+scripts/syncUsers/customerData.json
 
 # Docs containing secrets
 docs/plans/2026-03-03-helpdesk-dashboard-plan.md

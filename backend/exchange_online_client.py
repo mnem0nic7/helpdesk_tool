@@ -134,6 +134,8 @@ Connect-ExchangeOnline `
   -SkipLoadingFormatData `
   -CommandName @(
     'Get-Mailbox',
+    'Add-MailboxPermission',
+    'Add-RecipientPermission',
     'Get-EXOMailboxPermission',
     'Get-EXORecipientPermission',
     'Disconnect-ExchangeOnline'
@@ -246,6 +248,91 @@ $fullAccess = @(
 } | ConvertTo-Json -Depth 8 -Compress
             """.strip(),
             extra_env={"MAILBOX_IDENTITY": mailbox},
+            cancel_requested=cancel_requested,
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    def grant_full_access_permission(
+        self,
+        mailbox_identifier: str,
+        user_identifier: str,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        mailbox = str(mailbox_identifier or "").strip()
+        user = str(user_identifier or "").strip()
+        if not mailbox:
+            raise ExchangeOnlinePowerShellError("mailbox is required")
+        if not user:
+            raise ExchangeOnlinePowerShellError("user is required")
+        payload = self._run_script(
+            """
+$mailboxIdentity = $env:MAILBOX_IDENTITY
+$delegateUser = $env:DELEGATE_USER
+$existing = @(
+  Get-EXOMailboxPermission -Identity $mailboxIdentity -User $delegateUser -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.AccessRights -contains 'FullAccess' -and
+      $_.Deny -ne $true -and
+      $_.IsInherited -ne $true
+    }
+)
+if ($existing.Count -gt 0) {
+  [pscustomobject]@{
+    status = 'already_present'
+    message = "$delegateUser already has Full Access on $mailboxIdentity."
+  } | ConvertTo-Json -Depth 4 -Compress
+  return
+}
+Add-MailboxPermission -Identity $mailboxIdentity -User $delegateUser -AccessRights FullAccess -InheritanceType All -Confirm:$false | Out-Null
+[pscustomobject]@{
+  status = 'completed'
+  message = "Granted Full Access on $mailboxIdentity to $delegateUser."
+} | ConvertTo-Json -Depth 4 -Compress
+            """.strip(),
+            extra_env={"MAILBOX_IDENTITY": mailbox, "DELEGATE_USER": user},
+            cancel_requested=cancel_requested,
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    def grant_send_as_permission(
+        self,
+        mailbox_identifier: str,
+        user_identifier: str,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        mailbox = str(mailbox_identifier or "").strip()
+        user = str(user_identifier or "").strip()
+        if not mailbox:
+            raise ExchangeOnlinePowerShellError("mailbox is required")
+        if not user:
+            raise ExchangeOnlinePowerShellError("user is required")
+        payload = self._run_script(
+            """
+$mailboxIdentity = $env:MAILBOX_IDENTITY
+$delegateUser = $env:DELEGATE_USER
+$existing = @(
+  Get-EXORecipientPermission -Identity $mailboxIdentity -Trustee $delegateUser -ResultSize Unlimited -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.AccessRights -contains 'SendAs' -and
+      $_.Deny -ne $true
+    }
+)
+if ($existing.Count -gt 0) {
+  [pscustomobject]@{
+    status = 'already_present'
+    message = "$delegateUser already has Send As on $mailboxIdentity."
+  } | ConvertTo-Json -Depth 4 -Compress
+  return
+}
+Add-RecipientPermission -Identity $mailboxIdentity -Trustee $delegateUser -AccessRights SendAs -Confirm:$false | Out-Null
+[pscustomobject]@{
+  status = 'completed'
+  message = "Granted Send As on $mailboxIdentity to $delegateUser."
+} | ConvertTo-Json -Depth 4 -Compress
+            """.strip(),
+            extra_env={"MAILBOX_IDENTITY": mailbox, "DELEGATE_USER": user},
             cancel_requested=cancel_requested,
         )
         return payload if isinstance(payload, dict) else {}

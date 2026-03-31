@@ -893,6 +893,39 @@ class DelegateMailboxJobResponse(BaseModel):
     events: list[OneDriveCopyJobEventResponse] = Field(default_factory=list)
 
 
+class EmailgisticsHelperRequest(BaseModel):
+    """Request body for the Emailgistics Helper tool."""
+
+    user_mailbox: str = Field(min_length=3, max_length=320)
+    shared_mailbox: str = Field(min_length=3, max_length=320)
+
+
+class EmailgisticsHelperStepResponse(BaseModel):
+    """One step result returned by Emailgistics Helper."""
+
+    key: Literal["full_access", "send_as", "addin_group", "sync_users"]
+    label: str
+    status: Literal["pending", "completed", "already_present", "failed"]
+    message: str = ""
+
+
+class EmailgisticsHelperResponse(BaseModel):
+    """Result payload for one Emailgistics Helper execution."""
+
+    status: Literal["completed", "failed"]
+    user_mailbox: str
+    shared_mailbox: str
+    resolved_user_display_name: str = ""
+    resolved_user_principal_name: str = ""
+    resolved_shared_display_name: str = ""
+    resolved_shared_principal_name: str = ""
+    addin_group_name: str = ""
+    note: str = ""
+    error: str = ""
+    sync_output: str = ""
+    steps: list[EmailgisticsHelperStepResponse] = Field(default_factory=list)
+
+
 class OneDriveCopyJobResponse(BaseModel):
     """Status payload for one OneDrive copy background job."""
 

@@ -832,3 +832,57 @@ def test_cancel_delegate_mailbox_job_returns_finished_message(test_client, monke
 
     assert resp.status_code == 200
     assert resp.json() == {"cancelled": False, "message": "Mailbox delegate scan is already finished."}
+
+
+def test_emailgistics_helper_runs_for_admin_tools_users(test_client, monkeypatch):
+    import routes_tools
+
+    mock_service = MagicMock()
+    mock_service.run.return_value = {
+        "status": "completed",
+        "user_mailbox": "user@example.com",
+        "shared_mailbox": "shared@example.com",
+        "resolved_user_display_name": "User Example",
+        "resolved_user_principal_name": "user@example.com",
+        "resolved_shared_display_name": "Shared Example",
+        "resolved_shared_principal_name": "shared@example.com",
+        "addin_group_name": "Emailgistics_UserAddin",
+        "note": "Emailgistics Helper finished for user@example.com on shared@example.com.",
+        "error": "",
+        "sync_output": "Users have been successfully synced.",
+        "steps": [
+            {"key": "full_access", "label": "Grant Full Access", "status": "completed", "message": "ok"},
+            {"key": "send_as", "label": "Grant Send As", "status": "completed", "message": "ok"},
+            {"key": "addin_group", "label": "Add To Emailgistics_UserAddin", "status": "completed", "message": "ok"},
+            {"key": "sync_users", "label": "Run Emailgistics Sync", "status": "completed", "message": "ok"},
+        ],
+    }
+    monkeypatch.setattr(routes_tools, "emailgistics_helper_service", mock_service)
+
+    resp = test_client.post(
+        "/api/tools/emailgistics-helper",
+        headers={"host": "it-app.movedocs.com"},
+        json={"user_mailbox": "user@example.com", "shared_mailbox": "shared@example.com"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"
+    mock_service.run.assert_called_once_with(
+        user_mailbox="user@example.com",
+        shared_mailbox="shared@example.com",
+    )
+
+
+def test_emailgistics_helper_rejects_non_admin_users(test_client, monkeypatch):
+    import routes_tools
+
+    monkeypatch.setattr(routes_tools, "session_is_admin", lambda session: False)
+
+    resp = test_client.post(
+        "/api/tools/emailgistics-helper",
+        headers={"host": "it-app.movedocs.com"},
+        json={"user_mailbox": "user@example.com", "shared_mailbox": "shared@example.com"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Admin access is required for Emailgistics Helper"

@@ -20,6 +20,7 @@ const { mockApi } = vi.hoisted(() => ({
     getDelegateMailboxJob: vi.fn(),
     createDelegateMailboxJob: vi.fn(),
     cancelDelegateMailboxJob: vi.fn(),
+    runEmailgisticsHelper: vi.fn(),
   },
 }));
 
@@ -284,6 +285,45 @@ describe("ToolsPage", () => {
       cancelled: true,
       message: "Mailbox delegate scan cancelled.",
     });
+    mockApi.runEmailgisticsHelper.mockResolvedValue({
+      status: "completed",
+      user_mailbox: "helper-user@example.com",
+      shared_mailbox: "helper-shared@example.com",
+      resolved_user_display_name: "Helper User",
+      resolved_user_principal_name: "helper-user@example.com",
+      resolved_shared_display_name: "Helper Shared",
+      resolved_shared_principal_name: "helper-shared@example.com",
+      addin_group_name: "Emailgistics_UserAddin",
+      note: "Emailgistics Helper finished for helper-user@example.com on helper-shared@example.com.",
+      error: "",
+      sync_output: "Users have been successfully synced for helper-shared@example.com.",
+      steps: [
+        {
+          key: "full_access" as const,
+          label: "Grant Full Access",
+          status: "completed" as const,
+          message: "Granted Full Access on helper-shared@example.com to helper-user@example.com.",
+        },
+        {
+          key: "send_as" as const,
+          label: "Grant Send As",
+          status: "completed" as const,
+          message: "Granted Send As on helper-shared@example.com to helper-user@example.com.",
+        },
+        {
+          key: "addin_group" as const,
+          label: "Add To Emailgistics_UserAddin",
+          status: "already_present" as const,
+          message: "helper-user@example.com is already in Emailgistics_UserAddin.",
+        },
+        {
+          key: "sync_users" as const,
+          label: "Run Emailgistics Sync",
+          status: "completed" as const,
+          message: "Ran Emailgistics sync for helper-shared@example.com.",
+        },
+      ],
+    });
     mockApi.createOneDriveCopyJob.mockResolvedValue({
       ...baseJob,
       status: "queued",
@@ -301,6 +341,7 @@ describe("ToolsPage", () => {
     expect(await screen.findByText("Copy a full OneDrive to another user")).toBeInTheDocument();
     expect(screen.getByText("List mailbox delegate access for a mailbox")).toBeInTheDocument();
     expect(screen.getByText("Find mailboxes where a user has delegate access")).toBeInTheDocument();
+    expect(screen.getByText("Grant mailbox access and sync Emailgistics")).toBeInTheDocument();
     expect(screen.getByText("List Inbox rules for a provided mailbox")).toBeInTheDocument();
     expect(screen.getByText("Recent OneDrive copy jobs")).toBeInTheDocument();
     expect(screen.getByText("Recent delegate scan jobs")).toBeInTheDocument();
@@ -414,6 +455,34 @@ describe("ToolsPage", () => {
     });
   });
 
+  it("runs Emailgistics Helper for admins", async () => {
+    render(<ToolsPage />);
+
+    await screen.findByText("Grant mailbox access and sync Emailgistics");
+
+    const userInput = screen.getByLabelText("User mailbox UPN or email");
+    fireEvent.focus(userInput);
+    fireEvent.change(userInput, { target: { value: "helper-user@example.com" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Use and save "helper-user@example.com"/i }));
+
+    const sharedMailboxInput = screen.getByLabelText("Shared mailbox UPN or email");
+    fireEvent.focus(sharedMailboxInput);
+    fireEvent.change(sharedMailboxInput, { target: { value: "helper-shared@example.com" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Use and save "helper-shared@example.com"/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Run Emailgistics Helper" }));
+
+    await waitFor(() => {
+      expect(mockApi.runEmailgisticsHelper).toHaveBeenCalledWith({
+        user_mailbox: "helper-user@example.com",
+        shared_mailbox: "helper-shared@example.com",
+      });
+    });
+
+    expect(await screen.findByText("Helper Shared")).toBeInTheDocument();
+    expect(screen.getByText("Users have been successfully synced for helper-shared@example.com.")).toBeInTheDocument();
+  });
+
   it("renders tools for signed-in users even if the legacy tools-access flag is false", async () => {
     mockApi.getMe.mockResolvedValueOnce({
       email: "someone@example.com",
@@ -427,6 +496,21 @@ describe("ToolsPage", () => {
 
     expect(await screen.findByText("Copy a full OneDrive to another user")).toBeInTheDocument();
     expect(screen.queryByText("Tools access is limited")).not.toBeInTheDocument();
+  });
+
+  it("hides Emailgistics Helper for non-admin users", async () => {
+    mockApi.getMe.mockResolvedValueOnce({
+      email: "someone@example.com",
+      name: "Someone",
+      is_admin: false,
+      can_manage_users: false,
+      can_access_tools: true,
+    });
+
+    render(<ToolsPage />);
+
+    expect(await screen.findByText("Copy a full OneDrive to another user")).toBeInTheDocument();
+    expect(screen.queryByText("Grant mailbox access and sync Emailgistics")).not.toBeInTheDocument();
   });
 
   it("clears finished OneDrive copy jobs from the history card", async () => {
