@@ -8,9 +8,10 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from azure_client import AzureApiError, AzureClient
 from config import (
@@ -24,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 class ExchangeOnlinePowerShellError(RuntimeError):
     """Raised when Exchange Online PowerShell execution fails."""
+
+
+class ExchangeOnlinePowerShellCancelled(ExchangeOnlinePowerShellError):
+    """Raised when Exchange Online PowerShell work is cancelled by the user."""
 
 
 def _organization_domains(payload: dict[str, Any]) -> list[str]:
@@ -99,6 +104,7 @@ class ExchangeOnlinePowerShellClient:
         *,
         extra_env: dict[str, str] | None = None,
         timeout_seconds: int | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> Any:
         if not self.azure_client.configured:
             raise ExchangeOnlinePowerShellError("Exchange Online PowerShell requires configured Entra app credentials.")
@@ -140,23 +146,39 @@ finally {{
             script_path = Path(handle.name)
         timeout_seconds = max(30, int(timeout_seconds or self.timeout_seconds or 240))
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 [self.pwsh_path, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(script_path)],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout_seconds,
                 env=env,
             )
-        except subprocess.TimeoutExpired as exc:
-            raise ExchangeOnlinePowerShellError(
-                f"Exchange Online PowerShell timed out after {timeout_seconds} seconds."
-            ) from exc
+            deadline = time.monotonic() + timeout_seconds
+            while process.poll() is None:
+                if cancel_requested and cancel_requested():
+                    process.kill()
+                    try:
+                        process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    raise ExchangeOnlinePowerShellCancelled("Exchange Online PowerShell cancelled by user.")
+                if time.monotonic() >= deadline:
+                    process.kill()
+                    try:
+                        process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    raise ExchangeOnlinePowerShellError(
+                        f"Exchange Online PowerShell timed out after {timeout_seconds} seconds."
+                    )
+                time.sleep(0.25)
+            stdout, stderr = process.communicate()
         finally:
             script_path.unlink(missing_ok=True)
 
-        stdout = (completed.stdout or "").strip()
-        stderr = (completed.stderr or "").strip()
-        if completed.returncode != 0:
+        stdout = (stdout or "").strip()
+        stderr = (stderr or "").strip()
+        if process.returncode != 0:
             message = stderr or stdout or "Unknown Exchange Online PowerShell failure."
             raise ExchangeOnlinePowerShellError(message[:4000])
         if not stdout:
@@ -167,7 +189,12 @@ finally {{
             logger.warning("Unexpected Exchange Online PowerShell output: %s", stdout[:1000])
             raise ExchangeOnlinePowerShellError("Exchange Online PowerShell returned non-JSON output.") from exc
 
-    def get_mailbox_delegate_permissions(self, mailbox_identifier: str) -> dict[str, Any]:
+    def get_mailbox_delegate_permissions(
+        self,
+        mailbox_identifier: str,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         mailbox = str(mailbox_identifier or "").strip()
         if not mailbox:
             raise ExchangeOnlinePowerShellError("mailbox is required")
@@ -207,16 +234,22 @@ $fullAccess = @(
   send_as = $sendAs
   full_access = $fullAccess
 } | ConvertTo-Json -Depth 8 -Compress
-""".strip(),
+            """.strip(),
             extra_env={"MAILBOX_IDENTITY": mailbox},
+            cancel_requested=cancel_requested,
         )
         return payload if isinstance(payload, dict) else {}
 
-    def get_delegate_mailboxes_for_user(self, user_identifier: str) -> dict[str, Any]:
+    def get_send_as_mailboxes_for_user(
+        self,
+        user_identifier: str,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         user = str(user_identifier or "").strip()
         if not user:
             raise ExchangeOnlinePowerShellError("user is required")
-        send_as_payload = self._run_script(
+        payload = self._run_script(
             """
 $delegateUser = $env:DELEGATE_USER
 $mailboxes = @(
@@ -238,7 +271,19 @@ $mailboxes = @(
 } | ConvertTo-Json -Depth 8 -Compress
 """.strip(),
             extra_env={"DELEGATE_USER": user},
+            cancel_requested=cancel_requested,
         )
+        return payload if isinstance(payload, dict) else {}
+
+    def get_full_access_mailboxes_for_user(
+        self,
+        user_identifier: str,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        user = str(user_identifier or "").strip()
+        if not user:
+            raise ExchangeOnlinePowerShellError("user is required")
         payload = self._run_script(
             """
 $delegateUser = $env:DELEGATE_USER
@@ -322,7 +367,21 @@ if ($unexpectedFullAccessErrors.Count -gt 0) {
 """.strip(),
             extra_env={"DELEGATE_USER": user},
             timeout_seconds=max(EXCHANGE_DELEGATE_SCAN_TIMEOUT_SECONDS, int(self.timeout_seconds or 0)),
+            cancel_requested=cancel_requested,
         )
+        return payload if isinstance(payload, dict) else {}
+
+    def get_delegate_mailboxes_for_user(
+        self,
+        user_identifier: str,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        user = str(user_identifier or "").strip()
+        if not user:
+            raise ExchangeOnlinePowerShellError("user is required")
+        send_as_payload = self.get_send_as_mailboxes_for_user(user, cancel_requested=cancel_requested)
+        payload = self.get_full_access_mailboxes_for_user(user, cancel_requested=cancel_requested)
         send_as_mailboxes = send_as_payload.get("mailboxes") if isinstance(send_as_payload, dict) else []
         full_access_mailboxes = payload.get("mailboxes") if isinstance(payload, dict) else []
         return {

@@ -712,3 +712,92 @@ def test_delegate_mailbox_job_detail_rejects_other_users(test_client, monkeypatc
 
     assert resp.status_code == 403
     assert resp.json()["detail"] == "You do not have access to this mailbox delegate scan job"
+
+
+def test_cancel_delegate_mailbox_job_for_current_user(test_client, monkeypatch):
+    import routes_tools
+
+    mock_manager = MagicMock()
+    mock_manager.get_job.return_value = {
+        "job_id": "delegate-job-1",
+        "site_scope": "primary",
+        "status": "running",
+        "phase": "scanning_exchange_permissions",
+        "requested_by_email": "test@example.com",
+        "requested_by_name": "Test User",
+        "user": "delegate@example.com",
+        "display_name": "Delegate User",
+        "principal_name": "delegate@example.com",
+        "primary_address": "delegate@example.com",
+        "provider_enabled": True,
+        "supported_permission_types": ["send_on_behalf", "send_as", "full_access"],
+        "permission_counts": {},
+        "note": "",
+        "mailbox_count": 0,
+        "scanned_mailbox_count": 15,
+        "mailboxes": [],
+        "requested_at": "2026-03-31T18:00:00Z",
+        "started_at": "2026-03-31T18:00:05Z",
+        "completed_at": None,
+        "progress_current": 3,
+        "progress_total": 4,
+        "progress_message": "Checking Exchange permissions for Send As and Full Access",
+        "error": None,
+        "events": [],
+    }
+    mock_manager.job_belongs_to.return_value = True
+    mock_manager.cancel_job.return_value = True
+    monkeypatch.setattr(routes_tools, "mailbox_delegate_scan_jobs", mock_manager)
+
+    resp = test_client.post(
+        "/api/tools/delegate-mailboxes/jobs/delegate-job-1/cancel",
+        headers={"host": "it-app.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"cancelled": True, "message": "Mailbox delegate scan cancelled."}
+    mock_manager.cancel_job.assert_called_once_with("delegate-job-1")
+
+
+def test_cancel_delegate_mailbox_job_returns_finished_message(test_client, monkeypatch):
+    import routes_tools
+
+    mock_manager = MagicMock()
+    mock_manager.get_job.return_value = {
+        "job_id": "delegate-job-1",
+        "site_scope": "primary",
+        "status": "completed",
+        "phase": "completed",
+        "requested_by_email": "test@example.com",
+        "requested_by_name": "Test User",
+        "user": "delegate@example.com",
+        "display_name": "Delegate User",
+        "principal_name": "delegate@example.com",
+        "primary_address": "delegate@example.com",
+        "provider_enabled": True,
+        "supported_permission_types": ["send_on_behalf", "send_as", "full_access"],
+        "permission_counts": {},
+        "note": "",
+        "mailbox_count": 1,
+        "scanned_mailbox_count": 15,
+        "mailboxes": [],
+        "requested_at": "2026-03-31T18:00:00Z",
+        "started_at": "2026-03-31T18:00:05Z",
+        "completed_at": "2026-03-31T18:05:00Z",
+        "progress_current": 4,
+        "progress_total": 4,
+        "progress_message": "Mailbox delegate scan completed",
+        "error": None,
+        "events": [],
+    }
+    mock_manager.job_belongs_to.return_value = True
+    mock_manager.cancel_job.return_value = False
+    monkeypatch.setattr(routes_tools, "mailbox_delegate_scan_jobs", mock_manager)
+
+    resp = test_client.post(
+        "/api/tools/delegate-mailboxes/jobs/delegate-job-1/cancel",
+        headers={"host": "it-app.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"cancelled": False, "message": "Mailbox delegate scan is already finished."}

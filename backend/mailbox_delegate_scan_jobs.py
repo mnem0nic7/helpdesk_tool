@@ -16,11 +16,11 @@ from azure_client import AzureClient
 from config import DATA_DIR, MAILBOX_DELEGATE_SCAN_JOB_RETENTION_DAYS
 from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
-from user_admin_providers import MailboxAdminProvider, UserAdminProviderError
+from user_admin_providers import MailboxAdminProvider, UserAdminProviderCancelled, UserAdminProviderError
 
 logger = logging.getLogger(__name__)
 
-_STATUS_VALUES = {"queued", "running", "completed", "failed"}
+_STATUS_VALUES = {"queued", "running", "completed", "failed", "cancelled"}
 _PHASE_VALUES = {
     "queued",
     "resolving_user",
@@ -29,6 +29,7 @@ _PHASE_VALUES = {
     "merging_results",
     "completed",
     "failed",
+    "cancelled",
 }
 _PERMISSION_TYPES = ["send_on_behalf", "send_as", "full_access"]
 _EVENT_LOG_LIMIT = 100
@@ -98,7 +99,8 @@ class MailboxDelegateScanJobManager:
         self._db_path = db_path or os.path.join(DATA_DIR, "mailbox_delegate_scan_jobs.db")
         self._use_postgres = postgres_enabled() and db_path is None
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._cancel_events: dict[str, threading.Event] = {}
         self._bg_task: asyncio.Task[None] | None = None
         self._provider_factory = provider_factory or (lambda: MailboxAdminProvider(AzureClient()))
         self._init_db()
@@ -273,14 +275,30 @@ class MailboxDelegateScanJobManager:
             "events": self.get_job_events(job_id) if include_events else [],
         }
 
-    def _update_job(self, job_id: str, **fields: Any) -> None:
+    def _cancel_event_for_job(self, job_id: str) -> threading.Event:
+        with self._lock:
+            return self._cancel_events.setdefault(job_id, threading.Event())
+
+    def _is_cancel_requested(self, job_id: str) -> bool:
+        with self._lock:
+            event = self._cancel_events.get(job_id)
+        return bool(event and event.is_set())
+
+    def _clear_cancel_request(self, job_id: str) -> None:
+        with self._lock:
+            self._cancel_events.pop(job_id, None)
+
+    def _update_job(self, job_id: str, *, skip_if_cancelled: bool = False, **fields: Any) -> None:
         if not fields:
             return
         placeholder = self._placeholder()
         assignments = ", ".join(f"{key} = {placeholder}" for key in fields)
         values = list(fields.values()) + [job_id]
+        query = f"UPDATE mailbox_delegate_scan_jobs SET {assignments} WHERE job_id = {placeholder}"
+        if skip_if_cancelled:
+            query += " AND status <> 'cancelled'"
         with self._conn() as conn:
-            conn.execute(f"UPDATE mailbox_delegate_scan_jobs SET {assignments} WHERE job_id = {placeholder}", values)
+            conn.execute(query, values)
             conn.commit()
 
     def create_job(
@@ -360,6 +378,31 @@ class MailboxDelegateScanJobManager:
             "error": None,
             "events": [],
         }
+
+    def cancel_job(self, job_id: str) -> bool:
+        job = self.get_job(job_id)
+        if not job:
+            return False
+        if str(job.get("status") or "") in {"completed", "failed", "cancelled"}:
+            return False
+
+        self._cancel_event_for_job(job_id).set()
+        cancellation_message = (
+            "Mailbox delegate scan cancelled before it started."
+            if str(job.get("status") or "") == "queued"
+            else "Mailbox delegate scan cancelled by user. Stopping the current Exchange query."
+        )
+        self._update_job(
+            job_id,
+            status="cancelled",
+            phase="cancelled",
+            completed_at=_utcnow().isoformat(),
+            note="Mailbox delegate scan cancelled by user.",
+            progress_message=cancellation_message,
+            error="",
+        )
+        self._append_event(job_id, "warning", cancellation_message)
+        return True
 
     def get_job(self, job_id: str, *, include_events: bool = False) -> dict[str, Any] | None:
         placeholder = self._placeholder()
@@ -466,7 +509,15 @@ class MailboxDelegateScanJobManager:
                     (_utcnow().isoformat(), job_id),
                 )
                 conn.commit()
+            self._clear_cancel_request(job_id)
             return self.get_job(job_id)
+
+    def _raise_if_cancel_requested(self, job_id: str) -> None:
+        if self._is_cancel_requested(job_id):
+            raise UserAdminProviderCancelled("Mailbox delegate scan cancelled by user.")
+        job = self.get_job(job_id)
+        if job and str(job.get("status") or "") == "cancelled":
+            raise UserAdminProviderCancelled("Mailbox delegate scan cancelled by user.")
 
     def _process_job(self, job_id: str) -> None:
         job = self.get_job(job_id)
@@ -479,6 +530,8 @@ class MailboxDelegateScanJobManager:
         def progress_callback(payload: dict[str, Any]) -> None:
             nonlocal last_phase
             if not isinstance(payload, dict):
+                return
+            if self._is_cancel_requested(job_id):
                 return
             fields: dict[str, Any] = {}
             phase = str(payload.get("phase") or "").strip()
@@ -494,21 +547,28 @@ class MailboxDelegateScanJobManager:
             if "scanned_mailbox_count" in payload:
                 fields["scanned_mailbox_count"] = int(payload.get("scanned_mailbox_count") or 0)
             if fields:
-                self._update_job(job_id, **fields)
+                self._update_job(job_id, skip_if_cancelled=True, **fields)
             if phase and phase != last_phase and message:
                 last_phase = phase
                 self._append_event(job_id, "info", message)
 
         try:
             self._append_event(job_id, "info", f"Starting delegate mailbox scan for {user}.")
+            self._raise_if_cancel_requested(job_id)
             provider = self._provider_factory()
-            result = provider.list_delegate_mailboxes_for_user(user, progress_callback=progress_callback)
+            result = provider.list_delegate_mailboxes_for_user(
+                user,
+                progress_callback=progress_callback,
+                cancel_requested=lambda: self._is_cancel_requested(job_id),
+            )
+            self._raise_if_cancel_requested(job_id)
             permission_counts = result.get("permission_counts") if isinstance(result.get("permission_counts"), dict) else {}
             mailboxes = result.get("mailboxes") if isinstance(result.get("mailboxes"), list) else []
             note = str(result.get("note") or "").strip()
             completed_message = note or "Mailbox delegate scan completed."
             self._update_job(
                 job_id,
+                skip_if_cancelled=True,
                 status="completed",
                 phase="completed",
                 display_name=str(result.get("display_name") or ""),
@@ -531,18 +591,37 @@ class MailboxDelegateScanJobManager:
                 error="",
             )
             self._append_event(job_id, "info", completed_message)
+        except UserAdminProviderCancelled:
+            latest = self.get_job(job_id)
+            if latest and str(latest.get("status") or "") != "cancelled":
+                self._update_job(
+                    job_id,
+                    status="cancelled",
+                    phase="cancelled",
+                    completed_at=_utcnow().isoformat(),
+                    note="Mailbox delegate scan cancelled by user.",
+                    progress_message="Mailbox delegate scan cancelled by user.",
+                    error="",
+                )
+                self._append_event(job_id, "warning", "Mailbox delegate scan cancelled by user.")
         except Exception as exc:
+            latest = self.get_job(job_id)
+            if latest and str(latest.get("status") or "") == "cancelled":
+                return
             logger.exception("Mailbox delegate scan job %s failed", job_id)
             friendly_error = _friendly_delegate_error(str(exc))
             self._append_event(job_id, "error", friendly_error)
             self._update_job(
                 job_id,
+                skip_if_cancelled=True,
                 status="failed",
                 phase="failed",
                 completed_at=_utcnow().isoformat(),
                 progress_message="Mailbox delegate scan failed",
                 error=friendly_error,
             )
+        finally:
+            self._clear_cancel_request(job_id)
 
     async def _background_loop(self) -> None:
         while True:

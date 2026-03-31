@@ -17,6 +17,7 @@ const { mockApi } = vi.hoisted(() => ({
     listDelegateMailboxJobs: vi.fn(),
     getDelegateMailboxJob: vi.fn(),
     createDelegateMailboxJob: vi.fn(),
+    cancelDelegateMailboxJob: vi.fn(),
   },
 }));
 
@@ -275,6 +276,10 @@ describe("ToolsPage", () => {
       mailboxes: [],
       events: [],
     });
+    mockApi.cancelDelegateMailboxJob.mockResolvedValue({
+      cancelled: true,
+      message: "Mailbox delegate scan cancelled.",
+    });
     mockApi.createOneDriveCopyJob.mockResolvedValue({
       ...baseJob,
       status: "queued",
@@ -390,6 +395,19 @@ describe("ToolsPage", () => {
     expect(await screen.findByText("Scanned 10 mailboxes for Send on behalf, Send As, and Full Access.")).toBeInTheDocument();
     expect(screen.getAllByText("Shared Mailbox").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Send As").length).toBeGreaterThan(0);
+  });
+
+  it("cancels the active delegate mailbox scan", async () => {
+    render(<ToolsPage />);
+
+    await screen.findByText("Find mailboxes where a user has delegate access");
+    await screen.findByText("Checking Exchange permissions for Send As and Full Access");
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    await waitFor(() => {
+      expect(mockApi.cancelDelegateMailboxJob).toHaveBeenCalledWith("delegate-job-1");
+    });
   });
 
   it("renders tools for signed-in users even if the legacy tools-access flag is false", async () => {

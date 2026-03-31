@@ -145,7 +145,8 @@ class FakeMailboxDelegatesClient:
 
 
 class FakeExchangePowerShellMailboxDelegates:
-    def get_mailbox_delegate_permissions(self, mailbox_identifier: str):
+    def get_mailbox_delegate_permissions(self, mailbox_identifier: str, *, cancel_requested=None):
+        assert cancel_requested is None
         assert mailbox_identifier == "shared@example.com"
         return {
             "send_as": [
@@ -216,7 +217,8 @@ class FakeDelegateMailboxScanClient:
 
 
 class FakeExchangePowerShellUserMatches:
-    def get_send_as_mailboxes_for_user(self, user_identifier: str):
+    def get_send_as_mailboxes_for_user(self, user_identifier: str, *, cancel_requested=None):
+        assert cancel_requested is None
         assert user_identifier == "delegate@example.com"
         return {
             "mailboxes": [
@@ -237,7 +239,8 @@ class FakeExchangePowerShellUserMatches:
             ],
         }
 
-    def get_full_access_mailboxes_for_user(self, user_identifier: str):
+    def get_full_access_mailboxes_for_user(self, user_identifier: str, *, cancel_requested=None):
+        assert cancel_requested is None
         assert user_identifier == "delegate@example.com"
         return {
             "mailbox_count_scanned": 7,
@@ -254,7 +257,8 @@ class FakeExchangePowerShellUserMatches:
 
 
 class FakeExchangePowerShellUserMatchesWithFullAccessTimeout(FakeExchangePowerShellUserMatches):
-    def get_full_access_mailboxes_for_user(self, user_identifier: str):
+    def get_full_access_mailboxes_for_user(self, user_identifier: str, *, cancel_requested=None):
+        assert cancel_requested is None
         assert user_identifier == "delegate@example.com"
         from exchange_online_client import ExchangeOnlinePowerShellError
 

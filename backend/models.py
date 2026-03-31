@@ -859,8 +859,17 @@ class DelegateMailboxJobResponse(BaseModel):
 
     job_id: str
     site_scope: str
-    status: Literal["queued", "running", "completed", "failed"]
-    phase: Literal["queued", "resolving_user", "scanning_send_on_behalf", "scanning_exchange_permissions", "merging_results", "completed", "failed"]
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    phase: Literal[
+        "queued",
+        "resolving_user",
+        "scanning_send_on_behalf",
+        "scanning_exchange_permissions",
+        "merging_results",
+        "completed",
+        "failed",
+        "cancelled",
+    ]
     requested_by_email: str
     requested_by_name: str
     user: str

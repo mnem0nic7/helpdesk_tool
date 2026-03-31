@@ -22,7 +22,7 @@ const EXCLUDED_ROOT_FOLDERS = [
 
 const UPN_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const DELEGATE_PERMISSION_TYPES = ["send_on_behalf", "send_as", "full_access"] as const;
-type JobStatusTone = "queued" | "running" | "completed" | "failed";
+type JobStatusTone = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 type PickerOptionSource = OneDriveCopyUserOption["source"] | "manual";
 
@@ -51,6 +51,8 @@ function statusTone(status: JobStatusTone): string {
       return "bg-emerald-100 text-emerald-700";
     case "failed":
       return "bg-red-100 text-red-700";
+    case "cancelled":
+      return "bg-amber-100 text-amber-800";
     case "running":
       return "bg-amber-100 text-amber-700";
     default:
@@ -87,6 +89,8 @@ function delegateScanPhaseLabel(phase: DelegateMailboxJobStatus["phase"]): strin
       return "Completed";
     case "failed":
       return "Failed";
+    case "cancelled":
+      return "Cancelled";
     default:
       return "Queued";
   }
@@ -494,12 +498,16 @@ function DelegateMailboxesResults({
   errorMessage,
   onRefresh,
   isRefreshing,
+  onCancel,
+  isCancelling,
 }: {
   job: DelegateMailboxJobStatus | undefined;
   isLoading: boolean;
   errorMessage: string;
   onRefresh: () => void;
   isRefreshing: boolean;
+  onCancel: () => void;
+  isCancelling: boolean;
 }) {
   if (isLoading) {
     return (
@@ -539,6 +547,11 @@ function DelegateMailboxesResults({
           <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700">
             {delegateScanPhaseLabel(job.phase)}
           </span>
+          {isRunning ? (
+            <button type="button" onClick={onCancel} className={buttonClass("secondary", isCancelling)}>
+              {isCancelling ? "Stopping..." : "Stop"}
+            </button>
+          ) : null}
           <button type="button" onClick={onRefresh} className={buttonClass("secondary", isRefreshing)}>
             Refresh
           </button>
@@ -595,6 +608,10 @@ function DelegateMailboxesResults({
       {isRunning ? (
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
           This scan keeps running on the server even if you leave the page. Come back later and the latest running job or your most recent finished job will still be here.
+        </div>
+      ) : job.status === "cancelled" ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-6 text-sm text-amber-800">
+          This scan was cancelled. You can queue another delegate mailbox search whenever you are ready.
         </div>
       ) : null}
 
@@ -1072,6 +1089,17 @@ export default function ToolsPage() {
       setDelegateUserFormError(error instanceof Error ? error.message : "Failed to queue the delegate mailbox scan.");
     },
   });
+  const cancelDelegateMailboxJobMutation = useMutation({
+    mutationFn: (jobId: string) => api.cancelDelegateMailboxJob(jobId),
+    onSuccess: async (_, jobId) => {
+      setDelegateUserFormError("");
+      await queryClient.invalidateQueries({ queryKey: ["delegate-mailboxes", "jobs"] });
+      await queryClient.invalidateQueries({ queryKey: ["delegate-mailboxes", "jobs", jobId] });
+    },
+    onError: (error) => {
+      setDelegateUserFormError(error instanceof Error ? error.message : "Failed to cancel the delegate mailbox scan.");
+    },
+  });
   const canQueueJob =
     !!selectedSource &&
     !!selectedDestination &&
@@ -1452,6 +1480,12 @@ export default function ToolsPage() {
                 void activeDelegateMailboxJobQuery.refetch();
               }}
               isRefreshing={delegateMailboxJobsQuery.isFetching || activeDelegateMailboxJobQuery.isFetching}
+              onCancel={() => {
+                if (!activeDelegateMailboxJobQuery.data) return;
+                setDelegateUserFormError("");
+                cancelDelegateMailboxJobMutation.mutate(activeDelegateMailboxJobQuery.data.job_id);
+              }}
+              isCancelling={cancelDelegateMailboxJobMutation.isPending}
             />
           </section>
 

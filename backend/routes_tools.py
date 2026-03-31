@@ -301,3 +301,15 @@ def get_delegate_mailbox_job(
 ) -> DelegateMailboxJobResponse:
     job = _ensure_delegate_scan_job_access(job_id, session)
     return DelegateMailboxJobResponse.model_validate(job)
+
+
+@router.post("/delegate-mailboxes/jobs/{job_id}/cancel")
+def cancel_delegate_mailbox_job(
+    job_id: str,
+    session: dict[str, Any] = Depends(_require_tools_session),
+) -> dict[str, Any]:
+    _ensure_delegate_scan_job_access(job_id, session)
+    cancelled = mailbox_delegate_scan_jobs.cancel_job(job_id)
+    if cancelled:
+        return {"cancelled": True, "message": "Mailbox delegate scan cancelled."}
+    return {"cancelled": False, "message": "Mailbox delegate scan is already finished."}

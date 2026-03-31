@@ -1472,8 +1472,8 @@ export interface DelegateMailboxJobRequest {
 export interface DelegateMailboxJobStatus {
   job_id: string;
   site_scope: string;
-  status: "queued" | "running" | "completed" | "failed";
-  phase: "queued" | "resolving_user" | "scanning_send_on_behalf" | "scanning_exchange_permissions" | "merging_results" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  phase: "queued" | "resolving_user" | "scanning_send_on_behalf" | "scanning_exchange_permissions" | "merging_results" | "completed" | "failed" | "cancelled";
   requested_by_email: string;
   requested_by_name: string;
   user: string;
@@ -2989,6 +2989,13 @@ export const api = {
 
   getDelegateMailboxJob(job_id: string): Promise<DelegateMailboxJobStatus> {
     return fetchJSON<DelegateMailboxJobStatus>(`/api/tools/delegate-mailboxes/jobs/${encodeURIComponent(job_id)}`);
+  },
+
+  cancelDelegateMailboxJob(job_id: string): Promise<{ cancelled: boolean; message?: string }> {
+    return postJSON<{ cancelled: boolean; message?: string }>(
+      `/api/tools/delegate-mailboxes/jobs/${encodeURIComponent(job_id)}/cancel`,
+      {},
+    );
   },
 
   getAzureGroups(search = ""): Promise<AzureDirectoryObject[]> {

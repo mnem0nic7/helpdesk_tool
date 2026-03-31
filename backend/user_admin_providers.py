@@ -11,7 +11,11 @@ from urllib.parse import quote
 
 from azure_cache import azure_cache
 from azure_client import AzureApiError, AzureClient
-from exchange_online_client import ExchangeOnlinePowerShellClient, ExchangeOnlinePowerShellError
+from exchange_online_client import (
+    ExchangeOnlinePowerShellCancelled,
+    ExchangeOnlinePowerShellClient,
+    ExchangeOnlinePowerShellError,
+)
 from models import UserAdminActionType
 
 logger = logging.getLogger(__name__)
@@ -89,6 +93,10 @@ class UserAdminProviderError(RuntimeError):
         self.retry_after_seconds = retry_after_seconds
 
 
+class UserAdminProviderCancelled(UserAdminProviderError):
+    """Raised when a long-running provider operation is cancelled by the user."""
+
+
 def _directory_label(item: dict[str, Any]) -> str:
     if item.get("onPremisesDomainName"):
         return str(item.get("onPremisesDomainName"))
@@ -105,6 +113,21 @@ def _safe_graph_call(fn, *args, **kwargs):
             str(exc),
             retry_after_seconds=exc.retry_after_seconds(),
         ) from exc
+
+
+def _cancel_requested(cancel_requested: Callable[[], bool] | None) -> bool:
+    if not cancel_requested:
+        return False
+    try:
+        return bool(cancel_requested())
+    except Exception:
+        logger.warning("Mailbox delegate cancellation check failed", exc_info=True)
+        return False
+
+
+def _raise_if_cancel_requested(cancel_requested: Callable[[], bool] | None) -> None:
+    if _cancel_requested(cancel_requested):
+        raise UserAdminProviderCancelled("Mailbox delegate scan cancelled by user.")
 
 
 def _compact_list(values: list[str] | None) -> list[str]:
@@ -1147,31 +1170,87 @@ class MailboxAdminProvider:
             "rules": rules,
         }
 
-    def _exchange_delegate_permissions_for_mailbox(self, mailbox_identifier: str) -> dict[str, Any]:
+    def _exchange_delegate_permissions_for_mailbox(
+        self,
+        mailbox_identifier: str,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         try:
-            return self.exchange_powershell.get_mailbox_delegate_permissions(mailbox_identifier) if self.exchange_powershell else {}
+            return (
+                self.exchange_powershell.get_mailbox_delegate_permissions(
+                    mailbox_identifier,
+                    cancel_requested=cancel_requested,
+                )
+                if self.exchange_powershell
+                else {}
+            )
+        except ExchangeOnlinePowerShellCancelled as exc:
+            raise UserAdminProviderCancelled(str(exc)) from exc
         except ExchangeOnlinePowerShellError as exc:
             raise UserAdminProviderError(str(exc)) from exc
 
-    def _exchange_delegate_mailboxes_for_user(self, user_identifier: str) -> dict[str, Any]:
+    def _exchange_delegate_mailboxes_for_user(
+        self,
+        user_identifier: str,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         try:
-            return self.exchange_powershell.get_delegate_mailboxes_for_user(user_identifier) if self.exchange_powershell else {}
+            return (
+                self.exchange_powershell.get_delegate_mailboxes_for_user(
+                    user_identifier,
+                    cancel_requested=cancel_requested,
+                )
+                if self.exchange_powershell
+                else {}
+            )
+        except ExchangeOnlinePowerShellCancelled as exc:
+            raise UserAdminProviderCancelled(str(exc)) from exc
         except ExchangeOnlinePowerShellError as exc:
             raise UserAdminProviderError(str(exc)) from exc
 
-    def _exchange_send_as_mailboxes_for_user(self, user_identifier: str) -> dict[str, Any]:
+    def _exchange_send_as_mailboxes_for_user(
+        self,
+        user_identifier: str,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         try:
-            return self.exchange_powershell.get_send_as_mailboxes_for_user(user_identifier) if self.exchange_powershell else {}
+            return (
+                self.exchange_powershell.get_send_as_mailboxes_for_user(
+                    user_identifier,
+                    cancel_requested=cancel_requested,
+                )
+                if self.exchange_powershell
+                else {}
+            )
         except AttributeError:
-            return self._exchange_delegate_mailboxes_for_user(user_identifier)
+            return self._exchange_delegate_mailboxes_for_user(user_identifier, cancel_requested=cancel_requested)
+        except ExchangeOnlinePowerShellCancelled as exc:
+            raise UserAdminProviderCancelled(str(exc)) from exc
         except ExchangeOnlinePowerShellError as exc:
             raise UserAdminProviderError(str(exc)) from exc
 
-    def _exchange_full_access_mailboxes_for_user(self, user_identifier: str) -> dict[str, Any]:
+    def _exchange_full_access_mailboxes_for_user(
+        self,
+        user_identifier: str,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         try:
-            return self.exchange_powershell.get_full_access_mailboxes_for_user(user_identifier) if self.exchange_powershell else {}
+            return (
+                self.exchange_powershell.get_full_access_mailboxes_for_user(
+                    user_identifier,
+                    cancel_requested=cancel_requested,
+                )
+                if self.exchange_powershell
+                else {}
+            )
         except AttributeError:
-            return self._exchange_delegate_mailboxes_for_user(user_identifier)
+            return self._exchange_delegate_mailboxes_for_user(user_identifier, cancel_requested=cancel_requested)
+        except ExchangeOnlinePowerShellCancelled as exc:
+            raise UserAdminProviderCancelled(str(exc)) from exc
         except ExchangeOnlinePowerShellError as exc:
             raise UserAdminProviderError(str(exc)) from exc
 
@@ -1262,10 +1341,12 @@ class MailboxAdminProvider:
         user_identifier: str,
         *,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         user = str(user_identifier or "").strip()
         if not user:
             raise UserAdminProviderError("user is required")
+        _raise_if_cancel_requested(cancel_requested)
         if not self.enabled:
             return {
                 "user": user,
@@ -1306,6 +1387,7 @@ class MailboxAdminProvider:
             resolved_principal_name = str(user_row.get("userPrincipalName") or user).strip() or user
             resolved_primary_address = str(user_row.get("mail") or resolved_principal_name or user).strip() or user
 
+        _raise_if_cancel_requested(cancel_requested)
         rows = _safe_graph_call(
             self.client.exchange_admin_paged_request,
             "Mailbox",
@@ -1326,6 +1408,7 @@ class MailboxAdminProvider:
         normalized_user = _normalized_mailbox_identifier(user)
         matches: list[dict[str, str]] = []
         for row in rows:
+            _raise_if_cancel_requested(cancel_requested)
             delegates = _exchange_send_on_behalf_delegates(row)
             if any(_normalized_mailbox_identifier(item.get("mail")) == normalized_user for item in delegates):
                 mailbox_match = _exchange_mailbox_match(row)
@@ -1341,7 +1424,11 @@ class MailboxAdminProvider:
             scanned_mailbox_count=len(rows),
         )
         partial_note = ""
-        send_as_matches = self._exchange_send_as_mailboxes_for_user(resolved_principal_name or user)
+        _raise_if_cancel_requested(cancel_requested)
+        send_as_matches = self._exchange_send_as_mailboxes_for_user(
+            resolved_principal_name or user,
+            cancel_requested=cancel_requested,
+        )
         for row in send_as_matches.get("mailboxes") or []:
             if not isinstance(row, dict):
                 continue
@@ -1354,7 +1441,11 @@ class MailboxAdminProvider:
             matches.append(mailbox_match)
 
         try:
-            full_access_matches = self._exchange_full_access_mailboxes_for_user(resolved_principal_name or user)
+            _raise_if_cancel_requested(cancel_requested)
+            full_access_matches = self._exchange_full_access_mailboxes_for_user(
+                resolved_principal_name or user,
+                cancel_requested=cancel_requested,
+            )
         except UserAdminProviderError as exc:
             if "timed out" in str(exc).lower():
                 partial_note = " Full Access matches are not fully included because the org-wide Full Access scan timed out."
@@ -1362,6 +1453,7 @@ class MailboxAdminProvider:
             else:
                 raise
 
+        _raise_if_cancel_requested(cancel_requested)
         for row in full_access_matches.get("mailboxes") or []:
             if not isinstance(row, dict):
                 continue
@@ -1380,6 +1472,7 @@ class MailboxAdminProvider:
             int(send_as_matches.get("mailbox_count_scanned") or 0),
             int(full_access_matches.get("mailbox_count_scanned") or 0),
         )
+        _raise_if_cancel_requested(cancel_requested)
         _emit_progress(
             progress_callback,
             phase="merging_results",
