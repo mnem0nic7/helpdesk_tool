@@ -204,3 +204,54 @@ def test_mailbox_delegate_scan_job_manager_cancels_running_job(tmp_path):
     assert latest["phase"] == "cancelled"
     assert provider.stopped.is_set()
     assert any("cancelled" in event["message"].lower() for event in latest["events"])
+
+
+def test_mailbox_delegate_scan_job_manager_clears_finished_jobs_for_one_user(tmp_path):
+    manager = MailboxDelegateScanJobManager(
+        db_path=str(tmp_path / "mailbox_delegate_jobs.db"),
+        provider_factory=lambda: FakeMailboxProvider(),
+    )
+    with manager._conn() as conn:
+        conn.executemany(
+            """
+            INSERT INTO mailbox_delegate_scan_jobs (
+                job_id,
+                site_scope,
+                status,
+                phase,
+                requested_by_email,
+                requested_by_name,
+                user_identifier,
+                requested_at,
+                completed_at,
+                progress_message
+            )
+            VALUES (?, 'primary', ?, ?, ?, 'User', ?, ?, ?, ?)
+            """,
+            [
+                ("job-running", "running", "scanning_exchange_permissions", "tech@example.com", "delegate1@example.com", "2026-03-31T18:00:00Z", None, "Working"),
+                ("job-completed", "completed", "completed", "tech@example.com", "delegate2@example.com", "2026-03-31T18:01:00Z", "2026-03-31T18:05:00Z", "Done"),
+                ("job-cancelled", "cancelled", "cancelled", "tech@example.com", "delegate3@example.com", "2026-03-31T18:02:00Z", "2026-03-31T18:06:00Z", "Cancelled"),
+                ("job-other-user", "completed", "completed", "other@example.com", "delegate4@example.com", "2026-03-31T18:03:00Z", "2026-03-31T18:07:00Z", "Done"),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO mailbox_delegate_scan_job_events (job_id, level, message, created_at)
+            VALUES (?, 'info', ?, '2026-03-31T18:05:00Z')
+            """,
+            [
+                ("job-completed", "Completed"),
+                ("job-cancelled", "Cancelled"),
+                ("job-other-user", "Completed"),
+            ],
+        )
+        conn.commit()
+
+    deleted_count = manager.clear_finished_jobs_for_user("tech@example.com")
+
+    assert deleted_count == 2
+    tech_jobs = manager.list_jobs_for_user("tech@example.com", limit=10)
+    assert [job["job_id"] for job in tech_jobs] == ["job-running"]
+    other_jobs = manager.list_jobs_for_user("other@example.com", limit=10)
+    assert [job["job_id"] for job in other_jobs] == ["job-other-user"]

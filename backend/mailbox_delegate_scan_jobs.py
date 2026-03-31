@@ -454,6 +454,40 @@ class MailboxDelegateScanJobManager:
             ).fetchall()
         return [self._coerce_job(row, include_events=False) for row in rows if row]
 
+    def clear_finished_jobs_for_user(self, email: str) -> int:
+        normalized_email = str(email or "").strip().lower()
+        if not normalized_email:
+            return 0
+        placeholder = self._placeholder()
+        with self._conn() as conn:
+            finished_ids = [
+                str(row["job_id"])
+                for row in conn.execute(
+                    """
+                    SELECT job_id
+                    FROM mailbox_delegate_scan_jobs
+                    WHERE requested_by_email = {0}
+                      AND completed_at IS NOT NULL
+                    """.format(placeholder),
+                    (normalized_email,),
+                ).fetchall()
+            ]
+            if not finished_ids:
+                return 0
+            conn.executemany(
+                f"DELETE FROM mailbox_delegate_scan_job_events WHERE job_id = {placeholder}",
+                [(job_id,) for job_id in finished_ids],
+            )
+            conn.executemany(
+                f"DELETE FROM mailbox_delegate_scan_jobs WHERE job_id = {placeholder}",
+                [(job_id,) for job_id in finished_ids],
+            )
+            conn.commit()
+        with self._lock:
+            for job_id in finished_ids:
+                self._cancel_events.pop(job_id, None)
+        return len(finished_ids)
+
     def job_belongs_to(self, job_id: str, email: str, *, is_admin: bool = False) -> bool:
         job = self.get_job(job_id)
         if not job:

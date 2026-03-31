@@ -2959,6 +2959,10 @@ export const api = {
     return fetchJSON<OneDriveCopyJobStatus[]>(`/api/tools/onedrive-copy/jobs${buildQuery({ limit })}`);
   },
 
+  clearFinishedOneDriveCopyJobs(): Promise<{ deleted_count: number }> {
+    return postJSON<{ deleted_count: number }>("/api/tools/onedrive-copy/jobs/clear-finished", {});
+  },
+
   getOneDriveCopyJob(job_id: string): Promise<OneDriveCopyJobStatus> {
     return fetchJSON<OneDriveCopyJobStatus>(`/api/tools/onedrive-copy/jobs/${encodeURIComponent(job_id)}`);
   },
@@ -2985,6 +2989,10 @@ export const api = {
 
   listDelegateMailboxJobs(limit = 20): Promise<DelegateMailboxJobStatus[]> {
     return fetchJSON<DelegateMailboxJobStatus[]>(`/api/tools/delegate-mailboxes/jobs${buildQuery({ limit })}`);
+  },
+
+  clearFinishedDelegateMailboxJobs(): Promise<{ deleted_count: number }> {
+    return postJSON<{ deleted_count: number }>("/api/tools/delegate-mailboxes/jobs/clear-finished", {});
   },
 
   getDelegateMailboxJob(job_id: string): Promise<DelegateMailboxJobStatus> {

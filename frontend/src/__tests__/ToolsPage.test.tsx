@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { render } from "../test-utils.tsx";
 import ToolsPage from "../pages/ToolsPage.tsx";
 
@@ -8,6 +8,7 @@ const { mockApi } = vi.hoisted(() => ({
     getMe: vi.fn(),
     searchOneDriveCopyUsers: vi.fn(),
     listOneDriveCopyJobs: vi.fn(),
+    clearFinishedOneDriveCopyJobs: vi.fn(),
     getOneDriveCopyJob: vi.fn(),
     createOneDriveCopyJob: vi.fn(),
     listLoginAudit: vi.fn(),
@@ -15,6 +16,7 @@ const { mockApi } = vi.hoisted(() => ({
     listMailboxDelegates: vi.fn(),
     listDelegateMailboxes: vi.fn(),
     listDelegateMailboxJobs: vi.fn(),
+    clearFinishedDelegateMailboxJobs: vi.fn(),
     getDelegateMailboxJob: vi.fn(),
     createDelegateMailboxJob: vi.fn(),
     cancelDelegateMailboxJob: vi.fn(),
@@ -171,6 +173,7 @@ describe("ToolsPage", () => {
     });
     mockApi.listOneDriveCopyJobs.mockResolvedValue([baseJob]);
     mockApi.getOneDriveCopyJob.mockResolvedValue(baseJob);
+    mockApi.clearFinishedOneDriveCopyJobs.mockResolvedValue({ deleted_count: 1 });
     mockApi.listLoginAudit.mockResolvedValue([
       {
         event_id: 9,
@@ -262,6 +265,7 @@ describe("ToolsPage", () => {
       ],
     });
     mockApi.listDelegateMailboxJobs.mockResolvedValue([baseDelegateScanJob]);
+    mockApi.clearFinishedDelegateMailboxJobs.mockResolvedValue({ deleted_count: 1 });
     mockApi.getDelegateMailboxJob.mockResolvedValue(baseDelegateScanJob);
     mockApi.createDelegateMailboxJob.mockResolvedValue({
       ...baseDelegateScanJob,
@@ -423,5 +427,66 @@ describe("ToolsPage", () => {
 
     expect(await screen.findByText("Copy a full OneDrive to another user")).toBeInTheDocument();
     expect(screen.queryByText("Tools access is limited")).not.toBeInTheDocument();
+  });
+
+  it("clears finished OneDrive copy jobs from the history card", async () => {
+    mockApi.listOneDriveCopyJobs.mockResolvedValue([
+      {
+        ...baseJob,
+        job_id: "job-finished",
+        status: "completed",
+        phase: "completed",
+        completed_at: "2026-03-26T18:05:00Z",
+      },
+    ]);
+
+    render(<ToolsPage />);
+
+    const heading = await screen.findByRole("heading", { name: "Recent OneDrive copy jobs" });
+    const historyCard = heading.closest("section");
+    expect(historyCard).not.toBeNull();
+    const clearButton = within(historyCard as HTMLElement).getByRole("button", { name: "Clear finished" });
+    await waitFor(() => {
+      expect(clearButton).not.toBeDisabled();
+    });
+    fireEvent.click(clearButton);
+
+    await waitFor(() => {
+      expect(mockApi.clearFinishedOneDriveCopyJobs).toHaveBeenCalled();
+    });
+  });
+
+  it("clears finished delegate scan jobs from the history card", async () => {
+    mockApi.listDelegateMailboxJobs.mockResolvedValue([
+      {
+        ...baseDelegateScanJob,
+        job_id: "delegate-job-finished",
+        status: "completed",
+        phase: "completed",
+        completed_at: "2026-03-31T18:05:00Z",
+      },
+    ]);
+    mockApi.getDelegateMailboxJob.mockResolvedValueOnce({
+      ...baseDelegateScanJob,
+      job_id: "delegate-job-finished",
+      status: "completed",
+      phase: "completed",
+      completed_at: "2026-03-31T18:05:00Z",
+    });
+
+    render(<ToolsPage />);
+
+    const heading = await screen.findByRole("heading", { name: "Recent delegate scan jobs" });
+    const historyCard = heading.closest("section");
+    expect(historyCard).not.toBeNull();
+    const clearButton = within(historyCard as HTMLElement).getByRole("button", { name: "Clear finished" });
+    await waitFor(() => {
+      expect(clearButton).not.toBeDisabled();
+    });
+    fireEvent.click(clearButton);
+
+    await waitFor(() => {
+      expect(mockApi.clearFinishedDelegateMailboxJobs).toHaveBeenCalled();
+    });
   });
 });

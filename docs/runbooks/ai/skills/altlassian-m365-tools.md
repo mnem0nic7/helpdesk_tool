@@ -32,6 +32,7 @@ Use this workflow for Graph and Exchange-backed features on the shared Tools pag
 - Keep tool actions on the left and logs or history on the right unless a new design decision supersedes it.
 - When an Exchange-backed scan can run for tens of seconds or minutes, prefer a durable server-side job plus per-user history over a page-local spinner so navigation does not lose progress.
 - When an Exchange-backed scan is durable and long-running, support explicit user cancellation when the backend dependency can be interrupted safely instead of forcing people to wait for timeout.
+- When durable job history accumulates, prefer explicit `Clear finished` actions that remove completed, failed, or cancelled history without deleting queued or running jobs.
 - Verify runtime dependencies when touching Exchange-backed features so deploys do not succeed with a broken backend image.
 
 ## Invariants and gotchas
@@ -40,6 +41,7 @@ Use this workflow for Graph and Exchange-backed features on the shared Tools pag
 - Exchange-backed delegate access requires a working Exchange runtime path, not only Graph.
 - Org-wide delegate scans are not instant. Expect roughly 20 to 90 seconds in normal cases and 5 to 10 minutes in larger tenants, so UX copy and polling should set that expectation.
 - Delegate scan cancellation has to reach the server-side job and the live Exchange call. Avoid UI-only cancel states that leave the background work running.
+- If you add a clear-history action, keep its scope obvious. Shared job cards should not clear running work, and per-user job cards should only clear that user's finished history unless product requirements intentionally say otherwise.
 - Friendly user-facing errors matter because raw Graph and Exchange responses are not operator-friendly.
 - Do not accidentally expose Tools routes on `oasisdev`.
 

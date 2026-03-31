@@ -75,6 +75,10 @@ function phaseLabel(phase: OneDriveCopyJobStatus["phase"]): string {
   }
 }
 
+function isFinishedJob(status: OneDriveCopyJobStatus["status"] | DelegateMailboxJobStatus["status"]): boolean {
+  return status !== "queued" && status !== "running";
+}
+
 function delegateScanPhaseLabel(phase: DelegateMailboxJobStatus["phase"]): string {
   switch (phase) {
     case "resolving_user":
@@ -822,13 +826,18 @@ function DelegateMailboxJobHistory({
   onSelect,
   onRefresh,
   isRefreshing,
+  onClearFinished,
+  isClearing,
 }: {
   jobs: DelegateMailboxJobStatus[];
   activeJobId: string | null;
   onSelect: (jobId: string) => void;
   onRefresh: () => void;
   isRefreshing: boolean;
+  onClearFinished: () => void;
+  isClearing: boolean;
 }) {
+  const canClearFinished = jobs.some((job) => isFinishedJob(job.status));
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -836,9 +845,14 @@ function DelegateMailboxJobHistory({
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Your job history</div>
           <h2 className="mt-1 text-2xl font-semibold text-slate-900">Recent delegate scan jobs</h2>
         </div>
-        <button type="button" onClick={onRefresh} className={buttonClass("secondary", isRefreshing)}>
-          Refresh
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={onClearFinished} disabled={!canClearFinished || isClearing} className={buttonClass("secondary", !canClearFinished || isClearing)}>
+            {isClearing ? "Clearing..." : "Clear finished"}
+          </button>
+          <button type="button" onClick={onRefresh} className={buttonClass("secondary", isRefreshing)}>
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200">
@@ -983,9 +997,17 @@ export default function ToolsPage() {
   });
 
   useEffect(() => {
-    if (!activeJobId && jobsQuery.data?.length) {
-      setActiveJobId(jobsQuery.data[0].job_id);
+    const jobs = jobsQuery.data ?? [];
+    if (jobs.length === 0) {
+      if (activeJobId !== null) {
+        setActiveJobId(null);
+      }
+      return;
     }
+    if (activeJobId && jobs.some((job) => job.job_id === activeJobId)) {
+      return;
+    }
+    setActiveJobId(jobs[0].job_id);
   }, [activeJobId, jobsQuery.data]);
 
   const activeJobQuery = useQuery({
@@ -1034,6 +1056,9 @@ export default function ToolsPage() {
 
   useEffect(() => {
     if (!delegateMailboxJobsQuery.data?.length) {
+      if (activeDelegateMailboxJobId !== null) {
+        setActiveDelegateMailboxJobId(null);
+      }
       return;
     }
     if (activeDelegateMailboxJobId && delegateMailboxJobsQuery.data.some((job) => job.job_id === activeDelegateMailboxJobId)) {
@@ -1087,6 +1112,34 @@ export default function ToolsPage() {
     },
     onError: (error) => {
       setDelegateUserFormError(error instanceof Error ? error.message : "Failed to queue the delegate mailbox scan.");
+    },
+  });
+  const clearFinishedOneDriveJobsMutation = useMutation({
+    mutationFn: () => api.clearFinishedOneDriveCopyJobs(),
+    onSuccess: async () => {
+      const jobs = jobsQuery.data ?? [];
+      if (activeJobId && jobs.some((job) => job.job_id === activeJobId && isFinishedJob(job.status))) {
+        const nextRunningJob = jobs.find((job) => !isFinishedJob(job.status));
+        setActiveJobId(nextRunningJob?.job_id ?? null);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["onedrive-copy", "jobs"] });
+    },
+    onError: (error) => {
+      setFormError(error instanceof Error ? error.message : "Failed to clear finished OneDrive copy jobs.");
+    },
+  });
+  const clearFinishedDelegateMailboxJobsMutation = useMutation({
+    mutationFn: () => api.clearFinishedDelegateMailboxJobs(),
+    onSuccess: async () => {
+      const jobs = delegateMailboxJobsQuery.data ?? [];
+      if (activeDelegateMailboxJobId && jobs.some((job) => job.job_id === activeDelegateMailboxJobId && isFinishedJob(job.status))) {
+        const nextRunningJob = jobs.find((job) => !isFinishedJob(job.status));
+        setActiveDelegateMailboxJobId(nextRunningJob?.job_id ?? null);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["delegate-mailboxes", "jobs"] });
+    },
+    onError: (error) => {
+      setDelegateUserFormError(error instanceof Error ? error.message : "Failed to clear finished delegate scan jobs.");
     },
   });
   const cancelDelegateMailboxJobMutation = useMutation({
@@ -1550,9 +1603,22 @@ export default function ToolsPage() {
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Shared job history</div>
                 <h2 className="mt-1 text-2xl font-semibold text-slate-900">Recent OneDrive copy jobs</h2>
               </div>
-              <button type="button" onClick={() => jobsQuery.refetch()} className={buttonClass("secondary", jobsQuery.isFetching)}>
-                Refresh
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFormError("");
+                    clearFinishedOneDriveJobsMutation.mutate();
+                  }}
+                  disabled={!jobsQuery.data?.some((job) => isFinishedJob(job.status)) || clearFinishedOneDriveJobsMutation.isPending}
+                  className={buttonClass("secondary", !jobsQuery.data?.some((job) => isFinishedJob(job.status)) || clearFinishedOneDriveJobsMutation.isPending)}
+                >
+                  {clearFinishedOneDriveJobsMutation.isPending ? "Clearing..." : "Clear finished"}
+                </button>
+                <button type="button" onClick={() => jobsQuery.refetch()} className={buttonClass("secondary", jobsQuery.isFetching)}>
+                  Refresh
+                </button>
+              </div>
             </div>
 
             <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200">
@@ -1621,6 +1687,11 @@ export default function ToolsPage() {
               void delegateMailboxJobsQuery.refetch();
             }}
             isRefreshing={delegateMailboxJobsQuery.isFetching}
+            onClearFinished={() => {
+              setDelegateUserFormError("");
+              clearFinishedDelegateMailboxJobsMutation.mutate();
+            }}
+            isClearing={clearFinishedDelegateMailboxJobsMutation.isPending}
           />
 
           <LoginAuditPanel events={loginAuditQuery.data ?? []} />

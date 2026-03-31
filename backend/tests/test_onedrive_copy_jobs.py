@@ -135,6 +135,52 @@ def test_remember_user_option_enriches_saved_rows_and_searches_by_upn(tmp_path):
     ]
 
 
+def test_clear_finished_jobs_removes_completed_and_failed_history_only(tmp_path):
+    manager = OneDriveCopyJobManager(db_path=str(tmp_path / "onedrive_copy_jobs.db"))
+    with manager._conn() as conn:
+        conn.executemany(
+            """
+            INSERT INTO onedrive_copy_jobs (
+                job_id,
+                site_scope,
+                status,
+                phase,
+                requested_by_email,
+                requested_by_name,
+                source_upn,
+                destination_upn,
+                destination_folder,
+                requested_at,
+                completed_at,
+                progress_message
+            )
+            VALUES (?, 'primary', ?, ?, 'user@example.com', 'User', 'source@example.com', 'dest@example.com', 'Copied', ?, ?, ?)
+            """,
+            [
+                ("job-running", "running", "enumerating", "2026-03-31T18:00:00Z", None, "Working"),
+                ("job-completed", "completed", "completed", "2026-03-31T18:01:00Z", "2026-03-31T18:05:00Z", "Done"),
+                ("job-failed", "failed", "failed", "2026-03-31T18:02:00Z", "2026-03-31T18:06:00Z", "Failed"),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO onedrive_copy_job_events (job_id, level, message, created_at)
+            VALUES (?, 'info', ?, '2026-03-31T18:05:00Z')
+            """,
+            [
+                ("job-completed", "Completed"),
+                ("job-failed", "Failed"),
+            ],
+        )
+        conn.commit()
+
+    deleted_count = manager.clear_finished_jobs()
+
+    assert deleted_count == 2
+    remaining_jobs = manager.list_jobs(limit=10)
+    assert [job["job_id"] for job in remaining_jobs] == ["job-running"]
+
+
 def test_postgres_mode_backfills_legacy_jobs_and_requeues_running_jobs(tmp_path, monkeypatch):
     legacy_db_path = tmp_path / "onedrive_copy_jobs.db"
     postgres_db_path = tmp_path / "onedrive_copy_jobs_postgres.db"

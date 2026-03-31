@@ -197,6 +197,14 @@ def list_onedrive_copy_jobs(
     return [OneDriveCopyJobResponse.model_validate(job) for job in onedrive_copy_jobs.list_jobs(limit=limit)]
 
 
+@router.post("/onedrive-copy/jobs/clear-finished")
+def clear_finished_onedrive_copy_jobs(
+    _session: dict[str, Any] = Depends(_require_tools_session),
+) -> dict[str, Any]:
+    deleted_count = onedrive_copy_jobs.clear_finished_jobs()
+    return {"deleted_count": int(deleted_count)}
+
+
 @router.get("/onedrive-copy/jobs/{job_id}", response_model=OneDriveCopyJobResponse)
 def get_onedrive_copy_job(
     job_id: str,
@@ -292,6 +300,14 @@ def list_delegate_mailbox_jobs(
 ) -> list[DelegateMailboxJobResponse]:
     jobs = mailbox_delegate_scan_jobs.list_jobs_for_user(str(session.get("email") or ""), limit=limit)
     return [DelegateMailboxJobResponse.model_validate(job) for job in jobs]
+
+
+@router.post("/delegate-mailboxes/jobs/clear-finished")
+def clear_finished_delegate_mailbox_jobs(
+    session: dict[str, Any] = Depends(_require_tools_session),
+) -> dict[str, Any]:
+    deleted_count = mailbox_delegate_scan_jobs.clear_finished_jobs_for_user(str(session.get("email") or ""))
+    return {"deleted_count": int(deleted_count)}
 
 
 @router.get("/delegate-mailboxes/jobs/{job_id}", response_model=DelegateMailboxJobResponse)

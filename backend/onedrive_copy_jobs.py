@@ -663,6 +663,32 @@ class OneDriveCopyJobManager:
             ).fetchall()
         return [self._coerce_job(row, include_events=False) for row in rows if row]
 
+    def clear_finished_jobs(self) -> int:
+        placeholder = self._placeholder()
+        with self._conn() as conn:
+            finished_ids = [
+                str(row["job_id"])
+                for row in conn.execute(
+                    """
+                    SELECT job_id
+                    FROM onedrive_copy_jobs
+                    WHERE completed_at IS NOT NULL
+                    """,
+                ).fetchall()
+            ]
+            if not finished_ids:
+                return 0
+            conn.executemany(
+                f"DELETE FROM onedrive_copy_job_events WHERE job_id = {placeholder}",
+                [(job_id,) for job_id in finished_ids],
+            )
+            conn.executemany(
+                f"DELETE FROM onedrive_copy_jobs WHERE job_id = {placeholder}",
+                [(job_id,) for job_id in finished_ids],
+            )
+            conn.commit()
+        return len(finished_ids)
+
     async def start_worker(self) -> None:
         if self._bg_task and not self._bg_task.done():
             return

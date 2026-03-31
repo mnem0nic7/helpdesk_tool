@@ -319,6 +319,20 @@ def test_list_and_get_onedrive_copy_jobs_are_visible_to_any_authenticated_user(t
     assert detail_resp.json()["events"][0]["level"] == "info"
 
 
+def test_clear_finished_onedrive_copy_jobs_returns_deleted_count(test_client, monkeypatch):
+    import routes_tools
+
+    mock_jobs = MagicMock()
+    mock_jobs.clear_finished_jobs.return_value = 3
+    monkeypatch.setattr(routes_tools, "onedrive_copy_jobs", mock_jobs)
+
+    resp = test_client.post("/api/tools/onedrive-copy/jobs/clear-finished", headers={"host": "it-app.movedocs.com"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted_count": 3}
+    mock_jobs.clear_finished_jobs.assert_called_once_with()
+
+
 def test_tools_routes_allow_any_authenticated_user(test_client):
     sid = create_session("someone@example.com", "Someone Else")
     test_client.cookies.set("session_id", sid)
@@ -669,6 +683,23 @@ def test_delegate_mailbox_job_routes_list_and_fetch_current_users_jobs(test_clie
     assert detail_resp.json()["phase"] == "scanning_exchange_permissions"
     mock_manager.list_jobs_for_user.assert_called_once_with("test@example.com", limit=5)
     mock_manager.job_belongs_to.assert_called_once_with("delegate-job-1", "test@example.com", is_admin=True)
+
+
+def test_clear_finished_delegate_mailbox_jobs_returns_deleted_count(test_client, monkeypatch):
+    import routes_tools
+
+    mock_manager = MagicMock()
+    mock_manager.clear_finished_jobs_for_user.return_value = 2
+    monkeypatch.setattr(routes_tools, "mailbox_delegate_scan_jobs", mock_manager)
+
+    resp = test_client.post(
+        "/api/tools/delegate-mailboxes/jobs/clear-finished",
+        headers={"host": "it-app.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted_count": 2}
+    mock_manager.clear_finished_jobs_for_user.assert_called_once_with("test@example.com")
 
 
 def test_delegate_mailbox_job_detail_rejects_other_users(test_client, monkeypatch):
