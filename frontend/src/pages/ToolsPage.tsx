@@ -567,11 +567,11 @@ function DelegateMailboxesResults({
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-        {job.note || "Most delegate scans finish in 20-90 seconds. Large tenants can take up to about 4 minutes before the job times out."}
+        {job.note || "Most delegate scans finish in 20-90 seconds. Large tenants can take 5-10 minutes before the job times out."}
       </div>
 
       <div className="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-        Most delegate scans finish in 20-90 seconds. Large tenants can take up to about 4 minutes because the app has to sweep Exchange mailbox metadata plus delegate permissions.
+        Most delegate scans finish in 20-90 seconds. Large tenants can take 5-10 minutes because the app has to sweep Exchange mailbox metadata plus delegate permissions.
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
@@ -1415,7 +1415,7 @@ export default function ToolsPage() {
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Mailbox Delegation</div>
                 <h2 className="mt-1 text-2xl font-semibold text-slate-900">Find mailboxes where a user has delegate access</h2>
                 <p className="mt-2 text-sm text-slate-600">
-                  Enter a user email to queue an Exchange mailbox scan and list where that person currently has Send on behalf, Send As, or Full Access through the shared app registration. Most runs finish in 20-90 seconds, but larger tenants can take up to about 4 minutes.
+                  Enter a user email to queue an Exchange mailbox scan and list where that person currently has Send on behalf, Send As, or Full Access through the shared app registration. Most runs finish in 20-90 seconds, but larger tenants can take 5-10 minutes.
                 </p>
               </div>
               <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700">Org scan</span>

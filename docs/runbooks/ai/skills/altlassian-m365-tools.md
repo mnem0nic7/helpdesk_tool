@@ -37,7 +37,7 @@ Use this workflow for Graph and Exchange-backed features on the shared Tools pag
 
 - Microsoft Graph mailbox rule access depends on the right application permissions and admin consent.
 - Exchange-backed delegate access requires a working Exchange runtime path, not only Graph.
-- Org-wide delegate scans are not instant. Expect roughly 20 to 90 seconds in normal cases and up to about 4 minutes in larger tenants, so UX copy and polling should set that expectation.
+- Org-wide delegate scans are not instant. Expect roughly 20 to 90 seconds in normal cases and 5 to 10 minutes in larger tenants, so UX copy and polling should set that expectation.
 - Friendly user-facing errors matter because raw Graph and Exchange responses are not operator-friendly.
 - Do not accidentally expose Tools routes on `oasisdev`.
 

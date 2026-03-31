@@ -145,6 +145,9 @@ ENTRA_CLIENT_ID: str = os.getenv("ENTRA_CLIENT_ID", "")
 ENTRA_CLIENT_SECRET: str = os.getenv("ENTRA_CLIENT_SECRET", "")
 EXCHANGE_ONLINE_ORGANIZATION: str = os.getenv("EXCHANGE_ONLINE_ORGANIZATION", "").strip()
 EXCHANGE_POWERSHELL_TIMEOUT_SECONDS: int = int(os.getenv("EXCHANGE_POWERSHELL_TIMEOUT_SECONDS", "240"))
+EXCHANGE_DELEGATE_SCAN_TIMEOUT_SECONDS: int = int(
+    os.getenv("EXCHANGE_DELEGATE_SCAN_TIMEOUT_SECONDS", str(max(EXCHANGE_POWERSHELL_TIMEOUT_SECONDS, 600)))
+)
 ALLOWED_USERS: str = os.getenv("ALLOWED_USERS", "")  # comma-separated emails, empty = all
 ADMIN_USERS: str = os.getenv("ADMIN_USERS", "")  # comma-separated emails for write operations, empty = all authenticated
 

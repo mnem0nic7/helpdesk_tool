@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from azure_client import AzureApiError, AzureClient
-from config import EXCHANGE_ONLINE_ORGANIZATION, EXCHANGE_POWERSHELL_TIMEOUT_SECONDS
+from config import (
+    EXCHANGE_DELEGATE_SCAN_TIMEOUT_SECONDS,
+    EXCHANGE_ONLINE_ORGANIZATION,
+    EXCHANGE_POWERSHELL_TIMEOUT_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +93,13 @@ class ExchangeOnlinePowerShellClient:
         self._organization_cache = domains[0]
         return self._organization_cache
 
-    def _run_script(self, script_body: str, *, extra_env: dict[str, str] | None = None) -> Any:
+    def _run_script(
+        self,
+        script_body: str,
+        *,
+        extra_env: dict[str, str] | None = None,
+        timeout_seconds: int | None = None,
+    ) -> Any:
         if not self.azure_client.configured:
             raise ExchangeOnlinePowerShellError("Exchange Online PowerShell requires configured Entra app credentials.")
         if not self.pwsh_path:
@@ -128,7 +138,7 @@ finally {{
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".ps1", delete=False) as handle:
             handle.write(script)
             script_path = Path(handle.name)
-        timeout_seconds = max(30, int(self.timeout_seconds or 240))
+        timeout_seconds = max(30, int(timeout_seconds or self.timeout_seconds or 240))
         try:
             completed = subprocess.run(
                 [self.pwsh_path, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(script_path)],
@@ -298,5 +308,6 @@ $mailboxes = @(
 } | ConvertTo-Json -Depth 8 -Compress
 """.strip(),
             extra_env={"DELEGATE_USER": user},
+            timeout_seconds=max(EXCHANGE_DELEGATE_SCAN_TIMEOUT_SECONDS, int(self.timeout_seconds or 0)),
         )
         return payload if isinstance(payload, dict) else {}

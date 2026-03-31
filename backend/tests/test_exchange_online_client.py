@@ -9,9 +9,15 @@ def test_get_delegate_mailboxes_for_user_uses_mailbox_identity_pipeline_for_full
     client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
     captured: dict[str, object] = {}
 
-    def fake_run_script(script_body: str, *, extra_env: dict[str, str] | None = None):
+    def fake_run_script(
+        script_body: str,
+        *,
+        extra_env: dict[str, str] | None = None,
+        timeout_seconds: int | None = None,
+    ):
         captured["script_body"] = script_body
         captured["extra_env"] = extra_env or {}
+        captured["timeout_seconds"] = timeout_seconds
         return {"mailbox_count_scanned": 0, "mailboxes": []}
 
     monkeypatch.setattr(client, "_run_script", fake_run_script)
@@ -20,6 +26,7 @@ def test_get_delegate_mailboxes_for_user_uses_mailbox_identity_pipeline_for_full
 
     assert result == {"mailbox_count_scanned": 0, "mailboxes": []}
     assert captured["extra_env"] == {"DELEGATE_USER": "delegate@example.com"}
+    assert int(captured["timeout_seconds"]) >= 600
     script_body = str(captured["script_body"])
     assert "$batchSize = 50" in script_body
     assert "Select-Object -Skip $offset -First $batchSize" in script_body

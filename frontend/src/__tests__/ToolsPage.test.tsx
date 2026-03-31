@@ -300,6 +300,7 @@ describe("ToolsPage", () => {
     expect(screen.getAllByText("Tech User").length).toBeGreaterThan(0);
     expect(screen.getByText("source@example.com to dest@example.com")).toBeInTheDocument();
     expect(screen.getByText(/Most delegate scans finish in 20-90 seconds/i)).toBeInTheDocument();
+    expect(screen.getByText(/Large tenants can take 5-10 minutes/i)).toBeInTheDocument();
   });
 
   it("submits the create-job request with the expected default advanced options", async () => {
