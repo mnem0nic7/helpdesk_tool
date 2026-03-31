@@ -2402,13 +2402,7 @@ class ReportWorkbookBuilder:
 
     def _render_ai_summary_block(self, template: ReportTemplate, summary: ReportAISummary) -> str:
         title = str(summary.template_name or template.name).strip() or template.name
-        lines = [f"{title}: {summary.summary}"]
-        lines.extend(
-            f"• {bullet}"
-            for bullet in summary.bullets[:3]
-            if str(bullet or "").strip()
-        )
-        return "\n".join(lines)
+        return f"{title}: {summary.summary}"
 
     def _build_master_dashboard_ai_rows(
         self,

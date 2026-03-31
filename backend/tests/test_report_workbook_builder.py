@@ -669,11 +669,7 @@ def test_master_workbook_uses_manual_ai_summaries_when_all_included_templates_ha
     dashboard = workbook["Executive Dashboard"]
 
     assert dashboard["G6"].value == "AI Summary & Explanation"
-    assert dashboard["G7"].value == (
-        "SLA Compliance Rate: SLA performance improved across the current reporting window.\n"
-        "• Resolution compliance is trending in the right direction.\n"
-        "• Breach volume is concentrated in a small set of tickets."
-    )
+    assert dashboard["G7"].value == "SLA Compliance Rate: SLA performance improved across the current reporting window."
     assert "Resolution compliance is trending in the right direction." not in str(dashboard["G8"].value or "")
 
 
@@ -735,10 +731,7 @@ def test_master_workbook_uses_available_ai_summaries_for_selected_reports_even_i
     workbook = load_workbook(path)
     dashboard = workbook["Executive Dashboard"]
 
-    assert dashboard["G7"].value == (
-        "SLA Compliance Rate: SLA performance improved across the current reporting window.\n"
-        "• Resolution compliance is trending in the right direction."
-    )
+    assert dashboard["G7"].value == "SLA Compliance Rate: SLA performance improved across the current reporting window."
     assert "Resolution compliance is trending in the right direction." not in str(dashboard["G8"].value or "")
 
 
@@ -816,10 +809,8 @@ def test_master_workbook_combines_first_response_and_follow_up_ai_summaries_into
     dashboard = workbook["Executive Dashboard"]
 
     assert dashboard["G9"].value == (
-        "First Response Time: First response remained within target for the week.\n"
-        "• Only a small number of tickets required response follow-up.\n\n"
-        "Response & Daily Follow-Up: Daily follow-up coverage needs closer watch on aging tickets.\n"
-        "• The small backlog still has enough churn to monitor daily."
+        "First Response Time: First response remained within target for the week.\n\n"
+        "Response & Daily Follow-Up: Daily follow-up coverage needs closer watch on aging tickets."
     )
 
 

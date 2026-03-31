@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -217,7 +218,90 @@ def test_build_summary_prompt_for_manual_master_batch_uses_7_day_exec_guidance(t
     )
 
     assert "Lead with current 7-day performance" in system
+    assert "Do not use bullets, numbered lists, labels, or headings" in system
     assert "2-Hour Response + Daily Follow-Up" in user
     assert "Top weekly request categories" in user
     assert "delta_vs_prior_7d" in user
     assert "Prompt mode: master" in user
+    assert '{"summary":"..."}' in user
+
+
+def test_build_fallback_result_returns_conversational_summary_without_bullets(tmp_path: Path) -> None:
+    service = ReportAISummaryService(db_path=str(tmp_path / "report-ai-fallback.db"))
+    template = _make_template(template_id="tpl-fallback", name="SLA Compliance Rate", include_in_master_export=True)
+
+    class _FakeBuilder:
+        def _detect_escalation_anomaly(self, trend_rows):
+            return None
+
+        def _build_key_findings(self, context, *, anomaly):
+            return [
+                "🔴 SLA Compliance: 73.0% met in the last 7 days (30d context: 76.7%). 8 tickets breached.",
+                "🔴 MTTR Tail Risk: overall 7d P95 is 292.4h. Highest is the slowest priority band.",
+            ]
+
+    result = service._build_fallback_result(
+        template=template,
+        builder=_FakeBuilder(),
+        context={"trend_rows": []},
+        source="manual",
+        data_version="data-1",
+        error="model unavailable",
+    )
+
+    assert result.status == "fallback"
+    assert result.bullets == []
+    assert "Over the last 7 days, SLA compliance was 73.0% met" in result.summary
+    assert "MTTR remained a watch area" in result.summary
+
+
+def test_generate_summary_result_accepts_summary_without_bullets(monkeypatch, tmp_path: Path) -> None:
+    service = ReportAISummaryService(db_path=str(tmp_path / "report-ai-generate.db"))
+    template = _make_template(template_id="tpl-generate", name="Executive", include_in_master_export=True)
+    context = {
+        "kpis": [
+            {"value_7d": 0.73, "value_30d": 0.767, "prior_7d": 0.81, "delta": -0.08, "label": "SLA", "type": "percent"},
+            {"value_7d": 292.4, "value_30d": 2623.1, "prior_7d": 180.0, "delta": 112.4, "label": "MTTR", "type": "hours"},
+            {"value_7d": 0.90, "value_30d": 0.92, "prior_7d": 0.91, "delta": -0.01, "label": "First Response", "type": "percent"},
+            {"value_7d": 12, "value_30d": 15, "prior_7d": 10, "delta": 2, "label": "Backlog", "type": "integer"},
+        ],
+        "prior_7_window_start": date(2026, 3, 13),
+        "prior_7_window_end": date(2026, 3, 19),
+        "sla_rows_7": [{"group": "Met", "count": 7}, {"group": "BREACHED", "count": 1, "avg_ttr_hours": 96.0}],
+        "first_response_rows_7": [{"group": "Met", "count": 7}, {"group": "BREACHED", "count": 1}],
+        "followup_rows_7": [{"group": "Met", "count": 6}, {"group": "BREACHED", "count": 2}],
+        "mttr_priority_rows_7": [{"group": "Highest", "avg_ttr_hours": 254.9, "p95_ttr_hours": 838.0}],
+        "top_category_rows_7": [{"group": "Security Alert", "count": 32, "avg_ttr_hours": 18.0, "p95_ttr_hours": 48.0}],
+        "problem_areas": ["Highest priority tickets are aging."],
+        "gaps": [],
+    }
+
+    class _FakeBuilder:
+        def __init__(self, *args, **kwargs):
+            self.today = date(2026, 3, 26)
+
+        def _facts_for_config(self, config):
+            return []
+
+        def _build_dashboard_context(self, **kwargs):
+            return context
+
+    monkeypatch.setattr(service, "_issues_for_site_scope", lambda scope: [])
+    monkeypatch.setattr(service, "_resolve_model_id", lambda: "qwen2.5:7b")
+    monkeypatch.setattr(summary_module, "ReportWorkbookBuilder", _FakeBuilder)
+    monkeypatch.setattr(
+        summary_module,
+        "resolve_report_window_spec",
+        lambda config, today: SimpleNamespace(label="30 Day", start=date(2026, 2, 26), end=date(2026, 3, 26)),
+    )
+    monkeypatch.setattr(
+        summary_module,
+        "invoke_model_text",
+        lambda *args, **kwargs: '{"summary":"Over the last 7 days, SLA performance improved and the backlog stayed manageable."}',
+    )
+
+    result = service._generate_summary_result("primary", template, "manual", "data-1")
+
+    assert result.status == "ready"
+    assert result.summary == "Over the last 7 days, SLA performance improved and the backlog stayed manageable."
+    assert result.bullets == []

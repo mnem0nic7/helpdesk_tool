@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -58,6 +59,13 @@ def _clean_text(value: str, *, max_length: int) -> str:
     return text[: max_length - 3].rstrip() + "..."
 
 
+def _normalize_summary_text(raw: Any, *, max_length: int) -> str:
+    text = str(raw or "")
+    text = re.sub(r"(?m)^\s*(?:[•*\-]|\d+[.)])\s*", "", text)
+    text = re.sub(r"\s*\n+\s*", " ", text)
+    return _clean_text(text, max_length=max_length)
+
+
 def _normalize_bullets(raw: Any) -> list[str]:
     if not isinstance(raw, list):
         return []
@@ -67,6 +75,41 @@ def _normalize_bullets(raw: Any) -> list[str]:
         if text:
             bullets.append(text)
     return bullets[:4]
+
+
+def _rewrite_finding_as_sentence(value: Any) -> str:
+    text = _normalize_summary_text(value, max_length=320).lstrip("🟢🟡🔴⚠️ ").strip()
+    replacements = {
+        "SLA Compliance: ": "Over the last 7 days, SLA compliance was ",
+        "MTTR Tail Risk: overall 7d P95 is ": "MTTR remained a watch area, with the overall 7-day P95 at ",
+        "Response Discipline: ": "Response discipline was mixed: ",
+        "Backlog: ": "Backlog now sits at ",
+        "Data Quality: ": "Data quality note: ",
+    }
+    for prefix, replacement in replacements.items():
+        if text.startswith(prefix):
+            return replacement + text[len(prefix) :]
+    return text
+
+
+def _build_conversational_fallback_summary(findings: Sequence[str], *, template_name: str) -> str:
+    sentences = [
+        _rewrite_finding_as_sentence(item)
+        for item in findings
+        if str(item or "").strip()
+    ]
+    if not sentences:
+        return _clean_text(f"{template_name}: report summary unavailable.", max_length=240)
+
+    summary = sentences[0]
+    for sentence in sentences[1:]:
+        candidate = _clean_text(f"{summary} {sentence}", max_length=240)
+        if candidate == summary:
+            break
+        summary = candidate
+        if len(summary) >= 220:
+            break
+    return summary
 
 
 def _extract_json_object(raw: str) -> dict[str, Any]:
@@ -860,15 +903,17 @@ class ReportAISummaryService:
                 "Lead with current 7-day performance, use 30-day values only as secondary context, "
                 "and explicitly distinguish First Response SLA from the stricter 2-Hour Response + Daily Follow-Up metric. "
                 "Prefer concrete counts and categories over generic commentary. "
-                "Respond with valid JSON only using keys summary and bullets. "
-                "summary must be one short paragraph. bullets must be 2 to 4 short explanation or action bullets. "
+                "Respond with valid JSON only using the key summary. "
+                "summary must be one short conversational paragraph of 2 to 4 sentences. "
+                "Do not use bullets, numbered lists, labels, or headings inside the summary. "
                 "Do not mention missing data unless it materially affects interpretation."
             )
         else:
             system = (
                 "You write concise, executive-friendly service desk summaries. "
-                "Respond with valid JSON only using keys summary and bullets. "
-                "summary must be one short paragraph. bullets must be 2 to 4 short explanation or action bullets. "
+                "Respond with valid JSON only using the key summary. "
+                "summary must be one short conversational paragraph of 2 to 4 sentences. "
+                "Do not use bullets, numbered lists, labels, or headings inside the summary. "
                 "Do not mention missing data unless it materially affects interpretation."
             )
         user_msg = "\n".join(
@@ -919,7 +964,7 @@ class ReportAISummaryService:
                 *(gaps or ["- No material data gaps recorded"]),
                 "",
                 "Write the summary so the 7-day story leads. Use 30-day values only as supporting context, not the headline.",
-                'Return JSON like {"summary":"...","bullets":["..."]}.',
+                'Return JSON like {"summary":"..."}.',
             ]
         )
         return system, user_msg
@@ -936,13 +981,12 @@ class ReportAISummaryService:
     ) -> _SummaryGenerationResult:
         anomaly = builder._detect_escalation_anomaly(context.get("trend_rows") or [])
         findings = builder._build_key_findings(context, anomaly=anomaly)
-        summary = _clean_text(findings[0] if findings else f"{template.name}: report summary unavailable.", max_length=240)
-        bullets = [_clean_text(item, max_length=220) for item in findings[1:4]]
+        summary = _build_conversational_fallback_summary(findings, template_name=template.name)
         return _SummaryGenerationResult(
             status="fallback",
             source=source,
             summary=summary,
-            bullets=bullets,
+            bullets=[],
             fallback_used=True,
             model_used="",
             generated_at=_utcnow_iso(),
@@ -1008,10 +1052,10 @@ class ReportAISummaryService:
                 },
             )
             payload = _extract_json_object(raw)
-            summary = _clean_text(str(payload.get("summary") or ""), max_length=240)
+            summary = _normalize_summary_text(payload.get("summary"), max_length=240)
             bullets = _normalize_bullets(payload.get("bullets"))
-            if not summary or not bullets:
-                raise ValueError("AI response did not contain both summary and bullets")
+            if not summary:
+                raise ValueError("AI response did not contain a summary")
             return _SummaryGenerationResult(
                 status="ready",
                 source=source,
