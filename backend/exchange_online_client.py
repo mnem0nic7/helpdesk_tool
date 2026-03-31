@@ -210,8 +210,19 @@ $fullAccess = @(
             """
 $delegateUser = $env:DELEGATE_USER
 $allMailboxes = @(Get-Mailbox -ResultSize Unlimited)
+$mailboxIdentities = @(
+  foreach ($mailbox in $allMailboxes) {
+    if ($mailbox.UserPrincipalName) {
+      $mailbox.UserPrincipalName
+    }
+    elseif ($mailbox.PrimarySmtpAddress) {
+      $mailbox.PrimarySmtpAddress.ToString()
+    }
+  }
+)
 $fullAccess = @(
-  Get-EXOMailboxPermission -User $delegateUser -ResultSize Unlimited |
+  $mailboxIdentities |
+    Get-EXOMailboxPermission -User $delegateUser |
     Where-Object {
       $_.AccessRights -contains 'FullAccess' -and
       $_.Deny -ne $true -and
