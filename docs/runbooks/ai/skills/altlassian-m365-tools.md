@@ -7,7 +7,7 @@ Use this workflow for Graph and Exchange-backed features on the shared Tools pag
 - A new Microsoft 365 tool needs to be added to `it-app` or `azure`.
 - A mailbox-rules or delegate-access tool is failing.
 - The Emailgistics helper needs to grant mailbox access or run the shared-mailbox sync path.
-- The Emailgistics `Sync Now` action needs to rerun only `syncUsers.ps1` for a shared mailbox.
+- The Emailgistics `Sync Now` action needs to rerun only `syncUsers.ps1`, either for one shared mailbox or for all configured Emailgistics mailboxes when the mailbox field is left blank.
 - The work touches Graph permissions, Exchange Online access, or Tools page UX.
 
 ## Required first reads
@@ -38,14 +38,14 @@ Use this workflow for Graph and Exchange-backed features on the shared Tools pag
 - When durable job history accumulates, prefer explicit `Clear finished` actions that remove completed, failed, or cancelled history without deleting queued or running jobs.
 - Verify runtime dependencies when touching Exchange-backed features so deploys do not succeed with a broken backend image.
 - If a helper chains Exchange permission changes with a downstream Emailgistics or external sync, preflight the downstream dependency before changing mailbox permissions so you do not leave partial state behind on failure.
-- Keep the sync-only Emailgistics action truly sync-only. It should reuse the targeted `syncUsers.ps1` path without silently reintroducing mailbox permission or group-membership changes.
+- Keep the sync-only Emailgistics action truly sync-only. It should reuse the existing `syncUsers.ps1` path without silently reintroducing mailbox permission or group-membership changes, whether it is targeting one mailbox or all configured mailboxes.
 
 ## Invariants and gotchas
 
 - Microsoft Graph mailbox rule access depends on the right application permissions and admin consent.
 - Exchange-backed delegate access requires a working Exchange runtime path, not only Graph.
-- The Emailgistics helper depends on extra runtime config beyond the shared Entra app: `EMAILGISTICS_TOKEN_VALID_URL`, `EMAILGISTICS_USER_SYNC_URL`, and `EMAILGISTICS_AUTH_TOKEN`.
-- The Emailgistics `Sync Now` action should accept only a shared mailbox and should still return a readable result payload even though there is no resolved user context.
+- The Emailgistics helper depends on extra runtime config beyond the shared Entra app: `EMAILGISTICS_TOKEN_VALID_URL`, `EMAILGISTICS_USER_SYNC_URL`, and `EMAILGISTICS_AUTH_TOKEN`. Sync-all Emailgistics runs also need `EMAILGISTICS_CONFIGURED_MAILBOXES` when `customerData.json` is not available on the runtime.
+- The Emailgistics `Sync Now` action should still return a readable result payload even though there is no resolved user context, and blank-mailbox runs should render clear global-sync labels instead of empty mailbox fields.
 - `scripts/syncUsers/customerData.json` is local sensitive material and must stay out of git and out of the backend image. Prefer environment variables for runtime Emailgistics settings.
 - Org-wide delegate scans are not instant. Expect roughly 20 to 90 seconds in normal cases and 5 to 10 minutes in larger tenants, so UX copy and polling should set that expectation.
 - Delegate scan cancellation has to reach the server-side job and the live Exchange call. Avoid UI-only cancel states that leave the background work running.

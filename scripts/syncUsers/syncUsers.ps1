@@ -89,6 +89,7 @@ $clientSecret = if ($customerData.clientSecret) { $customerData.clientSecret } e
 $appId = if ($customerData.appId) { $customerData.appId } elseif ($env:EMAILGISTICS_APP_ID) { $env:EMAILGISTICS_APP_ID } else { "" }
 $organizationDomain = if ($customerData.organizationDomain) { $customerData.organizationDomain } elseif ($env:EMAILGISTICS_ORGANIZATION_DOMAIN) { $env:EMAILGISTICS_ORGANIZATION_DOMAIN } elseif ($env:EXCHANGE_ONLINE_ORGANIZATION) { $env:EXCHANGE_ONLINE_ORGANIZATION } else { "" }
 $targetMailbox = if ($env:EMAILGISTICS_TARGET_MAILBOX) { $env:EMAILGISTICS_TARGET_MAILBOX.Trim().ToLowerInvariant() } else { "" }
+$configuredMailboxesFromEnv = if ($env:EMAILGISTICS_CONFIGURED_MAILBOXES) { @($env:EMAILGISTICS_CONFIGURED_MAILBOXES -split "[,;`n`r]") } else { @() }
 $syncSecurityGroupsDefault = @("1", "true", "yes", "on") -contains (("$env:EMAILGISTICS_SYNC_SECURITY_GROUPS").Trim().ToLowerInvariant())
 
 $mgGraphAppId = if ($customerData.mgGraphAppId) { $customerData.mgGraphAppId } elseif ($env:MG_GRAPH_APP_ID) { $env:MG_GRAPH_APP_ID } else { "" }
@@ -125,6 +126,23 @@ ForEach($mailbox in @($customerData.mailboxes)) {
     }
 }
 
+if ($mailboxes.Count -eq 0) {
+    ForEach($mailboxAddress in $configuredMailboxesFromEnv) {
+        $normalizedMailboxAddress = "$mailboxAddress".Trim().ToLowerInvariant()
+        if (-not $normalizedMailboxAddress) {
+            continue
+        }
+        if ($targetMailbox -and $normalizedMailboxAddress -ne $targetMailbox) {
+            continue
+        }
+        $mailboxes += [pscustomobject]@{
+            mailboxAddress = $normalizedMailboxAddress
+            syncMailbox = $true
+            syncSecurityGroups = $syncSecurityGroupsDefault
+        }
+    }
+}
+
 if ($targetMailbox -and $mailboxes.Count -eq 0) {
     $mailboxes += [pscustomobject]@{
         mailboxAddress = $targetMailbox
@@ -134,7 +152,7 @@ if ($targetMailbox -and $mailboxes.Count -eq 0) {
 }
 
 if ($mailboxes.Count -eq 0) {
-    Write-Host "Error: No Emailgistics mailboxes were configured. Provide customerData.json mailboxes or EMAILGISTICS_TARGET_MAILBOX."
+    Write-Host "Error: No Emailgistics mailboxes were configured. Provide customerData.json mailboxes, EMAILGISTICS_CONFIGURED_MAILBOXES, or EMAILGISTICS_TARGET_MAILBOX."
     Close-Script
 }
 

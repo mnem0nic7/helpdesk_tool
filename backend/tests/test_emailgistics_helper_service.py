@@ -148,14 +148,14 @@ def test_emailgistics_helper_stops_before_permissions_when_sync_prereqs_fail(mon
         service,
         "_prepare_sync_users_execution",
         lambda shared_mailbox: (_ for _ in ()).throw(
-            EmailgisticsHelperError("Emailgistics Helper is not fully configured on the app runtime.")
+            EmailgisticsHelperError("Emailgistics automation is not fully configured on the app runtime.")
         ),
     )
 
     result = service.run(user_mailbox="user@example.com", shared_mailbox="shared@example.com")
 
     assert result["status"] == "failed"
-    assert result["error"] == "Emailgistics Helper is not fully configured on the app runtime."
+    assert result["error"] == "Emailgistics automation is not fully configured on the app runtime."
     assert result["steps"][0]["status"] == "failed"
     assert call_log == []
 
@@ -199,4 +199,37 @@ def test_emailgistics_sync_now_runs_only_sync_script(monkeypatch):
         "resolve_shared_mailbox",
         "prepare_sync",
         "run_sync",
+    ]
+
+
+def test_emailgistics_sync_now_runs_all_configured_mailboxes_without_target(monkeypatch):
+    call_log: list[str] = []
+    exchange_client = FakeExchangeClient(call_log)
+    service = EmailgisticsHelperService(client=MagicMock(), exchange_client=exchange_client)
+
+    monkeypatch.setattr(
+        service,
+        "_prepare_sync_users_execution",
+        lambda shared_mailbox=None: call_log.append(f"prepare_sync:{shared_mailbox}") or MagicMock(name="sync_execution"),
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_sync_users_script",
+        lambda shared_mailbox=None, *, execution=None: call_log.append(f"run_sync:{shared_mailbox}") or {
+            "status": "completed",
+            "message": "Ran Emailgistics sync for all configured mailboxes.",
+            "output": "Users have been successfully synced.",
+        },
+    )
+
+    result = service.run_sync_only(shared_mailbox="")
+
+    assert result["status"] == "completed"
+    assert result["shared_mailbox"] == ""
+    assert result["resolved_shared_principal_name"] == ""
+    assert result["note"] == "Emailgistics sync finished for all configured mailboxes."
+    assert [step["status"] for step in result["steps"]] == ["completed"]
+    assert call_log == [
+        "prepare_sync:None",
+        "run_sync:None",
     ]

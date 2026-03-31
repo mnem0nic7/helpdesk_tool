@@ -906,6 +906,39 @@ def test_emailgistics_sync_now_runs_for_admin_tools_users(test_client, monkeypat
     mock_service.run_sync_only.assert_called_once_with(shared_mailbox="shared@example.com")
 
 
+def test_emailgistics_sync_now_allows_empty_shared_mailbox_for_admin_tools_users(test_client, monkeypatch):
+    import routes_tools
+
+    mock_service = MagicMock()
+    mock_service.run_sync_only.return_value = {
+        "status": "completed",
+        "user_mailbox": "",
+        "shared_mailbox": "",
+        "resolved_user_display_name": "",
+        "resolved_user_principal_name": "",
+        "resolved_shared_display_name": "",
+        "resolved_shared_principal_name": "",
+        "addin_group_name": "Emailgistics_UserAddin",
+        "note": "Emailgistics sync finished for all configured mailboxes.",
+        "error": "",
+        "sync_output": "Users have been successfully synced.",
+        "steps": [
+            {"key": "sync_users", "label": "Run Emailgistics Sync", "status": "completed", "message": "ok"},
+        ],
+    }
+    monkeypatch.setattr(routes_tools, "emailgistics_helper_service", mock_service)
+
+    resp = test_client.post(
+        "/api/tools/emailgistics-helper/sync-now",
+        headers={"host": "it-app.movedocs.com"},
+        json={},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"
+    mock_service.run_sync_only.assert_called_once_with(shared_mailbox=None)
+
+
 def test_emailgistics_helper_rejects_non_admin_users(test_client, monkeypatch):
     import routes_tools
 

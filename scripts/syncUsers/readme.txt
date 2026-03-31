@@ -38,7 +38,7 @@ Here's a list of everything that the script does:
     - Prompt to upgrade if Microsoft.Graph submodule v2.6.0 (unsupported) or ExchangeOnlineManagement v2.x is detected
     - Verify the authentication token with the Emailgistics server for each mailbox
     - Prompt you for your Microsoft 365 administrator username (interactive mode) or use certificate-based authentication (noninteractive mode)
-    - Allow environment-backed noninteractive execution for targeted shared-mailbox sync runs
+    - Allow environment-backed noninteractive execution for targeted shared-mailbox sync runs or sync-all reruns backed by configured mailbox lists
     - Connect to Microsoft Graph with the required permissions (User.Read, Directory.Read.All)
     - Validate the Graph session and detect cached credential mismatches (interactive mode)
     - Connect to Exchange Online

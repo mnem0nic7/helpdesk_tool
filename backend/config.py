@@ -151,6 +151,11 @@ EXCHANGE_DELEGATE_SCAN_TIMEOUT_SECONDS: int = int(
 EMAILGISTICS_TOKEN_VALID_URL: str = os.getenv("EMAILGISTICS_TOKEN_VALID_URL", "").strip()
 EMAILGISTICS_USER_SYNC_URL: str = os.getenv("EMAILGISTICS_USER_SYNC_URL", "").strip()
 EMAILGISTICS_AUTH_TOKEN: str = os.getenv("EMAILGISTICS_AUTH_TOKEN", "").strip()
+EMAILGISTICS_CONFIGURED_MAILBOXES: list[str] = [
+    mailbox.lower()
+    for mailbox in _env_csv("EMAILGISTICS_CONFIGURED_MAILBOXES")
+    if mailbox.strip()
+]
 EMAILGISTICS_SYNC_SECURITY_GROUPS: bool = os.getenv("EMAILGISTICS_SYNC_SECURITY_GROUPS", "0").strip().lower() in {
     "1",
     "true",

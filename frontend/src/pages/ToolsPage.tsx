@@ -947,17 +947,24 @@ function EmailgisticsHelperResults({
   if (!result) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-        Use Emailgistics Helper to grant access and sync a shared mailbox, or use Sync Now to rerun syncUsers.ps1 for a shared mailbox that is already configured.
+        Use Emailgistics Helper to grant access and sync a shared mailbox, or use Sync Now to rerun syncUsers.ps1 for all configured Emailgistics mailboxes or a specific shared mailbox.
       </div>
     );
   }
 
   const isSyncOnly = !(result.resolved_user_principal_name || result.user_mailbox);
+  const sharedMailboxTitle =
+    result.resolved_shared_display_name ||
+    result.resolved_shared_principal_name ||
+    result.shared_mailbox ||
+    "All configured mailboxes";
+  const sharedMailboxSubtitle =
+    result.resolved_shared_principal_name || result.shared_mailbox || (isSyncOnly ? "Global Emailgistics sync run" : "");
   const resultTitle = isSyncOnly
-    ? result.resolved_shared_display_name || result.resolved_shared_principal_name || result.shared_mailbox
+    ? sharedMailboxTitle
     : result.resolved_user_display_name || result.resolved_user_principal_name || result.user_mailbox;
   const resultSubtitle = isSyncOnly
-    ? result.resolved_shared_principal_name || result.shared_mailbox
+    ? sharedMailboxSubtitle
     : `${result.resolved_user_principal_name || result.user_mailbox} -> ${result.resolved_shared_principal_name || result.shared_mailbox}`;
   const resultLabel = isSyncOnly ? "Emailgistics Sync" : "Emailgistics Helper";
 
@@ -998,8 +1005,8 @@ function EmailgisticsHelperResults({
         )}
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Shared mailbox</div>
-          <div className="mt-1 font-medium text-slate-900">{result.resolved_shared_display_name || result.resolved_shared_principal_name || result.shared_mailbox}</div>
-          <div className="text-xs text-slate-500">{result.resolved_shared_principal_name || result.shared_mailbox}</div>
+          <div className="mt-1 font-medium text-slate-900">{sharedMailboxTitle}</div>
+          <div className="text-xs text-slate-500">{sharedMailboxSubtitle}</div>
         </div>
       </div>
 
@@ -1315,7 +1322,7 @@ export default function ToolsPage() {
     mutationFn: () =>
       api.runEmailgisticsSyncNow({
         shared_mailbox:
-          selectedEmailgisticsSharedMailbox?.canonical_upn.trim() || emailgisticsSharedMailboxInput.trim(),
+          selectedEmailgisticsSharedMailbox?.canonical_upn.trim() || emailgisticsSharedMailboxInput.trim() || undefined,
       }),
     onMutate: () => {
       setEmailgisticsHelperFormError("");
@@ -1516,8 +1523,8 @@ export default function ToolsPage() {
   function submitEmailgisticsSyncNow() {
     const sharedMailbox =
       selectedEmailgisticsSharedMailbox?.canonical_upn.trim() || emailgisticsSharedMailboxInput.trim();
-    if (!sharedMailbox || !looksLikeUpn(sharedMailbox)) {
-      setEmailgisticsHelperFormError("Select a valid shared mailbox before running Emailgistics sync.");
+    if (sharedMailbox && !looksLikeUpn(sharedMailbox)) {
+      setEmailgisticsHelperFormError("Enter a valid shared mailbox or leave it blank to sync all configured Emailgistics mailboxes.");
       return;
     }
     setEmailgisticsHelperFormError("");
@@ -1558,7 +1565,6 @@ export default function ToolsPage() {
     !runEmailgisticsSyncNowMutation.isPending;
   const canRunEmailgisticsSyncNow =
     canUseEmailgisticsHelper &&
-    (selectedEmailgisticsSharedMailbox !== null || looksLikeUpn(emailgisticsSharedMailboxInput)) &&
     !runEmailgisticsHelperMutation.isPending &&
     !runEmailgisticsSyncNowMutation.isPending;
   const emailgisticsRunningLabel = runEmailgisticsHelperMutation.isPending
@@ -1863,7 +1869,8 @@ export default function ToolsPage() {
                 </button>
                 <span className="text-sm text-slate-500">
                   Run the full helper to apply permissions and group membership first, or use Sync Now to rerun only
-                  the Emailgistics syncUsers script for the selected shared mailbox.
+                  the Emailgistics syncUsers script. Leave the shared mailbox blank to sync all configured Emailgistics
+                  mailboxes, or enter one to target a single mailbox.
                 </span>
               </div>
 

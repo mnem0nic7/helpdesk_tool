@@ -12,6 +12,7 @@ from urllib.parse import quote
 from azure_client import AzureApiError, AzureClient
 from config import (
     EMAILGISTICS_AUTH_TOKEN,
+    EMAILGISTICS_CONFIGURED_MAILBOXES,
     EMAILGISTICS_SYNC_SECURITY_GROUPS,
     EMAILGISTICS_TOKEN_VALID_URL,
     EMAILGISTICS_USER_SYNC_URL,
@@ -168,12 +169,13 @@ class EmailgisticsHelperService:
             "message": f"Added {user.get('primary_address') or user.get('principal_name')} to {group.get('display_name') or self.addin_group_name}.",
         }
 
-    def _prepare_sync_users_execution(self, shared_mailbox: str) -> EmailgisticsSyncExecution:
+    def _prepare_sync_users_execution(self, shared_mailbox: str | None = None) -> EmailgisticsSyncExecution:
         script_dir = Path(self.sync_script_dir or "")
         script_path = script_dir / "syncUsers.ps1"
         if not script_path.exists():
             raise EmailgisticsHelperError("The Emailgistics syncUsers.ps1 script is not available on the app runtime.")
         exchange_client = self.exchange_client or ExchangeOnlinePowerShellClient(self.client)
+        normalized_shared_mailbox = str(shared_mailbox or "").strip().lower()
         missing_settings: list[str] = []
         if not EMAILGISTICS_TOKEN_VALID_URL:
             missing_settings.append("EMAILGISTICS_TOKEN_VALID_URL")
@@ -187,9 +189,11 @@ class EmailgisticsHelperService:
             missing_settings.append("ENTRA_CLIENT_ID")
         if not ENTRA_CLIENT_SECRET:
             missing_settings.append("ENTRA_CLIENT_SECRET")
+        if not normalized_shared_mailbox and not EMAILGISTICS_CONFIGURED_MAILBOXES:
+            missing_settings.append("EMAILGISTICS_CONFIGURED_MAILBOXES")
         if missing_settings:
             raise EmailgisticsHelperError(
-                "Emailgistics Helper is not fully configured on the app runtime. Missing "
+                "Emailgistics automation is not fully configured on the app runtime. Missing "
                 + ", ".join(missing_settings)
                 + "."
             )
@@ -198,7 +202,6 @@ class EmailgisticsHelperService:
         env.update(
             {
                 "EMAILGISTICS_NONINTERACTIVE": "1",
-                "EMAILGISTICS_TARGET_MAILBOX": shared_mailbox,
                 "EMAILGISTICS_TOKEN_VALID_URL": EMAILGISTICS_TOKEN_VALID_URL,
                 "EMAILGISTICS_USER_SYNC_URL": EMAILGISTICS_USER_SYNC_URL,
                 "EMAILGISTICS_AUTH_TOKEN": EMAILGISTICS_AUTH_TOKEN,
@@ -206,11 +209,16 @@ class EmailgisticsHelperService:
                 "EMAILGISTICS_APP_ID": ENTRA_CLIENT_ID,
                 "EMAILGISTICS_CLIENT_SECRET": ENTRA_CLIENT_SECRET,
                 "EMAILGISTICS_ORGANIZATION_DOMAIN": organization,
+                "EMAILGISTICS_CONFIGURED_MAILBOXES": ",".join(EMAILGISTICS_CONFIGURED_MAILBOXES),
                 "EMAILGISTICS_SYNC_SECURITY_GROUPS": "1" if EMAILGISTICS_SYNC_SECURITY_GROUPS else "0",
                 "EXCHANGE_ONLINE_ORGANIZATION": organization,
                 "MG_GRAPH_APP_ID": ENTRA_CLIENT_ID,
             }
         )
+        if normalized_shared_mailbox:
+            env["EMAILGISTICS_TARGET_MAILBOX"] = normalized_shared_mailbox
+        else:
+            env.pop("EMAILGISTICS_TARGET_MAILBOX", None)
         return EmailgisticsSyncExecution(
             exchange_client=exchange_client,
             script_dir=script_dir,
@@ -220,11 +228,12 @@ class EmailgisticsHelperService:
 
     def _run_sync_users_script(
         self,
-        shared_mailbox: str,
+        shared_mailbox: str | None,
         *,
         execution: EmailgisticsSyncExecution | None = None,
     ) -> dict[str, str]:
         prepared = execution or self._prepare_sync_users_execution(shared_mailbox)
+        target_label = str(shared_mailbox or "").strip() or "all configured mailboxes"
         process = subprocess.Popen(
             [prepared.exchange_client.pwsh_path, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(prepared.script_path)],
             cwd=str(prepared.script_dir),
@@ -244,7 +253,7 @@ class EmailgisticsHelperService:
             raise EmailgisticsHelperError(output or "Emailgistics syncUsers.ps1 failed.")
         return {
             "status": "completed",
-            "message": f"Ran Emailgistics sync for {shared_mailbox}.",
+            "message": f"Ran Emailgistics sync for {target_label}.",
             "output": output[:4000],
         }
 
@@ -322,7 +331,7 @@ class EmailgisticsHelperService:
                     break
         return response
 
-    def run_sync_only(self, *, shared_mailbox: str) -> dict[str, Any]:
+    def run_sync_only(self, *, shared_mailbox: str | None) -> dict[str, Any]:
         normalized_shared_mailbox = str(shared_mailbox or "").strip()
         steps = [_step_payload("sync_users")]
         response: dict[str, Any] = {
@@ -340,18 +349,20 @@ class EmailgisticsHelperService:
             "steps": steps,
         }
         try:
-            shared = self._resolve_shared_mailbox(
-                normalized_shared_mailbox,
-                anchor_mailbox=normalized_shared_mailbox,
-            )
-            resolved_shared_mailbox = (
-                shared.get("primary_address") or shared.get("principal_name") or normalized_shared_mailbox
-            )
-            response["resolved_shared_display_name"] = shared.get("display_name") or ""
-            response["resolved_shared_principal_name"] = resolved_shared_mailbox
-            sync_execution = self._prepare_sync_users_execution(resolved_shared_mailbox)
+            resolved_shared_mailbox = ""
+            if normalized_shared_mailbox:
+                shared = self._resolve_shared_mailbox(
+                    normalized_shared_mailbox,
+                    anchor_mailbox=normalized_shared_mailbox,
+                )
+                resolved_shared_mailbox = (
+                    shared.get("primary_address") or shared.get("principal_name") or normalized_shared_mailbox
+                )
+                response["resolved_shared_display_name"] = shared.get("display_name") or ""
+                response["resolved_shared_principal_name"] = resolved_shared_mailbox
+            sync_execution = self._prepare_sync_users_execution(resolved_shared_mailbox or None)
             sync_step = self._run_sync_users_script(
-                resolved_shared_mailbox,
+                resolved_shared_mailbox or None,
                 execution=sync_execution,
             )
             steps[0] = _step_payload(
@@ -361,7 +372,11 @@ class EmailgisticsHelperService:
             )
             response["sync_output"] = str(sync_step.get("output") or "")
             response["status"] = "completed"
-            response["note"] = f"Emailgistics sync finished for {resolved_shared_mailbox}."
+            response["note"] = (
+                f"Emailgistics sync finished for {resolved_shared_mailbox}."
+                if resolved_shared_mailbox
+                else "Emailgistics sync finished for all configured mailboxes."
+            )
         except (EmailgisticsHelperError, ExchangeOnlinePowerShellError) as exc:
             response["error"] = str(exc)
             response["note"] = "Emailgistics sync stopped before it could finish."

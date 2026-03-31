@@ -1503,7 +1503,7 @@ export interface EmailgisticsHelperRequest {
 }
 
 export interface EmailgisticsSyncNowRequest {
-  shared_mailbox: string;
+  shared_mailbox?: string;
 }
 
 export interface EmailgisticsHelperStep {

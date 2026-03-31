@@ -328,21 +328,21 @@ describe("ToolsPage", () => {
     mockApi.runEmailgisticsSyncNow.mockResolvedValue({
       status: "completed",
       user_mailbox: "",
-      shared_mailbox: "helper-shared@example.com",
+      shared_mailbox: "",
       resolved_user_display_name: "",
       resolved_user_principal_name: "",
-      resolved_shared_display_name: "Helper Shared",
-      resolved_shared_principal_name: "helper-shared@example.com",
+      resolved_shared_display_name: "",
+      resolved_shared_principal_name: "",
       addin_group_name: "Emailgistics_UserAddin",
-      note: "Emailgistics sync finished for helper-shared@example.com.",
+      note: "Emailgistics sync finished for all configured mailboxes.",
       error: "",
-      sync_output: "Users have been successfully synced for helper-shared@example.com.",
+      sync_output: "Users have been successfully synced for all configured Emailgistics mailboxes.",
       steps: [
         {
           key: "sync_users" as const,
           label: "Run Emailgistics Sync",
           status: "completed" as const,
-          message: "Ran Emailgistics sync for helper-shared@example.com.",
+          message: "Ran Emailgistics sync for all configured mailboxes.",
         },
       ],
     });
@@ -510,21 +510,16 @@ describe("ToolsPage", () => {
 
     await screen.findByText("Grant mailbox access and sync Emailgistics");
 
-    const sharedMailboxInput = screen.getByLabelText("Shared mailbox UPN or email");
-    fireEvent.focus(sharedMailboxInput);
-    fireEvent.change(sharedMailboxInput, { target: { value: "helper-shared@example.com" } });
-    fireEvent.click(await screen.findByRole("button", { name: /Use and save "helper-shared@example.com"/i }));
-
     fireEvent.click(screen.getByRole("button", { name: "Sync Now" }));
 
     await waitFor(() => {
-      expect(mockApi.runEmailgisticsSyncNow).toHaveBeenCalledWith({
-        shared_mailbox: "helper-shared@example.com",
-      });
+      expect(mockApi.runEmailgisticsSyncNow).toHaveBeenCalledWith({});
     });
 
-    expect(await screen.findByText("Emailgistics sync finished for helper-shared@example.com.")).toBeInTheDocument();
-    expect(screen.getByText("Users have been successfully synced for helper-shared@example.com.")).toBeInTheDocument();
+    expect((await screen.findAllByText("All configured mailboxes")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Global Emailgistics sync run").length).toBeGreaterThan(0);
+    expect(screen.getByText("Emailgistics sync finished for all configured mailboxes.")).toBeInTheDocument();
+    expect(screen.getByText("Users have been successfully synced for all configured Emailgistics mailboxes.")).toBeInTheDocument();
   });
 
   it("renders tools for signed-in users even if the legacy tools-access flag is false", async () => {

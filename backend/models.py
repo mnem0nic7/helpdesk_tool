@@ -903,7 +903,7 @@ class EmailgisticsHelperRequest(BaseModel):
 class EmailgisticsSyncNowRequest(BaseModel):
     """Request body for the Emailgistics sync-only tool action."""
 
-    shared_mailbox: str = Field(min_length=3, max_length=320)
+    shared_mailbox: str | None = Field(default=None, min_length=3, max_length=320)
 
 
 class EmailgisticsHelperStepResponse(BaseModel):
