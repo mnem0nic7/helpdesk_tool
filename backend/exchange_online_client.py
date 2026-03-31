@@ -216,6 +216,29 @@ $fullAccess = @(
         user = str(user_identifier or "").strip()
         if not user:
             raise ExchangeOnlinePowerShellError("user is required")
+        send_as_payload = self._run_script(
+            """
+$delegateUser = $env:DELEGATE_USER
+$mailboxes = @(
+  Get-EXORecipientPermission -Trustee $delegateUser -ResultSize Unlimited |
+    Where-Object { $_.AccessRights -contains 'SendAs' -and $_.Deny -ne $true } |
+    ForEach-Object {
+      $identity = $_.Identity
+      [pscustomobject]@{
+        Identity = $identity
+        DisplayName = $identity
+        UserPrincipalName = $identity
+        PrimarySmtpAddress = $identity
+        PermissionTypes = @('send_as')
+      }
+    }
+)
+[pscustomobject]@{
+  mailboxes = $mailboxes
+} | ConvertTo-Json -Depth 8 -Compress
+""".strip(),
+            extra_env={"DELEGATE_USER": user},
+        )
         payload = self._run_script(
             """
 $delegateUser = $env:DELEGATE_USER
@@ -281,33 +304,28 @@ $unexpectedFullAccessErrors = @(
 if ($unexpectedFullAccessErrors.Count -gt 0) {
   throw $unexpectedFullAccessErrors[0]
 }
-$sendAs = @(
-  Get-EXORecipientPermission -Trustee $delegateUser -ResultSize Unlimited |
-    Where-Object { $_.AccessRights -contains 'SendAs' -and $_.Deny -ne $true } |
-    Select-Object -ExpandProperty Identity -Unique
-)
-$allIdentities = @($fullAccess + $sendAs | Sort-Object -Unique)
-$mailboxes = @(
-  foreach ($identity in $allIdentities) {
-    $mailbox = Get-Mailbox -Identity $identity
-    [pscustomobject]@{
-      Identity = $identity
-      DisplayName = $mailbox.DisplayName
-      UserPrincipalName = $mailbox.UserPrincipalName
-      PrimarySmtpAddress = $mailbox.PrimarySmtpAddress.ToString()
-      PermissionTypes = @(
-        if ($identity -in $fullAccess) { 'full_access' }
-        if ($identity -in $sendAs) { 'send_as' }
-      )
-    }
-  }
-)
 [pscustomobject]@{
   mailbox_count_scanned = $allMailboxes.Count
-  mailboxes = $mailboxes
+  mailboxes = @(
+    foreach ($identity in $fullAccess) {
+      $mailbox = Get-Mailbox -Identity $identity
+      [pscustomobject]@{
+        Identity = $identity
+        DisplayName = $mailbox.DisplayName
+        UserPrincipalName = $mailbox.UserPrincipalName
+        PrimarySmtpAddress = $mailbox.PrimarySmtpAddress.ToString()
+        PermissionTypes = @('full_access')
+      }
+    }
+  )
 } | ConvertTo-Json -Depth 8 -Compress
 """.strip(),
             extra_env={"DELEGATE_USER": user},
             timeout_seconds=max(EXCHANGE_DELEGATE_SCAN_TIMEOUT_SECONDS, int(self.timeout_seconds or 0)),
         )
-        return payload if isinstance(payload, dict) else {}
+        send_as_mailboxes = send_as_payload.get("mailboxes") if isinstance(send_as_payload, dict) else []
+        full_access_mailboxes = payload.get("mailboxes") if isinstance(payload, dict) else []
+        return {
+            "mailbox_count_scanned": int(payload.get("mailbox_count_scanned") or 0) if isinstance(payload, dict) else 0,
+            "mailboxes": [*(send_as_mailboxes or []), *(full_access_mailboxes or [])],
+        }

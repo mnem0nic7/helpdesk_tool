@@ -216,17 +216,16 @@ class FakeDelegateMailboxScanClient:
 
 
 class FakeExchangePowerShellUserMatches:
-    def get_delegate_mailboxes_for_user(self, user_identifier: str):
+    def get_send_as_mailboxes_for_user(self, user_identifier: str):
         assert user_identifier == "delegate@example.com"
         return {
-            "mailbox_count_scanned": 7,
             "mailboxes": [
                 {
                     "Identity": "shared@example.com",
                     "DisplayName": "Shared Mailbox",
                     "UserPrincipalName": "shared@example.com",
                     "PrimarySmtpAddress": "shared@example.com",
-                    "PermissionTypes": ["full_access", "send_as"],
+                    "PermissionTypes": ["send_as"],
                 },
                 {
                     "Identity": "finance@example.com",
@@ -237,6 +236,29 @@ class FakeExchangePowerShellUserMatches:
                 },
             ],
         }
+
+    def get_full_access_mailboxes_for_user(self, user_identifier: str):
+        assert user_identifier == "delegate@example.com"
+        return {
+            "mailbox_count_scanned": 7,
+            "mailboxes": [
+                {
+                    "Identity": "shared@example.com",
+                    "DisplayName": "Shared Mailbox",
+                    "UserPrincipalName": "shared@example.com",
+                    "PrimarySmtpAddress": "shared@example.com",
+                    "PermissionTypes": ["full_access"],
+                },
+            ],
+        }
+
+
+class FakeExchangePowerShellUserMatchesWithFullAccessTimeout(FakeExchangePowerShellUserMatches):
+    def get_full_access_mailboxes_for_user(self, user_identifier: str):
+        assert user_identifier == "delegate@example.com"
+        from exchange_online_client import ExchangeOnlinePowerShellError
+
+        raise ExchangeOnlinePowerShellError("Exchange Online PowerShell timed out after 600 seconds.")
 
 
 def test_list_mailbox_delegates_returns_all_supported_delegate_types():
@@ -343,6 +365,24 @@ def test_list_delegate_mailboxes_for_user_merges_send_on_behalf_send_as_and_full
             "display_name": "Shared Mailbox",
             "principal_name": "shared@example.com",
             "primary_address": "shared@example.com",
-            "permission_types": ["send_on_behalf", "full_access", "send_as"],
+            "permission_types": ["send_on_behalf", "send_as", "full_access"],
         }
     ]
+
+
+def test_list_delegate_mailboxes_for_user_returns_partial_results_when_full_access_scan_times_out():
+    client = FakeDelegateMailboxScanClient()
+    provider = MailboxAdminProvider(
+        client=client,
+        exchange_powershell=FakeExchangePowerShellUserMatchesWithFullAccessTimeout(),
+    )
+
+    result = provider.list_delegate_mailboxes_for_user("delegate@example.com")
+
+    assert result["mailbox_count"] == 2
+    assert result["permission_counts"] == {
+        "send_on_behalf": 1,
+        "send_as": 2,
+        "full_access": 0,
+    }
+    assert "Full Access matches are not fully included" in result["note"]

@@ -1159,6 +1159,22 @@ class MailboxAdminProvider:
         except ExchangeOnlinePowerShellError as exc:
             raise UserAdminProviderError(str(exc)) from exc
 
+    def _exchange_send_as_mailboxes_for_user(self, user_identifier: str) -> dict[str, Any]:
+        try:
+            return self.exchange_powershell.get_send_as_mailboxes_for_user(user_identifier) if self.exchange_powershell else {}
+        except AttributeError:
+            return self._exchange_delegate_mailboxes_for_user(user_identifier)
+        except ExchangeOnlinePowerShellError as exc:
+            raise UserAdminProviderError(str(exc)) from exc
+
+    def _exchange_full_access_mailboxes_for_user(self, user_identifier: str) -> dict[str, Any]:
+        try:
+            return self.exchange_powershell.get_full_access_mailboxes_for_user(user_identifier) if self.exchange_powershell else {}
+        except AttributeError:
+            return self._exchange_delegate_mailboxes_for_user(user_identifier)
+        except ExchangeOnlinePowerShellError as exc:
+            raise UserAdminProviderError(str(exc)) from exc
+
     def _normalize_send_as_entries(self, rows: Any) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
         for row in rows or []:
@@ -1324,8 +1340,29 @@ class MailboxAdminProvider:
             progress_message="Checking Exchange permissions for Send As and Full Access",
             scanned_mailbox_count=len(rows),
         )
-        exchange_matches = self._exchange_delegate_mailboxes_for_user(resolved_principal_name or user)
-        for row in exchange_matches.get("mailboxes") or []:
+        partial_note = ""
+        send_as_matches = self._exchange_send_as_mailboxes_for_user(resolved_principal_name or user)
+        for row in send_as_matches.get("mailboxes") or []:
+            if not isinstance(row, dict):
+                continue
+            mailbox_match = _exchange_mailbox_match(row)
+            mailbox_match["permission_types"] = [
+                str(permission_type or "").strip()
+                for permission_type in row.get("PermissionTypes") or row.get("permission_types") or []
+                if str(permission_type or "").strip()
+            ]
+            matches.append(mailbox_match)
+
+        try:
+            full_access_matches = self._exchange_full_access_mailboxes_for_user(resolved_principal_name or user)
+        except UserAdminProviderError as exc:
+            if "timed out" in str(exc).lower():
+                partial_note = " Full Access matches are not fully included because the org-wide Full Access scan timed out."
+                full_access_matches = {"mailbox_count_scanned": len(rows), "mailboxes": []}
+            else:
+                raise
+
+        for row in full_access_matches.get("mailboxes") or []:
             if not isinstance(row, dict):
                 continue
             mailbox_match = _exchange_mailbox_match(row)
@@ -1338,7 +1375,11 @@ class MailboxAdminProvider:
 
         matches = _merge_mailbox_matches(matches)
         permission_counts = _permission_counts(matches)
-        scanned_mailbox_count = max(len(rows), int(exchange_matches.get("mailbox_count_scanned") or 0))
+        scanned_mailbox_count = max(
+            len(rows),
+            int(send_as_matches.get("mailbox_count_scanned") or 0),
+            int(full_access_matches.get("mailbox_count_scanned") or 0),
+        )
         _emit_progress(
             progress_callback,
             phase="merging_results",
@@ -1356,9 +1397,9 @@ class MailboxAdminProvider:
             "supported_permission_types": list(_MAILBOX_DELEGATE_PERMISSION_TYPES),
             "permission_counts": permission_counts,
             "note": (
-                f"Scanned {scanned_mailbox_count:,} mailboxes for Send on behalf, Send As, and Full Access."
+                f"Scanned {scanned_mailbox_count:,} mailboxes for Send on behalf, Send As, and Full Access.{partial_note}"
                 if matches
-                else f"No delegate mailbox access was found after scanning {scanned_mailbox_count:,} mailboxes."
+                else f"No delegate mailbox access was found after scanning {scanned_mailbox_count:,} mailboxes.{partial_note}"
             ),
             "mailbox_count": len(matches),
             "scanned_mailbox_count": scanned_mailbox_count,
