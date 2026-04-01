@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.responses import RedirectResponse
+from requests.exceptions import SSLError
 
 # Make backend importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -657,6 +658,62 @@ class TestAuthMiddleware:
 
         assert resp.status_code == 403
         assert "not authorized" in resp.text
+
+    def test_resolve_atlassian_identity_falls_back_when_optional_me_request_fails(self, monkeypatch):
+        import routes_auth
+
+        class _Response:
+            def __init__(self, *, ok: bool, payload: dict[str, object]):
+                self.ok = ok
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+        calls: list[str] = []
+
+        def _fake_get(url, **kwargs):
+            calls.append(str(url))
+            if url == "https://api.atlassian.com/me":
+                raise SSLError("EOF occurred in violation of protocol")
+            if url == "https://api.atlassian.com/ex/jira/cloud-1/rest/api/3/myself":
+                return _Response(
+                    ok=True,
+                    payload={
+                        "accountId": "acct-123",
+                        "emailAddress": "oasis.user@example.com",
+                        "displayName": "Oasis User",
+                    },
+                )
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        monkeypatch.setattr(routes_auth.requests, "get", _fake_get)
+
+        identity = routes_auth._resolve_atlassian_identity("access-token", "cloud-1")
+
+        assert identity == {
+            "account_id": "acct-123",
+            "email": "oasis.user@example.com",
+            "name": "Oasis User",
+        }
+        assert calls == [
+            "https://api.atlassian.com/me",
+            "https://api.atlassian.com/ex/jira/cloud-1/rest/api/3/myself",
+        ]
+
+    def test_resolve_allowed_atlassian_resource_wraps_request_failures(self, monkeypatch):
+        import routes_auth
+
+        def _fake_get(url, **kwargs):
+            raise SSLError("EOF occurred in violation of protocol")
+
+        monkeypatch.setattr(routes_auth.requests, "get", _fake_get)
+
+        with pytest.raises(routes_auth.HTTPException) as exc_info:
+            routes_auth._resolve_allowed_atlassian_resource("access-token")
+
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.detail == "Unable to resolve Atlassian site access"
 
     def test_auth_me_uses_session_flags_and_connected_jira_identity(self, auth_client):
         from auth import create_session, save_atlassian_connection

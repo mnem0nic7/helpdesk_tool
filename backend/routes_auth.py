@@ -104,11 +104,15 @@ async def _authorize_atlassian(request: Request, route_name: str):
 
 
 def _resolve_allowed_atlassian_resource(access_token: str) -> tuple[str, str, str]:
-    resources_resp = requests.get(
-        "https://api.atlassian.com/oauth/token/accessible-resources",
-        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
-        timeout=(10, 30),
-    )
+    try:
+        resources_resp = requests.get(
+            "https://api.atlassian.com/oauth/token/accessible-resources",
+            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            timeout=(10, 30),
+        )
+    except requests.RequestException as exc:
+        logger.warning("Failed to resolve Atlassian accessible resources", exc_info=exc)
+        raise HTTPException(status_code=502, detail="Unable to resolve Atlassian site access") from exc
     if not resources_resp.ok:
         raise HTTPException(status_code=502, detail="Unable to resolve Atlassian site access")
     resources = resources_resp.json()
@@ -131,22 +135,33 @@ def _resolve_allowed_atlassian_resource(access_token: str) -> tuple[str, str, st
 
 def _resolve_atlassian_identity(access_token: str, cloud_id: str) -> dict[str, str]:
     identity_payload: dict[str, Any] = {}
-    identity_resp = requests.get(
-        "https://api.atlassian.com/me",
-        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
-        timeout=(10, 30),
-    )
-    if identity_resp.ok:
-        identity_payload = identity_resp.json()
+    try:
+        identity_resp = requests.get(
+            "https://api.atlassian.com/me",
+            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            timeout=(10, 30),
+        )
+        if identity_resp.ok:
+            identity_payload = identity_resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Failed to resolve optional Atlassian /me profile; falling back to Jira /myself", exc_info=exc)
 
-    myself_resp = requests.get(
-        f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/myself",
-        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
-        timeout=(10, 30),
-    )
+    try:
+        myself_resp = requests.get(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/myself",
+            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            timeout=(10, 30),
+        )
+    except requests.RequestException as exc:
+        logger.warning("Failed to resolve Atlassian Jira /myself profile", exc_info=exc)
+        raise HTTPException(status_code=502, detail="Unable to resolve Atlassian account identity") from exc
     if not myself_resp.ok:
         raise HTTPException(status_code=502, detail="Unable to resolve Atlassian account identity")
-    myself = myself_resp.json()
+    try:
+        myself = myself_resp.json()
+    except ValueError as exc:
+        logger.warning("Invalid JSON from Atlassian Jira /myself profile", exc_info=exc)
+        raise HTTPException(status_code=502, detail="Unable to resolve Atlassian account identity") from exc
 
     account_id = (
         str(identity_payload.get("account_id") or "").strip()
