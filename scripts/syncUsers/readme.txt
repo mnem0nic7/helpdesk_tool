@@ -12,7 +12,28 @@ The script supports PowerShell 5.1 and PowerShell 7. It will not run on legacy v
 
 The script supports two execution modes:
     - Interactive: Prompts you for your Microsoft 365 administrator credentials and authenticates via browser or device code
-    - Noninteractive: Uses an App Registration for automated execution and supports either a certificate thumbprint or client secret. Runtime settings can come from customerData.json or environment variables.
+    - Noninteractive: Uses an App Registration for automated execution and supports a certificate file, a certificate thumbprint, or a client secret. Runtime settings can come from customerData.json or environment variables.
+
+For standalone customerData.json execution, the following noninteractive properties are supported:
+    - tenantId
+    - appId
+    - organizationDomain
+    - certificatePath
+    - certificatePassword
+    - certificateThumbprint
+    - clientSecret
+    - mgGraphAppId (interactive/device fallback only; it is not required for noninteractive app auth)
+
+The noninteractive auth precedence is:
+    1. certificatePath + certificatePassword
+    2. certificateThumbprint
+    3. clientSecret
+
+For the live app/container path, prefer environment variables instead of customerData.json. The recommended runtime values for this tenant are:
+    - EMAILGISTICS_ORGANIZATION_DOMAIN=oasisfinanciallytn.onmicrosoft.com
+    - EMAILGISTICS_CERTIFICATE_PATH=/app/private/emailgistics/emailgistics-auth.pfx
+
+Mounted-PFX auth is intended for the containerized app runtime. Thumbprint auth remains supported for Windows/operator runs where the certificate private key lives in the local cert store.
 
 In order to run the script, you must have the ability to run scripts on your computer. The script will run with any execution policy other than "Restricted". If the access policy is set to restricted, you can change it by running the following PowerShell command:
 "Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
@@ -37,8 +58,9 @@ Here's a list of everything that the script does:
     - Install NuGet, Microsoft.Graph submodules, and ExchangeOnlineManagement if they are not already present (Graph is loaded first to prevent MSAL assembly conflicts)
     - Prompt to upgrade if Microsoft.Graph submodule v2.6.0 (unsupported) or ExchangeOnlineManagement v2.x is detected
     - Verify the authentication token with the Emailgistics server for each mailbox
-    - Prompt you for your Microsoft 365 administrator username (interactive mode) or use certificate-based authentication (noninteractive mode)
+    - Prompt you for your Microsoft 365 administrator username (interactive mode) or use app-registration authentication (noninteractive mode)
     - Allow environment-backed noninteractive execution for targeted shared-mailbox sync runs or sync-all reruns backed by configured mailbox lists
+    - Support file-based certificate authentication for mounted-PFX/container runs and thumbprint-based authentication for Windows/operator runs
     - Connect to Microsoft Graph with the required permissions (User.Read, Directory.Read.All)
     - Validate the Graph session and detect cached credential mismatches (interactive mode)
     - Connect to Exchange Online
@@ -54,3 +76,8 @@ What the script checks for:
     - Authentication token is valid for each mailbox
     - Logged in user has Global Administrator or Exchange Administrator roles (via Microsoft Graph role check, interactive mode only)
     - Graph credential mismatch detection (handles cached credential issues, interactive mode only)
+
+The Entra and Exchange app-registration setup stays outside this repo:
+    - Upload the public certificate to the app registration
+    - Grant the Exchange application permission and admin consent
+    - Assign the needed Exchange role to the service principal

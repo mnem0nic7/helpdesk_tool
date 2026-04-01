@@ -84,6 +84,8 @@ $tokenValidURL = if ($customerData.tokenValidUrl) { $customerData.tokenValidUrl 
 $userSyncURL = if ($customerData.userSyncUrl) { $customerData.userSyncUrl } elseif ($env:EMAILGISTICS_USER_SYNC_URL) { $env:EMAILGISTICS_USER_SYNC_URL } else { "" }
 $authToken = if ($customerData.authToken) { $customerData.authToken } elseif ($env:EMAILGISTICS_AUTH_TOKEN) { $env:EMAILGISTICS_AUTH_TOKEN } else { "" }
 $tenantId = if ($customerData.tenantId) { $customerData.tenantId } elseif ($env:EMAILGISTICS_TENANT_ID) { $env:EMAILGISTICS_TENANT_ID } else { "" }
+$certificatePath = if ($customerData.certificatePath) { $customerData.certificatePath } elseif ($env:EMAILGISTICS_CERTIFICATE_PATH) { $env:EMAILGISTICS_CERTIFICATE_PATH } else { "" }
+$certificatePassword = if ($customerData.certificatePassword) { $customerData.certificatePassword } elseif ($env:EMAILGISTICS_CERTIFICATE_PASSWORD) { $env:EMAILGISTICS_CERTIFICATE_PASSWORD } else { "" }
 $certificateThumbprint = if ($customerData.certificateThumbprint) { $customerData.certificateThumbprint } elseif ($env:EMAILGISTICS_CERTIFICATE_THUMBPRINT) { $env:EMAILGISTICS_CERTIFICATE_THUMBPRINT } else { "" }
 $clientSecret = if ($customerData.clientSecret) { $customerData.clientSecret } elseif ($env:EMAILGISTICS_CLIENT_SECRET) { $env:EMAILGISTICS_CLIENT_SECRET } else { "" }
 $appId = if ($customerData.appId) { $customerData.appId } elseif ($env:EMAILGISTICS_APP_ID) { $env:EMAILGISTICS_APP_ID } else { "" }
@@ -548,9 +550,12 @@ Start-Sleep -Seconds $secondsBetweenSteps
 # set flags for upcoming loop
 $successfulAuth = $false
 $noninteractive = $false # default behaviour will be interactive execution
+$hasCertificateFileAuth = ($certificatePath) -AND ($certificatePassword)
+$hasCertificateThumbprintAuth = [bool]$certificateThumbprint
+$hasClientSecretAuth = [bool]$clientSecret
 
 # check if all properties required for noninteractive execution have been provided
-if (($tenantId) -AND ($appId) -AND ($organizationDomain) -AND (($certificateThumbprint) -OR ($clientSecret))) {
+if (($tenantId) -AND ($appId) -AND ($organizationDomain) -AND ($hasCertificateFileAuth -OR $hasCertificateThumbprintAuth -OR $hasClientSecretAuth)) {
     Write-Host "`nRunning script in noninteractive mode..."
     $noninteractive = $true
 }
@@ -601,7 +606,15 @@ do
         Write-Host -NoNewline "Connecting to Microsoft Graph Powershell..."
 
         if ($noninteractive -eq $true) {
-            if ($certificateThumbprint) {
+            if ($hasCertificateFileAuth) {
+                if (-not (Test-Path -Path $certificatePath -PathType Leaf)) {
+                    Write-Host "`nError: Certificate file was not found at $certificatePath."
+                    Close-Script
+                }
+                $graphCertificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certificatePath, $certificatePassword)
+                Connect-MgGraph -TenantId $tenantId -ApplicationId $appId -Certificate $graphCertificate -NoWelcome
+            }
+            elseif ($certificateThumbprint) {
                 # Noninteractive login with certificate thumbprint
                 Connect-MgGraph -TenantId $tenantId -ApplicationId $appId -CertificateThumbprint $certificateThumbprint -NoWelcome
             }
@@ -702,9 +715,13 @@ do
 		Write-Host -NoNewline "`nCreate new ExchangeOnline Session..."
 
         if ($noninteractive -eq $true) {
-            if ($certificateThumbprint) {
+            if ($hasCertificateFileAuth) {
+                $secureCertificatePassword = ConvertTo-SecureString $certificatePassword -AsPlainText -Force
+                Connect-ExchangeOnline -CertificateFilePath $certificatePath -CertificatePassword $secureCertificatePassword -AppId $appId -Organization $organizationDomain -ShowBanner:$false
+            }
+            elseif ($certificateThumbprint) {
                 # Noninteractive login with certificate thumbprint
-                Connect-ExchangeOnline -CertificateThumbprint $certificateThumbprint -AppID $appId -Organization $organizationDomain -ShowBanner:$false
+                Connect-ExchangeOnline -CertificateThumbprint $certificateThumbprint -AppId $appId -Organization $organizationDomain -ShowBanner:$false
             }
             else {
                 # Noninteractive login with client secret app credentials

@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+import emailgistics_helper_service as service_module
 from emailgistics_helper_service import EmailgisticsHelperError, EmailgisticsHelperService
 
 
@@ -261,3 +263,107 @@ def test_emailgistics_sync_now_uses_dedicated_timeout_floor(monkeypatch):
 
     assert result["status"] == "completed"
     assert result["message"] == "Ran Emailgistics sync for all configured mailboxes."
+
+
+def test_prepare_sync_users_execution_uses_emailgistics_client_secret_settings(monkeypatch, tmp_path):
+    script_dir = tmp_path / "syncUsers"
+    script_dir.mkdir()
+    (script_dir / "syncUsers.ps1").write_text("# test script\n", encoding="utf-8")
+
+    service = EmailgisticsHelperService(
+        client=MagicMock(),
+        exchange_client=FakeExchangeClient([]),
+        sync_script_dir=script_dir,
+    )
+
+    monkeypatch.setattr(service_module, "EMAILGISTICS_AUTH_MODE", "client_secret")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_TOKEN_VALID_URL", "https://emailgistics.example/token-valid")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_USER_SYNC_URL", "https://emailgistics.example/user-sync")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_AUTH_TOKEN", "emailgistics-token")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_TENANT_ID", "tenant-123")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_APP_ID", "app-123")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CLIENT_SECRET", "secret-123")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_ORGANIZATION_DOMAIN", "oasisfinanciallytn.onmicrosoft.com")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CERTIFICATE_PATH", "")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CERTIFICATE_PASSWORD", "")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CONFIGURED_MAILBOXES", ["shared@example.com"])
+    monkeypatch.setattr(service_module, "EMAILGISTICS_SYNC_SECURITY_GROUPS", True)
+
+    prepared = service._prepare_sync_users_execution("shared@example.com")
+
+    assert prepared.script_path == script_dir / "syncUsers.ps1"
+    assert prepared.env["EMAILGISTICS_AUTH_MODE"] == "client_secret"
+    assert prepared.env["EMAILGISTICS_TENANT_ID"] == "tenant-123"
+    assert prepared.env["EMAILGISTICS_APP_ID"] == "app-123"
+    assert prepared.env["EMAILGISTICS_CLIENT_SECRET"] == "secret-123"
+    assert prepared.env["EMAILGISTICS_ORGANIZATION_DOMAIN"] == "oasisfinanciallytn.onmicrosoft.com"
+    assert prepared.env["EMAILGISTICS_CONFIGURED_MAILBOXES"] == "shared@example.com"
+    assert prepared.env["EMAILGISTICS_TARGET_MAILBOX"] == "shared@example.com"
+    assert "EMAILGISTICS_CERTIFICATE_PATH" not in prepared.env
+    assert "EMAILGISTICS_CERTIFICATE_PASSWORD" not in prepared.env
+
+
+def test_prepare_sync_users_execution_uses_certificate_settings(monkeypatch, tmp_path):
+    script_dir = tmp_path / "syncUsers"
+    script_dir.mkdir()
+    (script_dir / "syncUsers.ps1").write_text("# test script\n", encoding="utf-8")
+    certificate_path = tmp_path / "emailgistics-auth.pfx"
+    certificate_path.write_bytes(b"fake-pfx")
+
+    service = EmailgisticsHelperService(
+        client=MagicMock(),
+        exchange_client=FakeExchangeClient([]),
+        sync_script_dir=script_dir,
+    )
+
+    monkeypatch.setattr(service_module, "EMAILGISTICS_AUTH_MODE", "certificate")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_TOKEN_VALID_URL", "https://emailgistics.example/token-valid")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_USER_SYNC_URL", "https://emailgistics.example/user-sync")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_AUTH_TOKEN", "emailgistics-token")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_TENANT_ID", "tenant-123")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_APP_ID", "app-123")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CLIENT_SECRET", "")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_ORGANIZATION_DOMAIN", "oasisfinanciallytn.onmicrosoft.com")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CERTIFICATE_PATH", str(certificate_path))
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CERTIFICATE_PASSWORD", "pfx-password")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CONFIGURED_MAILBOXES", ["shared@example.com"])
+    monkeypatch.setattr(service_module, "EMAILGISTICS_SYNC_SECURITY_GROUPS", False)
+
+    prepared = service._prepare_sync_users_execution("")
+
+    assert prepared.env["EMAILGISTICS_AUTH_MODE"] == "certificate"
+    assert prepared.env["EMAILGISTICS_TENANT_ID"] == "tenant-123"
+    assert prepared.env["EMAILGISTICS_APP_ID"] == "app-123"
+    assert prepared.env["EMAILGISTICS_ORGANIZATION_DOMAIN"] == "oasisfinanciallytn.onmicrosoft.com"
+    assert prepared.env["EMAILGISTICS_CERTIFICATE_PATH"] == str(certificate_path)
+    assert prepared.env["EMAILGISTICS_CERTIFICATE_PASSWORD"] == "pfx-password"
+    assert prepared.env["EMAILGISTICS_CONFIGURED_MAILBOXES"] == "shared@example.com"
+    assert "EMAILGISTICS_CLIENT_SECRET" not in prepared.env
+    assert "EMAILGISTICS_TARGET_MAILBOX" not in prepared.env
+
+
+def test_prepare_sync_users_execution_requires_readable_certificate_file(monkeypatch, tmp_path):
+    script_dir = tmp_path / "syncUsers"
+    script_dir.mkdir()
+    (script_dir / "syncUsers.ps1").write_text("# test script\n", encoding="utf-8")
+
+    service = EmailgisticsHelperService(
+        client=MagicMock(),
+        exchange_client=FakeExchangeClient([]),
+        sync_script_dir=script_dir,
+    )
+
+    monkeypatch.setattr(service_module, "EMAILGISTICS_AUTH_MODE", "certificate")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_TOKEN_VALID_URL", "https://emailgistics.example/token-valid")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_USER_SYNC_URL", "https://emailgistics.example/user-sync")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_AUTH_TOKEN", "emailgistics-token")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_TENANT_ID", "tenant-123")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_APP_ID", "app-123")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CLIENT_SECRET", "")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_ORGANIZATION_DOMAIN", "oasisfinanciallytn.onmicrosoft.com")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CERTIFICATE_PATH", str(tmp_path / "missing-auth.pfx"))
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CERTIFICATE_PASSWORD", "pfx-password")
+    monkeypatch.setattr(service_module, "EMAILGISTICS_CONFIGURED_MAILBOXES", ["shared@example.com"])
+
+    with pytest.raises(EmailgisticsHelperError, match="certificate file was not found or is unreadable"):
+        service._prepare_sync_users_execution("")

@@ -180,3 +180,51 @@ def test_safe_script_hook_config_parses_json(monkeypatch):
     config = _reload_config()
 
     assert config.AZURE_FINOPS_SAFE_SCRIPT_HOOKS["vm_echo"]["label"] == "VM Echo"
+
+
+def test_emailgistics_auth_config_defaults_to_shared_entra_settings(monkeypatch):
+    monkeypatch.setenv("APP_SECRET_KEY", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("ENTRA_TENANT_ID", "shared-tenant")
+    monkeypatch.setenv("ENTRA_CLIENT_ID", "shared-client")
+    monkeypatch.setenv("ENTRA_CLIENT_SECRET", "shared-secret")
+    monkeypatch.setenv("EXCHANGE_ONLINE_ORGANIZATION", "oasisfinanciallytn.onmicrosoft.com")
+    monkeypatch.delenv("EMAILGISTICS_AUTH_MODE", raising=False)
+    monkeypatch.delenv("EMAILGISTICS_TENANT_ID", raising=False)
+    monkeypatch.delenv("EMAILGISTICS_APP_ID", raising=False)
+    monkeypatch.delenv("EMAILGISTICS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("EMAILGISTICS_ORGANIZATION_DOMAIN", raising=False)
+    monkeypatch.delenv("EMAILGISTICS_CERTIFICATE_PATH", raising=False)
+    monkeypatch.delenv("EMAILGISTICS_CERTIFICATE_PASSWORD", raising=False)
+
+    config = _reload_config()
+
+    assert config.EMAILGISTICS_AUTH_MODE == "client_secret"
+    assert config.EMAILGISTICS_TENANT_ID == "shared-tenant"
+    assert config.EMAILGISTICS_APP_ID == "shared-client"
+    assert config.EMAILGISTICS_CLIENT_SECRET == "shared-secret"
+    assert config.EMAILGISTICS_ORGANIZATION_DOMAIN == "oasisfinanciallytn.onmicrosoft.com"
+    assert config.EMAILGISTICS_CERTIFICATE_PATH == ""
+    assert config.EMAILGISTICS_CERTIFICATE_PASSWORD == ""
+
+
+def test_emailgistics_auth_config_honors_certificate_overrides(monkeypatch):
+    monkeypatch.setenv("APP_SECRET_KEY", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("EMAILGISTICS_AUTH_MODE", "certificate")
+    monkeypatch.setenv("EMAILGISTICS_TENANT_ID", "emailgistics-tenant")
+    monkeypatch.setenv("EMAILGISTICS_APP_ID", "emailgistics-app")
+    monkeypatch.setenv("EMAILGISTICS_CLIENT_SECRET", "unused-secret")
+    monkeypatch.setenv("EMAILGISTICS_ORGANIZATION_DOMAIN", "oasisfinanciallytn.onmicrosoft.com")
+    monkeypatch.setenv("EMAILGISTICS_CERTIFICATE_PATH", "/app/private/emailgistics/emailgistics-auth.pfx")
+    monkeypatch.setenv("EMAILGISTICS_CERTIFICATE_PASSWORD", "pfx-password")
+
+    config = _reload_config()
+
+    assert config.EMAILGISTICS_AUTH_MODE == "certificate"
+    assert config.EMAILGISTICS_TENANT_ID == "emailgistics-tenant"
+    assert config.EMAILGISTICS_APP_ID == "emailgistics-app"
+    assert config.EMAILGISTICS_CLIENT_SECRET == "unused-secret"
+    assert config.EMAILGISTICS_ORGANIZATION_DOMAIN == "oasisfinanciallytn.onmicrosoft.com"
+    assert config.EMAILGISTICS_CERTIFICATE_PATH == "/app/private/emailgistics/emailgistics-auth.pfx"
+    assert config.EMAILGISTICS_CERTIFICATE_PASSWORD == "pfx-password"

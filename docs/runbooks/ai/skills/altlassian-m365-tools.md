@@ -45,6 +45,7 @@ Use this workflow for Graph and Exchange-backed features on the shared Tools pag
 - Microsoft Graph mailbox rule access depends on the right application permissions and admin consent.
 - Exchange-backed delegate access requires a working Exchange runtime path, not only Graph.
 - The Emailgistics helper depends on extra runtime config beyond the shared Entra app: `EMAILGISTICS_TOKEN_VALID_URL`, `EMAILGISTICS_USER_SYNC_URL`, and `EMAILGISTICS_AUTH_TOKEN`. Sync-all Emailgistics runs also need `EMAILGISTICS_CONFIGURED_MAILBOXES` when `customerData.json` is not available on the runtime.
+- Emailgistics auth can now diverge from the shared `ENTRA_*` lane. Preserve the shared app-secret path for the rest of the app, and keep Emailgistics-specific certificate config isolated behind `EMAILGISTICS_AUTH_MODE`, `EMAILGISTICS_*`, and the mounted `/app/private` path.
 - The Emailgistics `Sync Now` action should still return a readable result payload even though there is no resolved user context, and blank-mailbox runs should render clear global-sync labels instead of empty mailbox fields.
 - `scripts/syncUsers/customerData.json` is local sensitive material and must stay out of git and out of the backend image. Prefer environment variables for runtime Emailgistics settings.
 - Org-wide delegate scans are not instant. Expect roughly 20 to 90 seconds in normal cases and 5 to 10 minutes in larger tenants, so UX copy and polling should set that expectation.

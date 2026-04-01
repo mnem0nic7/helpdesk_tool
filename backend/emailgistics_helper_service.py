@@ -11,15 +11,19 @@ from urllib.parse import quote
 
 from azure_client import AzureApiError, AzureClient
 from config import (
+    EMAILGISTICS_APP_ID,
+    EMAILGISTICS_AUTH_MODE,
     EMAILGISTICS_AUTH_TOKEN,
+    EMAILGISTICS_CERTIFICATE_PASSWORD,
+    EMAILGISTICS_CERTIFICATE_PATH,
+    EMAILGISTICS_CLIENT_SECRET,
     EMAILGISTICS_CONFIGURED_MAILBOXES,
+    EMAILGISTICS_ORGANIZATION_DOMAIN,
     EMAILGISTICS_SYNC_TIMEOUT_SECONDS,
     EMAILGISTICS_SYNC_SECURITY_GROUPS,
+    EMAILGISTICS_TENANT_ID,
     EMAILGISTICS_TOKEN_VALID_URL,
     EMAILGISTICS_USER_SYNC_URL,
-    ENTRA_CLIENT_ID,
-    ENTRA_CLIENT_SECRET,
-    ENTRA_TENANT_ID,
 )
 from exchange_online_client import (
     ExchangeOnlinePowerShellClient,
@@ -66,6 +70,10 @@ def _normalized_mailbox(value: Any) -> str:
 
 def _odata_quote(value: str) -> str:
     return str(value or "").replace("'", "''")
+
+
+def _emailgistics_certificate_file() -> Path:
+    return Path(EMAILGISTICS_CERTIFICATE_PATH).expanduser()
 
 
 @dataclass
@@ -178,6 +186,8 @@ class EmailgisticsHelperService:
             raise EmailgisticsHelperError("The Emailgistics syncUsers.ps1 script is not available on the app runtime.")
         exchange_client = self.exchange_client or ExchangeOnlinePowerShellClient(self.client)
         normalized_shared_mailbox = str(shared_mailbox or "").strip().lower()
+        auth_mode = EMAILGISTICS_AUTH_MODE
+        organization = EMAILGISTICS_ORGANIZATION_DOMAIN
         missing_settings: list[str] = []
         if not EMAILGISTICS_TOKEN_VALID_URL:
             missing_settings.append("EMAILGISTICS_TOKEN_VALID_URL")
@@ -185,12 +195,19 @@ class EmailgisticsHelperService:
             missing_settings.append("EMAILGISTICS_USER_SYNC_URL")
         if not EMAILGISTICS_AUTH_TOKEN:
             missing_settings.append("EMAILGISTICS_AUTH_TOKEN")
-        if not ENTRA_TENANT_ID:
-            missing_settings.append("ENTRA_TENANT_ID")
-        if not ENTRA_CLIENT_ID:
-            missing_settings.append("ENTRA_CLIENT_ID")
-        if not ENTRA_CLIENT_SECRET:
-            missing_settings.append("ENTRA_CLIENT_SECRET")
+        if not EMAILGISTICS_TENANT_ID:
+            missing_settings.append("EMAILGISTICS_TENANT_ID")
+        if not EMAILGISTICS_APP_ID:
+            missing_settings.append("EMAILGISTICS_APP_ID")
+        if not organization:
+            missing_settings.append("EMAILGISTICS_ORGANIZATION_DOMAIN")
+        if auth_mode == "certificate":
+            if not EMAILGISTICS_CERTIFICATE_PATH:
+                missing_settings.append("EMAILGISTICS_CERTIFICATE_PATH")
+            if not EMAILGISTICS_CERTIFICATE_PASSWORD:
+                missing_settings.append("EMAILGISTICS_CERTIFICATE_PASSWORD")
+        elif not EMAILGISTICS_CLIENT_SECRET:
+            missing_settings.append("EMAILGISTICS_CLIENT_SECRET")
         if not normalized_shared_mailbox and not EMAILGISTICS_CONFIGURED_MAILBOXES:
             missing_settings.append("EMAILGISTICS_CONFIGURED_MAILBOXES")
         if missing_settings:
@@ -199,24 +216,37 @@ class EmailgisticsHelperService:
                 + ", ".join(missing_settings)
                 + "."
             )
-        organization = exchange_client.organization()
+        if auth_mode == "certificate":
+            certificate_path = _emailgistics_certificate_file()
+            if not certificate_path.is_file() or not os.access(certificate_path, os.R_OK):
+                raise EmailgisticsHelperError(
+                    f"Emailgistics certificate file was not found or is unreadable at {certificate_path}."
+                )
         env = os.environ.copy()
         env.update(
             {
+                "EMAILGISTICS_AUTH_MODE": auth_mode,
                 "EMAILGISTICS_NONINTERACTIVE": "1",
                 "EMAILGISTICS_TOKEN_VALID_URL": EMAILGISTICS_TOKEN_VALID_URL,
                 "EMAILGISTICS_USER_SYNC_URL": EMAILGISTICS_USER_SYNC_URL,
                 "EMAILGISTICS_AUTH_TOKEN": EMAILGISTICS_AUTH_TOKEN,
-                "EMAILGISTICS_TENANT_ID": ENTRA_TENANT_ID,
-                "EMAILGISTICS_APP_ID": ENTRA_CLIENT_ID,
-                "EMAILGISTICS_CLIENT_SECRET": ENTRA_CLIENT_SECRET,
+                "EMAILGISTICS_TENANT_ID": EMAILGISTICS_TENANT_ID,
+                "EMAILGISTICS_APP_ID": EMAILGISTICS_APP_ID,
                 "EMAILGISTICS_ORGANIZATION_DOMAIN": organization,
                 "EMAILGISTICS_CONFIGURED_MAILBOXES": ",".join(EMAILGISTICS_CONFIGURED_MAILBOXES),
                 "EMAILGISTICS_SYNC_SECURITY_GROUPS": "1" if EMAILGISTICS_SYNC_SECURITY_GROUPS else "0",
                 "EXCHANGE_ONLINE_ORGANIZATION": organization,
-                "MG_GRAPH_APP_ID": ENTRA_CLIENT_ID,
+                "MG_GRAPH_APP_ID": EMAILGISTICS_APP_ID,
             }
         )
+        if auth_mode == "certificate":
+            env["EMAILGISTICS_CERTIFICATE_PATH"] = str(_emailgistics_certificate_file())
+            env["EMAILGISTICS_CERTIFICATE_PASSWORD"] = EMAILGISTICS_CERTIFICATE_PASSWORD
+            env.pop("EMAILGISTICS_CLIENT_SECRET", None)
+        else:
+            env["EMAILGISTICS_CLIENT_SECRET"] = EMAILGISTICS_CLIENT_SECRET
+            env.pop("EMAILGISTICS_CERTIFICATE_PATH", None)
+            env.pop("EMAILGISTICS_CERTIFICATE_PASSWORD", None)
         if normalized_shared_mailbox:
             env["EMAILGISTICS_TARGET_MAILBOX"] = normalized_shared_mailbox
         else:
