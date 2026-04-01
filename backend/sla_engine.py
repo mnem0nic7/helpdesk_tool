@@ -333,11 +333,30 @@ def business_minutes_between(
 # DateTime parsing
 # ---------------------------------------------------------------------------
 
-def _parse_dt(s: str | None) -> datetime | None:
-    if not s:
+def _parse_dt(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, dict):
+        for key in ("value", "created", "dateTime", "iso", "timestamp", "time", "date"):
+            if key in value:
+                value = value[key]
+                break
+        else:
+            return None
+    if isinstance(value, (int, float)):
+        ts = float(value)
+        if ts > 1e12:
+            ts = ts / 1000.0
+        try:
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if not isinstance(value, str):
         return None
     try:
-        s = s.replace("+0000", "+00:00").replace("Z", "+00:00")
+        s = value.replace("+0000", "+00:00").replace("Z", "+00:00")
         return datetime.fromisoformat(s)
     except (ValueError, TypeError):
         return None
