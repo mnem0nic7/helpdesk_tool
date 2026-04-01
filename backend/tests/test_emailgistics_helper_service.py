@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from emailgistics_helper_service import EmailgisticsHelperError, EmailgisticsHelperService
@@ -233,3 +236,28 @@ def test_emailgistics_sync_now_runs_all_configured_mailboxes_without_target(monk
         "prepare_sync:None",
         "run_sync:None",
     ]
+
+
+def test_emailgistics_sync_now_uses_dedicated_timeout_floor(monkeypatch):
+    service = EmailgisticsHelperService(client=MagicMock(), exchange_client=FakeExchangeClient([]), sync_timeout_seconds=600)
+    prepared = SimpleNamespace(
+        exchange_client=SimpleNamespace(pwsh_path="/usr/bin/pwsh", timeout_seconds=240),
+        script_dir=Path("/tmp"),
+        script_path=Path("/tmp/syncUsers.ps1"),
+        env={"EMAILGISTICS_NONINTERACTIVE": "1"},
+    )
+
+    class FakeProcess:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            assert timeout == 600
+            return ("Users have been successfully synced.", "")
+
+    monkeypatch.setattr(service, "_prepare_sync_users_execution", lambda shared_mailbox=None: prepared)
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+
+    result = service._run_sync_users_script(shared_mailbox="")
+
+    assert result["status"] == "completed"
+    assert result["message"] == "Ran Emailgistics sync for all configured mailboxes."

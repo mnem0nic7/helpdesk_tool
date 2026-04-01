@@ -13,6 +13,7 @@ from azure_client import AzureApiError, AzureClient
 from config import (
     EMAILGISTICS_AUTH_TOKEN,
     EMAILGISTICS_CONFIGURED_MAILBOXES,
+    EMAILGISTICS_SYNC_TIMEOUT_SECONDS,
     EMAILGISTICS_SYNC_SECURITY_GROUPS,
     EMAILGISTICS_TOKEN_VALID_URL,
     EMAILGISTICS_USER_SYNC_URL,
@@ -73,6 +74,7 @@ class EmailgisticsHelperService:
     exchange_client: ExchangeOnlinePowerShellClient | None = None
     addin_group_name: str = EMAILGISTICS_ADDIN_GROUP_NAME
     sync_script_dir: Path | None = None
+    sync_timeout_seconds: int = EMAILGISTICS_SYNC_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
         if self.exchange_client is None:
@@ -242,8 +244,13 @@ class EmailgisticsHelperService:
             text=True,
             env=prepared.env,
         )
+        timeout_seconds = max(
+            60,
+            int(self.sync_timeout_seconds or 0),
+            int(prepared.exchange_client.timeout_seconds or 0),
+        )
         try:
-            stdout, stderr = process.communicate(timeout=max(240, int(prepared.exchange_client.timeout_seconds or 0)))
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
         except subprocess.TimeoutExpired as exc:
             process.kill()
             process.communicate()
