@@ -947,26 +947,20 @@ function EmailgisticsHelperResults({
   if (!result) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-        Use Emailgistics Helper to grant access and sync a shared mailbox, or use Sync Now to rerun syncUsers.ps1 for all configured Emailgistics mailboxes or a specific shared mailbox.
+        Use Emailgistics Helper to grant access and add a user to the Emailgistics group for a shared mailbox.
       </div>
     );
   }
 
-  const isSyncOnly = !(result.resolved_user_principal_name || result.user_mailbox);
   const sharedMailboxTitle =
     result.resolved_shared_display_name ||
     result.resolved_shared_principal_name ||
     result.shared_mailbox ||
     "All configured mailboxes";
-  const sharedMailboxSubtitle =
-    result.resolved_shared_principal_name || result.shared_mailbox || (isSyncOnly ? "Global Emailgistics sync run" : "");
-  const resultTitle = isSyncOnly
-    ? sharedMailboxTitle
-    : result.resolved_user_display_name || result.resolved_user_principal_name || result.user_mailbox;
-  const resultSubtitle = isSyncOnly
-    ? sharedMailboxSubtitle
-    : `${result.resolved_user_principal_name || result.user_mailbox} -> ${result.resolved_shared_principal_name || result.shared_mailbox}`;
-  const resultLabel = isSyncOnly ? "Emailgistics Sync" : "Emailgistics Helper";
+  const sharedMailboxSubtitle = result.resolved_shared_principal_name || result.shared_mailbox || "";
+  const resultTitle = result.resolved_user_display_name || result.resolved_user_principal_name || result.user_mailbox;
+  const resultSubtitle = `${result.resolved_user_principal_name || result.user_mailbox} -> ${result.resolved_shared_principal_name || result.shared_mailbox}`;
+  const resultLabel = "Emailgistics Helper";
 
   return (
     <div className="space-y-4">
@@ -995,14 +989,12 @@ function EmailgisticsHelperResults({
         ))}
       </div>
 
-      <div className={`grid gap-3 ${isSyncOnly ? "md:grid-cols-1" : "md:grid-cols-2"}`}>
-        {isSyncOnly ? null : (
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Resolved user</div>
-            <div className="mt-1 font-medium text-slate-900">{result.resolved_user_display_name || result.resolved_user_principal_name || result.user_mailbox}</div>
-            <div className="text-xs text-slate-500">{result.resolved_user_principal_name || result.user_mailbox}</div>
-          </div>
-        )}
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Resolved user</div>
+          <div className="mt-1 font-medium text-slate-900">{result.resolved_user_display_name || result.resolved_user_principal_name || result.user_mailbox}</div>
+          <div className="text-xs text-slate-500">{result.resolved_user_principal_name || result.user_mailbox}</div>
+        </div>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Shared mailbox</div>
           <div className="mt-1 font-medium text-slate-900">{sharedMailboxTitle}</div>
@@ -1011,18 +1003,11 @@ function EmailgisticsHelperResults({
       </div>
 
       <div className={`rounded-2xl border px-4 py-3 text-sm ${result.status === "completed" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
-        {result.note || (isSyncOnly ? "Emailgistics sync finished." : "Emailgistics Helper finished.")}
+        {result.note || "Emailgistics Helper finished."}
       </div>
 
       {result.error ? (
         <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{result.error}</div>
-      ) : null}
-
-      {result.sync_output ? (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Sync output</div>
-          <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-slate-700">{result.sync_output}</pre>
-        </div>
       ) : null}
     </div>
   );
@@ -1318,27 +1303,6 @@ export default function ToolsPage() {
       setEmailgisticsHelperResult(undefined);
     },
   });
-  const runEmailgisticsSyncNowMutation = useMutation({
-    mutationFn: () =>
-      api.runEmailgisticsSyncNow({
-        shared_mailbox:
-          selectedEmailgisticsSharedMailbox?.canonical_upn.trim() || emailgisticsSharedMailboxInput.trim() || undefined,
-      }),
-    onMutate: () => {
-      setEmailgisticsHelperFormError("");
-      setEmailgisticsHelperResult(undefined);
-    },
-    onSuccess: (result) => {
-      setEmailgisticsHelperFormError("");
-      setEmailgisticsHelperResult(result);
-    },
-    onError: (error) => {
-      setEmailgisticsHelperFormError(
-        error instanceof Error ? error.message : "Emailgistics sync failed before it could finish.",
-      );
-      setEmailgisticsHelperResult(undefined);
-    },
-  });
   const canQueueJob =
     !!selectedSource &&
     !!selectedDestination &&
@@ -1520,17 +1484,6 @@ export default function ToolsPage() {
     runEmailgisticsHelperMutation.mutate();
   }
 
-  function submitEmailgisticsSyncNow() {
-    const sharedMailbox =
-      selectedEmailgisticsSharedMailbox?.canonical_upn.trim() || emailgisticsSharedMailboxInput.trim();
-    if (sharedMailbox && !looksLikeUpn(sharedMailbox)) {
-      setEmailgisticsHelperFormError("Enter a valid shared mailbox or leave it blank to sync all configured Emailgistics mailboxes.");
-      return;
-    }
-    setEmailgisticsHelperFormError("");
-    runEmailgisticsSyncNowMutation.mutate();
-  }
-
   const mailboxApiError =
     mailboxRulesQuery.error instanceof Error &&
     activeMailboxLookup &&
@@ -1561,17 +1514,10 @@ export default function ToolsPage() {
     canUseEmailgisticsHelper &&
     (selectedEmailgisticsUser !== null || looksLikeUpn(emailgisticsUserInput)) &&
     (selectedEmailgisticsSharedMailbox !== null || looksLikeUpn(emailgisticsSharedMailboxInput)) &&
-    !runEmailgisticsHelperMutation.isPending &&
-    !runEmailgisticsSyncNowMutation.isPending;
-  const canRunEmailgisticsSyncNow =
-    canUseEmailgisticsHelper &&
-    !runEmailgisticsHelperMutation.isPending &&
-    !runEmailgisticsSyncNowMutation.isPending;
+    !runEmailgisticsHelperMutation.isPending;
   const emailgisticsRunningLabel = runEmailgisticsHelperMutation.isPending
     ? "Running Emailgistics Helper..."
-    : runEmailgisticsSyncNowMutation.isPending
-      ? "Running Emailgistics sync..."
-      : "";
+    : "";
 
   return (
     <div className="space-y-6">
@@ -1812,12 +1758,11 @@ export default function ToolsPage() {
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Emailgistics Helper</div>
                   <h2 className="mt-1 text-2xl font-semibold text-slate-900">
-                    Grant mailbox access and sync Emailgistics
+                    Grant mailbox access for Emailgistics
                   </h2>
                   <p className="mt-2 text-sm text-slate-600">
                     Admin-only helper that grants a user Full Access and Send As on a shared mailbox, adds them to the
-                    Emailgistics add-in group, and runs the targeted Emailgistics syncUsers PowerShell flow for that
-                    shared mailbox.
+                    Emailgistics add-in group.
                   </p>
                 </div>
                 <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-700">
@@ -1859,24 +1804,14 @@ export default function ToolsPage() {
                 >
                   {runEmailgisticsHelperMutation.isPending ? "Running helper..." : "Run Emailgistics Helper"}
                 </button>
-                <button
-                  type="button"
-                  onClick={submitEmailgisticsSyncNow}
-                  disabled={!canRunEmailgisticsSyncNow}
-                  className={buttonClass("secondary", !canRunEmailgisticsSyncNow)}
-                >
-                  {runEmailgisticsSyncNowMutation.isPending ? "Running sync..." : "Sync Now"}
-                </button>
                 <span className="text-sm text-slate-500">
-                  Run the full helper to apply permissions and group membership first, or use Sync Now to rerun only
-                  the Emailgistics syncUsers script. Leave the shared mailbox blank to sync all configured Emailgistics
-                  mailboxes, or enter one to target a single mailbox. Global syncs can take 10-30 minutes on larger tenants.
+                  This action only grants mailbox access and group membership. It no longer runs Emailgistics sync.
                 </span>
               </div>
 
               <EmailgisticsHelperResults
                 result={emailgisticsHelperResult}
-                isRunning={runEmailgisticsHelperMutation.isPending || runEmailgisticsSyncNowMutation.isPending}
+                isRunning={runEmailgisticsHelperMutation.isPending}
                 runningLabel={emailgisticsRunningLabel}
                 errorMessage={emailgisticsHelperFormError}
               />

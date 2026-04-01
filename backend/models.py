@@ -900,16 +900,10 @@ class EmailgisticsHelperRequest(BaseModel):
     shared_mailbox: str = Field(min_length=3, max_length=320)
 
 
-class EmailgisticsSyncNowRequest(BaseModel):
-    """Request body for the Emailgistics sync-only tool action."""
-
-    shared_mailbox: str | None = Field(default=None, min_length=3, max_length=320)
-
-
 class EmailgisticsHelperStepResponse(BaseModel):
     """One step result returned by Emailgistics Helper."""
 
-    key: Literal["full_access", "send_as", "addin_group", "sync_users"]
+    key: Literal["full_access", "send_as", "addin_group"]
     label: str
     status: Literal["pending", "completed", "already_present", "failed"]
     message: str = ""
@@ -928,7 +922,6 @@ class EmailgisticsHelperResponse(BaseModel):
     addin_group_name: str = ""
     note: str = ""
     error: str = ""
-    sync_output: str = ""
     steps: list[EmailgisticsHelperStepResponse] = Field(default_factory=list)
 
 

@@ -21,7 +21,6 @@ const { mockApi } = vi.hoisted(() => ({
     createDelegateMailboxJob: vi.fn(),
     cancelDelegateMailboxJob: vi.fn(),
     runEmailgisticsHelper: vi.fn(),
-    runEmailgisticsSyncNow: vi.fn(),
   },
 }));
 
@@ -297,7 +296,6 @@ describe("ToolsPage", () => {
       addin_group_name: "Emailgistics_UserAddin",
       note: "Emailgistics Helper finished for helper-user@example.com on helper-shared@example.com.",
       error: "",
-      sync_output: "Users have been successfully synced for helper-shared@example.com.",
       steps: [
         {
           key: "full_access" as const,
@@ -316,33 +314,6 @@ describe("ToolsPage", () => {
           label: "Add To Emailgistics_UserAddin",
           status: "already_present" as const,
           message: "helper-user@example.com is already in Emailgistics_UserAddin.",
-        },
-        {
-          key: "sync_users" as const,
-          label: "Run Emailgistics Sync",
-          status: "completed" as const,
-          message: "Ran Emailgistics sync for helper-shared@example.com.",
-        },
-      ],
-    });
-    mockApi.runEmailgisticsSyncNow.mockResolvedValue({
-      status: "completed",
-      user_mailbox: "",
-      shared_mailbox: "",
-      resolved_user_display_name: "",
-      resolved_user_principal_name: "",
-      resolved_shared_display_name: "",
-      resolved_shared_principal_name: "",
-      addin_group_name: "Emailgistics_UserAddin",
-      note: "Emailgistics sync finished for all configured mailboxes.",
-      error: "",
-      sync_output: "Users have been successfully synced for all configured Emailgistics mailboxes.",
-      steps: [
-        {
-          key: "sync_users" as const,
-          label: "Run Emailgistics Sync",
-          status: "completed" as const,
-          message: "Ran Emailgistics sync for all configured mailboxes.",
         },
       ],
     });
@@ -363,7 +334,7 @@ describe("ToolsPage", () => {
     expect(await screen.findByText("Copy a full OneDrive to another user")).toBeInTheDocument();
     expect(screen.getByText("List mailbox delegate access for a mailbox")).toBeInTheDocument();
     expect(screen.getByText("Find mailboxes where a user has delegate access")).toBeInTheDocument();
-    expect(screen.getByText("Grant mailbox access and sync Emailgistics")).toBeInTheDocument();
+    expect(screen.getByText("Grant mailbox access for Emailgistics")).toBeInTheDocument();
     expect(screen.getByText("List Inbox rules for a provided mailbox")).toBeInTheDocument();
     expect(screen.getByText("Recent OneDrive copy jobs")).toBeInTheDocument();
     expect(screen.getByText("Recent delegate scan jobs")).toBeInTheDocument();
@@ -480,7 +451,7 @@ describe("ToolsPage", () => {
   it("runs Emailgistics Helper for admins", async () => {
     render(<ToolsPage />);
 
-    await screen.findByText("Grant mailbox access and sync Emailgistics");
+    await screen.findByText("Grant mailbox access for Emailgistics");
 
     const userInput = screen.getByLabelText("User mailbox UPN or email");
     fireEvent.focus(userInput);
@@ -502,24 +473,6 @@ describe("ToolsPage", () => {
     });
 
     expect(await screen.findByText("Helper Shared")).toBeInTheDocument();
-    expect(screen.getByText("Users have been successfully synced for helper-shared@example.com.")).toBeInTheDocument();
-  });
-
-  it("runs Emailgistics Sync Now for admins", async () => {
-    render(<ToolsPage />);
-
-    await screen.findByText("Grant mailbox access and sync Emailgistics");
-
-    fireEvent.click(screen.getByRole("button", { name: "Sync Now" }));
-
-    await waitFor(() => {
-      expect(mockApi.runEmailgisticsSyncNow).toHaveBeenCalledWith({});
-    });
-
-    expect((await screen.findAllByText("All configured mailboxes")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Global Emailgistics sync run").length).toBeGreaterThan(0);
-    expect(screen.getByText("Emailgistics sync finished for all configured mailboxes.")).toBeInTheDocument();
-    expect(screen.getByText("Users have been successfully synced for all configured Emailgistics mailboxes.")).toBeInTheDocument();
   });
 
   it("renders tools for signed-in users even if the legacy tools-access flag is false", async () => {
@@ -549,7 +502,7 @@ describe("ToolsPage", () => {
     render(<ToolsPage />);
 
     expect(await screen.findByText("Copy a full OneDrive to another user")).toBeInTheDocument();
-    expect(screen.queryByText("Grant mailbox access and sync Emailgistics")).not.toBeInTheDocument();
+    expect(screen.queryByText("Grant mailbox access for Emailgistics")).not.toBeInTheDocument();
   });
 
   it("clears finished OneDrive copy jobs from the history card", async () => {
