@@ -1870,7 +1870,7 @@ export default function ToolsPage() {
                 <span className="text-sm text-slate-500">
                   Run the full helper to apply permissions and group membership first, or use Sync Now to rerun only
                   the Emailgistics syncUsers script. Leave the shared mailbox blank to sync all configured Emailgistics
-                  mailboxes, or enter one to target a single mailbox.
+                  mailboxes, or enter one to target a single mailbox. Global syncs can take 10-30 minutes on larger tenants.
                 </span>
               </div>
 
