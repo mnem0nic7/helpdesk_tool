@@ -3,7 +3,9 @@ import { render, screen } from "@testing-library/react"
 import type { ReactElement } from "react"
 import AppErrorBoundary from "../components/AppErrorBoundary"
 
-const logClientError = vi.fn()
+const { logClientError } = vi.hoisted(() => ({
+  logClientError: vi.fn(),
+}))
 
 vi.mock("../lib/errorLogging", () => ({
   logClientError,

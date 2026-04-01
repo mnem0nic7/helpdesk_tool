@@ -128,6 +128,6 @@ describe("TicketFilters", () => {
 
   it("hides clear button when filters default", () => {
     renderFilters();
-    expect(screen.queryByText("Clear Filters")).not.toBeInTheDocument();
+    expect(screen.getByText("Clear Filters")).toHaveClass("invisible");
   });
 });

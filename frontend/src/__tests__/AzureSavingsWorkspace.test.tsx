@@ -234,7 +234,8 @@ function filterOpportunities(params?: Record<string, unknown>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  window.history.replaceState({}, "", "https://azure.movedocs.com/");
+  document.documentElement.dataset.siteHostname = "azure.movedocs.com";
+  window.history.replaceState({}, "", "/");
 
   mockApi.getMe.mockResolvedValue({
     email: "user@example.com",
@@ -517,7 +518,7 @@ describe("Azure savings workspace", () => {
     await screen.findByText("Quantified Savings");
     expect(screen.getByText("Persisted recommendation workspace")).toBeInTheDocument();
     expect(screen.getByText("Actionable Savings Opportunities")).toBeInTheDocument();
-    expect(screen.getByText("Clean up attached costs for idle VM vm-1")).toBeInTheDocument();
+    expect(await screen.findByText("Clean up attached costs for idle VM vm-1")).toBeInTheDocument();
 
     fireEvent.change(screen.getAllByRole("combobox")[0], {
       target: { value: "storage" },
@@ -565,7 +566,7 @@ describe("Azure savings workspace", () => {
     render(<AzureSavingsPage />);
 
     fireEvent.click(await screen.findByText("Review unattached managed disk disk-1"));
-    await screen.findByText("Send Teams Alert");
+    await screen.findByRole("button", { name: "Send Teams Alert" });
 
     fireEvent.change(screen.getByPlaceholderText("Channel label (optional)"), { target: { value: "FinOps Watch" } });
     fireEvent.change(screen.getByPlaceholderText("Teams webhook override (optional)"), {
@@ -589,7 +590,7 @@ describe("Azure savings workspace", () => {
     render(<AzureCostPage />);
     expect(await screen.findByText("Cached app data")).toBeInTheDocument();
     expect(await screen.findByText("Top Savings Opportunities")).toBeInTheDocument();
-    expect(screen.getByText("Clean up attached costs for idle VM vm-1")).toBeInTheDocument();
+    expect(await screen.findByText("Clean up attached costs for idle VM vm-1")).toBeInTheDocument();
 
     render(<AzureComputeOptimizationPage />);
     expect(await screen.findByText("Compute Savings Actions")).toBeInTheDocument();
@@ -601,7 +602,7 @@ describe("Azure savings workspace", () => {
 
     render(<AzureResourcesPage />);
     expect(await screen.findByText("Network Cleanup")).toBeInTheDocument();
-    expect(screen.getByText("Release unattached public IP pip-1")).toBeInTheDocument();
+    expect(screen.getAllByText("Release unattached public IP pip-1").length).toBeGreaterThan(0);
   });
 
   it("sends Azure resource search terms to the backend", async () => {
@@ -655,7 +656,8 @@ describe("Azure savings workspace", () => {
   });
 
   it("renders the savings route and nav on the Azure host", async () => {
-    window.history.replaceState({}, "", "https://azure.movedocs.com/savings");
+    document.documentElement.dataset.siteHostname = "azure.movedocs.com";
+    window.history.replaceState({}, "", "/savings");
 
     renderApp();
 

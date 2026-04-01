@@ -1126,7 +1126,12 @@ class IssueCache:
         )
         return inserted
 
-    async def _auto_triage_new_tickets(self, new_keys: list[str], progress: dict | None = None) -> None:
+    async def _auto_triage_new_tickets(
+        self,
+        new_keys: list[str],
+        progress: dict | None = None,
+        model_id: str | None = None,
+    ) -> None:
         """Run AI triage on genuinely new tickets and apply high-confidence priority changes."""
         from config import AUTO_TRIAGE_MODEL, OLLAMA_MODEL
         from ai_client import (
@@ -1140,19 +1145,22 @@ class IssueCache:
         from jira_client import JiraClient
 
         loop = asyncio.get_running_loop()
+        requested_model_id = str(model_id or "").strip()
+        if requested_model_id.lower() in {"none", "null", "undefined"}:
+            requested_model_id = ""
 
         def _resolve_model_id() -> str | None:
             return select_available_ollama_model(
                 get_available_models(),
-                preferred_model_id=AUTO_TRIAGE_MODEL,
+                preferred_model_id=requested_model_id or AUTO_TRIAGE_MODEL,
                 fallback_model_id=OLLAMA_MODEL,
             )
 
-        model_id = await loop.run_in_executor(None, _resolve_model_id)
-        if not model_id:
+        resolved_model_id = await loop.run_in_executor(None, _resolve_model_id)
+        if not resolved_model_id:
             logger.warning(
                 "Auto-triage: neither preferred model %s nor fallback model %s is available from the active AI provider, skipping",
-                AUTO_TRIAGE_MODEL,
+                requested_model_id or AUTO_TRIAGE_MODEL,
                 OLLAMA_MODEL,
             )
             return
@@ -1191,7 +1199,7 @@ class IssueCache:
 
                     async def _run_ai_triage() -> Any:
                         return await loop.run_in_executor(
-                            None, analyze_ticket, issue, model_id
+                            None, analyze_ticket, issue, resolved_model_id
                         )
 
                     result = await background_ai_worker.run_item(
@@ -1216,7 +1224,7 @@ class IssueCache:
                                 )
                                 store.log_change(
                                     key, "priority", s.current_value, target_priority,
-                                    s.confidence, model_id,
+                                    s.confidence, resolved_model_id,
                                 )
                                 # Update local cache
                                 self.update_cached_field(key, "priority", target_priority)
@@ -1235,7 +1243,7 @@ class IssueCache:
                                     )
                                     store.log_change(
                                         key, "request_type", s.current_value, s.suggested_value,
-                                        s.confidence, model_id,
+                                        s.confidence, resolved_model_id,
                                     )
                                     # Update local cache
                                     self.update_cached_field(key, "request_type", s.suggested_value)
@@ -1253,7 +1261,7 @@ class IssueCache:
                                     )
                                     store.log_change(
                                         key, "reporter", s.current_value, s.suggested_value,
-                                        s.confidence, model_id,
+                                        s.confidence, resolved_model_id,
                                     )
                                     self.update_cached_field(
                                         key,

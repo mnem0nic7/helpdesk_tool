@@ -2071,17 +2071,19 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
   }
 
   function updateRouteParams(next: { search?: string; userId?: string | null }) {
-    const params = new URLSearchParams(searchParams);
-    if (next.search !== undefined) {
-      if (next.search) params.set("search", next.search);
-      else params.delete("search");
-    }
-    if (next.userId === null) {
-      params.delete("userId");
-    } else if (next.userId) {
-      params.set("userId", next.userId);
-    }
-    setSearchParams(params, { replace: true });
+    setSearchParams((currentParams) => {
+      const params = new URLSearchParams(currentParams);
+      if (next.search !== undefined) {
+        if (next.search) params.set("search", next.search);
+        else params.delete("search");
+      }
+      if (next.userId === null) {
+        params.delete("userId");
+      } else if (next.userId) {
+        params.set("userId", next.userId);
+      }
+      return params;
+    }, { replace: true });
   }
 
   return (

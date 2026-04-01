@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { render } from "../test-utils.tsx";
 import AzureVirtualDesktopsPage from "../pages/AzureVirtualDesktopsPage.tsx";
+import type { AzureVirtualDesktopRemovalResponse } from "../lib/api.ts";
 
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
@@ -309,7 +310,7 @@ describe("AzureVirtualDesktopsPage", () => {
   });
 
   it("keeps the search input focused while desktop search refetches", async () => {
-    let resolveFilteredSearch!: (value: any) => void;
+    let resolveFilteredSearch!: (value: AzureVirtualDesktopRemovalResponse) => void;
     mockApi.getAzureVirtualDesktopRemovalCandidates
       .mockResolvedValueOnce({
         desktops: [

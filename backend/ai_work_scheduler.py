@@ -31,6 +31,7 @@ class _IssueCacheProtocol(Protocol):
         self,
         new_keys: list[str],
         progress: dict[str, Any] | None = None,
+        model_id: str | None = None,
     ) -> None: ...
 
 

@@ -43,26 +43,80 @@ class TestAutoTriageRoutes:
 
         store.clear_auto_triaged()
 
+    def test_run_all_treats_placeholder_model_string_as_unset(
+        self,
+        test_client,
+        monkeypatch,
+    ):
+        import routes_triage
+        from triage_store import store
+
+        store.clear_auto_triaged()
+
+        auto_triage = AsyncMock()
         monkeypatch.setattr(
             routes_triage,
             "get_available_models",
-            lambda: [AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama")],
+            lambda: [
+                AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
+                AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
+            ],
         )
-        monkeypatch.setattr(routes_triage.cache, "_auto_triage_new_tickets", AsyncMock())
+        monkeypatch.setattr(routes_triage.cache, "_auto_triage_new_tickets", auto_triage)
 
-        def _backfill() -> None:
-            store.mark_auto_triaged("OIT-100")
+        resp = test_client.post("/api/triage/run-all", json={"model": "None", "limit": 1})
 
-        monkeypatch.setattr(routes_triage.cache, "ensure_auto_triage_processed_backfill", _backfill)
+        assert resp.status_code == 200
+        assert resp.json()["started"] is True
+        assert resp.json()["total_tickets"] == 1
+        auto_triage.assert_awaited_once()
+        assert auto_triage.await_args.kwargs["model_id"] == "qwen2.5:7b"
+
+        store.clear_auto_triaged()
+
+    def test_run_all_passes_explicit_model_to_background_worker(
+        self,
+        test_client,
+        monkeypatch,
+    ):
+        import routes_triage
+        from triage_store import store
+
+        store.clear_auto_triaged()
+
+        auto_triage = AsyncMock()
+        monkeypatch.setattr(
+            routes_triage,
+            "get_available_models",
+            lambda: [
+                AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
+                AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
+            ],
+        )
+        monkeypatch.setattr(routes_triage.cache, "_auto_triage_new_tickets", auto_triage)
+
+        resp = test_client.post("/api/triage/run-all", json={"model": "qwen2.5:3b", "limit": 1})
+
+        assert resp.status_code == 200
+        assert resp.json()["started"] is True
+        auto_triage.assert_awaited_once()
+        assert auto_triage.await_args.kwargs["model_id"] == "qwen2.5:3b"
+
+        store.clear_auto_triaged()
+
+    def test_run_all_returns_clear_error_when_no_models_are_available(
+        self,
+        test_client,
+        monkeypatch,
+    ):
+        import routes_triage
+
+        monkeypatch.setattr(routes_triage, "get_available_models", lambda: [])
 
         resp = test_client.post("/api/triage/run-all", json={})
 
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert payload["started"] is True
-        assert payload["total_tickets"] == 3
-
-        store.clear_auto_triaged()
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "No AI model available. Ensure Ollama is running and the configured local model is pulled."
 
 
 class TestTechnicianScoringRoutes:

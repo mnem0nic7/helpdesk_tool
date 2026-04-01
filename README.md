@@ -120,6 +120,7 @@ docker compose up --build
 - PostgreSQL and Redis are the intended shared services for the main app, while local development may still use SQLite-backed data under `data/`.
 - In blue/green Docker deployments, Azure FinOps DuckDB defaults to color-scoped files like `azure_finops_blue.duckdb` and `azure_finops_green.duckdb` so the two runtimes do not fight over the same lock.
 - The Azure Virtual Desktops page keeps its search input in local state while syncing route params so filtered refetches do not tear down the page and steal focus.
+- Bulk AI triage actions launched from the AI Change Log use the configured Ollama triage model when no explicit model is supplied. Placeholder client values like `None` are treated as unset, and any explicit model choice is forwarded into the background auto-triage worker so validation and execution use the same model.
 
 ## Reporting notes
 

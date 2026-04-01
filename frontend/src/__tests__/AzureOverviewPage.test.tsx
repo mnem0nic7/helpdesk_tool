@@ -142,7 +142,7 @@ describe("AzureOverviewPage", () => {
       "href",
       "https://app.powerbi.com/groups/example",
     );
-    expect(screen.getByText("Not configured yet")).toBeInTheDocument();
+    expect(screen.getByText("Reporting target is not configured yet.")).toBeInTheDocument();
     expect(screen.getByText("Healthy")).toBeInTheDocument();
     expect(screen.getByText("Deliveries")).toBeInTheDocument();
     expect(screen.getByText("Parsed")).toBeInTheDocument();

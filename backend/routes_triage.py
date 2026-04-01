@@ -52,6 +52,13 @@ technician_scoring_manager = TechnicianScoringManager(
 )
 
 
+def _normalize_requested_model(value: Any) -> str:
+    normalized = str(value or "").strip()
+    if normalized.lower() in {"none", "null", "undefined"}:
+        return ""
+    return normalized
+
+
 def _ensure_processed_backfill() -> None:
     handler = getattr(cache, "ensure_auto_triage_processed_backfill", None)
     if callable(handler):
@@ -146,8 +153,13 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     if progress["running"]:
         return {"started": False, "total_tickets": progress["total"], "message": "Triage run already in progress"}
 
-    requested_model = str((body or {}).get("model") or "").strip()
+    requested_model = _normalize_requested_model((body or {}).get("model"))
     available_models = get_available_models()
+    if not available_models:
+        raise HTTPException(
+            status_code=400,
+            detail="No AI model available. Ensure Ollama is running and the configured local model is pulled.",
+        )
     model = requested_model or select_available_ollama_model(
         available_models,
         preferred_model_id=AUTO_TRIAGE_MODEL,
@@ -199,7 +211,7 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
 
     async def _run() -> None:
         try:
-            await cache._auto_triage_new_tickets(all_keys, progress=progress)
+            await cache._auto_triage_new_tickets(all_keys, progress=progress, model_id=model)
         except Exception:
             logger.exception("run-all: background triage failed")
         finally:
@@ -359,10 +371,23 @@ async def get_suggestion(key: str) -> dict[str, Any]:
 @router.post("/analyze")
 async def analyze(req: TriageAnalyzeRequest) -> list[dict[str, Any]]:
     """Analyze tickets. Returns cached results when available, else calls AI."""
+    from config import AUTO_TRIAGE_MODEL, OLLAMA_MODEL
+
     # Validate model
     available = get_available_models()
+    if not available:
+        raise HTTPException(
+            status_code=400,
+            detail="No AI model available. Ensure Ollama is running and the configured local model is pulled.",
+        )
+    requested_model = _normalize_requested_model(req.model)
+    model_id = requested_model or select_available_ollama_model(
+        available,
+        preferred_model_id=AUTO_TRIAGE_MODEL,
+        fallback_model_id=OLLAMA_MODEL,
+    )
     model_ids = {m.id for m in available}
-    if req.model not in model_ids:
+    if not model_id or model_id not in model_ids:
         raise HTTPException(
             status_code=400,
             detail=f"Model '{req.model}' is not available from the active Ollama provider.",
@@ -385,7 +410,7 @@ async def analyze(req: TriageAnalyzeRequest) -> list[dict[str, Any]]:
             continue
 
         try:
-            result = analyze_ticket(issue, req.model)
+            result = analyze_ticket(issue, model_id)
             result.suggestions = validate_suggestions(key, result.suggestions)
             store.save(result)
             results.append(result.model_dump())

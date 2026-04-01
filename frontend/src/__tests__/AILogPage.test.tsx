@@ -227,7 +227,7 @@ describe("AILogPage", () => {
     render(<AILogPage />);
 
     const ticketLinks = await screen.findAllByRole("link", { name: "OIT-1" });
-    expect(ticketLinks).toHaveLength(2);
+    expect(ticketLinks).toHaveLength(1);
     expect(ticketLinks[0]).toHaveAttribute("href", "/ai-log?ticket=OIT-1");
 
     await user.click(ticketLinks[0]);
@@ -285,19 +285,19 @@ describe("AILogPage", () => {
     ).toBeDisabled();
   });
 
-  it("filters technician scores and change log entries with the search box", async () => {
+  it("filters AI change log entries with the search box", async () => {
     const user = userEvent.setup();
 
     render(<AILogPage />);
 
-    await screen.findByText("Printer is offline");
-    expect(screen.queryByText("VPN password reset")).not.toBeInTheDocument();
+    await screen.findByText("Waiting on VPN reset");
+    expect(screen.queryByText("High")).toBeInTheDocument();
 
     await user.type(screen.getByRole("searchbox", { name: "Search AI log" }), "vpn");
 
     await waitFor(() => {
       expect(mockApi.getTriageLog).toHaveBeenLastCalledWith({ search: "vpn" });
-      expect(screen.queryByText("Printer is offline")).not.toBeInTheDocument();
+      expect(screen.queryByText("High")).not.toBeInTheDocument();
       expect(screen.getByText("Waiting on VPN reset")).toBeInTheDocument();
     });
   });

@@ -21,6 +21,7 @@ from openpyxl.utils import get_column_letter
 
 from issue_cache import cache
 from jira_client import JiraClient
+import metrics
 from metrics import issue_to_row, _extract_description, _all_comments_text
 from metrics import percentile
 from auth import require_authenticated_user
@@ -118,7 +119,7 @@ def _apply_runtime_template_readiness(
     builder = ReportWorkbookBuilder(
         all_issues=_calculation_scoped_issues(include_excluded_on_primary=True),
         site_scope=site_scope,
-        today=_today_utc(),
+        today=datetime.now(timezone.utc).date(),
         enable_changelog_fetch=False,
     )
     adjusted: list[ReportTemplate] = []
@@ -641,7 +642,7 @@ def _parse_iso_date(raw: str | None, *, field_name: str, default: date) -> date:
 
 def _today_utc() -> date:
     """Return today's UTC date."""
-    return datetime.now(timezone.utc).date()
+    return metrics._now().date()
 
 
 def _parse_issue_date(issue: dict[str, Any], field_name: str) -> date | None:

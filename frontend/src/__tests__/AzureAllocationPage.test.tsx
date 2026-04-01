@@ -234,12 +234,12 @@ describe("AzureAllocationPage", () => {
   it("renders the team and application allocation workspace", async () => {
     render(<AzureAllocationPage />);
 
-    expect(await screen.findByText("Allocation")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Allocation" })).toBeInTheDocument();
     expect(screen.getByText("Cost by Team")).toBeInTheDocument();
     expect(screen.getByText("Cost by Application")).toBeInTheDocument();
     expect(screen.getByText("Platform Team")).toBeInTheDocument();
     expect(screen.getByText("Billing App")).toBeInTheDocument();
     expect(screen.getByText("Unassigned Team")).toBeInTheDocument();
-    expect(screen.getByText("Active Rules")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Active Rules" })).toBeInTheDocument();
   });
 });

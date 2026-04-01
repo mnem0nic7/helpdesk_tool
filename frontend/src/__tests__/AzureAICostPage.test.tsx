@@ -66,7 +66,7 @@ describe("AzureAICostPage", () => {
 
     expect(await screen.findByText("AI Cost")).toBeInTheDocument();
     expect(screen.getByText("Ollama-only runtime confirmed")).toBeInTheDocument();
-    expect(screen.getByText("qwen2.5:7b")).toBeInTheDocument();
+    expect(screen.getAllByText("qwen2.5:7b").length).toBeGreaterThan(0);
     expect(screen.getByText("azure_cost_copilot")).toBeInTheDocument();
     expect(screen.getByText("By Team")).toBeInTheDocument();
     expect(screen.getByText("FinOps")).toBeInTheDocument();

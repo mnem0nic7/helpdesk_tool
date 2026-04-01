@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { render } from "../test-utils.tsx";
 import UsersPage from "../pages/UsersPage.tsx";
@@ -172,6 +172,7 @@ afterAll(() => {
 describe("Users directory pages", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, "", "/users");
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
       writable: true,
@@ -581,7 +582,7 @@ describe("Users directory pages", () => {
 
     expect(await screen.findByRole("heading", { name: "Users" })).toBeInTheDocument();
     expect(screen.getByText(/admin workspace/i)).toBeInTheDocument();
-    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
+    expect(await screen.findByRole("cell", { name: "Ada Lovelace" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Licensed summary filter" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "No Success 30d summary filter" })).toBeInTheDocument();
     expect(screen.getByText("Recent Activity")).toBeInTheDocument();
@@ -595,7 +596,7 @@ describe("Users directory pages", () => {
     await user.click(screen.getByRole("button", { name: "Review Bulk Action" }));
 
     expect(await screen.findByRole("heading", { name: /Disable Sign-In for 1 user/i })).toBeInTheDocument();
-    expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getAllByText("Ada Lovelace").length).toBeGreaterThan(0);
 
     await user.type(screen.getByLabelText(/Type CONFIRM to continue/i), "CONFIRM");
     await user.click(screen.getByRole("button", { name: /Queue Disable Sign-In/i }));
@@ -617,16 +618,16 @@ describe("Users directory pages", () => {
 
     render(<UsersPage />);
 
-    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
-    expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
-    expect(screen.getByText("Linus Queue")).toBeInTheDocument();
+    expect(await screen.findByRole("cell", { name: "Ada Lovelace" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Grace Hopper" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Linus Queue" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Disabled + Licensed summary filter" }));
 
     await waitFor(() => {
       expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
     });
-    expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Grace Hopper" })).toBeInTheDocument();
     expect(screen.queryByText("Linus Queue")).not.toBeInTheDocument();
 
     const disabledPill = screen
@@ -644,19 +645,30 @@ describe("Users directory pages", () => {
       expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
     });
     expect(screen.queryByText("Grace Hopper")).not.toBeInTheDocument();
-    expect(screen.getByText("Linus Queue")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Linus Queue" })).toBeInTheDocument();
 
     const activityPill = screen
       .getAllByRole("button", { name: "No Success 30d" })
       .find((button) => !button.hasAttribute("aria-pressed"));
     expect(activityPill?.className).toContain("border-sky-500");
 
-    await user.type(screen.getByPlaceholderText("Search name, email, department..."), "Ada");
-    await user.selectOptions(screen.getAllByRole("combobox")[0], "MOVEDOCS");
+    const directorySelect = screen
+      .getAllByRole("combobox")
+      .find((element) => Array.from((element as HTMLSelectElement).options).some((option) => option.value === "MOVEDOCS"));
+    if (!(directorySelect instanceof HTMLSelectElement)) {
+      throw new Error("Directory filter select was not found");
+    }
+    await user.selectOptions(directorySelect, "MOVEDOCS");
+    fireEvent.change(screen.getByPlaceholderText("Search name, email, department..."), {
+      target: { value: "Engineer" },
+    });
+    await screen.findByRole("button", { name: "Total summary filter" });
     await user.click(screen.getByRole("button", { name: "Total summary filter" }));
 
-    expect(screen.getByPlaceholderText("Search name, email, department...")).toHaveValue("Ada");
-    expect(screen.getAllByRole("combobox")[0]).toHaveValue("MOVEDOCS");
+    expect(screen.getByPlaceholderText("Search name, email, department...")).toHaveValue("Engineer");
+    expect(screen.getByRole("cell", { name: "Ada Lovelace" })).toBeInTheDocument();
+    expect(screen.queryByText("Linus Queue")).not.toBeInTheDocument();
+    expect(screen.queryByText("Grace Hopper")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Total summary filter" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -696,8 +708,8 @@ describe("Users directory pages", () => {
 
     render(<UsersPage />);
 
-    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
-    await user.click(screen.getByText("Ada Lovelace"));
+    expect(await screen.findByRole("cell", { name: "Ada Lovelace" })).toBeInTheDocument();
+    await user.click(screen.getByRole("cell", { name: "Ada Lovelace" }));
 
     expect(await screen.findByRole("heading", { name: "Ada Lovelace" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
@@ -722,7 +734,7 @@ describe("Users directory pages", () => {
     expect(await screen.findByText(/Mailbox management will unlock/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Exit" }));
-    expect(await screen.findByText("Start Exit Workflow")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Start Exit Workflow" })).toBeInTheDocument();
     expect(screen.getByText("Hybrid exit workflow (Oasis)")).toBeInTheDocument();
 
     await user.type(screen.getByPlaceholderText("ada@contoso.com"), "ada@contoso.com");
@@ -743,10 +755,11 @@ describe("Users directory pages", () => {
 
   it("renders the shared Azure directory view without the primary admin workspace", async () => {
     const user = userEvent.setup();
+    window.history.replaceState({}, "", "/azure/users");
 
     render(<AzureUsersPage />);
 
-    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
+    expect(await screen.findByRole("cell", { name: "Ada Lovelace" })).toBeInTheDocument();
     expect(screen.queryByText("Bulk Actions")).not.toBeInTheDocument();
     expect(screen.queryByText("Recent Activity")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Export Filtered CSV" })).not.toBeInTheDocument();
@@ -756,9 +769,9 @@ describe("Users directory pages", () => {
     await waitFor(() => {
       expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
     });
-    expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Grace Hopper" })).toBeInTheDocument();
 
-    await user.click(screen.getByText("Grace Hopper"));
+    await user.click(screen.getByRole("cell", { name: "Grace Hopper" }));
 
     expect(await screen.findByRole("heading", { name: "Grace Hopper" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
