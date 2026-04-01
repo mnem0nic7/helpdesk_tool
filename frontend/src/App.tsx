@@ -27,6 +27,7 @@ const AzureCopilotPage = lazy(() => import("./pages/AzureCopilotPage"));
 const AzureStoragePage = lazy(() => import("./pages/AzureStoragePage"));
 const AzureComputeOptimizationPage = lazy(() => import("./pages/AzureComputeOptimizationPage.tsx"));
 const AzureUsersPage = lazy(() => import("./pages/AzureUsersPage"));
+const AzureSecurityPage = lazy(() => import("./pages/AzureSecurityPage"));
 const AzureAlertsPage = lazy(() => import("./pages/AzureAlertsPage"));
 const AzureAccountHealthPage = lazy(() => import("./pages/AzureAccountHealthPage"));
 const AzureVirtualDesktopsPage = lazy(() => import("./pages/AzureVirtualDesktopsPage"));
@@ -58,6 +59,7 @@ export default function App() {
                 <Route path="virtual-desktops" element={<AzureVirtualDesktopsPage />} />
                 <Route path="resources" element={<AzureResourcesPage />} />
                 <Route path="identity" element={<AzureIdentityPage />} />
+                <Route path="security" element={<AzureSecurityPage />} />
                 <Route path="users" element={<AzureUsersPage />} />
                 <Route path="tools" element={<ToolsPage />} />
                 <Route path="cost" element={<AzureCostPage />} />

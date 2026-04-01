@@ -39,6 +39,7 @@ const azureNavItems: NavItem[] = [
   { to: "/resources", label: "Resources", icon: "resources" },
   { to: "/storage", label: "Storage", icon: "storage" },
   { to: "/identity", label: "Identity", icon: "identity" },
+  { to: "/security", label: "Security", icon: "security" },
   { to: "/users", label: "Users", icon: "users" },
   { to: "/tools", label: "Tools", icon: "tools" },
   { to: "/cost", label: "Cost", icon: "cost" },
@@ -58,6 +59,7 @@ const azureBreadcrumbLabels: Record<string, string> = {
   resources: "Resources",
   storage: "Storage",
   identity: "Identity",
+  security: "Security",
   users: "Users",
   tools: "Tools",
   cost: "Cost",
@@ -96,6 +98,8 @@ function AzureSidebarIcon({ icon }: { icon: string }) {
       return <svg aria-hidden="true" {...common}><ellipse cx="12" cy="6" rx="7.5" ry="3" /><path d="M4.5 6v8c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6" /><path d="M4.5 10c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3" /></svg>;
     case "identity":
       return <svg aria-hidden="true" {...common}><circle cx="9" cy="9" r="3" /><path d="M4 19c.9-2.7 3.2-4 5-4s4.1 1.3 5 4" /><path d="M17 8h4" /><path d="M19 6v4" /></svg>;
+    case "security":
+      return <svg aria-hidden="true" {...common}><path d="M12 3 5.5 5.8v5c0 5.4 6.5 9.2 6.5 9.2s6.5-3.8 6.5-9.2v-5L12 3Z" /><path d="m9.5 11.8 1.7 1.7 3.8-4" /></svg>;
     case "users":
       return <svg aria-hidden="true" {...common}><circle cx="8" cy="8" r="3" /><circle cx="17" cy="9" r="2.5" /><path d="M3.5 19c.8-2.8 3.1-4.2 4.5-4.2 1.5 0 3.8 1.4 4.6 4.2" /><path d="M14 19c.5-1.8 1.9-3.1 3.5-3.1 1 0 2.2.5 3 1.7" /></svg>;
     case "tools":

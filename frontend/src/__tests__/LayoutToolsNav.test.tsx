@@ -94,6 +94,11 @@ describe("Layout tools navigation", () => {
     expect(await screen.findByRole("link", { name: /Tools/ })).toBeInTheDocument();
   });
 
+  it("shows Security on the azure host", async () => {
+    renderLayoutAt("/", "azure");
+    expect(await screen.findByRole("link", { name: /Security/ })).toBeInTheDocument();
+  });
+
   it("hides Tools on oasisdev", async () => {
     renderLayoutAt("/", "oasisdev");
     await screen.findByText("Page content");
