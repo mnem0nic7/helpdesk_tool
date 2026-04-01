@@ -710,8 +710,7 @@ do
                 # Noninteractive login with client secret app credentials
                 $exoScope = "https://outlook.office365.com/.default"
                 $exoToken = Get-ClientCredentialToken -ClientId $appId -ClientSecret $clientSecret -Scope $exoScope -TokenUri $tokenUrl
-                $secureExoToken = ConvertTo-SecureString $exoToken -AsPlainText -Force
-                Connect-ExchangeOnline -AccessToken $secureExoToken -Organization $organizationDomain -ShowBanner:$false
+                Connect-ExchangeOnline -AccessToken $exoToken -Organization $organizationDomain -ShowBanner:$false
             }
         }
         elseif ($useDeviceAuth)
