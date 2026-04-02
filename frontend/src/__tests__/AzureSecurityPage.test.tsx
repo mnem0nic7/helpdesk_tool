@@ -88,22 +88,28 @@ describe("AzureSecurityPage", () => {
     });
   });
 
-  it("renders the security workspace with starter tools", async () => {
+  it("renders the security workspace as a review-lane hub", async () => {
     render(<AzureSecurityPage />);
 
     expect(await screen.findByText("Azure Security")).toBeInTheDocument();
-    expect(screen.getByText("Security Control Planes")).toBeInTheDocument();
-    expect(screen.getByText("Starter Security Tools")).toBeInTheDocument();
+    expect(screen.getByText("Security Review Lanes")).toBeInTheDocument();
+    expect(screen.getByText("Connected Consoles")).toBeInTheDocument();
     expect(screen.getByText("Security Incident Copilot")).toBeInTheDocument();
-    expect(screen.getByText("Identity Review Lane")).toBeInTheDocument();
+    expect(screen.getByText("Identity Review")).toBeInTheDocument();
+    expect(screen.getByText("User Review")).toBeInTheDocument();
+    expect(screen.getByText("Account Health")).toBeInTheDocument();
     expect(screen.getByText("Privileged Access Review")).toBeInTheDocument();
     expect(screen.getByText("Application Hygiene")).toBeInTheDocument();
     expect(screen.getByText("2/2 configured datasets healthy")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open Alert Desk" })).toHaveAttribute("href", "/alerts");
-    expect(screen.getAllByRole("link", { name: "Open Security Copilot" })).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "Open Security Copilot" })).toHaveAttribute("href", "/security/copilot");
     expect(screen.getByRole("link", { name: "Open Access Review" })).toHaveAttribute("href", "/security/access-review");
-    expect(screen.getByRole("link", { name: "Open Application Hygiene" })).toHaveAttribute("href", "/security/app-hygiene");
+    expect(screen.getAllByRole("link", { name: "Open Identity Review" })[0]).toHaveAttribute("href", "/security/identity-review");
+    expect(screen.getAllByRole("link", { name: "Open User Review" })[0]).toHaveAttribute("href", "/security/user-review");
+    expect(screen.getAllByRole("link", { name: "Open Account Health" })[0]).toHaveAttribute("href", "/security/account-health");
+    expect(screen.getAllByRole("link", { name: "Open Application Hygiene" })[0]).toHaveAttribute("href", "/security/app-hygiene");
     expect(screen.getByRole("link", { name: "Microsoft Defender" })).toHaveAttribute("href", "https://security.microsoft.com/");
+    expect(screen.queryByText("Security Control Planes")).not.toBeInTheDocument();
+    expect(screen.queryByText("Starter Security Tools")).not.toBeInTheDocument();
   });
 
   it("falls back to overview datasets when the live status call is unavailable", async () => {

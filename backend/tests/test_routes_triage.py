@@ -58,8 +58,8 @@ class TestAutoTriageRoutes:
             routes_triage,
             "get_available_models",
             lambda: [
-                AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
-                AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
+                AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama"),
+                AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
             ],
         )
         monkeypatch.setattr(routes_triage.cache, "_auto_triage_new_tickets", auto_triage)
@@ -70,7 +70,7 @@ class TestAutoTriageRoutes:
         assert resp.json()["started"] is True
         assert resp.json()["total_tickets"] == 1
         auto_triage.assert_awaited_once()
-        assert auto_triage.await_args.kwargs["model_id"] == "qwen2.5:7b"
+        assert auto_triage.await_args.kwargs["model_id"] == "qwen3.5:4b"
 
         store.clear_auto_triaged()
 
@@ -89,18 +89,18 @@ class TestAutoTriageRoutes:
             routes_triage,
             "get_available_models",
             lambda: [
-                AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
-                AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
+                AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama"),
+                AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
             ],
         )
         monkeypatch.setattr(routes_triage.cache, "_auto_triage_new_tickets", auto_triage)
 
-        resp = test_client.post("/api/triage/run-all", json={"model": "qwen2.5:3b", "limit": 1})
+        resp = test_client.post("/api/triage/run-all", json={"model": "nemotron-3-nano:4b", "limit": 1})
 
         assert resp.status_code == 200
         assert resp.json()["started"] is True
         auto_triage.assert_awaited_once()
-        assert auto_triage.await_args.kwargs["model_id"] == "qwen2.5:3b"
+        assert auto_triage.await_args.kwargs["model_id"] == "nemotron-3-nano:4b"
 
         store.clear_auto_triaged()
 
@@ -163,7 +163,7 @@ class TestTechnicianScoringRoutes:
         monkeypatch.setattr(
             scoring_manager_module,
             "get_available_models",
-            lambda: [AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama")],
+            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
         )
         monkeypatch.setattr(routes_triage._client, "get_request_comments", lambda key: [])
         monkeypatch.setattr(
@@ -281,7 +281,7 @@ class TestTechnicianScoringRoutes:
                 documentation_score=4,
                 documentation_notes="Clear resolution notes.",
                 score_summary="Strong closeout quality.",
-                model_used="qwen2.5:7b",
+                model_used="qwen3.5:4b",
                 created_at="2026-03-04T12:00:00+00:00",
             )
             if key == "OIT-300"

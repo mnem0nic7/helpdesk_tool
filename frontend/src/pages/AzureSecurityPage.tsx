@@ -24,58 +24,9 @@ type BuildQueueItem = {
   description: string;
 };
 
-const controlPlaneCards: ToolCardDefinition[] = [
+const reviewLaneCards: ToolCardDefinition[] = [
   {
-    eyebrow: "Control Plane",
-    title: "Identity and Access",
-    description:
-      "Start tenant security work from the identity inventory, sign-in health, and the Entra admin surface for roles, app access, and directory posture.",
-    status: "Ready now",
-    actions: [
-      { label: "Identity Inventory", to: "/identity" },
-      { label: "Account Health", to: "/account-health", tone: "secondary" },
-      { label: "Entra Admin Center", to: "https://entra.microsoft.com/", external: true, tone: "secondary" },
-    ],
-  },
-  {
-    eyebrow: "Control Plane",
-    title: "Detection and Response",
-    description:
-      "Work alerts, correlate Azure signals, and keep one landing zone for triage before the dedicated incident tooling arrives here.",
-    status: "Ready now",
-    actions: [
-      { label: "Azure Alerts", to: "/alerts" },
-      { label: "Microsoft Defender", to: "https://security.microsoft.com/", external: true, tone: "secondary" },
-      { label: "Azure Portal", to: "https://portal.azure.com/", external: true, tone: "secondary" },
-    ],
-  },
-  {
-    eyebrow: "Control Plane",
-    title: "User and Access Operations",
-    description:
-      "Pivot into user lifecycle checks, directory hygiene, and shared operator tools when an identity issue becomes an access or operational task.",
-    status: "Ready now",
-    actions: [
-      { label: "Azure Users", to: "/users" },
-      { label: "Shared Admin Tools", to: "/tools", tone: "secondary" },
-    ],
-  },
-  {
-    eyebrow: "Control Plane",
-    title: "Application and Resource Audit",
-    description:
-      "Review enterprise apps, app registrations, subscriptions, and exposed resources from one place while we wire in deeper security-specific checks.",
-    status: "In build",
-    actions: [
-      { label: "Resource Inventory", to: "/resources" },
-      { label: "Azure Overview", to: "/", tone: "secondary" },
-    ],
-  },
-];
-
-const starterTools: ToolCardDefinition[] = [
-  {
-    eyebrow: "Starter Tool",
+    eyebrow: "Investigation",
     title: "Security Incident Copilot",
     description:
       "Run guided incident intake, let the copilot ask for missing evidence, query grounded Azure and local sources, auto-start safe mailbox delegate scans when the case needs them, and export a repeatable investigation handoff.",
@@ -86,47 +37,85 @@ const starterTools: ToolCardDefinition[] = [
     ],
   },
   {
-    eyebrow: "Starter Tool",
-    title: "Identity Review Lane",
-    description:
-      "Use the current app inventory to review enterprise apps, app registrations, directory roles, and user posture without leaving the Azure surface.",
-    status: "Ready now",
-    actions: [
-      { label: "Open Identity Inventory", to: "/identity" },
-      { label: "Review Account Health", to: "/account-health", tone: "secondary" },
-    ],
-  },
-  {
-    eyebrow: "Starter Tool",
-    title: "Alert Triage Lane",
-    description:
-      "Work Azure alerts, turn findings into tracked operator follow-up, and hand active investigations to the security copilot when you need grounded cross-source evidence.",
-    status: "Ready now",
-    actions: [
-      { label: "Open Alert Desk", to: "/alerts" },
-      { label: "Open Security Copilot", to: "/security/copilot", tone: "secondary" },
-    ],
-  },
-  {
-    eyebrow: "Starter Tool",
+    eyebrow: "Review Lane",
     title: "Privileged Access Review",
     description:
       "Review elevated Azure RBAC assignments, guest or external privileged principals, stale privileged users, and emergency account watchlists from one dedicated security lane.",
     status: "Ready now",
     actions: [
       { label: "Open Access Review", to: "/security/access-review" },
-      { label: "Review Azure Users", to: "/users", tone: "secondary" },
+      { label: "Open User Review", to: "/security/user-review", tone: "secondary" },
     ],
   },
   {
-    eyebrow: "Starter Tool",
+    eyebrow: "Review Lane",
+    title: "Identity Review",
+    description:
+      "Review groups, enterprise applications, app registrations, and directory roles from one security-first lane before dropping into the raw identity inventory.",
+    status: "Ready now",
+    actions: [
+      { label: "Open Identity Review", to: "/security/identity-review" },
+      { label: "Open Application Hygiene", to: "/security/app-hygiene", tone: "secondary" },
+    ],
+  },
+  {
+    eyebrow: "Review Lane",
+    title: "User Review",
+    description:
+      "Work stale sign-ins, disabled licensed accounts, guest identities, synced users, and shared/service-style accounts from a review-oriented user lane.",
+    status: "Ready now",
+    actions: [
+      { label: "Open User Review", to: "/security/user-review" },
+      { label: "Open Account Health", to: "/security/account-health", tone: "secondary" },
+    ],
+  },
+  {
+    eyebrow: "Review Lane",
+    title: "Account Health",
+    description:
+      "Review disabled accounts, stale cloud passwords, old guest identities, and incomplete employee profiles from one account hygiene lane.",
+    status: "Ready now",
+    actions: [
+      { label: "Open Account Health", to: "/security/account-health" },
+      { label: "Open User Review", to: "/security/user-review", tone: "secondary" },
+    ],
+  },
+  {
+    eyebrow: "Review Lane",
     title: "Application Hygiene",
     description:
       "Review app registration owner coverage, expiring client secrets and certificates, external audience exposure, and publisher trust from one security lane.",
     status: "Ready now",
     actions: [
       { label: "Open Application Hygiene", to: "/security/app-hygiene" },
-      { label: "Review App Inventory", to: "/identity", tone: "secondary" },
+      { label: "Open Identity Review", to: "/security/identity-review", tone: "secondary" },
+    ],
+  },
+];
+
+const connectedConsoles: ToolCardDefinition[] = [
+  {
+    eyebrow: "Connected Console",
+    title: "Detection and Response",
+    description:
+      "Pivot from the review lanes into alert response, Microsoft Defender, and Azure-native investigation views when an incident needs deeper telemetry.",
+    status: "Ready now",
+    actions: [
+      { label: "Azure Alerts", to: "/alerts" },
+      { label: "Microsoft Defender", to: "https://security.microsoft.com/", external: true, tone: "secondary" },
+      { label: "Azure Portal", to: "https://portal.azure.com/", external: true, tone: "secondary" },
+    ],
+  },
+  {
+    eyebrow: "Connected Console",
+    title: "Operator Tools",
+    description:
+      "Use the shared tools surface and Entra admin center when a review turns into operational remediation or detailed tenant administration.",
+    status: "Ready now",
+    actions: [
+      { label: "Shared Admin Tools", to: "/tools" },
+      { label: "Entra Admin Center", to: "https://entra.microsoft.com/", external: true, tone: "secondary" },
+      { label: "Azure Overview", to: "/", tone: "secondary" },
     ],
   },
 ];
@@ -265,8 +254,8 @@ export default function AzureSecurityPage() {
       <div>
         <h1 className="text-3xl font-bold text-slate-900">Azure Security</h1>
         <p className="mt-1 max-w-4xl text-sm text-slate-500">
-          Security-focused workspace for Azure identity, alert response, tenant hygiene, and the next wave of operator tools. This first build
-          gives the Azure site a dedicated landing zone for security work instead of scattering it across unrelated tabs.
+          Security-focused workspace for Azure review lanes, incident response, and tenant hygiene. The Azure sidebar now routes identity, users,
+          and account hygiene through this hub so security work stays in one place instead of bouncing across unrelated tabs.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <AzureSourceBadge
@@ -296,9 +285,10 @@ export default function AzureSecurityPage() {
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Security Control Planes</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Security Review Lanes</h2>
             <p className="mt-1 max-w-3xl text-sm text-slate-500">
-              These are the main jump points for Azure security work today while the dedicated workflows on this page keep expanding.
+              These are the primary security-native entrypoints for Azure tenant review work. Hidden raw inventory pages still exist for drill-ins,
+              but the sidebar now keeps operators grounded in these review lanes first.
             </p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
@@ -307,7 +297,7 @@ export default function AzureSecurityPage() {
           </div>
         </div>
         <div className="mt-5 grid gap-4 xl:grid-cols-2">
-          {controlPlaneCards.map((card) => (
+          {reviewLaneCards.map((card) => (
             <ToolCard key={card.title} {...card} />
           ))}
         </div>
@@ -316,15 +306,15 @@ export default function AzureSecurityPage() {
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Starter Security Tools</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Connected Consoles</h2>
             <p className="mt-1 max-w-3xl text-sm text-slate-500">
-              First-pass tool lanes that pull the existing Azure pages into a more intentional security workspace while we build dedicated checks.
+              External consoles and adjacent Azure surfaces that still matter once a review lane turns into live investigation or remediation work.
             </p>
           </div>
-          <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700">Security workspace v1</span>
+          <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700">Keep moving</span>
         </div>
         <div className="mt-5 grid gap-4 xl:grid-cols-2">
-          {starterTools.map((card) => (
+          {connectedConsoles.map((card) => (
             <ToolCard key={card.title} {...card} />
           ))}
         </div>

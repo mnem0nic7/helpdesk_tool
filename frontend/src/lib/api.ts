@@ -2302,8 +2302,18 @@ export interface SecurityCopilotIncident {
   affected_resources: string[];
   alert_names: string[];
   observed_artifacts: string[];
+  identity_query: string;
+  identity_candidates: SecurityCopilotIdentityCandidate[];
   confidence: number;
   missing_fields: string[];
+}
+
+export interface SecurityCopilotIdentityCandidate {
+  id: string;
+  display_name: string;
+  principal_name: string;
+  mail: string;
+  match_reason: string;
 }
 
 export interface SecurityCopilotFollowUpQuestion {
@@ -2313,6 +2323,7 @@ export interface SecurityCopilotFollowUpQuestion {
   placeholder: string;
   required: boolean;
   input_type: "text" | "textarea" | "email" | "list";
+  choices: string[];
 }
 
 export interface SecurityCopilotPlannedSource {

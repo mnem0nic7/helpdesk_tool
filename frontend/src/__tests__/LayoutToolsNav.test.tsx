@@ -66,6 +66,7 @@ function renderLayoutAt(pathname: string, scope: MockScope) {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<div>Page content</div>} />
+        <Route path="*" element={<div>Page content</div>} />
       </Route>
     </Routes>,
   );
@@ -97,6 +98,17 @@ describe("Layout tools navigation", () => {
   it("shows Security on the azure host", async () => {
     renderLayoutAt("/", "azure");
     expect(await screen.findByRole("link", { name: /Security/ })).toBeInTheDocument();
+  });
+
+  it("hides raw identity, users, and account health tabs on the azure host and shows security breadcrumbs for the new lanes", async () => {
+    renderLayoutAt("/security/user-review", "azure");
+
+    expect(await screen.findByText("Page content")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Identity$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Users$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Account Health$/ })).not.toBeInTheDocument();
+    expect(screen.getAllByText("Security").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("User Review").length).toBeGreaterThan(0);
   });
 
   it("hides Tools on oasisdev", async () => {

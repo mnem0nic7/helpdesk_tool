@@ -23,6 +23,7 @@ from models import (
     SecurityCopilotChatMessage,
     SecurityCopilotChatResponse,
     SecurityCopilotFollowUpQuestion,
+    SecurityCopilotIdentityCandidate,
     SecurityCopilotIncident,
     SecurityCopilotJobRef,
     SecurityCopilotPlannedSource,
@@ -87,9 +88,29 @@ _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _GUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
 _RESOURCE_ID_RE = re.compile(r"/subscriptions/[^\s]+", re.IGNORECASE)
 _TIMEFRAME_RE = re.compile(
-    r"\b(last\s+\d+\s+\w+|since\s+[^,.]+|from\s+[^,.]+\s+to\s+[^,.]+|today|yesterday|overnight|this morning|this afternoon)\b",
+    r"\b(last\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+\w+|since\s+[^,.]+|from\s+[^,.]+\s+to\s+[^,.]+|today|yesterday|overnight|this morning|this afternoon)\b",
     re.IGNORECASE,
 )
+_DISPLAY_NAME_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b")
+_NAME_CONTEXT_PATTERNS = (
+    re.compile(r"\b([A-Za-z][A-Za-z'.-]+(?:\s+[A-Za-z][A-Za-z'.-]+){1,2})\s+(?:had|has|reported|reports|triggered|received|showed|shows)\b", re.IGNORECASE),
+    re.compile(r"\b(?:user|employee|account|for|investigate|check)\s+([A-Za-z][A-Za-z'.-]+(?:\s+[A-Za-z][A-Za-z'.-]+){1,2})\b", re.IGNORECASE),
+)
+_IDENTITY_CONFIRM_YES = {"yes", "y", "confirm", "confirmed", "that's right", "that one", "correct"}
+_IDENTITY_CONFIRM_INDEX = {
+    "1": 0,
+    "first": 0,
+    "the first one": 0,
+    "option 1": 0,
+    "2": 1,
+    "second": 1,
+    "the second one": 1,
+    "option 2": 1,
+    "3": 2,
+    "third": 2,
+    "the third one": 2,
+    "option 3": 2,
+}
 _MAX_PREVIEW_ROWS = 6
 
 
@@ -132,6 +153,163 @@ def _unique_list(values: list[Any]) -> list[str]:
     return result
 
 
+def _identity_candidate_value(candidate: SecurityCopilotIdentityCandidate) -> str:
+    return str(candidate.principal_name or candidate.mail or candidate.display_name or "").strip()
+
+
+def _identity_candidate_label(candidate: SecurityCopilotIdentityCandidate) -> str:
+    identity = _identity_candidate_value(candidate)
+    display_name = str(candidate.display_name or "").strip()
+    if display_name and identity and display_name.lower() != identity.lower():
+        return f"{display_name} <{identity}>"
+    return display_name or identity
+
+
+def _normalize_identity_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _clear_identity_candidates(incident: SecurityCopilotIncident) -> SecurityCopilotIncident:
+    if not incident.identity_candidates and not incident.identity_query:
+        return incident
+    updated = incident.model_copy(deep=True)
+    updated.identity_query = ""
+    updated.identity_candidates = []
+    return updated
+
+
+def _extract_identity_lookup_queries(*texts: str) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for text in texts:
+        raw = str(text or "").strip()
+        if not raw:
+            continue
+        for pattern in _NAME_CONTEXT_PATTERNS:
+            for match in pattern.findall(raw):
+                normalized = re.sub(r"\s+", " ", str(match or "").strip())
+                key = normalized.lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    candidates.append(normalized)
+        for match in _DISPLAY_NAME_RE.findall(raw):
+            normalized = re.sub(r"\s+", " ", str(match or "").strip())
+            key = normalized.lower()
+            if key and key not in seen:
+                seen.add(key)
+                candidates.append(normalized)
+    return candidates[:3]
+
+
+def _lookup_identity_candidates(*queries: str) -> tuple[str, list[SecurityCopilotIdentityCandidate]]:
+    for query in _extract_identity_lookup_queries(*queries):
+        try:
+            rows = azure_cache.list_directory_objects("users", search=query)[:6]
+        except Exception:
+            logger.exception("Security copilot failed to resolve Azure user candidates for %s", query)
+            return "", []
+        candidates: list[SecurityCopilotIdentityCandidate] = []
+        query_lower = query.lower()
+        for row in rows:
+            display_name = str(row.get("display_name") or "").strip()
+            principal_name = str(row.get("principal_name") or "").strip()
+            mail = str(row.get("mail") or "").strip()
+            if not (display_name or principal_name or mail):
+                continue
+            match_reason = "display_name_contains"
+            if display_name.lower() == query_lower:
+                match_reason = "display_name_exact"
+            elif principal_name.lower() == query_lower or mail.lower() == query_lower:
+                match_reason = "principal_exact"
+            candidates.append(
+                SecurityCopilotIdentityCandidate(
+                    id=str(row.get("id") or ""),
+                    display_name=display_name,
+                    principal_name=principal_name,
+                    mail=mail,
+                    match_reason=match_reason,
+                )
+            )
+        if candidates:
+            candidates.sort(
+                key=lambda item: (
+                    0 if item.match_reason == "display_name_exact" else 1 if item.match_reason == "principal_exact" else 2,
+                    _identity_candidate_label(item).lower(),
+                )
+            )
+            deduped: list[SecurityCopilotIdentityCandidate] = []
+            seen: set[str] = set()
+            for candidate in candidates:
+                key = _normalize_identity_text(_identity_candidate_value(candidate))
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(candidate)
+            if deduped:
+                return query, deduped[:4]
+    return "", []
+
+
+def _resolve_identity_candidate_reply(
+    incident: SecurityCopilotIncident,
+    message: str,
+) -> SecurityCopilotIncident:
+    if not incident.identity_candidates or incident.affected_users:
+        return incident
+    normalized = _normalize_identity_text(message)
+    if not normalized:
+        return incident
+
+    chosen: SecurityCopilotIdentityCandidate | None = None
+    if normalized in _IDENTITY_CONFIRM_YES and len(incident.identity_candidates) == 1:
+        chosen = incident.identity_candidates[0]
+    elif normalized in _IDENTITY_CONFIRM_INDEX:
+        index = _IDENTITY_CONFIRM_INDEX[normalized]
+        if 0 <= index < len(incident.identity_candidates):
+            chosen = incident.identity_candidates[index]
+    else:
+        for candidate in incident.identity_candidates:
+            haystacks = {
+                _normalize_identity_text(candidate.display_name),
+                _normalize_identity_text(candidate.principal_name),
+                _normalize_identity_text(candidate.mail),
+                _normalize_identity_text(_identity_candidate_label(candidate)),
+            }
+            if any(value and value in normalized for value in haystacks):
+                chosen = candidate
+                break
+
+    if chosen is None:
+        return incident
+
+    updated = incident.model_copy(deep=True)
+    identity = _identity_candidate_value(chosen)
+    if identity:
+        updated.affected_users = _unique_list([identity, *updated.affected_users])
+    if updated.lane == "mailbox_abuse":
+        mailbox = str(chosen.mail or chosen.principal_name or "").strip()
+        if mailbox:
+            updated.affected_mailboxes = _unique_list([mailbox, *updated.affected_mailboxes])
+    updated.identity_query = ""
+    updated.identity_candidates = []
+    return updated
+
+
+def _resolve_identity_candidates(
+    incident: SecurityCopilotIncident,
+    *texts: str,
+) -> SecurityCopilotIncident:
+    if incident.affected_users or incident.lane not in {"identity_compromise", "unknown"}:
+        return _clear_identity_candidates(incident)
+    query, candidates = _lookup_identity_candidates(*texts)
+    if not candidates:
+        return incident
+    updated = incident.model_copy(deep=True)
+    updated.identity_query = query
+    updated.identity_candidates = candidates
+    return updated
+
+
 def _extract_json_object(raw: str) -> dict[str, Any]:
     text = str(raw or "").strip()
     if text.startswith("```"):
@@ -143,6 +321,23 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
         text = text[start : end + 1]
     payload = json.loads(text)
     return payload if isinstance(payload, dict) else {}
+
+
+def _merge_summary(current_summary: str, update_summary: str) -> str:
+    current_text = str(current_summary or "").strip()
+    update_text = str(update_summary or "").strip()
+    if not update_text:
+        return current_text
+    if not current_text:
+        return update_text
+    normalized = _normalize_identity_text(update_text)
+    if normalized in _IDENTITY_CONFIRM_YES or normalized in _IDENTITY_CONFIRM_INDEX:
+        return current_text
+    if len(update_text.split()) <= 5 and len(update_text) <= 64:
+        return current_text
+    if normalized in _normalize_identity_text(current_text):
+        return current_text
+    return update_text
 
 
 def _compact_history(history: list[SecurityCopilotChatMessage]) -> list[dict[str, str]]:
@@ -317,7 +512,7 @@ def _merge_incident(
         lane = update.lane if update.lane != "unknown" else current.lane
         merged = SecurityCopilotIncident(
             lane=lane if lane else "unknown",
-            summary=_clip(update.summary or current.summary, 600),
+            summary=_clip(_merge_summary(current.summary, update.summary), 600),
             timeframe=update.timeframe or current.timeframe,
             affected_users=_unique_list([*current.affected_users, *update.affected_users]),
             affected_mailboxes=_unique_list([*current.affected_mailboxes, *update.affected_mailboxes]),
@@ -325,6 +520,8 @@ def _merge_incident(
             affected_resources=_unique_list([*current.affected_resources, *update.affected_resources]),
             alert_names=_unique_list([*current.alert_names, *update.alert_names]),
             observed_artifacts=_unique_list([*current.observed_artifacts, *update.observed_artifacts]),
+            identity_query=current.identity_query,
+            identity_candidates=[candidate.model_copy(deep=True) for candidate in current.identity_candidates],
             confidence=max(float(current.confidence or 0.0), float(update.confidence or 0.0)),
             missing_fields=[],
         )
@@ -352,6 +549,10 @@ def _resolve_incident_profile(
     merged = _merge_incident(current, heuristic)
     ai_update = _invoke_incident_model(message, merged, model_id, history=history)
     merged = _merge_incident(merged, ai_update)
+    merged = _resolve_identity_candidate_reply(merged, message)
+    merged = _resolve_identity_candidates(merged, message, merged.summary)
+    if merged.affected_users:
+        merged = _clear_identity_candidates(merged)
     if not merged.summary and message.strip():
         merged.summary = _clip(message.strip(), 600)
     merged.missing_fields = _missing_fields_for_incident(merged)
@@ -365,7 +566,9 @@ def _missing_fields_for_incident(incident: SecurityCopilotIncident) -> list[str]
     if not incident.timeframe.strip():
         missing.append("timeframe")
 
-    if incident.lane == "identity_compromise" and not incident.affected_users:
+    if incident.identity_candidates and not incident.affected_users:
+        missing.append("identity_confirmation")
+    elif incident.lane == "identity_compromise" and not incident.affected_users:
         missing.append("affected_users")
     elif incident.lane == "mailbox_abuse" and not incident.affected_mailboxes:
         missing.append("affected_mailboxes")
@@ -386,7 +589,9 @@ def _missing_fields_for_incident(incident: SecurityCopilotIncident) -> list[str]
     return missing
 
 
-def _follow_up_question(field_key: str) -> SecurityCopilotFollowUpQuestion:
+def _follow_up_question(field_key: str, incident: SecurityCopilotIncident) -> SecurityCopilotFollowUpQuestion:
+    identity_choices = [_identity_candidate_label(candidate) for candidate in incident.identity_candidates]
+    identity_query = incident.identity_query or "that name"
     catalog: dict[str, SecurityCopilotFollowUpQuestion] = {
         "summary": SecurityCopilotFollowUpQuestion(
             key="summary",
@@ -407,6 +612,17 @@ def _follow_up_question(field_key: str) -> SecurityCopilotFollowUpQuestion:
             prompt="Which user account should I investigate first?",
             placeholder="Example: ada@example.com",
             input_type="email",
+        ),
+        "identity_confirmation": SecurityCopilotFollowUpQuestion(
+            key="identity_confirmation",
+            label="Confirm user account",
+            prompt=(
+                f"I found {len(identity_choices)} Azure user match(es) for {identity_query}. "
+                "Confirm which account I should investigate first."
+            ),
+            placeholder="Reply with the exact account, or click one of the matches below.",
+            input_type="list",
+            choices=identity_choices,
         ),
         "affected_mailboxes": SecurityCopilotFollowUpQuestion(
             key="affected_mailboxes",
@@ -439,7 +655,7 @@ def _follow_up_question(field_key: str) -> SecurityCopilotFollowUpQuestion:
 
 
 def _build_follow_up_questions(incident: SecurityCopilotIncident) -> list[SecurityCopilotFollowUpQuestion]:
-    return [_follow_up_question(field_key) for field_key in incident.missing_fields[:3]]
+    return [_follow_up_question(field_key, incident) for field_key in incident.missing_fields[:3]]
 
 
 def _lane_label(lane: str) -> str:
@@ -455,6 +671,20 @@ def _lane_label(lane: str) -> str:
 
 def _assistant_message_for_intake(incident: SecurityCopilotIncident) -> str:
     questions = _build_follow_up_questions(incident)
+    if incident.identity_candidates and not incident.affected_users:
+        options = "; ".join(_identity_candidate_label(candidate) for candidate in incident.identity_candidates[:3])
+        remaining_prompts = "; ".join(
+            question.prompt for question in questions if question.key != "identity_confirmation"
+        )
+        return (
+            f"I can investigate this as {_lane_label(incident.lane)}. "
+            f"I found Azure user matches for {incident.identity_query or 'the provided name'}: {options}. "
+            + (
+                f"Confirm which account I should investigate first. I still need: {remaining_prompts}"
+                if remaining_prompts
+                else "Confirm which account I should investigate first."
+            )
+        )
     prompts = "; ".join(question.prompt for question in questions)
     if prompts:
         return (

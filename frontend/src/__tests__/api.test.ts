@@ -266,6 +266,8 @@ describe("azure api methods", () => {
         affected_resources: [],
         alert_names: [],
         observed_artifacts: [],
+        identity_query: "",
+        identity_candidates: [],
         confidence: 0.8,
         missing_fields: ["timeframe"],
       },
@@ -275,7 +277,7 @@ describe("azure api methods", () => {
       jobs: [],
       answer: { summary: "", findings: [], next_steps: [], warnings: [] },
       citations: [],
-      model_used: "qwen2.5:7b",
+      model_used: "qwen3.5:4b",
       generated_at: "2026-04-02T02:00:00Z",
     });
     await api.chatAzureSecurityCopilot({
@@ -290,6 +292,8 @@ describe("azure api methods", () => {
         affected_resources: [],
         alert_names: [],
         observed_artifacts: [],
+        identity_query: "",
+        identity_candidates: [],
         confidence: 0,
         missing_fields: [],
       },

@@ -7,8 +7,10 @@ import logging
 import re
 import threading
 import time
+import heapq
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -83,12 +85,24 @@ _DEFAULT_COPILOT_MODEL_ORDER = (
 )
 _DEFAULT_COPILOT_MODEL_RANK = {model_id: index for index, model_id in enumerate(_DEFAULT_COPILOT_MODEL_ORDER)}
 _DEFAULT_OLLAMA_FALLBACK_MODEL_ORDER = (
+    "qwen3.5:4b",
     "nemotron-3-nano:4b",
-    "qwen2.5:7b",
-    "qwen2.5:3b",
 )
 _OLLAMA_HTTP_POOL_CONNECTIONS = 8
 _OLLAMA_HTTP_POOL_MAXSIZE = 16
+_OLLAMA_MAX_CONCURRENT_REQUESTS = 1
+_DEFAULT_OLLAMA_REQUEST_PRIORITY = 50
+_OLLAMA_REQUEST_PRIORITY_BY_FEATURE = {
+    "azure_security_copilot": 0,
+    "azure_cost_copilot": 20,
+    "azure_alert_rule_parse": 25,
+    "ticket_auto_triage": 40,
+    "technician_qa": 45,
+    "kb_ticket_draft": 50,
+    "kb_sop_draft": 55,
+    "kb_reformat": 55,
+    "report_ai_summary": 70,
+}
 
 _AUTO_TRIAGE_MAX_OUTPUT_TOKENS = 450
 _TECHNICIAN_QA_MAX_OUTPUT_TOKENS = 250
@@ -124,6 +138,7 @@ def _build_ollama_session() -> requests.Session:
 
 
 _OLLAMA_THREAD_LOCAL = threading.local()
+T = TypeVar("T")
 
 
 def _get_ollama_session() -> requests.Session:
@@ -132,6 +147,74 @@ def _get_ollama_session() -> requests.Session:
         session = _build_ollama_session()
         _OLLAMA_THREAD_LOCAL.session = session
     return session
+
+
+@dataclass(order=True)
+class _QueuedOllamaRequest:
+    priority: int
+    order: int
+    label: str = field(compare=False)
+
+
+class OllamaRequestCoordinator:
+    """Coordinate non-preemptive priority access to the local Ollama runtime."""
+
+    def __init__(self, *, max_concurrent_requests: int = 1) -> None:
+        self._max_concurrent_requests = max(1, int(max_concurrent_requests or 1))
+        self._condition = threading.Condition()
+        self._queue: list[_QueuedOllamaRequest] = []
+        self._active_count = 0
+        self._counter = 0
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._condition:
+            return {
+                "active_count": self._active_count,
+                "queued": [
+                    {"priority": item.priority, "order": item.order, "label": item.label}
+                    for item in sorted(self._queue)
+                ],
+            }
+
+    def run(self, *, priority: int, label: str, work: Callable[[], T]) -> T:
+        with self._condition:
+            queued = _QueuedOllamaRequest(
+                priority=int(priority),
+                order=self._counter,
+                label=label,
+            )
+            self._counter += 1
+            heapq.heappush(self._queue, queued)
+            while True:
+                is_next = bool(self._queue) and self._queue[0] is queued
+                if is_next and self._active_count < self._max_concurrent_requests:
+                    heapq.heappop(self._queue)
+                    self._active_count += 1
+                    break
+                self._condition.wait()
+        try:
+            return work()
+        finally:
+            with self._condition:
+                self._active_count = max(0, self._active_count - 1)
+                self._condition.notify_all()
+
+
+_OLLAMA_REQUEST_COORDINATOR = OllamaRequestCoordinator(
+    max_concurrent_requests=_OLLAMA_MAX_CONCURRENT_REQUESTS
+)
+
+
+def _resolve_ollama_request_priority(
+    feature_surface: str = "",
+    explicit_priority: int | None = None,
+) -> int:
+    if explicit_priority is not None:
+        return int(explicit_priority)
+    return _OLLAMA_REQUEST_PRIORITY_BY_FEATURE.get(
+        str(feature_surface or "").strip().lower(),
+        _DEFAULT_OLLAMA_REQUEST_PRIORITY,
+    )
 
 
 def _int(value: Any) -> int:
@@ -1033,6 +1116,8 @@ def _invoke_ollama(
     temperature: float | None = None,
     max_output_tokens: int | None = None,
     json_output: bool = False,
+    priority: int | None = None,
+    queue_label: str = "",
 ) -> tuple[str, dict[str, Any]]:
     """Call a local Ollama model and return response text plus usage."""
     payload: dict[str, Any] = {
@@ -1055,22 +1140,29 @@ def _invoke_ollama(
     if options:
         payload["options"] = options
 
-    response = _get_ollama_session().post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json=payload,
-        timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
+    def _run_request() -> tuple[str, dict[str, Any]]:
+        response = _get_ollama_session().post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json=payload,
+            timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        data = response.json()
+        message = data.get("message") or {}
+        text = str(message.get("content") or "").strip()
+        if text:
+            return text, {
+                "input_tokens": _int(data.get("prompt_eval_count")),
+                "output_tokens": _int(data.get("eval_count")),
+                "total_tokens": _int(data.get("prompt_eval_count")) + _int(data.get("eval_count")),
+            }
+        raise RuntimeError(f"Ollama model '{model_id}' returned no text output")
+
+    return _OLLAMA_REQUEST_COORDINATOR.run(
+        priority=_resolve_ollama_request_priority(explicit_priority=priority),
+        label=queue_label or model_id,
+        work=_run_request,
     )
-    response.raise_for_status()
-    data = response.json()
-    message = data.get("message") or {}
-    text = str(message.get("content") or "").strip()
-    if text:
-        return text, {
-            "input_tokens": _int(data.get("prompt_eval_count")),
-            "output_tokens": _int(data.get("eval_count")),
-            "total_tokens": _int(data.get("prompt_eval_count")) + _int(data.get("eval_count")),
-        }
-    raise RuntimeError(f"Ollama model '{model_id}' returned no text output")
 
 
 def _call_ollama(
@@ -1081,6 +1173,8 @@ def _call_ollama(
     temperature: float | None = None,
     max_output_tokens: int | None = None,
     json_output: bool = False,
+    priority: int | None = None,
+    queue_label: str = "",
 ) -> str:
     return _invoke_ollama(
         model_id,
@@ -1089,6 +1183,8 @@ def _call_ollama(
         temperature=temperature,
         max_output_tokens=max_output_tokens,
         json_output=json_output,
+        priority=priority,
+        queue_label=queue_label,
     )[0]
 
 
@@ -1107,6 +1203,7 @@ def invoke_model_text(
     json_output: bool = False,
     openai_api_mode: str = "responses",
     metadata: dict[str, Any] | None = None,
+    ollama_priority: int | None = None,
 ) -> str:
     provider = _get_model_provider(model_id)
     if not provider:
@@ -1143,6 +1240,11 @@ def invoke_model_text(
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
                 json_output=json_output,
+                priority=_resolve_ollama_request_priority(
+                    feature_surface=feature_surface,
+                    explicit_priority=ollama_priority,
+                ),
+                queue_label=feature_surface or app_surface or model_id,
             )
         else:
             raise ValueError(f"Unsupported provider: {provider}")

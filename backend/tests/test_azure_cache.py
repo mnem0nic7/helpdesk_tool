@@ -150,6 +150,23 @@ def test_get_grounding_context_includes_vm_inventory_summary(tmp_path):
     ]
 
 
+def test_quick_search_page_results_point_to_security_review_lanes(tmp_path):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+
+    review_results = cache.quick_search("review")
+    page_routes = {item["label"]: item["route"] for item in review_results if item["kind"] == "page"}
+
+    assert page_routes["Identity Review"] == "/security/identity-review"
+    assert page_routes["Privileged Access Review"] == "/security/access-review"
+    assert page_routes["User Review"] == "/security/user-review"
+    assert "Identity" not in page_routes
+    assert "Users" not in page_routes
+
+    account_health_results = cache.quick_search("account health")
+    account_health_pages = {item["label"]: item["route"] for item in account_health_results if item["kind"] == "page"}
+    assert account_health_pages["Account Health"] == "/security/account-health"
+
+
 def test_get_virtual_machine_detail_returns_related_resources_and_costs(tmp_path):
     cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
     vm_id = "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-1"

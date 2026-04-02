@@ -94,22 +94,22 @@ def test_select_model_id_prefers_technician_score_model_and_falls_back(monkeypat
         manager_module,
         "get_available_models",
         lambda: [
-            SimpleNamespace(id="qwen2.5:3b", provider="ollama"),
-            SimpleNamespace(id="qwen2.5:7b", provider="ollama"),
+            SimpleNamespace(id="nemotron-3-nano:4b", provider="ollama"),
+            SimpleNamespace(id="qwen3.5:4b", provider="ollama"),
         ],
     )
-    monkeypatch.setattr(manager_module, "TECHNICIAN_SCORE_MODEL", "qwen2.5:3b")
-    monkeypatch.setattr(manager_module, "OLLAMA_MODEL", "qwen2.5:7b")
+    monkeypatch.setattr(manager_module, "TECHNICIAN_SCORE_MODEL", "nemotron-3-nano:4b")
+    monkeypatch.setattr(manager_module, "OLLAMA_MODEL", "qwen3.5:4b")
 
-    assert TechnicianScoringManager._select_model_id() == "qwen2.5:3b"
+    assert TechnicianScoringManager._select_model_id() == "nemotron-3-nano:4b"
 
     monkeypatch.setattr(
         manager_module,
         "get_available_models",
-        lambda: [SimpleNamespace(id="qwen2.5:7b", provider="ollama")],
+        lambda: [SimpleNamespace(id="qwen3.5:4b", provider="ollama")],
     )
 
-    assert TechnicianScoringManager._select_model_id() == "qwen2.5:7b"
+    assert TechnicianScoringManager._select_model_id() == "qwen3.5:4b"
 
 
 @pytest.mark.asyncio
@@ -157,7 +157,7 @@ async def test_run_scope_once_pauses_when_auto_triage_becomes_priority(monkeypat
         "preview_scope_run",
         lambda scope, *, reset=False, limit=None: {
             "scope": scope,
-            "model_id": "qwen2.5:7b",
+            "model_id": "qwen3.5:4b",
             "issues_by_key": issues_by_key,
             "keys_to_process": ["OIT-300", "OIT-400"],
             "total_tickets": 2,

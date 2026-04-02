@@ -19,6 +19,7 @@ const AzureOverviewPage = lazy(() => import("./pages/AzureOverviewPage"));
 const AzureVMsPage = lazy(() => import("./pages/AzureVMsPage"));
 const AzureResourcesPage = lazy(() => import("./pages/AzureResourcesPage"));
 const AzureIdentityPage = lazy(() => import("./pages/AzureIdentityPage"));
+const AzureSecurityIdentityReviewPage = lazy(() => import("./pages/AzureSecurityIdentityReviewPage"));
 const AzureCostPage = lazy(() => import("./pages/AzureCostPage"));
 const AzureAllocationPage = lazy(() => import("./pages/AzureAllocationPage"));
 const AzureAICostPage = lazy(() => import("./pages/AzureAICostPage"));
@@ -30,6 +31,7 @@ const AzureUsersPage = lazy(() => import("./pages/AzureUsersPage"));
 const AzureSecurityPage = lazy(() => import("./pages/AzureSecurityPage"));
 const AzureSecurityAccessReviewPage = lazy(() => import("./pages/AzureSecurityAccessReviewPage"));
 const AzureSecurityAppHygienePage = lazy(() => import("./pages/AzureSecurityAppHygienePage"));
+const AzureSecurityUserReviewPage = lazy(() => import("./pages/AzureSecurityUserReviewPage"));
 const AzureSecurityCopilotPage = lazy(() => import("./pages/AzureSecurityCopilotPage"));
 const AzureAlertsPage = lazy(() => import("./pages/AzureAlertsPage"));
 const AzureAccountHealthPage = lazy(() => import("./pages/AzureAccountHealthPage"));
@@ -64,8 +66,11 @@ export default function App() {
                 <Route path="identity" element={<AzureIdentityPage />} />
                 <Route path="security" element={<AzureSecurityPage />} />
                 <Route path="security/access-review" element={<AzureSecurityAccessReviewPage />} />
+                <Route path="security/identity-review" element={<AzureSecurityIdentityReviewPage />} />
                 <Route path="security/app-hygiene" element={<AzureSecurityAppHygienePage />} />
+                <Route path="security/user-review" element={<AzureSecurityUserReviewPage />} />
                 <Route path="security/copilot" element={<AzureSecurityCopilotPage />} />
+                <Route path="security/account-health" element={<AzureAccountHealthPage />} />
                 <Route path="users" element={<AzureUsersPage />} />
                 <Route path="tools" element={<ToolsPage />} />
                 <Route path="cost" element={<AzureCostPage />} />
@@ -76,7 +81,7 @@ export default function App() {
                 <Route path="compute" element={<AzureComputeOptimizationPage />} />
                 <Route path="copilot" element={<AzureCopilotPage />} />
                 <Route path="alerts" element={<AzureAlertsPage />} />
-                <Route path="account-health" element={<AzureAccountHealthPage />} />
+                <Route path="account-health" element={<Navigate to="/security/account-health" replace />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </>
             ) : (

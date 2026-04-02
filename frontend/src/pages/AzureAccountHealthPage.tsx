@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type AzureDirectoryObject } from "../lib/api.ts";
+import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
+import { AzureSecurityLaneHero } from "../components/AzureSecurityLane.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
@@ -19,6 +21,15 @@ function formatDate(iso: string): string {
   return isNaN(dt.getTime())
     ? "—"
     : dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatTimestamp(value: string | null | undefined): string {
+  if (!value) return "No refresh recorded";
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return value;
+  }
 }
 
 function portalUrl(id: string): string {
@@ -460,9 +471,15 @@ export default function AzureAccountHealthPage() {
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
+  const statusQuery = useQuery({
+    queryKey: ["azure", "status", "security-account-health"],
+    queryFn: () => api.getAzureStatus(),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
 
   if (isLoading) {
-    return <div className="text-sm text-slate-500">Loading user data...</div>;
+    return <AzurePageSkeleton titleWidth="w-56" subtitleWidth="w-[40rem]" statCount={5} sectionCount={5} />;
   }
   if (isError) {
     return (
@@ -486,19 +503,25 @@ export default function AzureAccountHealthPage() {
   ]
     .sort((a, b) => priorityScore(b) - priorityScore(a))
     .slice(0, 3);
+  const directoryDataset = statusQuery.data?.datasets?.find((dataset) => dataset.key === "directory");
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">Account Health</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Accounts that may need to be updated, disabled, or removed — with guidance on each action.
-          </p>
-        </div>
-        {/* Threshold controls */}
-        <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm text-sm text-slate-600">
+      <AzureSecurityLaneHero
+        title="Account Health"
+        description="Accounts that may need to be updated, disabled, or removed, with opinionated guidance for each remediation path. This is the security-native account hygiene lane, while the hidden raw user inventory stays available for direct admin work."
+        accent="amber"
+        refreshLabel="Directory refresh"
+        refreshValue={formatTimestamp(directoryDataset?.last_refresh ?? statusQuery.data?.last_refresh)}
+        actions={[
+          { label: "Back to Security workspace", to: "/security", tone: "secondary" },
+          { label: "Open User Review", to: "/security/user-review" },
+          { label: "Open raw user inventory", to: "/users", tone: "secondary" },
+        ]}
+      />
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-4 text-sm text-slate-600">
           <label className="flex items-center gap-2">
             Stale password after
             <input
@@ -535,7 +558,7 @@ export default function AzureAccountHealthPage() {
             Include shared / service-style accounts
           </label>
         </div>
-      </div>
+      </section>
 
       {/* Summary cards */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">

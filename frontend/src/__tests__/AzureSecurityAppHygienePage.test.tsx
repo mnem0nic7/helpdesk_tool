@@ -131,6 +131,7 @@ describe("AzureSecurityAppHygienePage", () => {
     expect(screen.getByText("Flagged app registrations")).toBeInTheDocument();
     expect(screen.getByText("Credential watch table")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to Security workspace" })).toHaveAttribute("href", "/security");
+    expect(screen.getByRole("link", { name: "Open Identity Review" })).toHaveAttribute("href", "/security/identity-review");
     expect(screen.getByRole("link", { name: "Open app inventory" })).toHaveAttribute("href", "/identity?tab=app-registrations");
     expect(screen.getAllByText("Payroll Connector").length).toBeGreaterThan(0);
     expect(screen.getAllByText("External Intake").length).toBeGreaterThan(0);

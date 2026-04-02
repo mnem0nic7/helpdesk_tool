@@ -32,6 +32,8 @@ function buildResponse(overrides: Record<string, unknown> = {}) {
       affected_resources: [],
       alert_names: [],
       observed_artifacts: [],
+      identity_query: "",
+      identity_candidates: [],
       confidence: 0.8,
       missing_fields: ["timeframe", "affected_mailboxes"],
     },
@@ -43,6 +45,7 @@ function buildResponse(overrides: Record<string, unknown> = {}) {
         placeholder: "Since 2 AM UTC",
         required: true,
         input_type: "text",
+        choices: [],
       },
       {
         key: "affected_mailboxes",
@@ -51,6 +54,7 @@ function buildResponse(overrides: Record<string, unknown> = {}) {
         placeholder: "payroll@example.com",
         required: true,
         input_type: "email",
+        choices: [],
       },
     ],
     planned_sources: [
@@ -73,7 +77,7 @@ function buildResponse(overrides: Record<string, unknown> = {}) {
     jobs: [],
     answer: { summary: "", findings: [], next_steps: [], warnings: [] },
     citations: [],
-    model_used: "qwen2.5:7b",
+    model_used: "qwen3.5:4b",
     generated_at: "2026-04-02T02:00:00Z",
     ...overrides,
   };
@@ -98,8 +102,8 @@ describe("AzureSecurityCopilotPage", () => {
       value: { writeText: clipboardWriteText },
     });
     mockApi.getAzureAIModels.mockResolvedValue([
-      { id: "qwen2.5:7b", name: "qwen2.5:7b", provider: "ollama" },
-      { id: "qwen2.5:3b", name: "qwen2.5:3b", provider: "ollama" },
+      { id: "qwen3.5:4b", name: "qwen3.5:4b", provider: "ollama" },
+      { id: "nemotron-3-nano:4b", name: "nemotron-3-nano:4b", provider: "ollama" },
     ]);
     mockApi.getAzureStatus.mockResolvedValue({
       configured: true,
@@ -216,6 +220,100 @@ describe("AzureSecurityCopilotPage", () => {
     expect(globalThis.URL.createObjectURL).toHaveBeenCalledTimes(2);
     expect(anchorClickSpy).toHaveBeenCalledTimes(2);
     anchorClickSpy.mockRestore();
+  });
+
+  it("renders identity confirmation choices and submits the selected account", async () => {
+    mockApi.chatAzureSecurityCopilot
+      .mockResolvedValueOnce(
+        buildResponse({
+          assistant_message: "I found Azure user matches for Abhishek Mishra. Confirm which account I should investigate first.",
+          incident: {
+            lane: "identity_compromise",
+            summary: "Abhishek Mishra had impossible travel in the last two weeks.",
+            timeframe: "last two weeks",
+            affected_users: [],
+            affected_mailboxes: [],
+            affected_apps: [],
+            affected_resources: [],
+            alert_names: [],
+            observed_artifacts: [],
+            identity_query: "Abhishek Mishra",
+            identity_candidates: [
+              {
+                id: "user-1",
+                display_name: "Abhishek Mishra",
+                principal_name: "abhishek.mishra@example.com",
+                mail: "abhishek.mishra@example.com",
+                match_reason: "display_name_exact",
+              },
+            ],
+            confidence: 0.85,
+            missing_fields: ["identity_confirmation"],
+          },
+          follow_up_questions: [
+            {
+              key: "identity_confirmation",
+              label: "Confirm user account",
+              prompt: "I found 1 Azure user match(es) for Abhishek Mishra. Confirm which account I should investigate first.",
+              placeholder: "Reply with the exact account, or click one of the matches below.",
+              required: true,
+              input_type: "list",
+              choices: ["Abhishek Mishra <abhishek.mishra@example.com>"],
+            },
+          ],
+          planned_sources: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        buildResponse({
+          phase: "complete",
+          assistant_message: "Confirmed. I investigated abhishek.mishra@example.com and found no additional alert history matches yet.",
+          incident: {
+            lane: "identity_compromise",
+            summary: "Abhishek Mishra had impossible travel in the last two weeks.",
+            timeframe: "last two weeks",
+            affected_users: ["abhishek.mishra@example.com"],
+            affected_mailboxes: ["abhishek.mishra@example.com"],
+            affected_apps: [],
+            affected_resources: [],
+            alert_names: [],
+            observed_artifacts: [],
+            identity_query: "",
+            identity_candidates: [],
+            confidence: 0.92,
+            missing_fields: [],
+          },
+          follow_up_questions: [],
+          planned_sources: [],
+          source_results: [],
+          answer: {
+            summary: "No grounded high-confidence findings yet.",
+            findings: [],
+            next_steps: [],
+            warnings: [],
+          },
+        }),
+      );
+
+    render(<AzureSecurityCopilotPage />);
+
+    fireEvent.change(
+      await screen.findByPlaceholderText(/User ada@example.com reported impossible travel alerts/i),
+      { target: { value: "Abhishek Mishra had impossible travel in the last two week investigate and report back with findings" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start Investigation" }));
+
+    expect(await screen.findByRole("button", { name: "Abhishek Mishra <abhishek.mishra@example.com>" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Abhishek Mishra <abhishek.mishra@example.com>" }));
+
+    await waitFor(() => {
+      expect(mockApi.chatAzureSecurityCopilot).toHaveBeenCalledTimes(2);
+    });
+
+    const secondCall = mockApi.chatAzureSecurityCopilot.mock.calls[1][0];
+    expect(secondCall.message).toBe("Abhishek Mishra <abhishek.mishra@example.com>");
+    expect(secondCall.incident.identity_candidates).toHaveLength(1);
   });
 
   it("polls running jobs and updates to the completed investigation summary", async () => {

@@ -1,4 +1,5 @@
 import json
+import threading
 
 import ai_client
 from ai_client import (
@@ -171,21 +172,20 @@ def test_get_available_models_includes_ollama_when_enabled(monkeypatch):
     monkeypatch.setattr(ai_client, "OPENAI_API_KEY", "")
     monkeypatch.setattr(ai_client, "ANTHROPIC_API_KEY", "")
     monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
     monkeypatch.setattr(ai_client, "_OLLAMA_MODEL_CACHE", None)
     monkeypatch.setattr(
         ai_client,
         "_list_ollama_models_from_api",
         lambda: [
+            AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama"),
             AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
-            AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
-            AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
         ],
     )
 
     models = get_available_models()
 
-    assert [model.id for model in models] == ["nemotron-3-nano:4b", "qwen2.5:7b", "qwen2.5:3b"]
+    assert [model.id for model in models] == ["qwen3.5:4b", "nemotron-3-nano:4b"]
 
 
 def test_list_ollama_models_uses_thread_local_session_helper(monkeypatch):
@@ -198,9 +198,8 @@ def test_list_ollama_models_uses_thread_local_session_helper(monkeypatch):
         def json(self) -> dict[str, object]:
             return {
                 "models": [
+                    {"model": "qwen3.5:4b", "name": "qwen3.5:4b"},
                     {"model": "nemotron-3-nano:4b", "name": "nemotron-3-nano:4b"},
-                    {"model": "qwen2.5:7b", "name": "qwen2.5:7b"},
-                    {"name": "qwen2.5:3b"},
                 ]
             }
 
@@ -213,13 +212,13 @@ def test_list_ollama_models_uses_thread_local_session_helper(monkeypatch):
     monkeypatch.setattr(ai_client, "_get_ollama_session", lambda: _Session())
     monkeypatch.setattr(ai_client, "OLLAMA_BASE_URL", "http://ollama.local:11434")
     monkeypatch.setattr(ai_client, "OLLAMA_REQUEST_TIMEOUT_SECONDS", 42.0)
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
 
     models = ai_client._list_ollama_models_from_api()
 
     assert captured["url"] == "http://ollama.local:11434/api/tags"
     assert captured["timeout"] == 42.0
-    assert [model.id for model in models] == ["nemotron-3-nano:4b", "qwen2.5:7b", "qwen2.5:3b"]
+    assert [model.id for model in models] == ["qwen3.5:4b", "nemotron-3-nano:4b"]
 
 
 def test_get_available_models_ignores_cloud_keys_and_uses_ollama_only(monkeypatch):
@@ -230,7 +229,7 @@ def test_get_available_models_ignores_cloud_keys_and_uses_ollama_only(monkeypatc
     monkeypatch.setattr(
         ai_client,
         "_list_ollama_models_from_api",
-        lambda: [AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama")],
+        lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
     )
 
     models = get_available_models()
@@ -240,19 +239,19 @@ def test_get_available_models_ignores_cloud_keys_and_uses_ollama_only(monkeypatc
 
 def test_select_available_ollama_model_prefers_requested_model_then_repo_fallbacks(monkeypatch):
     available = [
-        AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
-        AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
+        AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama"),
+        AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
     ]
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
-    monkeypatch.setattr(ai_client, "OLLAMA_FAST_MODEL", "qwen2.5:3b")
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_FAST_MODEL", "qwen3.5:4b")
 
     assert (
         ai_client.select_available_ollama_model(
             available,
-            preferred_model_id="qwen2.5:3b",
-            fallback_model_id="qwen2.5:7b",
+            preferred_model_id="qwen3.5:4b",
+            fallback_model_id="nemotron-3-nano:4b",
         )
-        == "qwen2.5:3b"
+        == "qwen3.5:4b"
     )
     assert (
         ai_client.select_available_ollama_model(
@@ -260,25 +259,24 @@ def test_select_available_ollama_model_prefers_requested_model_then_repo_fallbac
             preferred_model_id="missing-model",
             fallback_model_id="missing-fallback",
         )
-        == "qwen2.5:7b"
+        == "qwen3.5:4b"
     )
 
 
-def test_get_default_copilot_model_id_falls_back_to_qwen_when_nemotron_missing(monkeypatch):
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
+def test_get_default_copilot_model_id_falls_back_to_nemotron_when_qwen_missing(monkeypatch):
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
 
     models = [
-        AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
-        AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
+        AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
     ]
 
-    assert get_default_copilot_model_id(models) == "qwen2.5:7b"
+    assert get_default_copilot_model_id(models) == "nemotron-3-nano:4b"
 
 
 def test_invoke_model_text_rejects_non_ollama_models(monkeypatch):
     monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
     monkeypatch.setattr(ai_client, "_OLLAMA_MODEL_CACHE", None)
-    monkeypatch.setattr(ai_client, "_list_ollama_models_from_api", lambda: [AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama")])
+    monkeypatch.setattr(ai_client, "_list_ollama_models_from_api", lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")])
 
     try:
         ai_client.invoke_model_text(
@@ -321,7 +319,7 @@ def test_invoke_ollama_includes_keep_alive_json_format_and_output_cap(monkeypatc
     monkeypatch.setattr(ai_client, "OLLAMA_REQUEST_TIMEOUT_SECONDS", 30.0)
 
     text, usage = ai_client._invoke_ollama(
-        "qwen2.5:3b",
+        "qwen3.5:4b",
         "system",
         "user",
         max_output_tokens=123,
@@ -373,7 +371,7 @@ def test_score_closed_ticket_parses_scores(monkeypatch):
     )
     monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
 
-    score = score_closed_ticket(issue, [{"author": {"displayName": "Ada"}, "body": "Resolved and confirmed.", "public": True}], "qwen2.5:7b")
+    score = score_closed_ticket(issue, [{"author": {"displayName": "Ada"}, "body": "Resolved and confirmed.", "public": True}], "qwen3.5:4b")
 
     assert score.key == "OIT-42"
     assert score.communication_score == 4
@@ -397,7 +395,7 @@ def test_analyze_ticket_uses_ollama_provider(monkeypatch):
     }
 
     monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen2.5:7b")
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
     monkeypatch.setattr(ai_client, "get_request_type_names", lambda: ["VPN", "Get IT help"])
     monkeypatch.setattr(
         ai_client,
@@ -417,9 +415,9 @@ def test_analyze_ticket_uses_ollama_provider(monkeypatch):
 
     monkeypatch.setattr(knowledge_base.kb_store, "find_relevant_articles", lambda **kwargs: [])
 
-    result = analyze_ticket(issue, "qwen2.5:7b")
+    result = analyze_ticket(issue, "qwen3.5:4b")
 
-    assert result.model_used == "qwen2.5:7b"
+    assert result.model_used == "qwen3.5:4b"
     assert result.suggestions[0].field == "request_type"
     assert result.suggestions[0].suggested_value == "VPN"
 
@@ -456,7 +454,7 @@ def test_analyze_ticket_uses_fast_path_output_cap_and_json_mode(monkeypatch):
     import knowledge_base
     monkeypatch.setattr(knowledge_base.kb_store, "find_relevant_articles", lambda **kwargs: [])
 
-    analyze_ticket(issue, "qwen2.5:3b")
+    analyze_ticket(issue, "nemotron-3-nano:4b")
 
     assert captured["max_output_tokens"] == 450
     assert captured["json_output"] is True
@@ -485,7 +483,7 @@ def test_score_closed_ticket_clamps_invalid_scores(monkeypatch):
     )
     monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
 
-    score = score_closed_ticket(issue, [], "qwen2.5:7b")
+    score = score_closed_ticket(issue, [], "qwen3.5:4b")
 
     assert score.communication_score == 5
     assert score.documentation_score == 1
@@ -515,7 +513,7 @@ def test_score_closed_ticket_uses_fast_path_output_cap_and_json_mode(monkeypatch
     monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke)
     monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
 
-    score_closed_ticket(issue, [], "qwen2.5:3b")
+    score_closed_ticket(issue, [], "nemotron-3-nano:4b")
 
     assert captured["max_output_tokens"] == 250
     assert captured["json_output"] is True
@@ -578,7 +576,7 @@ def test_analyze_ticket_includes_relevant_kb_context(monkeypatch):
         ],
     )
 
-    result = ai_client.analyze_ticket(issue, "qwen2.5:7b")
+    result = ai_client.analyze_ticket(issue, "qwen3.5:4b")
 
     assert result.suggestions[0].suggested_value == "Email or Outlook"
     assert "Relevant Knowledge Base Articles" in captured["user_msg"]
@@ -741,7 +739,7 @@ def test_draft_kb_article_parses_model_response(monkeypatch):
     )
     monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
 
-    draft = draft_kb_article(issue, [], "qwen2.5:7b", existing_article)
+    draft = draft_kb_article(issue, [], "qwen3.5:4b", existing_article)
 
     assert draft.title == "Email or Outlook"
     assert draft.recommended_action == "update_existing"
@@ -774,7 +772,7 @@ def test_draft_kb_article_uses_json_mode_and_output_cap(monkeypatch):
     monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke)
     monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
 
-    draft_kb_article(issue, [], "qwen2.5:7b", None)
+    draft_kb_article(issue, [], "qwen3.5:4b", None)
 
     assert captured["max_output_tokens"] == 2200
     assert captured["json_output"] is True
@@ -782,7 +780,7 @@ def test_draft_kb_article_uses_json_mode_and_output_cap(monkeypatch):
 
 def test_draft_kb_from_sop_supports_ollama(monkeypatch):
     monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen2.5:7b")
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
     monkeypatch.setattr(
         ai_client,
         "invoke_model_text",
@@ -795,10 +793,10 @@ def test_draft_kb_from_sop_supports_ollama(monkeypatch):
         }""",
     )
 
-    draft = draft_kb_from_sop("VPN troubleshooting steps", "vpn_access.docx", "qwen2.5:7b")
+    draft = draft_kb_from_sop("VPN troubleshooting steps", "vpn_access.docx", "qwen3.5:4b")
 
     assert draft.title == "VPN Access"
-    assert draft.model_used == "qwen2.5:7b"
+    assert draft.model_used == "qwen3.5:4b"
     assert draft.request_type == "VPN"
 
 
@@ -829,7 +827,7 @@ def test_answer_azure_cost_question_uses_compact_context_and_output_cap(monkeypa
     monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke)
     monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
 
-    response = ai_client.answer_azure_cost_question("Where can we save?", context, "qwen2.5:7b")
+    response = ai_client.answer_azure_cost_question("Where can we save?", context, "qwen3.5:4b")
 
     compact_payload = json.loads(str(captured["user_msg"]).split("Grounding data:\n", 1)[1])
     assert response.answer == "All good."
@@ -859,7 +857,7 @@ def test_invoke_model_text_records_ai_usage(monkeypatch):
     )
 
     result = ai_client.invoke_model_text(
-        "qwen2.5:7b",
+        "qwen3.5:4b",
         "system prompt",
         "user prompt",
         feature_surface="azure_cost_copilot",
@@ -877,6 +875,86 @@ def test_invoke_model_text_records_ai_usage(monkeypatch):
     assert recorded["team"] == "FinOps"
     assert recorded["metadata"]["team_source"] == "default_feature_surface"
     assert recorded["metadata"]["team_source_key"] == "azure_cost_copilot"
+
+
+def test_invoke_model_text_uses_highest_ollama_priority_for_security_copilot(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id: "ollama")
+    monkeypatch.setattr(
+        ai_client,
+        "_invoke_ollama",
+        lambda model_id, system, user_msg, **kwargs: captured.update(kwargs) or ("structured output", {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}),
+    )
+    monkeypatch.setattr(
+        ai_client.azure_finops_service,
+        "record_ai_usage",
+        lambda **kwargs: {"usage_id": "usage-priority"},
+    )
+
+    ai_client.invoke_model_text(
+        "qwen3.5:4b",
+        "system prompt",
+        "user prompt",
+        feature_surface="azure_security_copilot",
+        app_surface="azure_portal",
+        actor_type="user",
+        actor_id="operator@example.com",
+    )
+
+    assert captured["priority"] == 0
+    assert captured["queue_label"] == "azure_security_copilot"
+
+
+def test_ollama_request_coordinator_prefers_security_requests_over_waiting_background_work():
+    coordinator = ai_client.OllamaRequestCoordinator(max_concurrent_requests=1)
+    first_started = threading.Event()
+    release_first = threading.Event()
+    order: list[str] = []
+
+    def first_low_priority() -> str:
+        order.append("low-running")
+        first_started.set()
+        release_first.wait(timeout=2)
+        return "low-running"
+
+    def queued_low_priority() -> str:
+        order.append("low-queued")
+        return "low-queued"
+
+    def queued_security() -> str:
+        order.append("security")
+        return "security"
+
+    first_thread = threading.Thread(
+        target=lambda: coordinator.run(priority=50, label="low-running", work=first_low_priority),
+    )
+    second_thread = threading.Thread(
+        target=lambda: coordinator.run(priority=50, label="low-queued", work=queued_low_priority),
+    )
+    third_thread = threading.Thread(
+        target=lambda: coordinator.run(priority=0, label="security", work=queued_security),
+    )
+
+    first_thread.start()
+    assert first_started.wait(timeout=2)
+    second_thread.start()
+    third_thread.start()
+
+    for _ in range(50):
+        snapshot = coordinator.snapshot()
+        if len(snapshot["queued"]) == 2:
+            break
+        threading.Event().wait(0.01)
+    else:
+        raise AssertionError("Expected two queued Ollama requests")
+
+    release_first.set()
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+    third_thread.join(timeout=2)
+
+    assert order == ["low-running", "security", "low-queued"]
 
 
 def test_invoke_model_text_prefers_explicit_team_over_mappings(monkeypatch):
@@ -900,7 +978,7 @@ def test_invoke_model_text_prefers_explicit_team_over_mappings(monkeypatch):
     )
 
     ai_client.invoke_model_text(
-        "qwen2.5:7b",
+        "qwen3.5:4b",
         "system prompt",
         "user prompt",
         feature_surface="azure_cost_copilot",
@@ -936,7 +1014,7 @@ def test_invoke_model_text_uses_actor_mapping_before_defaults(monkeypatch):
     )
 
     ai_client.invoke_model_text(
-        "qwen2.5:7b",
+        "qwen3.5:4b",
         "system prompt",
         "user prompt",
         feature_surface="ticket_auto_triage",

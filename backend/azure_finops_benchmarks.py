@@ -267,9 +267,9 @@ def seed_benchmark_dataset(
                     DATE '2026-03-23' - CAST((i % {lookback_days}) AS INTEGER) AS recorded_date,
                     'ollama' AS provider,
                     CASE
-                        WHEN i % 3 = 0 THEN 'qwen2.5:7b'
-                        WHEN i % 3 = 1 THEN 'qwen2.5:3b'
-                        ELSE 'qwen2.5-coder:7b'
+                        WHEN i % 3 = 0 THEN 'qwen3.5:4b'
+                        WHEN i % 3 = 1 THEN 'nemotron-3-nano:4b'
+                        ELSE 'nemotron-3-nano:4b'
                     END AS model_id,
                     CASE
                         WHEN i % 4 = 0 THEN 'azure_cost_copilot'

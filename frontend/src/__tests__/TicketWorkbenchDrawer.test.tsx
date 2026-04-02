@@ -616,7 +616,7 @@ describe("TicketWorkbenchDrawer", () => {
         documentation_notes: "Resolution notes could be more specific.",
         overall_score: 3.5,
         score_summary: "Good customer communication with average documentation.",
-        model_used: "qwen2.5:7b",
+        model_used: "qwen3.5:4b",
         created_at: "2026-03-04T12:00:00+00:00",
         ticket_summary: ticketRow.summary,
         ticket_status: ticketRow.status,

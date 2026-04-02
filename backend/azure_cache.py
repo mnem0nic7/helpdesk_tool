@@ -3382,19 +3382,19 @@ class AzureCache:
             ("page", "compute", "Compute", "RI coverage, idle VMs, and compute optimization", "/compute"),
             ("page", "resources", "Resources", "Cross-subscription resource inventory", "/resources"),
             ("page", "storage", "Storage", "Storage accounts, disks, and snapshots", "/storage"),
-            ("page", "identity", "Identity", "Users, groups, enterprise apps, and roles", "/identity"),
             ("page", "security", "Security", "Azure security workspace and investigation tools", "/security"),
+            ("page", "security-identity-review", "Identity Review", "Review groups, enterprise apps, app registrations, and directory roles", "/security/identity-review"),
             ("page", "security-access-review", "Privileged Access Review", "Review elevated Azure RBAC access and break-glass candidates", "/security/access-review"),
+            ("page", "security-user-review", "User Review", "Review stale sign-ins, guest identities, synced users, and disabled licensed accounts", "/security/user-review"),
+            ("page", "security-account-health", "Account Health", "Review account hygiene, stale passwords, old guests, and incomplete profiles", "/security/account-health"),
             ("page", "security-app-hygiene", "Application Hygiene", "Review app registration owners and credential expiry risk", "/security/app-hygiene"),
             ("page", "security-copilot", "Security Copilot", "Investigate security incidents across Azure and local sources", "/security/copilot"),
-            ("page", "users", "Users", "Directory user health and sign-in analysis", "/users"),
             ("page", "cost", "Cost", "Spend trend and FinOps validation", "/cost"),
             ("page", "allocations", "Allocation", "Showback rules and allocation runs", "/allocations"),
             ("page", "ai-costs", "AI Cost", "Ollama AI usage and estimated cost", "/ai-costs"),
             ("page", "savings", "Savings", "Ranked Azure savings opportunities", "/savings"),
             ("page", "copilot", "Copilot", "Ask grounded Azure cost and governance questions", "/copilot"),
             ("page", "alerts", "Alerts", "Azure alert rules and delivery history", "/alerts"),
-            ("page", "account-health", "Account Health", "Account hygiene and identity cleanup", "/account-health"),
         ]
         for kind, item_id, label, subtitle, route in page_definitions:
             if query_lower in label.lower() or query_lower in subtitle.lower():

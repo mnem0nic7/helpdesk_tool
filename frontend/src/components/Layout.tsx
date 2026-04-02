@@ -38,9 +38,7 @@ const azureNavItems: NavItem[] = [
   { to: "/compute", label: "Compute", icon: "compute" },
   { to: "/resources", label: "Resources", icon: "resources" },
   { to: "/storage", label: "Storage", icon: "storage" },
-  { to: "/identity", label: "Identity", icon: "identity" },
   { to: "/security", label: "Security", icon: "security" },
-  { to: "/users", label: "Users", icon: "users" },
   { to: "/tools", label: "Tools", icon: "tools" },
   { to: "/cost", label: "Cost", icon: "cost" },
   { to: "/allocations", label: "Allocation", icon: "allocation" },
@@ -48,7 +46,6 @@ const azureNavItems: NavItem[] = [
   { to: "/savings", label: "Savings", icon: "savings" },
   { to: "/copilot", label: "Copilot", icon: "copilot" },
   { to: "/alerts", label: "Alerts", icon: "alerts" },
-  { to: "/account-health", label: "Account Health", icon: "account-health" },
 ];
 
 const azureBreadcrumbLabels: Record<string, string> = {
@@ -179,8 +176,11 @@ export default function Layout() {
     const params = new URLSearchParams(location.search);
     let detailLabel = "";
     if (segment === "security" && subsegment === "access-review") detailLabel = "Privileged Access Review";
+    if (segment === "security" && subsegment === "identity-review") detailLabel = "Identity Review";
     if (segment === "security" && subsegment === "app-hygiene") detailLabel = "Application Hygiene";
+    if (segment === "security" && subsegment === "user-review") detailLabel = "User Review";
     if (segment === "security" && subsegment === "copilot") detailLabel = "Security Copilot";
+    if (segment === "security" && subsegment === "account-health") detailLabel = "Account Health";
     if (segment === "vms" && params.get("vmId")) detailLabel = "VM Detail";
     if (segment === "virtual-desktops" && params.get("desktopId")) detailLabel = "Desktop Detail";
     if (segment === "resources" && params.get("resourceId")) detailLabel = "Resource Detail";

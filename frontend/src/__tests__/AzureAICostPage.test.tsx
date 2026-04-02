@@ -28,7 +28,7 @@ describe("AzureAICostPage", () => {
       estimated_tokens: 1200,
       estimated_cost: 0,
       currency: "USD",
-      top_model: "qwen2.5:7b",
+      top_model: "qwen3.5:4b",
       top_feature: "azure_cost_copilot",
       window_start: "2026-03-20",
       window_end: "2026-03-23",
@@ -56,7 +56,7 @@ describe("AzureAICostPage", () => {
         ]);
       }
       return Promise.resolve([
-        { label: "qwen2.5:7b", request_count: 12, estimated_tokens: 1200, estimated_cost: 0, currency: "USD", share: 1 },
+        { label: "qwen3.5:4b", request_count: 12, estimated_tokens: 1200, estimated_cost: 0, currency: "USD", share: 1 },
       ]);
     });
   });
@@ -66,7 +66,7 @@ describe("AzureAICostPage", () => {
 
     expect(await screen.findByText("AI Cost")).toBeInTheDocument();
     expect(screen.getByText("Ollama-only runtime confirmed")).toBeInTheDocument();
-    expect(screen.getAllByText("qwen2.5:7b").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("qwen3.5:4b").length).toBeGreaterThan(0);
     expect(screen.getByText("azure_cost_copilot")).toBeInTheDocument();
     expect(screen.getByText("By Team")).toBeInTheDocument();
     expect(screen.getByText("FinOps")).toBeInTheDocument();

@@ -1121,6 +1121,16 @@ class SecurityCopilotChatMessage(BaseModel):
     content: str
 
 
+class SecurityCopilotIdentityCandidate(BaseModel):
+    """One Azure user candidate resolved from a display-name style lookup."""
+
+    id: str = ""
+    display_name: str = ""
+    principal_name: str = ""
+    mail: str = ""
+    match_reason: str = ""
+
+
 class SecurityCopilotIncident(BaseModel):
     """Normalized incident profile built from the chat intake."""
 
@@ -1139,6 +1149,8 @@ class SecurityCopilotIncident(BaseModel):
     affected_resources: list[str] = Field(default_factory=list)
     alert_names: list[str] = Field(default_factory=list)
     observed_artifacts: list[str] = Field(default_factory=list)
+    identity_query: str = ""
+    identity_candidates: list[SecurityCopilotIdentityCandidate] = Field(default_factory=list)
     confidence: float = 0.0
     missing_fields: list[str] = Field(default_factory=list)
 
@@ -1152,6 +1164,7 @@ class SecurityCopilotFollowUpQuestion(BaseModel):
     placeholder: str = ""
     required: bool = True
     input_type: Literal["text", "textarea", "email", "list"] = "text"
+    choices: list[str] = Field(default_factory=list)
 
 
 class SecurityCopilotPlannedSource(BaseModel):

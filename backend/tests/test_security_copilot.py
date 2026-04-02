@@ -23,7 +23,7 @@ def test_resolve_incident_profile_falls_back_to_heuristics(monkeypatch):
     incident = security_copilot._resolve_incident_profile(
         "Shared mailbox payroll@example.com is forwarding mail externally since 2 AM UTC.",
         SecurityCopilotIncident(),
-        "qwen2.5:7b",
+        "qwen3.5:4b",
     )
 
     assert incident.lane == "mailbox_abuse"
@@ -56,7 +56,7 @@ def test_resolve_incident_profile_includes_recent_chat_history_in_model_payload(
     incident = security_copilot._resolve_incident_profile(
         "Check her account first.",
         SecurityCopilotIncident(),
-        "qwen2.5:7b",
+        "qwen3.5:4b",
         history=[
             SecurityCopilotChatMessage(role="user", content="ada@example.com reported impossible travel alerts."),
             SecurityCopilotChatMessage(role="assistant", content="I still need the timeframe."),
@@ -67,6 +67,79 @@ def test_resolve_incident_profile_includes_recent_chat_history_in_model_payload(
     assert payload["recent_history"][0]["content"] == "ada@example.com reported impossible travel alerts."
     assert incident.affected_users == ["ada@example.com"]
     assert incident.timeframe == "Since 2 AM UTC"
+
+
+def test_run_security_copilot_chat_resolves_display_name_to_identity_confirmation(monkeypatch):
+    monkeypatch.setattr(
+        security_copilot,
+        "invoke_model_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ollama unavailable")),
+    )
+    monkeypatch.setattr(
+        security_copilot.azure_cache,
+        "list_directory_objects",
+        lambda snapshot_name, *, search="": [
+            {
+                "id": "user-1",
+                "display_name": "Abhishek Mishra",
+                "principal_name": "abhishek.mishra@example.com",
+                "mail": "abhishek.mishra@example.com",
+            }
+        ]
+        if snapshot_name == "users" and "abhishek mishra" in search.lower()
+        else [],
+    )
+    monkeypatch.setattr(security_copilot, "_build_source_registry", lambda: [])
+
+    response = security_copilot.run_security_copilot_chat(
+        SecurityCopilotChatRequest(
+            message="Abhishek Mishra had impossible travel in the last two week investigate and report back with findings",
+            incident=SecurityCopilotIncident(),
+        ),
+        {"email": "test@example.com", "name": "Test User"},
+        model_id="qwen3.5:4b",
+    )
+
+    assert response.phase == "needs_input"
+    assert response.incident.identity_query == "Abhishek Mishra"
+    assert response.incident.identity_candidates[0].principal_name == "abhishek.mishra@example.com"
+    assert response.follow_up_questions[0].key == "identity_confirmation"
+    assert response.follow_up_questions[0].choices == ["Abhishek Mishra <abhishek.mishra@example.com>"]
+    assert "Confirm which account I should investigate first" in response.assistant_message
+
+
+def test_resolve_incident_profile_accepts_identity_confirmation_reply(monkeypatch):
+    monkeypatch.setattr(
+        security_copilot,
+        "invoke_model_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ollama unavailable")),
+    )
+
+    incident = security_copilot._resolve_incident_profile(
+        "the first one",
+        SecurityCopilotIncident(
+            lane="identity_compromise",
+            summary="Abhishek Mishra had impossible travel.",
+            timeframe="last two weeks",
+            identity_query="Abhishek Mishra",
+            identity_candidates=[
+                security_copilot.SecurityCopilotIdentityCandidate(
+                    id="user-1",
+                    display_name="Abhishek Mishra",
+                    principal_name="abhishek.mishra@example.com",
+                    mail="abhishek.mishra@example.com",
+                    match_reason="display_name_exact",
+                )
+            ],
+        ),
+        "qwen3.5:4b",
+    )
+
+    assert incident.summary == "Abhishek Mishra had impossible travel."
+    assert incident.affected_users == ["abhishek.mishra@example.com"]
+    assert incident.identity_candidates == []
+    assert incident.identity_query == ""
+    assert "identity_confirmation" not in incident.missing_fields
 
 
 def test_plan_security_sources_skips_user_admin_without_permission():
@@ -97,7 +170,7 @@ def test_run_security_copilot_chat_returns_needs_input_for_missing_fields(monkey
             ),
         ),
         {"email": "test@example.com", "name": "Test User"},
-        model_id="qwen2.5:7b",
+        model_id="qwen3.5:4b",
     )
 
     assert response.phase == "needs_input"
@@ -140,7 +213,7 @@ def test_run_security_copilot_chat_reports_source_errors(monkeypatch):
             ),
         ),
         {"email": "test@example.com", "name": "Test User"},
-        model_id="qwen2.5:7b",
+        model_id="qwen3.5:4b",
     )
 
     assert response.phase == "complete"
@@ -204,7 +277,7 @@ def test_run_security_copilot_chat_returns_running_jobs(monkeypatch):
             ),
         ),
         {"email": "test@example.com", "name": "Test User"},
-        model_id="qwen2.5:7b",
+        model_id="qwen3.5:4b",
     )
 
     assert response.phase == "running_jobs"
@@ -261,7 +334,7 @@ def test_run_security_copilot_chat_warns_when_tenant_data_is_stale(monkeypatch):
             ),
         ),
         {"email": "test@example.com", "name": "Test User"},
-        model_id="qwen2.5:7b",
+        model_id="qwen3.5:4b",
     )
 
     assert response.phase == "complete"
@@ -314,7 +387,7 @@ def test_run_security_copilot_chat_handles_no_relevant_findings(monkeypatch):
             ),
         ),
         {"email": "test@example.com", "name": "Test User"},
-        model_id="qwen2.5:7b",
+        model_id="qwen3.5:4b",
     )
 
     assert response.phase == "complete"

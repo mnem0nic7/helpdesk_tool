@@ -502,10 +502,10 @@ beforeEach(() => {
     matched_count: 1,
     total_count: 1,
   });
-  mockApi.getAzureAIModels.mockResolvedValue([{ id: "qwen2.5:7b", name: "qwen2.5:7b", provider: "ollama" }]);
+  mockApi.getAzureAIModels.mockResolvedValue([{ id: "qwen3.5:4b", name: "qwen3.5:4b", provider: "ollama" }]);
   mockApi.askAzureCostCopilot.mockResolvedValue({
     answer: "Start with unattached disks and idle VM cleanup.",
-    model_used: "qwen2.5:7b",
+    model_used: "qwen3.5:4b",
     generated_at: "2026-03-19T00:00:00Z",
     citations: [{ source_type: "savings", label: "Savings opportunities", detail: "5 ranked items" }],
   });

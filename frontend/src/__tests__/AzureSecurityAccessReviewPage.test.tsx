@@ -142,6 +142,7 @@ describe("AzureSecurityAccessReviewPage", () => {
     expect(screen.getByText("Break-glass watchlist")).toBeInTheDocument();
     expect(screen.getByText("Privileged assignment table")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to Security workspace" })).toHaveAttribute("href", "/security");
+    expect(screen.getByRole("link", { name: "Open User Review" })).toHaveAttribute("href", "/security/user-review");
     expect(screen.getByRole("link", { name: "Open Security Copilot" })).toHaveAttribute("href", "/security/copilot");
     expect(screen.getByText(/could not be refreshed live/i)).toBeInTheDocument();
     expect(screen.getAllByText("Emergency Admin").length).toBeGreaterThan(0);

@@ -705,7 +705,7 @@ def test_ai_usage_rollups_and_pricing(tmp_path):
     )
     service.record_ai_usage(
         provider="ollama",
-        model_id="qwen2.5:7b",
+        model_id="qwen3.5:4b",
         feature_surface="ticket_auto_triage",
         app_surface="tickets",
         actor_type="system",

@@ -267,8 +267,8 @@ def _default_azure_finops_duckdb_path() -> str:
 # Local AI provider (Ollama)
 OLLAMA_ENABLED: bool = _env_bool("OLLAMA_ENABLED", "0")
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "nemotron-3-nano:4b").strip() or "nemotron-3-nano:4b"
-OLLAMA_FAST_MODEL: str = os.getenv("OLLAMA_FAST_MODEL", "qwen2.5:3b").strip() or "qwen2.5:3b"
+OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen3.5:4b").strip() or "qwen3.5:4b"
+OLLAMA_FAST_MODEL: str = os.getenv("OLLAMA_FAST_MODEL", "qwen3.5:4b").strip() or "qwen3.5:4b"
 OLLAMA_REQUEST_TIMEOUT_SECONDS: float = float(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "300"))
 OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "15m").strip() or "15m"
 

@@ -36,6 +36,8 @@ const emptyIncident: SecurityCopilotIncident = {
   affected_resources: [],
   alert_names: [],
   observed_artifacts: [],
+  identity_query: "",
+  identity_candidates: [],
   confidence: 0,
   missing_fields: [],
 };
@@ -406,8 +408,8 @@ export default function AzureSecurityCopilotPage() {
   const investigationMarkdown = latestResponse ? buildInvestigationMarkdown(latestResponse, turns) : "";
   const investigationJson = latestResponse ? buildInvestigationJson(latestResponse, turns) : "";
 
-  const submitInvestigation = () => {
-    const message = draft.trim();
+  const submitInvestigationMessage = (rawMessage?: string) => {
+    const message = (rawMessage ?? draft).trim();
     if (!message) return;
     chatMutation.mutate({
       message,
@@ -497,11 +499,11 @@ export default function AzureSecurityCopilotPage() {
           </select>
           <button
             type="button"
-            onClick={submitInvestigation}
+            onClick={() => submitInvestigationMessage()}
             disabled={!canSubmit}
             className="rounded-xl bg-sky-700 px-5 py-2 text-sm font-medium text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {chatMutation.isPending ? "Investigating..." : "Start Investigation"}
+            {chatMutation.isPending ? "Investigating..." : turns.length > 0 ? "Send" : "Start Investigation"}
           </button>
         </div>
 
@@ -555,6 +557,7 @@ export default function AzureSecurityCopilotPage() {
             ...activeIncident.affected_resources.map((item) => `Resource: ${item}`),
             ...activeIncident.alert_names.map((item) => `Alert: ${item}`),
             ...activeIncident.observed_artifacts.map((item) => `Artifact: ${item}`),
+            ...activeIncident.identity_candidates.map((item) => `Candidate: ${item.display_name || item.principal_name || item.mail}`),
           ].map((item) => (
             <span key={item} className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
               {item}
@@ -587,6 +590,21 @@ export default function AzureSecurityCopilotPage() {
                     <div className="text-sm font-semibold text-slate-900">{question.label}</div>
                     <div className="mt-2 text-sm leading-6 text-slate-600">{question.prompt}</div>
                     <div className="mt-2 text-xs text-slate-500">{question.placeholder}</div>
+                    {question.choices?.length ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {question.choices.map((choice) => (
+                          <button
+                            key={`${question.key}-${choice}`}
+                            type="button"
+                            disabled={chatMutation.isPending}
+                            onClick={() => submitInvestigationMessage(choice)}
+                            className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {choice}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ))}
               </div>
