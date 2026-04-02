@@ -113,6 +113,9 @@ def test_ollama_config_defaults_and_overrides(monkeypatch):
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/")
     monkeypatch.setenv("OLLAMA_MODEL", "")
     monkeypatch.setenv("OLLAMA_FAST_MODEL", "")
+    monkeypatch.setenv("OLLAMA_SECURITY_ENABLED", "true")
+    monkeypatch.setenv("OLLAMA_SECURITY_BASE_URL", "http://localhost:11434/")
+    monkeypatch.setenv("OLLAMA_SECURITY_MODEL", "")
     monkeypatch.delenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", raising=False)
     monkeypatch.setenv("OLLAMA_KEEP_ALIVE", "")
     monkeypatch.setenv("AUTO_TRIAGE_MODEL", "")
@@ -126,6 +129,9 @@ def test_ollama_config_defaults_and_overrides(monkeypatch):
     assert config.OLLAMA_BASE_URL == "http://localhost:11434"
     assert config.OLLAMA_MODEL == "qwen3.5:4b"
     assert config.OLLAMA_FAST_MODEL == "qwen3.5:4b"
+    assert config.OLLAMA_SECURITY_ENABLED is True
+    assert config.OLLAMA_SECURITY_BASE_URL == "http://localhost:11434"
+    assert config.OLLAMA_SECURITY_MODEL == "qwen3.5:4b"
     assert config.OLLAMA_REQUEST_TIMEOUT_SECONDS == 300
     assert config.OLLAMA_KEEP_ALIVE == "15m"
     assert config.AUTO_TRIAGE_MODEL == "qwen3.5:4b"

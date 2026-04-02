@@ -409,7 +409,7 @@ export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: 
 
   const { data: models = [] } = useQuery({
     queryKey: ["azure", "ai", "models", "security-copilot"],
-    queryFn: () => api.getAzureAIModels(),
+    queryFn: () => api.getAzureSecurityCopilotModels(),
     staleTime: 5 * 60 * 1000,
   });
   const statusQuery = useQuery({

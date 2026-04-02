@@ -7,7 +7,7 @@ const clipboardWriteText = vi.fn();
 
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
-    getAzureAIModels: vi.fn(),
+    getAzureSecurityCopilotModels: vi.fn(),
     getAzureStatus: vi.fn(),
     chatAzureSecurityCopilot: vi.fn(),
   },
@@ -101,7 +101,7 @@ describe("AzureSecurityCopilotPage", () => {
       configurable: true,
       value: { writeText: clipboardWriteText },
     });
-    mockApi.getAzureAIModels.mockResolvedValue([
+    mockApi.getAzureSecurityCopilotModels.mockResolvedValue([
       { id: "qwen3.5:4b", name: "qwen3.5:4b", provider: "ollama" },
       { id: "nemotron-3-nano:4b", name: "nemotron-3-nano:4b", provider: "ollama" },
     ]);

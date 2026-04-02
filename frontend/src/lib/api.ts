@@ -3534,6 +3534,10 @@ export const api = {
     return fetchJSON<AIModel[]>("/api/azure/ai/models");
   },
 
+  getAzureSecurityCopilotModels(): Promise<AIModel[]> {
+    return fetchJSON<AIModel[]>("/api/azure/security/copilot/models");
+  },
+
   getAzureAICostSummary(lookbackDays?: number): Promise<AzureAICostSummary> {
     return fetchJSON<AzureAICostSummary>(`/api/azure/ai-costs/summary${buildQuery({ lookback_days: lookbackDays })}`);
   },

@@ -25,6 +25,9 @@ from config import (
     OLLAMA_KEEP_ALIVE,
     OLLAMA_MODEL,
     OLLAMA_REQUEST_TIMEOUT_SECONDS,
+    OLLAMA_SECURITY_BASE_URL,
+    OLLAMA_SECURITY_ENABLED,
+    OLLAMA_SECURITY_MODEL,
     OPENAI_API_KEY,
 )
 from models import (
@@ -57,7 +60,7 @@ _CURATED_MODELS: list[dict[str, str]] = [
 _OPENAI_COPILOT_MODEL_CACHE_TTL_SECONDS = 300
 _OPENAI_COPILOT_MODEL_CACHE: tuple[float, list[AIModel]] | None = None
 _OLLAMA_MODEL_CACHE_TTL_SECONDS = 30
-_OLLAMA_MODEL_CACHE: tuple[float, list[AIModel]] | None = None
+_OLLAMA_MODEL_CACHE: dict[str, tuple[float, list[AIModel]]] | None = None
 _OPENAI_TEXT_MODEL_PREFIXES = ("gpt-", "o1", "o3", "o4")
 _OPENAI_EXCLUDED_MODEL_TOKENS = (
     "audio",
@@ -123,6 +126,7 @@ _TICKET_KB_EXCERPT_CHAR_LIMIT = 400
 _QA_COMMENT_MAX_COUNT = 6
 _QA_COMMENT_CHAR_LIMIT = 400
 _KB_EXISTING_ARTICLE_CHAR_LIMIT = 3000
+_OLLAMA_RUNTIME_STATE_LOCK = threading.Lock()
 
 
 def _build_ollama_session() -> requests.Session:
@@ -141,11 +145,49 @@ _OLLAMA_THREAD_LOCAL = threading.local()
 T = TypeVar("T")
 
 
-def _get_ollama_session() -> requests.Session:
-    session = getattr(_OLLAMA_THREAD_LOCAL, "session", None)
+@dataclass(frozen=True)
+class OllamaRuntimeSettings:
+    name: str
+    enabled: bool
+    base_url: str
+    preferred_model_id: str
+
+
+def _normalize_ollama_runtime(runtime: str | None = None) -> str:
+    return "security" if str(runtime or "").strip().lower() == "security" else "default"
+
+
+def _get_ollama_runtime_settings(runtime: str | None = None) -> OllamaRuntimeSettings:
+    normalized = _normalize_ollama_runtime(runtime)
+    if normalized == "security":
+        return OllamaRuntimeSettings(
+            name="security",
+            enabled=OLLAMA_SECURITY_ENABLED,
+            base_url=OLLAMA_SECURITY_BASE_URL,
+            preferred_model_id=OLLAMA_SECURITY_MODEL,
+        )
+    return OllamaRuntimeSettings(
+        name="default",
+        enabled=OLLAMA_ENABLED,
+        base_url=OLLAMA_BASE_URL,
+        preferred_model_id=OLLAMA_MODEL,
+    )
+
+
+def _normalize_ollama_base_url(base_url: str) -> str:
+    return str(base_url or "").strip().rstrip("/")
+
+
+def _get_ollama_session(base_url: str = "") -> requests.Session:
+    normalized_base_url = _normalize_ollama_base_url(base_url or OLLAMA_BASE_URL)
+    sessions = getattr(_OLLAMA_THREAD_LOCAL, "sessions", None)
+    if not isinstance(sessions, dict):
+        sessions = {}
+        _OLLAMA_THREAD_LOCAL.sessions = sessions
+    session = sessions.get(normalized_base_url)
     if session is None:
         session = _build_ollama_session()
-        _OLLAMA_THREAD_LOCAL.session = session
+        sessions[normalized_base_url] = session
     return session
 
 
@@ -200,9 +242,19 @@ class OllamaRequestCoordinator:
                 self._condition.notify_all()
 
 
-_OLLAMA_REQUEST_COORDINATOR = OllamaRequestCoordinator(
-    max_concurrent_requests=_OLLAMA_MAX_CONCURRENT_REQUESTS
-)
+_OLLAMA_REQUEST_COORDINATORS: dict[str, OllamaRequestCoordinator] = {}
+
+
+def _get_ollama_request_coordinator(base_url: str) -> OllamaRequestCoordinator:
+    normalized_base_url = _normalize_ollama_base_url(base_url or OLLAMA_BASE_URL)
+    with _OLLAMA_RUNTIME_STATE_LOCK:
+        coordinator = _OLLAMA_REQUEST_COORDINATORS.get(normalized_base_url)
+        if coordinator is None:
+            coordinator = OllamaRequestCoordinator(
+                max_concurrent_requests=_OLLAMA_MAX_CONCURRENT_REQUESTS
+            )
+            _OLLAMA_REQUEST_COORDINATORS[normalized_base_url] = coordinator
+        return coordinator
 
 
 def _resolve_ollama_request_priority(
@@ -273,14 +325,17 @@ def select_available_ollama_model(
     *,
     preferred_model_id: str = "",
     fallback_model_id: str = "",
+    runtime: str = "default",
 ) -> str | None:
     if not available:
         return None
+    runtime_settings = _get_ollama_runtime_settings(runtime)
     available_ids = {model.id for model in available if model.provider == "ollama"}
     seen: set[str] = set()
     candidates = [
         preferred_model_id,
         fallback_model_id,
+        runtime_settings.preferred_model_id,
         OLLAMA_MODEL,
         *_DEFAULT_OLLAMA_FALLBACK_MODEL_ORDER,
         OLLAMA_FAST_MODEL,
@@ -370,9 +425,10 @@ def _get_curated_models(provider: str) -> list[AIModel]:
     return [AIModel(**model) for model in _CURATED_MODELS if model["provider"] == provider]
 
 
-def _list_ollama_models_from_api() -> list[AIModel]:
-    response = _get_ollama_session().get(
-        f"{OLLAMA_BASE_URL}/api/tags",
+def _list_ollama_models_from_api(*, runtime: str = "default") -> list[AIModel]:
+    runtime_settings = _get_ollama_runtime_settings(runtime)
+    response = _get_ollama_session(runtime_settings.base_url).get(
+        f"{runtime_settings.base_url}/api/tags",
         timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
@@ -387,7 +443,14 @@ def _list_ollama_models_from_api() -> list[AIModel]:
     preference_rank = {
         model_id: index
         for index, model_id in enumerate(
-            dict.fromkeys((OLLAMA_MODEL, *_DEFAULT_OLLAMA_FALLBACK_MODEL_ORDER, OLLAMA_FAST_MODEL))
+            dict.fromkeys(
+                (
+                    runtime_settings.preferred_model_id,
+                    OLLAMA_MODEL,
+                    *_DEFAULT_OLLAMA_FALLBACK_MODEL_ORDER,
+                    OLLAMA_FAST_MODEL,
+                )
+            )
         )
     }
     return sorted(
@@ -396,35 +459,48 @@ def _list_ollama_models_from_api() -> list[AIModel]:
     )
 
 
-def _get_available_ollama_models() -> list[AIModel]:
+def _get_available_ollama_models(*, runtime: str = "default") -> list[AIModel]:
     global _OLLAMA_MODEL_CACHE
 
-    if not OLLAMA_ENABLED:
+    runtime_settings = _get_ollama_runtime_settings(runtime)
+    if not runtime_settings.enabled:
+        return []
+    base_url = _normalize_ollama_base_url(runtime_settings.base_url)
+    if not base_url:
         return []
 
     now = time.time()
-    cached = _OLLAMA_MODEL_CACHE
+    cache_store = _OLLAMA_MODEL_CACHE if isinstance(_OLLAMA_MODEL_CACHE, dict) else {}
+    cached = cache_store.get(base_url)
     if cached and now - cached[0] < _OLLAMA_MODEL_CACHE_TTL_SECONDS:
         return list(cached[1])
 
     try:
-        models = _list_ollama_models_from_api()
+        models = _list_ollama_models_from_api(runtime=runtime_settings.name)
     except Exception:
-        logger.warning("Failed to fetch Ollama models from %s", OLLAMA_BASE_URL, exc_info=True)
+        logger.warning(
+            "Failed to fetch %s Ollama models from %s",
+            runtime_settings.name,
+            runtime_settings.base_url,
+            exc_info=True,
+        )
         if cached:
             return list(cached[1])
-        _OLLAMA_MODEL_CACHE = (now, [])
+        cache_store[base_url] = (now, [])
+        _OLLAMA_MODEL_CACHE = cache_store
         return []
 
-    _OLLAMA_MODEL_CACHE = (now, list(models))
+    cache_store[base_url] = (now, list(models))
+    _OLLAMA_MODEL_CACHE = cache_store
     return models
 
 
-def get_available_models() -> list[AIModel]:
+def get_available_models(*, runtime: str = "default") -> list[AIModel]:
     """Return models from the active Ollama runtime."""
-    if not OLLAMA_ENABLED:
+    runtime_settings = _get_ollama_runtime_settings(runtime)
+    if not runtime_settings.enabled:
         return []
-    return _get_available_ollama_models()
+    return _get_available_ollama_models(runtime=runtime_settings.name)
 
 
 def _is_openai_text_model(model_id: str) -> bool:
@@ -459,8 +535,13 @@ def _list_openai_copilot_models_from_api() -> list[AIModel]:
 
 
 def get_available_copilot_models() -> list[AIModel]:
-    """Return Azure Copilot models from the active Ollama runtime."""
+    """Return Azure cost copilot models from the default Ollama runtime."""
     return get_available_models()
+
+
+def get_available_security_copilot_models() -> list[AIModel]:
+    """Return Security Copilot models from the dedicated security Ollama runtime."""
+    return get_available_models(runtime="security")
 
 
 def get_default_copilot_model_id(available: list[AIModel]) -> str | None:
@@ -479,10 +560,27 @@ def get_default_copilot_model_id(available: list[AIModel]) -> str | None:
     return available[0].id
 
 
-def _get_model_provider(model_id: str) -> str | None:
-    if OLLAMA_ENABLED and model_id == OLLAMA_MODEL:
+def get_default_security_copilot_model_id(available: list[AIModel]) -> str | None:
+    if not available:
+        return None
+    default_ollama = select_available_ollama_model(
+        available,
+        preferred_model_id=OLLAMA_SECURITY_MODEL,
+        fallback_model_id=OLLAMA_MODEL,
+        runtime="security",
+    )
+    if default_ollama:
+        return default_ollama
+    return available[0].id
+
+
+def _get_model_provider(model_id: str, *, ollama_runtime: str = "default") -> str | None:
+    runtime_settings = _get_ollama_runtime_settings(ollama_runtime)
+    if runtime_settings.enabled and model_id == runtime_settings.preferred_model_id:
         return "ollama"
-    if OLLAMA_ENABLED and any(model.id == model_id for model in _get_available_ollama_models()):
+    if runtime_settings.enabled and any(
+        model.id == model_id for model in _get_available_ollama_models(runtime=runtime_settings.name)
+    ):
         return "ollama"
     return None
 
@@ -1118,8 +1216,10 @@ def _invoke_ollama(
     json_output: bool = False,
     priority: int | None = None,
     queue_label: str = "",
+    runtime: str = "default",
 ) -> tuple[str, dict[str, Any]]:
     """Call a local Ollama model and return response text plus usage."""
+    runtime_settings = _get_ollama_runtime_settings(runtime)
     payload: dict[str, Any] = {
         "model": model_id,
         "messages": [
@@ -1141,8 +1241,8 @@ def _invoke_ollama(
         payload["options"] = options
 
     def _run_request() -> tuple[str, dict[str, Any]]:
-        response = _get_ollama_session().post(
-            f"{OLLAMA_BASE_URL}/api/chat",
+        response = _get_ollama_session(runtime_settings.base_url).post(
+            f"{runtime_settings.base_url}/api/chat",
             json=payload,
             timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
         )
@@ -1158,7 +1258,7 @@ def _invoke_ollama(
             }
         raise RuntimeError(f"Ollama model '{model_id}' returned no text output")
 
-    return _OLLAMA_REQUEST_COORDINATOR.run(
+    return _get_ollama_request_coordinator(runtime_settings.base_url).run(
         priority=_resolve_ollama_request_priority(explicit_priority=priority),
         label=queue_label or model_id,
         work=_run_request,
@@ -1175,6 +1275,7 @@ def _call_ollama(
     json_output: bool = False,
     priority: int | None = None,
     queue_label: str = "",
+    runtime: str = "default",
 ) -> str:
     return _invoke_ollama(
         model_id,
@@ -1185,6 +1286,7 @@ def _call_ollama(
         json_output=json_output,
         priority=priority,
         queue_label=queue_label,
+        runtime=runtime,
     )[0]
 
 
@@ -1204,8 +1306,13 @@ def invoke_model_text(
     openai_api_mode: str = "responses",
     metadata: dict[str, Any] | None = None,
     ollama_priority: int | None = None,
+    ollama_runtime: str | None = None,
 ) -> str:
-    provider = _get_model_provider(model_id)
+    resolved_ollama_runtime = _normalize_ollama_runtime(
+        ollama_runtime
+        or ("security" if str(feature_surface or "").strip().lower() == "azure_security_copilot" else "default")
+    )
+    provider = _get_model_provider(model_id, ollama_runtime=resolved_ollama_runtime)
     if not provider:
         raise ValueError(f"Unknown model: {model_id}")
 
@@ -1245,6 +1352,7 @@ def invoke_model_text(
                     explicit_priority=ollama_priority,
                 ),
                 queue_label=feature_surface or app_surface or model_id,
+                runtime=resolved_ollama_runtime,
             )
         else:
             raise ValueError(f"Unsupported provider: {provider}")

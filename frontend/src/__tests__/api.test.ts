@@ -252,6 +252,14 @@ describe("azure api methods", () => {
     expect(JSON.parse(call[1].body)).toEqual({ question: "Where can we save?" });
   });
 
+  it("loads Azure security copilot models from the dedicated security endpoint", async () => {
+    mockFetch([{ id: "qwen3.5:4b", name: "qwen3.5:4b", provider: "ollama" }]);
+    await api.getAzureSecurityCopilotModels();
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/azure/security/copilot/models");
+    expect(call[1]).toBeUndefined();
+  });
+
   it("posts Azure security copilot investigations", async () => {
     mockFetch({
       phase: "needs_input",

@@ -14,6 +14,9 @@ x-backend-common: &backend-common
     STORAGE_DUAL_WRITE_SQLITE: "1"
     KB_ARTICLE_ARCHIVE: /app/private/OIT_KB_Articles.zip
     OLLAMA_BASE_URL: http://host.docker.internal:11434
+    OLLAMA_SECURITY_ENABLED: "1"
+    OLLAMA_SECURITY_BASE_URL: http://security_ollama:11434
+    OLLAMA_SECURITY_MODEL: qwen3.5:4b
     APP_RUNTIME_BLUEGREEN_ENABLED: "1"
   volumes:
     - cache_data:/app/data
@@ -66,6 +69,27 @@ services:
       - app_net
     restart: unless-stopped
 
+  security_ollama:
+    image: ollama/ollama:latest
+    entrypoint: ["/bin/sh", "/scripts/security_ollama_entrypoint.sh"]
+    environment:
+      SECURITY_OLLAMA_PRIMARY_MODEL: qwen3.5:4b
+      SECURITY_OLLAMA_FALLBACK_MODEL: nemotron-3-nano:4b
+    expose:
+      - "11434"
+    volumes:
+      - ollama_security_data:/root/.ollama
+      - ./scripts/security_ollama_entrypoint.sh:/scripts/security_ollama_entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f /tmp/security-ollama-ready ] && OLLAMA_HOST=http://127.0.0.1:11434 ollama list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 5s
+    networks:
+      - app_net
+    restart: unless-stopped
+
   caddy:
     build:
       context: .
@@ -94,6 +118,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      security_ollama:
+        condition: service_healthy
 
   backend_green:
     <<: *backend-common
@@ -104,6 +130,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      security_ollama:
         condition: service_healthy
 
   frontend_blue:
@@ -119,5 +147,6 @@ volumes:
   cache_data:
   caddy_data:
   caddy_config:
+  ollama_security_data:
   postgres_data:
   redis_data:

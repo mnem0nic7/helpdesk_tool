@@ -271,6 +271,12 @@ OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen3.5:4b").strip() or "qwen3.5:
 OLLAMA_FAST_MODEL: str = os.getenv("OLLAMA_FAST_MODEL", "qwen3.5:4b").strip() or "qwen3.5:4b"
 OLLAMA_REQUEST_TIMEOUT_SECONDS: float = float(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "300"))
 OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "15m").strip() or "15m"
+OLLAMA_SECURITY_ENABLED: bool = _env_bool(
+    "OLLAMA_SECURITY_ENABLED",
+    "1" if OLLAMA_ENABLED else "0",
+)
+OLLAMA_SECURITY_BASE_URL: str = os.getenv("OLLAMA_SECURITY_BASE_URL", OLLAMA_BASE_URL).rstrip("/")
+OLLAMA_SECURITY_MODEL: str = os.getenv("OLLAMA_SECURITY_MODEL", OLLAMA_MODEL).strip() or OLLAMA_MODEL
 
 # Auto-triage and fast structured AI defaults
 AUTO_TRIAGE_MODEL: str = os.getenv("AUTO_TRIAGE_MODEL", OLLAMA_FAST_MODEL).strip() or OLLAMA_FAST_MODEL

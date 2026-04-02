@@ -546,6 +546,55 @@ PY
     then
         echo "ERROR: ${service} cannot reach Ollama."
         exit 1
+fi
+}
+
+verify_backend_security_ollama() {
+    local service="$1"
+    echo ">>> Verifying ${service} can reach the Security Copilot Ollama runtime..."
+    if ! docker compose exec -T "$service" python3 - <<'PY'
+import json
+import sys
+import urllib.request
+
+from config import (
+    OLLAMA_SECURITY_BASE_URL,
+    OLLAMA_SECURITY_ENABLED,
+    OLLAMA_SECURITY_MODEL,
+)
+
+if not OLLAMA_SECURITY_ENABLED:
+    print("Security Ollama runtime is disabled; skipping security runtime verification.")
+    raise SystemExit(0)
+
+base = OLLAMA_SECURITY_BASE_URL.rstrip("/")
+model_id = (OLLAMA_SECURITY_MODEL or "").strip()
+if not base:
+    print("OLLAMA_SECURITY_BASE_URL is not set in the backend container.")
+    sys.exit(1)
+if not model_id:
+    print("OLLAMA_SECURITY_MODEL is not set in the backend container.")
+    sys.exit(1)
+
+url = f"{base}/api/tags"
+try:
+    with urllib.request.urlopen(url, timeout=10) as response:
+        if response.status != 200:
+            print(f"Security Ollama check returned HTTP {response.status} for {url}")
+            sys.exit(1)
+        payload = json.loads(response.read().decode("utf-8", "ignore"))
+except Exception as exc:
+    print(f"Failed to reach Security Copilot Ollama from backend container at {url}: {exc}")
+    sys.exit(1)
+
+models = {entry.get("model") or entry.get("name") for entry in payload.get("models") or []}
+if model_id not in models:
+    print(f"Configured Security Copilot model is missing from the security runtime: {model_id}")
+    sys.exit(1)
+PY
+    then
+        echo "ERROR: ${service} could not reach the Security Copilot Ollama runtime."
+        exit 1
     fi
 }
 
@@ -728,10 +777,11 @@ if [[ "$CADDY_IMAGE_REQUIRED" == "1" ]]; then
     build_services caddy
 fi
 
-echo ">>> Starting shared data services..."
-start_services postgres redis
+echo ">>> Starting shared services..."
+start_services postgres redis security_ollama
 wait_for_service_healthy postgres 120
 wait_for_service_healthy redis 60
+wait_for_service_healthy security_ollama 900
 
 echo ">>> Building inactive app color (${TARGET_COLOR})..."
 build_services "$TARGET_BACKEND_SERVICE" "$TARGET_FRONTEND_SERVICE"
@@ -758,6 +808,7 @@ fi
 
 wait_for_container_http "$TARGET_BACKEND_SERVICE" 8000 "/api/health" "${TARGET_BACKEND_SERVICE} API liveness"
 verify_backend_ollama "$TARGET_BACKEND_SERVICE"
+verify_backend_security_ollama "$TARGET_BACKEND_SERVICE"
 
 if [[ "$BOOTSTRAP_DEPLOY" == "0" ]]; then
     wait_for_backend_role "$TARGET_BACKEND_SERVICE" follower
