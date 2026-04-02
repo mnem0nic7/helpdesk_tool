@@ -9,13 +9,22 @@ import {
   type SecurityCopilotChatResponse,
   type SecurityCopilotIncident,
   type SecurityCopilotJobRef,
+  type SecurityCopilotLane,
   type SecurityCopilotSourceResult,
 } from "../lib/api.ts";
 
-const starterPrompts = [
+type SecurityCopilotPageMode = "general" | "dlp";
+
+const generalStarterPrompts = [
   "User ada@example.com reported impossible travel alerts and repeated MFA prompts since 2 AM UTC.",
   "Shared mailbox payroll@example.com is forwarding mail externally and we need to check rules and delegation.",
   "Suspicious service principal activity is tied to app id 11111111-2222-3333-4444-555555555555 from this morning.",
+];
+
+const dlpStarterPrompts = [
+  "Purview DLP alert blocked payroll@example.com from emailing employee SSNs to an external recipient this morning. Review the finding and summarize what to investigate next.",
+  "A DLP finding says alex@example.com tried to share a spreadsheet with credit card data outside the organization. Review the user and mailbox context.",
+  "DLP policy tipped on a shared mailbox sending regulated data externally. Investigate whether delegate access, forwarding, or identity risk is involved.",
 ];
 
 const laneLabels: Record<string, string> = {
@@ -23,6 +32,7 @@ const laneLabels: Record<string, string> = {
   mailbox_abuse: "Mailbox abuse",
   app_or_service_principal: "App or service principal",
   azure_alert_or_resource: "Azure alert or resource",
+  dlp_finding: "DLP finding",
   unknown: "Unknown",
 };
 
@@ -41,6 +51,13 @@ const emptyIncident: SecurityCopilotIncident = {
   confidence: 0,
   missing_fields: [],
 };
+
+function buildEmptyIncident(lane: SecurityCopilotLane): SecurityCopilotIncident {
+  return {
+    ...emptyIncident,
+    lane,
+  };
+}
 
 type SecurityTurn = {
   id: string;
@@ -342,11 +359,52 @@ function AnswerBlock({ answer }: { answer: SecurityCopilotAnswer }) {
   );
 }
 
-export default function AzureSecurityCopilotPage() {
+function ConversationBubble({
+  speaker,
+  tone,
+  meta,
+  children,
+}: {
+  speaker: string;
+  tone: "user" | "assistant" | "pending";
+  meta?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const wrapperClassName =
+    tone === "user" ? "flex justify-end" : "flex justify-start";
+  const bubbleClassName =
+    tone === "user"
+      ? "max-w-3xl rounded-2xl rounded-br-md bg-slate-900 px-4 py-3 text-sm leading-6 text-white shadow-sm"
+      : tone === "pending"
+        ? "max-w-3xl rounded-2xl rounded-bl-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm leading-6 text-sky-900 shadow-sm"
+        : "max-w-3xl rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-800 shadow-sm";
+
+  return (
+    <div className={wrapperClassName}>
+      <div className={bubbleClassName}>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-wide opacity-80">
+          <span>{speaker}</span>
+          {meta}
+        </div>
+        <div className="mt-2 whitespace-pre-wrap">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: SecurityCopilotPageMode }) {
+  const isDlpMode = mode === "dlp";
+  const pageTitle = isDlpMode ? "DLP Findings Review" : "Security Copilot";
+  const pageDescription = isDlpMode
+    ? "Paste a Purview or other DLP finding, let the copilot normalize the actors and destinations, and review grounded identity, mailbox, ticket, and knowledge-base context before you escalate."
+    : "Ollama-backed incident workbench for Azure security investigations. It asks follow-up questions until it has enough context, queries the relevant Azure and local sources your session can use, and auto-starts safe mailbox delegate scans when the case needs them.";
+  const starterPrompts = isDlpMode ? dlpStarterPrompts : generalStarterPrompts;
+  const defaultIncident = buildEmptyIncident(isDlpMode ? "dlp_finding" : "unknown");
   const [draft, setDraft] = useState("");
   const [model, setModel] = useState("");
   const [turns, setTurns] = useState<SecurityTurn[]>([]);
   const [latestResponse, setLatestResponse] = useState<SecurityCopilotChatResponse | null>(null);
+  const [pendingUserMessage, setPendingUserMessage] = useState("");
   const [exportNotice, setExportNotice] = useState("");
 
   const { data: models = [] } = useQuery({
@@ -364,6 +422,9 @@ export default function AzureSecurityCopilotPage() {
   const chatMutation = useMutation({
     mutationFn: (body: SecurityCopilotChatRequest) => api.chatAzureSecurityCopilot(body),
     onSuccess: (response, variables) => {
+      if (variables.message.trim()) {
+        setPendingUserMessage("");
+      }
       setLatestResponse(response);
       if (variables.message.trim()) {
         setTurns((current) => [
@@ -383,6 +444,9 @@ export default function AzureSecurityCopilotPage() {
         return [...current.slice(0, -1), { ...previous, response }];
       });
     },
+    onError: () => {
+      setPendingUserMessage("");
+    },
   });
 
   useEffect(() => {
@@ -401,7 +465,7 @@ export default function AzureSecurityCopilotPage() {
     return () => window.clearTimeout(timeoutId);
   }, [chatMutation, latestResponse, model, turns]);
 
-  const activeIncident = latestResponse?.incident ?? emptyIncident;
+  const activeIncident = latestResponse?.incident ?? defaultIncident;
   const activeJobs = latestResponse?.jobs ?? [];
   const canSubmit = draft.trim().length > 0 && !chatMutation.isPending;
   const exportFileStem = latestResponse ? buildExportFileStem(latestResponse) : "";
@@ -411,6 +475,7 @@ export default function AzureSecurityCopilotPage() {
   const submitInvestigationMessage = (rawMessage?: string) => {
     const message = (rawMessage ?? draft).trim();
     if (!message) return;
+    setPendingUserMessage(message);
     chatMutation.mutate({
       message,
       history: buildHistory(turns),
@@ -455,12 +520,11 @@ export default function AzureSecurityCopilotPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-3xl font-bold text-slate-900">Security Copilot</h1>
+            <h1 className="text-3xl font-bold text-slate-900">{pageTitle}</h1>
             <StatusPill label={statusLabel} tone={latestResponse ? phaseTone(latestResponse.phase) : "sky"} />
           </div>
           <p className="mt-2 max-w-4xl text-sm text-slate-500">
-            Ollama-backed incident workbench for Azure security investigations. It asks follow-up questions until it has enough context, queries
-            the relevant Azure and local sources your session can use, and auto-starts safe mailbox delegate scans when the case needs them.
+            {pageDescription}
           </p>
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
             <span className="rounded-full bg-slate-100 px-3 py-1">
@@ -469,6 +533,11 @@ export default function AzureSecurityCopilotPage() {
             <span className="rounded-full bg-slate-100 px-3 py-1">
               {models.length} local model{models.length === 1 ? "" : "s"} available through Ollama
             </span>
+            {isDlpMode ? (
+              <Link to="/security/copilot" className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700 hover:bg-slate-200">
+                Open full Security Copilot
+              </Link>
+            ) : null}
             <Link to="/security" className="rounded-full bg-sky-50 px-3 py-1 font-semibold text-sky-700 hover:bg-sky-100">
               Back to Security workspace
             </Link>
@@ -476,8 +545,101 @@ export default function AzureSecurityCopilotPage() {
         </div>
       </div>
 
+      {isDlpMode ? (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+          <h2 className="text-lg font-semibold text-amber-900">Coverage note</h2>
+          <p className="mt-2 text-sm leading-6 text-amber-900/90">
+            This lane reviews pasted DLP findings against the Azure and local sources already wired into this app. It does not pull a live Purview
+            incident feed yet, so start with the finding summary, actor, timeframe, and any destination or policy details you already have.
+          </p>
+        </section>
+      ) : null}
+
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-[1fr,260px,auto]">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Conversation</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Enter the incident here, let the bot respond in this thread, and keep replying in the same chat box. Investigation results stay below.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            {latestResponse ? <StatusPill label={statusLabel} tone={phaseTone(latestResponse.phase)} /> : null}
+            {latestResponse ? <span>{latestResponse.model_used}</span> : null}
+            {latestResponse ? <span>{formatTimestamp(latestResponse.generated_at)}</span> : null}
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div className="max-h-[28rem] space-y-4 overflow-y-auto pr-1">
+            {turns.length === 0 && !pendingUserMessage ? (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-6 text-sm leading-7 text-slate-500">
+                Start with what happened, who or what is involved, and the timeframe you care about. The copilot will respond here and keep asking follow-up questions in the same conversation until it has enough to investigate.
+              </div>
+            ) : null}
+
+            {turns.map((turn, index) => {
+              const isLatest = index === turns.length - 1;
+              return (
+                <div key={turn.id} className="space-y-3">
+                  <ConversationBubble speaker="You" tone="user" meta={<span>{formatTimestamp(turn.response.generated_at)}</span>}>
+                    {turn.question}
+                  </ConversationBubble>
+
+                  <ConversationBubble
+                    speaker={isDlpMode ? "DLP Review Bot" : "Security Copilot"}
+                    tone="assistant"
+                    meta={<StatusPill label={turn.response.phase.replace(/_/g, " ")} tone={phaseTone(turn.response.phase)} />}
+                  >
+                    <div>{turn.response.assistant_message}</div>
+
+                    {isLatest && turn.response.follow_up_questions.length > 0 ? (
+                      <div className="mt-4 space-y-3">
+                        {turn.response.follow_up_questions.map((question) => (
+                          <div key={question.key} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{question.label}</div>
+                            <div className="mt-1 text-sm leading-6 text-slate-700">{question.prompt}</div>
+                            {question.placeholder ? (
+                              <div className="mt-1 text-xs text-slate-500">{question.placeholder}</div>
+                            ) : null}
+                            {question.choices?.length ? (
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {question.choices.map((choice) => (
+                                  <button
+                                    key={`${question.key}-${choice}`}
+                                    type="button"
+                                    disabled={chatMutation.isPending}
+                                    onClick={() => submitInvestigationMessage(choice)}
+                                    className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {choice}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </ConversationBubble>
+                </div>
+              );
+            })}
+
+            {pendingUserMessage ? (
+              <div className="space-y-3">
+                <ConversationBubble speaker="You" tone="user">
+                  {pendingUserMessage}
+                </ConversationBubble>
+                <ConversationBubble speaker={isDlpMode ? "DLP Review Bot" : "Security Copilot"} tone="pending">
+                  Investigating...
+                </ConversationBubble>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-[1fr,260px,auto]">
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -530,7 +692,7 @@ export default function AzureSecurityCopilotPage() {
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Normalized Incident</h2>
+            <h2 className="text-lg font-semibold text-slate-900">{isDlpMode ? "Normalized DLP Finding" : "Normalized Incident"}</h2>
             <p className="mt-1 text-sm text-slate-500">
               The copilot keeps this structured profile in the browser and sends it back on each turn so the backend stays stateless.
             </p>
@@ -568,50 +730,6 @@ export default function AzureSecurityCopilotPage() {
           )}
         </div>
       </section>
-
-      {latestResponse ? (
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-wrap items-center gap-3">
-            <h2 className="text-lg font-semibold text-slate-900">Current Copilot Status</h2>
-            <StatusPill label={statusLabel} tone={phaseTone(latestResponse.phase)} />
-            <span className="text-xs text-slate-500">{latestResponse.model_used}</span>
-            <span className="text-xs text-slate-500">{formatTimestamp(latestResponse.generated_at)}</span>
-          </div>
-          <div className="mt-4 rounded-xl bg-slate-50 px-4 py-4 text-sm leading-7 text-slate-800">
-            {latestResponse.assistant_message}
-          </div>
-
-          {latestResponse.follow_up_questions.length > 0 ? (
-            <div className="mt-4">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Follow-up questions</div>
-              <div className="mt-2 grid gap-3 md:grid-cols-2">
-                {latestResponse.follow_up_questions.map((question) => (
-                  <div key={question.key} className="rounded-xl border border-slate-200 bg-white px-4 py-4">
-                    <div className="text-sm font-semibold text-slate-900">{question.label}</div>
-                    <div className="mt-2 text-sm leading-6 text-slate-600">{question.prompt}</div>
-                    <div className="mt-2 text-xs text-slate-500">{question.placeholder}</div>
-                    {question.choices?.length ? (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {question.choices.map((choice) => (
-                          <button
-                            key={`${question.key}-${choice}`}
-                            type="button"
-                            disabled={chatMutation.isPending}
-                            onClick={() => submitInvestigationMessage(choice)}
-                            className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {choice}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </section>
-      ) : null}
 
       {latestResponse?.planned_sources.length ? (
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -745,28 +863,6 @@ export default function AzureSecurityCopilotPage() {
         </section>
       ) : null}
 
-      {turns.length > 0 ? (
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Transcript</h2>
-          <div className="mt-4 space-y-4">
-            {turns
-              .slice()
-              .reverse()
-              .map((turn, index) => (
-                <article key={turn.id} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="text-sm font-semibold text-slate-900">{index === 0 ? "Latest Turn" : "Earlier Turn"}</div>
-                    <span className="text-xs text-slate-500">{formatTimestamp(turn.response.generated_at)}</span>
-                  </div>
-                  <div className="mt-3 rounded-lg bg-white px-3 py-3 text-sm text-slate-800">{turn.question}</div>
-                  <div className="mt-3 rounded-lg bg-sky-50 px-3 py-3 text-sm leading-6 text-sky-900">
-                    {turn.response.assistant_message}
-                  </div>
-                </article>
-              ))}
-          </div>
-        </section>
-      ) : null}
     </div>
   );
 }

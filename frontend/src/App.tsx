@@ -20,6 +20,8 @@ const AzureVMsPage = lazy(() => import("./pages/AzureVMsPage"));
 const AzureResourcesPage = lazy(() => import("./pages/AzureResourcesPage"));
 const AzureIdentityPage = lazy(() => import("./pages/AzureIdentityPage"));
 const AzureSecurityIdentityReviewPage = lazy(() => import("./pages/AzureSecurityIdentityReviewPage"));
+const AzureSecurityGuestAccessReviewPage = lazy(() => import("./pages/AzureSecurityGuestAccessReviewPage"));
+const AzureSecurityDlpReviewPage = lazy(() => import("./pages/AzureSecurityDlpReviewPage"));
 const AzureCostPage = lazy(() => import("./pages/AzureCostPage"));
 const AzureAllocationPage = lazy(() => import("./pages/AzureAllocationPage"));
 const AzureAICostPage = lazy(() => import("./pages/AzureAICostPage"));
@@ -67,6 +69,8 @@ export default function App() {
                 <Route path="security" element={<AzureSecurityPage />} />
                 <Route path="security/access-review" element={<AzureSecurityAccessReviewPage />} />
                 <Route path="security/identity-review" element={<AzureSecurityIdentityReviewPage />} />
+                <Route path="security/guest-access-review" element={<AzureSecurityGuestAccessReviewPage />} />
+                <Route path="security/dlp-review" element={<AzureSecurityDlpReviewPage />} />
                 <Route path="security/app-hygiene" element={<AzureSecurityAppHygienePage />} />
                 <Route path="security/user-review" element={<AzureSecurityUserReviewPage />} />
                 <Route path="security/copilot" element={<AzureSecurityCopilotPage />} />

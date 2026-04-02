@@ -71,6 +71,28 @@ const reviewLaneCards: ToolCardDefinition[] = [
   },
   {
     eyebrow: "Review Lane",
+    title: "Guest Access Review",
+    description:
+      "Review guest identities, collaboration groups that can widen external reach, and app registrations that allow identities from outside the home tenant.",
+    status: "Ready now",
+    actions: [
+      { label: "Open Guest Access Review", to: "/security/guest-access-review" },
+      { label: "Open User Review", to: "/security/user-review", tone: "secondary" },
+    ],
+  },
+  {
+    eyebrow: "Review Lane",
+    title: "DLP Findings Review",
+    description:
+      "Paste Purview or other DLP finding details, let the copilot normalize actors and destinations, and review grounded identity, mailbox, and local context before escalation.",
+    status: "Ready now",
+    actions: [
+      { label: "Open DLP Findings Review", to: "/security/dlp-review" },
+      { label: "Open Security Copilot", to: "/security/copilot", tone: "secondary" },
+    ],
+  },
+  {
+    eyebrow: "Review Lane",
     title: "Account Health",
     description:
       "Review disabled accounts, stale cloud passwords, old guest identities, and incomplete employee profiles from one account hygiene lane.",
@@ -138,8 +160,8 @@ const buildQueue: BuildQueueItem[] = [
     description: "Layer delegated consent, app permissions, and service principal grant review on top of the shipped application hygiene lane.",
   },
   {
-    title: "Guest and external access review",
-    description: "Build a focused review lane for external users, shared collaboration risk, and dormant access.",
+    title: "Guest access entitlement history",
+    description: "Add durable change history and review notes so external access decisions can be tracked over time.",
   },
 ];
 
@@ -255,7 +277,7 @@ export default function AzureSecurityPage() {
         <h1 className="text-3xl font-bold text-slate-900">Azure Security</h1>
         <p className="mt-1 max-w-4xl text-sm text-slate-500">
           Security-focused workspace for Azure review lanes, incident response, and tenant hygiene. The Azure sidebar now routes identity, users,
-          and account hygiene through this hub so security work stays in one place instead of bouncing across unrelated tabs.
+          account hygiene, and external guest-access review through this hub so security work stays in one place instead of bouncing across unrelated tabs.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <AzureSourceBadge

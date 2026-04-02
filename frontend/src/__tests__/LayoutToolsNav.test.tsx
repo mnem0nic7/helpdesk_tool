@@ -111,6 +111,22 @@ describe("Layout tools navigation", () => {
     expect(screen.getAllByText("User Review").length).toBeGreaterThan(0);
   });
 
+  it("shows the guest access review breadcrumb on the azure host", async () => {
+    renderLayoutAt("/security/guest-access-review", "azure");
+
+    expect(await screen.findByText("Page content")).toBeInTheDocument();
+    expect(screen.getAllByText("Security").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Guest Access Review").length).toBeGreaterThan(0);
+  });
+
+  it("shows the dlp findings review breadcrumb on the azure host", async () => {
+    renderLayoutAt("/security/dlp-review", "azure");
+
+    expect(await screen.findByText("Page content")).toBeInTheDocument();
+    expect(screen.getAllByText("Security").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("DLP Findings Review").length).toBeGreaterThan(0);
+  });
+
   it("hides Tools on oasisdev", async () => {
     renderLayoutAt("/", "oasisdev");
     await screen.findByText("Page content");

@@ -1139,6 +1139,7 @@ class SecurityCopilotIncident(BaseModel):
         "mailbox_abuse",
         "app_or_service_principal",
         "azure_alert_or_resource",
+        "dlp_finding",
         "unknown",
     ] = "unknown"
     summary: str = ""

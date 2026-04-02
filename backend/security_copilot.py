@@ -41,7 +41,7 @@ Read the current normalized incident profile plus the newest user message and up
 
 Rules:
 - Return only JSON.
-- Use one lane from: identity_compromise, mailbox_abuse, app_or_service_principal, azure_alert_or_resource, unknown.
+- Use one lane from: identity_compromise, mailbox_abuse, app_or_service_principal, azure_alert_or_resource, dlp_finding, unknown.
 - Preserve existing facts unless the new message clearly adds or corrects them.
 - Extract concrete identifiers when present: users, mailboxes, apps, resources, alerts, URLs, IPs, GUIDs.
 - Keep timeframe as plain text exactly as the operator would understand it.
@@ -359,6 +359,25 @@ def _lane_from_keywords(text: str, existing_lane: str = "unknown") -> str:
     lowered = text.lower()
     lane_keywords = (
         (
+            "dlp_finding",
+            (
+                "dlp",
+                "data loss prevention",
+                "purview",
+                "policy tip",
+                "sensitive info type",
+                "sensitive information",
+                "credit card",
+                "social security",
+                "ssn",
+                "pci",
+                "hipaa",
+                "blocked sharing",
+                "blocked email",
+                "purview alert",
+            ),
+        ),
+        (
             "mailbox_abuse",
             (
                 "mailbox",
@@ -442,6 +461,10 @@ def _heuristic_incident_update(message: str, existing: SecurityCopilotIncident) 
     elif lane == "identity_compromise":
         affected_users = emails
         affected_mailboxes = emails
+    elif lane == "dlp_finding":
+        affected_users = emails
+        if any(keyword in text.lower() for keyword in ("mailbox", "email", "emailed", "outlook", "shared mailbox")):
+            affected_mailboxes = emails
     else:
         affected_users = emails
         if "mailbox" in text.lower():
@@ -530,6 +553,10 @@ def _merge_incident(
         merged.affected_mailboxes = list(merged.affected_users)
     if merged.lane == "identity_compromise" and not merged.affected_users and merged.affected_mailboxes:
         merged.affected_users = list(merged.affected_mailboxes)
+    if merged.lane == "dlp_finding" and not merged.affected_mailboxes and any(
+        keyword in merged.summary.lower() for keyword in ("mailbox", "email", "emailed", "outlook", "shared mailbox")
+    ):
+        merged.affected_mailboxes = list(merged.affected_users)
     if merged.lane == "app_or_service_principal" and not merged.affected_apps:
         merged.affected_apps = [
             artifact
@@ -576,6 +603,16 @@ def _missing_fields_for_incident(incident: SecurityCopilotIncident) -> list[str]
         missing.append("affected_apps")
     elif incident.lane == "azure_alert_or_resource" and not (incident.affected_resources or incident.alert_names):
         missing.append("affected_resources")
+    elif incident.lane == "dlp_finding":
+        if not (
+            incident.affected_users
+            or incident.affected_mailboxes
+            or incident.affected_apps
+            or incident.affected_resources
+            or incident.alert_names
+            or incident.observed_artifacts
+        ):
+            missing.append("scope")
     elif incident.lane == "unknown":
         if not (
             incident.affected_users
@@ -592,6 +629,11 @@ def _missing_fields_for_incident(incident: SecurityCopilotIncident) -> list[str]
 def _follow_up_question(field_key: str, incident: SecurityCopilotIncident) -> SecurityCopilotFollowUpQuestion:
     identity_choices = [_identity_candidate_label(candidate) for candidate in incident.identity_candidates]
     identity_query = incident.identity_query or "that name"
+    scope_prompt = "What concrete identifier do you already have, like a user, mailbox, app, resource, IP, URL, or alert name?"
+    scope_placeholder = "Example: ada@example.com and impossible travel alert."
+    if incident.lane == "dlp_finding":
+        scope_prompt = "What DLP finding detail do you already have, such as the actor, mailbox, policy name, destination, file name, or sensitive data type?"
+        scope_placeholder = "Example: Purview DLP blocked payroll@example.com from emailing W-2 data to an external recipient."
     catalog: dict[str, SecurityCopilotFollowUpQuestion] = {
         "summary": SecurityCopilotFollowUpQuestion(
             key="summary",
@@ -646,8 +688,8 @@ def _follow_up_question(field_key: str, incident: SecurityCopilotIncident) -> Se
         "scope": SecurityCopilotFollowUpQuestion(
             key="scope",
             label="Scope hint",
-            prompt="What concrete identifier do you already have, like a user, mailbox, app, resource, IP, URL, or alert name?",
-            placeholder="Example: ada@example.com and impossible travel alert.",
+            prompt=scope_prompt,
+            placeholder=scope_placeholder,
             input_type="textarea",
         ),
     }
@@ -664,6 +706,7 @@ def _lane_label(lane: str) -> str:
         "mailbox_abuse": "mailbox abuse",
         "app_or_service_principal": "app or service principal abuse",
         "azure_alert_or_resource": "Azure alert or resource incident",
+        "dlp_finding": "DLP finding",
         "unknown": "security incident",
     }
     return labels.get(lane, "security incident")
@@ -1444,7 +1487,7 @@ def _run_delegate_mailboxes_live_source(
 
 
 def _needs_delegate_scan(incident: SecurityCopilotIncident) -> bool:
-    return incident.lane in {"identity_compromise", "mailbox_abuse"} and bool(
+    return incident.lane in {"identity_compromise", "mailbox_abuse", "dlp_finding"} and bool(
         incident.affected_users or incident.affected_mailboxes
     )
 
@@ -1807,7 +1850,7 @@ def _build_source_registry() -> list[SecuritySourceDefinition]:
             key="alert_history",
             label="Azure alert history",
             permission="authenticated",
-            applies=lambda incident: incident.lane in {"azure_alert_or_resource", "identity_compromise", "unknown"} or bool(incident.alert_names),
+            applies=lambda incident: incident.lane in {"azure_alert_or_resource", "identity_compromise", "dlp_finding", "unknown"} or bool(incident.alert_names),
             query_summary=_source_query_summary,
             runner=_run_alert_history_source,
         ),
@@ -1823,7 +1866,7 @@ def _build_source_registry() -> list[SecuritySourceDefinition]:
             key="directory",
             label="Azure directory objects",
             permission="authenticated",
-            applies=lambda incident: incident.lane in {"identity_compromise", "app_or_service_principal", "unknown"} or bool(_directory_search_terms(incident)),
+            applies=lambda incident: incident.lane in {"identity_compromise", "app_or_service_principal", "dlp_finding", "unknown"} or bool(_directory_search_terms(incident)),
             query_summary=_source_query_summary,
             runner=_run_directory_source,
         ),
@@ -1863,7 +1906,7 @@ def _build_source_registry() -> list[SecuritySourceDefinition]:
             key="login_audit",
             label="App login audit",
             permission="authenticated",
-            applies=lambda incident: incident.lane in {"identity_compromise", "mailbox_abuse"} or bool(incident.affected_users or incident.affected_mailboxes),
+            applies=lambda incident: incident.lane in {"identity_compromise", "mailbox_abuse", "dlp_finding"} or bool(incident.affected_users or incident.affected_mailboxes),
             query_summary=_source_query_summary,
             runner=_run_login_audit_source,
         ),
@@ -1887,7 +1930,7 @@ def _build_source_registry() -> list[SecuritySourceDefinition]:
             key="delegate_mailboxes_live",
             label="Delegate mailbox lookup",
             permission="authenticated",
-            applies=lambda incident: incident.lane in {"identity_compromise", "mailbox_abuse"} and bool(incident.affected_users or incident.affected_mailboxes),
+            applies=lambda incident: incident.lane in {"identity_compromise", "mailbox_abuse", "dlp_finding"} and bool(incident.affected_users or incident.affected_mailboxes),
             query_summary=_source_query_summary,
             runner=_run_delegate_mailboxes_live_source,
         ),
@@ -2044,6 +2087,8 @@ def _fallback_answer(
     next_steps = []
     if incident.lane in {"identity_compromise", "mailbox_abuse"}:
         next_steps.append("Review mailbox rules, delegation, and recent identity events for the affected account.")
+    if incident.lane == "dlp_finding":
+        next_steps.append("Confirm the actor, destination, and sensitive-data indicator, then review related identity, mailbox, and sharing context.")
     if incident.lane == "app_or_service_principal":
         next_steps.append("Review app ownership, role assignments, and recent consent or credential changes.")
     if incident.lane == "azure_alert_or_resource":

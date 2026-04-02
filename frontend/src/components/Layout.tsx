@@ -177,6 +177,8 @@ export default function Layout() {
     let detailLabel = "";
     if (segment === "security" && subsegment === "access-review") detailLabel = "Privileged Access Review";
     if (segment === "security" && subsegment === "identity-review") detailLabel = "Identity Review";
+    if (segment === "security" && subsegment === "guest-access-review") detailLabel = "Guest Access Review";
+    if (segment === "security" && subsegment === "dlp-review") detailLabel = "DLP Findings Review";
     if (segment === "security" && subsegment === "app-hygiene") detailLabel = "Application Hygiene";
     if (segment === "security" && subsegment === "user-review") detailLabel = "User Review";
     if (segment === "security" && subsegment === "copilot") detailLabel = "Security Copilot";

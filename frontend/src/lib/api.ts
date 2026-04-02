@@ -2285,6 +2285,7 @@ export type SecurityCopilotLane =
   | "mailbox_abuse"
   | "app_or_service_principal"
   | "azure_alert_or_resource"
+  | "dlp_finding"
   | "unknown";
 
 export interface SecurityCopilotChatMessage {

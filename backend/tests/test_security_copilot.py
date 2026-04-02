@@ -31,6 +31,25 @@ def test_resolve_incident_profile_falls_back_to_heuristics(monkeypatch):
     assert incident.timeframe
 
 
+def test_resolve_incident_profile_classifies_dlp_findings(monkeypatch):
+    monkeypatch.setattr(
+        security_copilot,
+        "invoke_model_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ollama unavailable")),
+    )
+
+    incident = security_copilot._resolve_incident_profile(
+        "Purview DLP alert blocked payroll@example.com from emailing employee SSNs outside the organization this morning.",
+        SecurityCopilotIncident(),
+        "qwen3.5:4b",
+    )
+
+    assert incident.lane == "dlp_finding"
+    assert "payroll@example.com" in incident.affected_users
+    assert "payroll@example.com" in incident.affected_mailboxes
+    assert incident.timeframe
+
+
 def test_resolve_incident_profile_includes_recent_chat_history_in_model_payload(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -156,6 +175,27 @@ def test_plan_security_sources_skips_user_admin_without_permission():
 
     assert user_admin.status == "skipped"
     assert "user-admin access" in user_admin.reason
+
+
+def test_plan_security_sources_includes_dlp_relevant_sources():
+    incident = SecurityCopilotIncident(
+        lane="dlp_finding",
+        summary="Purview DLP blocked payroll@example.com from sending W-2 data externally.",
+        timeframe="This morning",
+        affected_users=["payroll@example.com"],
+        affected_mailboxes=["payroll@example.com"],
+        observed_artifacts=["SSN"],
+    )
+    session = {"auth_provider": "atlassian", "can_manage_users": True}
+
+    planned = security_copilot.plan_security_sources(incident, session)
+    planned_keys = {item.key for item in planned}
+
+    assert "directory" in planned_keys
+    assert "login_audit" in planned_keys
+    assert "mailbox_rules" in planned_keys
+    assert "delegate_mailbox_scan_job" in planned_keys
+    assert "ticket_search" in planned_keys
 
 
 def test_run_security_copilot_chat_returns_needs_input_for_missing_fields(monkeypatch):

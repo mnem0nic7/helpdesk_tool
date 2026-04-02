@@ -159,12 +159,22 @@ def test_quick_search_page_results_point_to_security_review_lanes(tmp_path):
     assert page_routes["Identity Review"] == "/security/identity-review"
     assert page_routes["Privileged Access Review"] == "/security/access-review"
     assert page_routes["User Review"] == "/security/user-review"
+    assert page_routes["Guest Access Review"] == "/security/guest-access-review"
+    assert page_routes["DLP Findings Review"] == "/security/dlp-review"
     assert "Identity" not in page_routes
     assert "Users" not in page_routes
 
     account_health_results = cache.quick_search("account health")
     account_health_pages = {item["label"]: item["route"] for item in account_health_results if item["kind"] == "page"}
     assert account_health_pages["Account Health"] == "/security/account-health"
+
+    guest_results = cache.quick_search("guest")
+    guest_pages = {item["label"]: item["route"] for item in guest_results if item["kind"] == "page"}
+    assert guest_pages["Guest Access Review"] == "/security/guest-access-review"
+
+    dlp_results = cache.quick_search("dlp")
+    dlp_pages = {item["label"]: item["route"] for item in dlp_results if item["kind"] == "page"}
+    assert dlp_pages["DLP Findings Review"] == "/security/dlp-review"
 
 
 def test_get_virtual_machine_detail_returns_related_resources_and_costs(tmp_path):

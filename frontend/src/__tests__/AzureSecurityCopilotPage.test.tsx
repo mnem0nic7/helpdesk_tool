@@ -123,6 +123,19 @@ describe("AzureSecurityCopilotPage", () => {
     expect(screen.getByRole("link", { name: "Back to Security workspace" })).toHaveAttribute("href", "/security");
   });
 
+  it("renders the dlp findings review mode with dlp-specific guidance", async () => {
+    render(<AzureSecurityCopilotPage mode="dlp" />);
+
+    expect(await screen.findByText("DLP Findings Review")).toBeInTheDocument();
+    expect(screen.getByText(/Paste a Purview or other DLP finding/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not pull a live Purview incident feed yet/i)).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText(/Purview DLP alert blocked payroll@example.com from emailing employee SSNs/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open full Security Copilot" })).toHaveAttribute("href", "/security/copilot");
+    expect(screen.getAllByText("DLP finding").length).toBeGreaterThan(0);
+  });
+
   it("shows follow-up questions and planned sources after the first turn", async () => {
     mockApi.chatAzureSecurityCopilot.mockResolvedValue(buildResponse());
 
@@ -134,9 +147,11 @@ describe("AzureSecurityCopilotPage", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Start Investigation" }));
 
-    expect(await screen.findByText("Current Copilot Status")).toBeInTheDocument();
-    expect(screen.getByText("Follow-up questions")).toBeInTheDocument();
+    expect(await screen.findByText("Conversation")).toBeInTheDocument();
+    expect(screen.getByText("Shared mailbox payroll@example.com is forwarding mail externally.")).toBeInTheDocument();
+    expect(screen.getByText("I need the timeframe and affected mailbox before I query sources.")).toBeInTheDocument();
     expect(screen.getByText("Affected mailbox")).toBeInTheDocument();
+    expect(screen.getByText("Which mailbox is involved?")).toBeInTheDocument();
     expect(screen.getByText("Source Plan")).toBeInTheDocument();
     expect(screen.getByText("Mailbox inbox rules")).toBeInTheDocument();
 
