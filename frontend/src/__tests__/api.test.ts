@@ -252,6 +252,55 @@ describe("azure api methods", () => {
     expect(JSON.parse(call[1].body)).toEqual({ question: "Where can we save?" });
   });
 
+  it("posts Azure security copilot investigations", async () => {
+    mockFetch({
+      phase: "needs_input",
+      assistant_message: "Need the timeframe.",
+      incident: {
+        lane: "identity_compromise",
+        summary: "Suspicious sign-ins",
+        timeframe: "",
+        affected_users: ["ada@example.com"],
+        affected_mailboxes: [],
+        affected_apps: [],
+        affected_resources: [],
+        alert_names: [],
+        observed_artifacts: [],
+        confidence: 0.8,
+        missing_fields: ["timeframe"],
+      },
+      follow_up_questions: [],
+      planned_sources: [],
+      source_results: [],
+      jobs: [],
+      answer: { summary: "", findings: [], next_steps: [], warnings: [] },
+      citations: [],
+      model_used: "qwen2.5:7b",
+      generated_at: "2026-04-02T02:00:00Z",
+    });
+    await api.chatAzureSecurityCopilot({
+      message: "Investigate ada@example.com",
+      incident: {
+        lane: "unknown",
+        summary: "",
+        timeframe: "",
+        affected_users: [],
+        affected_mailboxes: [],
+        affected_apps: [],
+        affected_resources: [],
+        alert_names: [],
+        observed_artifacts: [],
+        confidence: 0,
+        missing_fields: [],
+      },
+      jobs: [],
+    });
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/azure/security/copilot/chat");
+    expect(call[1].method).toBe("POST");
+    expect(JSON.parse(call[1].body)).toMatchObject({ message: "Investigate ada@example.com" });
+  });
+
   it("calls the Azure VM endpoint with query params", async () => {
     mockFetch({
       vms: [],

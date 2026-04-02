@@ -8,7 +8,7 @@ The main application lives in `backend/` and `frontend/`. The repo also includes
 
 - Primary helpdesk dashboard for OIT ticket operations, SLA tracking, AI triage, reporting, alerts, and knowledge-base tooling.
 - OasisDev-hosted helpdesk view that reuses the same application with scope-aware filtering.
-- Azure Control Center for Azure inventory, cost, identity, VM and virtual desktop analysis, alerts, optimization workflows, and a dedicated Security workspace for Azure security tooling.
+- Azure Control Center for Azure inventory, cost, identity, VM and virtual desktop analysis, alerts, optimization workflows, and a dedicated Security workspace for Azure security tooling, including an Ollama-backed incident copilot.
 - Shared signed-in tools on the primary and Azure hosts for OneDrive copy jobs, login audit review, read-only mailbox Inbox rule lookup, Exchange mailbox delegate lookups for Send on behalf, Send As, and Full Access, and admin-only Emailgistics actions that either grant mailbox access and sync a shared mailbox or rerun `syncUsers.ps1` for all configured Emailgistics mailboxes or one targeted shared mailbox.
 
 ## Repository layout
@@ -112,6 +112,8 @@ docker compose up --build
 
 - The frontend switches between helpdesk and Azure route trees based on site branding and request host.
 - The Azure host now includes a dedicated `/security` workspace for security-oriented tooling and operator jump points. New Azure security flows should prefer that surface over overloading the generic `/tools` page.
+- The Azure security workspace also includes `/security/copilot`, an Ollama-backed incident workbench that keeps incident state in the browser, asks follow-up questions until the intake is sufficient, queries the relevant Azure and local/internal sources the current session can use, auto-starts safe delegate-mailbox scan jobs when mailbox or identity incidents need deeper Exchange evidence, and can export a grounded markdown or JSON investigation handoff bundle for escalation or post-incident review.
+- Local Ollama-backed features now default to `nemotron-3-nano:4b` when it is available. If a host does not have that model yet, the app falls back to `qwen2.5:7b` and then `qwen2.5:3b` instead of failing model discovery.
 - The shared `/tools` surface is available to all signed-in users on the primary and Azure hosts and includes OneDrive copy, login audit, mailbox Inbox rule lookup, and Exchange mailbox delegate lookups for Send on behalf, Send As, and Full Access powered by the shared app registration.
 - The org-wide "find mailboxes where a user has delegate access" workflow is a durable server-side job, not a page-local request. Users should normally expect results in about 20 to 90 seconds, but larger tenants can take 5 to 10 minutes because the app has to sweep Exchange mailbox and permission data. Each signed-in user sees their own recent delegate scan jobs and any still-running jobs when they come back to the Tools page, can cancel a queued or running scan from the Tools UI if they no longer need it, and can clear finished delegate history without touching running work.
 - Both job history cards on the Tools page now expose `Clear finished` actions. The shared OneDrive history card clears completed, failed, or cancelled jobs from shared history, while the delegate-scan history card clears the signed-in user's finished delegate jobs. Neither action removes queued or running jobs.

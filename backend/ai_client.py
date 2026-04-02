@@ -19,6 +19,7 @@ from config import (
     AZURE_FINOPS_AI_TEAM_MAPPINGS,
     OLLAMA_BASE_URL,
     OLLAMA_ENABLED,
+    OLLAMA_FAST_MODEL,
     OLLAMA_KEEP_ALIVE,
     OLLAMA_MODEL,
     OLLAMA_REQUEST_TIMEOUT_SECONDS,
@@ -81,6 +82,11 @@ _DEFAULT_COPILOT_MODEL_ORDER = (
     "claude-haiku-4-5-20251001",
 )
 _DEFAULT_COPILOT_MODEL_RANK = {model_id: index for index, model_id in enumerate(_DEFAULT_COPILOT_MODEL_ORDER)}
+_DEFAULT_OLLAMA_FALLBACK_MODEL_ORDER = (
+    "nemotron-3-nano:4b",
+    "qwen2.5:7b",
+    "qwen2.5:3b",
+)
 _OLLAMA_HTTP_POOL_CONNECTIONS = 8
 _OLLAMA_HTTP_POOL_MAXSIZE = 16
 
@@ -188,9 +194,20 @@ def select_available_ollama_model(
     if not available:
         return None
     available_ids = {model.id for model in available if model.provider == "ollama"}
-    for candidate in (preferred_model_id, fallback_model_id, OLLAMA_MODEL):
+    seen: set[str] = set()
+    candidates = [
+        preferred_model_id,
+        fallback_model_id,
+        OLLAMA_MODEL,
+        *_DEFAULT_OLLAMA_FALLBACK_MODEL_ORDER,
+        OLLAMA_FAST_MODEL,
+    ]
+    for candidate in candidates:
         normalized = str(candidate or "").strip()
-        if normalized and normalized in available_ids:
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        if normalized in available_ids:
             return normalized
     for model in available:
         if model.provider == "ollama":
@@ -207,6 +224,7 @@ _DEFAULT_AI_TEAMS_BY_FEATURE: dict[str, str] = {
     "kb_reformat": "Service Desk",
     "azure_cost_copilot": "FinOps",
     "azure_alert_rule_parse": "FinOps",
+    "azure_security_copilot": "Security",
 }
 
 _DEFAULT_AI_TEAMS_BY_APP: dict[str, str] = {
@@ -283,9 +301,15 @@ def _list_ollama_models_from_api() -> list[AIModel]:
             continue
         display_name = str(item.get("name") or model_id).strip() or model_id
         seen[model_id] = AIModel(id=model_id, name=display_name, provider="ollama")
+    preference_rank = {
+        model_id: index
+        for index, model_id in enumerate(
+            dict.fromkeys((OLLAMA_MODEL, *_DEFAULT_OLLAMA_FALLBACK_MODEL_ORDER, OLLAMA_FAST_MODEL))
+        )
+    }
     return sorted(
         seen.values(),
-        key=lambda model: (0 if model.id == OLLAMA_MODEL else 1, model.id.lower()),
+        key=lambda model: (preference_rank.get(model.id, len(preference_rank) + 1), model.id.lower()),
     )
 
 
@@ -359,9 +383,13 @@ def get_available_copilot_models() -> list[AIModel]:
 def get_default_copilot_model_id(available: list[AIModel]) -> str | None:
     if not available:
         return None
+    default_ollama = select_available_ollama_model(
+        available,
+        preferred_model_id=OLLAMA_MODEL,
+    )
+    if default_ollama:
+        return default_ollama
     available_ids = {model.id for model in available}
-    if OLLAMA_MODEL in available_ids:
-        return OLLAMA_MODEL
     for model_id in _DEFAULT_COPILOT_MODEL_ORDER:
         if model_id in available_ids:
             return model_id

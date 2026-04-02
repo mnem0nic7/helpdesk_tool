@@ -1114,6 +1114,102 @@ class AzureCostChatRequest(BaseModel):
     model: Optional[str] = None
 
 
+class SecurityCopilotChatMessage(BaseModel):
+    """One browser-kept transcript turn sent to the security copilot."""
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class SecurityCopilotIncident(BaseModel):
+    """Normalized incident profile built from the chat intake."""
+
+    lane: Literal[
+        "identity_compromise",
+        "mailbox_abuse",
+        "app_or_service_principal",
+        "azure_alert_or_resource",
+        "unknown",
+    ] = "unknown"
+    summary: str = ""
+    timeframe: str = ""
+    affected_users: list[str] = Field(default_factory=list)
+    affected_mailboxes: list[str] = Field(default_factory=list)
+    affected_apps: list[str] = Field(default_factory=list)
+    affected_resources: list[str] = Field(default_factory=list)
+    alert_names: list[str] = Field(default_factory=list)
+    observed_artifacts: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    missing_fields: list[str] = Field(default_factory=list)
+
+
+class SecurityCopilotFollowUpQuestion(BaseModel):
+    """One intake question the frontend should surface next."""
+
+    key: str
+    label: str
+    prompt: str
+    placeholder: str = ""
+    required: bool = True
+    input_type: Literal["text", "textarea", "email", "list"] = "text"
+
+
+class SecurityCopilotPlannedSource(BaseModel):
+    """One source the incident copilot plans to query."""
+
+    key: str
+    label: str
+    status: Literal["planned", "running", "completed", "skipped", "error"] = "planned"
+    query_summary: str = ""
+    reason: str = ""
+
+
+class SecurityCopilotSourceResult(BaseModel):
+    """One executed or skipped source query result."""
+
+    key: str
+    label: str
+    status: Literal["completed", "running", "skipped", "error"]
+    query_summary: str = ""
+    item_count: int = 0
+    highlights: list[str] = Field(default_factory=list)
+    preview: list[dict[str, Any]] = Field(default_factory=list)
+    citations: list["AzureCitation"] = Field(default_factory=list)
+    reason: str = ""
+
+
+class SecurityCopilotJobRef(BaseModel):
+    """Tracked safe background job started or observed by the security copilot."""
+
+    job_type: Literal["delegate_mailbox_scan"]
+    label: str
+    job_id: str
+    status: str
+    phase: str = ""
+    target: str = ""
+    summary: str = ""
+    started_automatically: bool = True
+
+
+class SecurityCopilotAnswer(BaseModel):
+    """Structured final answer returned by the security copilot."""
+
+    summary: str = ""
+    findings: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SecurityCopilotChatRequest(BaseModel):
+    """Main request body for the Azure security incident copilot."""
+
+    message: str = ""
+    history: list[SecurityCopilotChatMessage] = Field(default_factory=list)
+    incident: SecurityCopilotIncident = Field(default_factory=SecurityCopilotIncident)
+    jobs: list[SecurityCopilotJobRef] = Field(default_factory=list)
+    model: Optional[str] = None
+
+
 class AzureRecommendationDismissRequest(BaseModel):
     """Dismiss a persisted recommendation with an optional operator note."""
 
@@ -1284,6 +1380,22 @@ class AzureCostChatResponse(BaseModel):
     model_used: str
     generated_at: str
     citations: list[AzureCitation] = Field(default_factory=list)
+
+
+class SecurityCopilotChatResponse(BaseModel):
+    """End-to-end response for the Azure security incident copilot."""
+
+    phase: Literal["needs_input", "running_jobs", "complete"]
+    assistant_message: str
+    incident: SecurityCopilotIncident = Field(default_factory=SecurityCopilotIncident)
+    follow_up_questions: list[SecurityCopilotFollowUpQuestion] = Field(default_factory=list)
+    planned_sources: list[SecurityCopilotPlannedSource] = Field(default_factory=list)
+    source_results: list[SecurityCopilotSourceResult] = Field(default_factory=list)
+    jobs: list[SecurityCopilotJobRef] = Field(default_factory=list)
+    answer: SecurityCopilotAnswer = Field(default_factory=SecurityCopilotAnswer)
+    citations: list[AzureCitation] = Field(default_factory=list)
+    model_used: str
+    generated_at: str
 
 
 # ── Azure Alerts ──────────────────────────────────────────────────────────────

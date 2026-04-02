@@ -2280,6 +2280,101 @@ export interface AzureCostChatResponse {
   citations: AzureCitation[];
 }
 
+export type SecurityCopilotLane =
+  | "identity_compromise"
+  | "mailbox_abuse"
+  | "app_or_service_principal"
+  | "azure_alert_or_resource"
+  | "unknown";
+
+export interface SecurityCopilotChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface SecurityCopilotIncident {
+  lane: SecurityCopilotLane;
+  summary: string;
+  timeframe: string;
+  affected_users: string[];
+  affected_mailboxes: string[];
+  affected_apps: string[];
+  affected_resources: string[];
+  alert_names: string[];
+  observed_artifacts: string[];
+  confidence: number;
+  missing_fields: string[];
+}
+
+export interface SecurityCopilotFollowUpQuestion {
+  key: string;
+  label: string;
+  prompt: string;
+  placeholder: string;
+  required: boolean;
+  input_type: "text" | "textarea" | "email" | "list";
+}
+
+export interface SecurityCopilotPlannedSource {
+  key: string;
+  label: string;
+  status: "planned" | "running" | "completed" | "skipped" | "error";
+  query_summary: string;
+  reason: string;
+}
+
+export interface SecurityCopilotSourceResult {
+  key: string;
+  label: string;
+  status: "completed" | "running" | "skipped" | "error";
+  query_summary: string;
+  item_count: number;
+  highlights: string[];
+  preview: Record<string, unknown>[];
+  citations: AzureCitation[];
+  reason: string;
+}
+
+export interface SecurityCopilotJobRef {
+  job_type: "delegate_mailbox_scan";
+  label: string;
+  job_id: string;
+  status: string;
+  phase: string;
+  target: string;
+  summary: string;
+  started_automatically: boolean;
+}
+
+export interface SecurityCopilotAnswer {
+  summary: string;
+  findings: string[];
+  next_steps: string[];
+  warnings: string[];
+}
+
+export interface SecurityCopilotChatRequest {
+  message: string;
+  history?: SecurityCopilotChatMessage[];
+  incident?: SecurityCopilotIncident;
+  jobs?: SecurityCopilotJobRef[];
+  model?: string;
+}
+
+export interface SecurityCopilotChatResponse {
+  phase: "needs_input" | "running_jobs" | "complete";
+  assistant_message: string;
+  incident: SecurityCopilotIncident;
+  follow_up_questions: SecurityCopilotFollowUpQuestion[];
+  planned_sources: SecurityCopilotPlannedSource[];
+  source_results: SecurityCopilotSourceResult[];
+  jobs: SecurityCopilotJobRef[];
+  answer: SecurityCopilotAnswer;
+  citations: AzureCitation[];
+  model_used: string;
+  generated_at: string;
+}
+
 export interface AzureAICostSummary {
   lookback_days: number;
   usage_record_count: number;
@@ -3317,6 +3412,10 @@ export const api = {
 
   askAzureCostCopilot(question: string, model?: string): Promise<AzureCostChatResponse> {
     return postJSON<AzureCostChatResponse>("/api/azure/ai/cost-chat", { question, model });
+  },
+
+  chatAzureSecurityCopilot(body: SecurityCopilotChatRequest): Promise<SecurityCopilotChatResponse> {
+    return postJSON<SecurityCopilotChatResponse>("/api/azure/security/copilot/chat", body);
   },
 
   // -------------------------------------------------------------------------

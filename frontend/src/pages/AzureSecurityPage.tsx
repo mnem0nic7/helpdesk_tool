@@ -76,6 +76,17 @@ const controlPlaneCards: ToolCardDefinition[] = [
 const starterTools: ToolCardDefinition[] = [
   {
     eyebrow: "Starter Tool",
+    title: "Security Incident Copilot",
+    description:
+      "Run guided incident intake, let the copilot ask for missing evidence, query grounded Azure and local sources, auto-start safe mailbox delegate scans when the case needs them, and export a repeatable investigation handoff.",
+    status: "Ready now",
+    actions: [
+      { label: "Open Security Copilot", to: "/security/copilot" },
+      { label: "Open Azure Alerts", to: "/alerts", tone: "secondary" },
+    ],
+  },
+  {
+    eyebrow: "Starter Tool",
     title: "Identity Review Lane",
     description:
       "Use the current app inventory to review enterprise apps, app registrations, directory roles, and user posture without leaving the Azure surface.",
@@ -89,11 +100,11 @@ const starterTools: ToolCardDefinition[] = [
     eyebrow: "Starter Tool",
     title: "Alert Triage Lane",
     description:
-      "Work Azure alerts, turn findings into tracked operator follow-up, and use the local copilot lane when you need a grounded first-pass summary.",
+      "Work Azure alerts, turn findings into tracked operator follow-up, and hand active investigations to the security copilot when you need grounded cross-source evidence.",
     status: "Ready now",
     actions: [
       { label: "Open Alert Desk", to: "/alerts" },
-      { label: "Open Azure Copilot", to: "/copilot", tone: "secondary" },
+      { label: "Open Security Copilot", to: "/security/copilot", tone: "secondary" },
     ],
   },
   {
@@ -140,10 +151,6 @@ const buildQueue: BuildQueueItem[] = [
   {
     title: "Guest and external access review",
     description: "Build a focused review lane for external users, shared collaboration risk, and dormant access.",
-  },
-  {
-    title: "Security incident starter kit",
-    description: "Capture common triage templates, ticket handoff steps, and recommended evidence links for recurring investigations.",
   },
 ];
 

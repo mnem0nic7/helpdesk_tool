@@ -171,12 +171,13 @@ def test_get_available_models_includes_ollama_when_enabled(monkeypatch):
     monkeypatch.setattr(ai_client, "OPENAI_API_KEY", "")
     monkeypatch.setattr(ai_client, "ANTHROPIC_API_KEY", "")
     monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen2.5:7b")
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
     monkeypatch.setattr(ai_client, "_OLLAMA_MODEL_CACHE", None)
     monkeypatch.setattr(
         ai_client,
         "_list_ollama_models_from_api",
         lambda: [
+            AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
             AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
             AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
         ],
@@ -184,7 +185,7 @@ def test_get_available_models_includes_ollama_when_enabled(monkeypatch):
 
     models = get_available_models()
 
-    assert [model.id for model in models] == ["qwen2.5:7b", "qwen2.5:3b"]
+    assert [model.id for model in models] == ["nemotron-3-nano:4b", "qwen2.5:7b", "qwen2.5:3b"]
 
 
 def test_list_ollama_models_uses_thread_local_session_helper(monkeypatch):
@@ -197,6 +198,7 @@ def test_list_ollama_models_uses_thread_local_session_helper(monkeypatch):
         def json(self) -> dict[str, object]:
             return {
                 "models": [
+                    {"model": "nemotron-3-nano:4b", "name": "nemotron-3-nano:4b"},
                     {"model": "qwen2.5:7b", "name": "qwen2.5:7b"},
                     {"name": "qwen2.5:3b"},
                 ]
@@ -211,12 +213,13 @@ def test_list_ollama_models_uses_thread_local_session_helper(monkeypatch):
     monkeypatch.setattr(ai_client, "_get_ollama_session", lambda: _Session())
     monkeypatch.setattr(ai_client, "OLLAMA_BASE_URL", "http://ollama.local:11434")
     monkeypatch.setattr(ai_client, "OLLAMA_REQUEST_TIMEOUT_SECONDS", 42.0)
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
 
     models = ai_client._list_ollama_models_from_api()
 
     assert captured["url"] == "http://ollama.local:11434/api/tags"
     assert captured["timeout"] == 42.0
-    assert [model.id for model in models] == ["qwen2.5:7b", "qwen2.5:3b"]
+    assert [model.id for model in models] == ["nemotron-3-nano:4b", "qwen2.5:7b", "qwen2.5:3b"]
 
 
 def test_get_available_models_ignores_cloud_keys_and_uses_ollama_only(monkeypatch):
@@ -235,11 +238,13 @@ def test_get_available_models_ignores_cloud_keys_and_uses_ollama_only(monkeypatc
     assert [model.provider for model in models] == ["ollama"]
 
 
-def test_select_available_ollama_model_prefers_fast_model_then_fallback():
+def test_select_available_ollama_model_prefers_requested_model_then_repo_fallbacks(monkeypatch):
     available = [
         AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
         AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
     ]
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_FAST_MODEL", "qwen2.5:3b")
 
     assert (
         ai_client.select_available_ollama_model(
@@ -253,10 +258,21 @@ def test_select_available_ollama_model_prefers_fast_model_then_fallback():
         ai_client.select_available_ollama_model(
             available,
             preferred_model_id="missing-model",
-            fallback_model_id="qwen2.5:7b",
+            fallback_model_id="missing-fallback",
         )
         == "qwen2.5:7b"
     )
+
+
+def test_get_default_copilot_model_id_falls_back_to_qwen_when_nemotron_missing(monkeypatch):
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
+
+    models = [
+        AIModel(id="qwen2.5:3b", name="qwen2.5:3b", provider="ollama"),
+        AIModel(id="qwen2.5:7b", name="qwen2.5:7b", provider="ollama"),
+    ]
+
+    assert get_default_copilot_model_id(models) == "qwen2.5:7b"
 
 
 def test_invoke_model_text_rejects_non_ollama_models(monkeypatch):

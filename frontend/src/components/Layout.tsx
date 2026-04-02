@@ -174,10 +174,11 @@ export default function Layout() {
   const azureBreadcrumbs = useMemo(() => {
     if (branding.scope !== "azure") return [];
     const path = location.pathname.replace(/^\/+/, "");
-    const [segment] = path.split("/");
+    const [segment, subsegment] = path.split("/");
     const currentLabel = azureBreadcrumbLabels[segment || ""] || "Azure";
     const params = new URLSearchParams(location.search);
     let detailLabel = "";
+    if (segment === "security" && subsegment === "copilot") detailLabel = "Security Copilot";
     if (segment === "vms" && params.get("vmId")) detailLabel = "VM Detail";
     if (segment === "virtual-desktops" && params.get("desktopId")) detailLabel = "Desktop Detail";
     if (segment === "resources" && params.get("resourceId")) detailLabel = "Resource Detail";

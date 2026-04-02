@@ -216,10 +216,14 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     import routes_cache
     import routes_triage
     import routes_azure
+    import routes_azure_security_copilot
     import routes_tools
     import routes_user_admin
     import routes_user_exit
+    import security_copilot as security_copilot_module
     import azure_cache as azure_cache_module
+    import azure_alert_store as azure_alert_store_module
+    import mailbox_delegate_scan_jobs as mailbox_delegate_scan_jobs_module
     import onedrive_copy_jobs as onedrive_copy_jobs_module
     import user_admin_jobs as user_admin_jobs_module
     import user_admin_providers as user_admin_providers_module
@@ -309,6 +313,7 @@ def test_client(mock_cache, freeze_time, monkeypatch):
 
     monkeypatch.setattr(azure_cache_module, "azure_cache", mock_azure_cache)
     monkeypatch.setattr(routes_azure, "azure_cache", mock_azure_cache)
+    monkeypatch.setattr(security_copilot_module, "azure_cache", mock_azure_cache)
 
     mock_user_admin_jobs = MagicMock()
     mock_user_admin_jobs.start_worker = AsyncMock()
@@ -319,6 +324,34 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     mock_user_admin_jobs.job_belongs_to.return_value = True
     monkeypatch.setattr(user_admin_jobs_module, "user_admin_jobs", mock_user_admin_jobs)
     monkeypatch.setattr(routes_user_admin, "user_admin_jobs", mock_user_admin_jobs)
+    monkeypatch.setattr(security_copilot_module, "user_admin_jobs", mock_user_admin_jobs)
+
+    mock_mailbox_delegate_scan_jobs = MagicMock()
+    mock_mailbox_delegate_scan_jobs.start_worker = AsyncMock()
+    mock_mailbox_delegate_scan_jobs.stop_worker = AsyncMock()
+    mock_mailbox_delegate_scan_jobs.get_job.return_value = None
+    mock_mailbox_delegate_scan_jobs.create_job.return_value = {
+        "job_id": "delegate-job-1",
+        "site_scope": "azure",
+        "status": "queued",
+        "phase": "queued",
+        "requested_by_email": "test@example.com",
+        "requested_by_name": "Test User",
+        "user": "test@example.com",
+        "display_name": "Test User",
+        "principal_name": "test@example.com",
+        "primary_address": "test@example.com",
+        "provider_enabled": True,
+        "supported_permission_types": ["send_on_behalf", "send_as", "full_access"],
+        "permission_counts": {"send_on_behalf": 0, "send_as": 0, "full_access": 0},
+        "note": "",
+        "mailbox_count": 0,
+        "scanned_mailbox_count": 0,
+        "mailboxes": [],
+    }
+    monkeypatch.setattr(mailbox_delegate_scan_jobs_module, "mailbox_delegate_scan_jobs", mock_mailbox_delegate_scan_jobs)
+    monkeypatch.setattr(routes_tools, "mailbox_delegate_scan_jobs", mock_mailbox_delegate_scan_jobs)
+    monkeypatch.setattr(security_copilot_module, "mailbox_delegate_scan_jobs", mock_mailbox_delegate_scan_jobs)
 
     mock_onedrive_copy_jobs = MagicMock()
     mock_onedrive_copy_jobs.start_worker = AsyncMock()
@@ -459,6 +492,17 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     monkeypatch.setattr(user_admin_providers_module, "user_admin_providers", mock_user_admin_providers)
     monkeypatch.setattr(routes_tools, "user_admin_providers", mock_user_admin_providers)
     monkeypatch.setattr(routes_user_admin, "user_admin_providers", mock_user_admin_providers)
+    monkeypatch.setattr(security_copilot_module, "user_admin_providers", mock_user_admin_providers)
+
+    mock_alert_store = MagicMock()
+    mock_alert_store.get_history.return_value = []
+    monkeypatch.setattr(azure_alert_store_module, "azure_alert_store", mock_alert_store)
+    monkeypatch.setattr(security_copilot_module, "azure_alert_store", mock_alert_store)
+    monkeypatch.setattr(security_copilot_module, "cache", mock_cache)
+    monkeypatch.setattr(security_copilot_module, "list_login_audit", lambda limit=100: [])
+    monkeypatch.setattr(security_copilot_module, "kb_store", MagicMock(list_articles=MagicMock(return_value=[])))
+
+    monkeypatch.setattr(routes_azure_security_copilot, "run_security_copilot_chat", security_copilot_module.run_security_copilot_chat)
 
     mock_user_exit_workflows = MagicMock()
     mock_user_exit_workflows.start_worker = AsyncMock()
@@ -525,6 +569,7 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     mock_kb_store = MagicMock()
     mock_kb_store.ensure_seed_articles.return_value = 0
     monkeypatch.setattr(main, "kb_store", mock_kb_store)
+    monkeypatch.setattr(main, "mailbox_delegate_scan_jobs", mock_mailbox_delegate_scan_jobs)
     monkeypatch.setattr(main, "onedrive_copy_jobs", mock_onedrive_copy_jobs)
     monkeypatch.setattr(main, "report_ai_summary_service", mock_report_ai_summary_service)
     mock_runtime_role_manager = MagicMock()

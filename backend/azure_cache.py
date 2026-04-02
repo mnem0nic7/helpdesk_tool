@@ -3248,6 +3248,8 @@ class AzureCache:
             ("page", "resources", "Resources", "Cross-subscription resource inventory", "/resources"),
             ("page", "storage", "Storage", "Storage accounts, disks, and snapshots", "/storage"),
             ("page", "identity", "Identity", "Users, groups, enterprise apps, and roles", "/identity"),
+            ("page", "security", "Security", "Azure security workspace and investigation tools", "/security"),
+            ("page", "security-copilot", "Security Copilot", "Investigate security incidents across Azure and local sources", "/security/copilot"),
             ("page", "users", "Users", "Directory user health and sign-in analysis", "/users"),
             ("page", "cost", "Cost", "Spend trend and FinOps validation", "/cost"),
             ("page", "allocations", "Allocation", "Showback rules and allocation runs", "/allocations"),

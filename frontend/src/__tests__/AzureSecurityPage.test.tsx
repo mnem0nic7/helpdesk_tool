@@ -94,9 +94,11 @@ describe("AzureSecurityPage", () => {
     expect(await screen.findByText("Azure Security")).toBeInTheDocument();
     expect(screen.getByText("Security Control Planes")).toBeInTheDocument();
     expect(screen.getByText("Starter Security Tools")).toBeInTheDocument();
+    expect(screen.getByText("Security Incident Copilot")).toBeInTheDocument();
     expect(screen.getByText("Identity Review Lane")).toBeInTheDocument();
     expect(screen.getByText("2/2 configured datasets healthy")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open Alert Desk" })).toHaveAttribute("href", "/alerts");
+    expect(screen.getAllByRole("link", { name: "Open Security Copilot" })).toHaveLength(2);
     expect(screen.getByRole("link", { name: "Microsoft Defender" })).toHaveAttribute("href", "https://security.microsoft.com/");
   });
 

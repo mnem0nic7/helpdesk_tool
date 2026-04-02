@@ -124,7 +124,7 @@ def test_ollama_config_defaults_and_overrides(monkeypatch):
 
     assert config.OLLAMA_ENABLED is True
     assert config.OLLAMA_BASE_URL == "http://localhost:11434"
-    assert config.OLLAMA_MODEL == "qwen2.5:7b"
+    assert config.OLLAMA_MODEL == "nemotron-3-nano:4b"
     assert config.OLLAMA_FAST_MODEL == "qwen2.5:3b"
     assert config.OLLAMA_REQUEST_TIMEOUT_SECONDS == 300
     assert config.OLLAMA_KEEP_ALIVE == "15m"
