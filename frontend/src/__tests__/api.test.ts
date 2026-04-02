@@ -301,6 +301,40 @@ describe("azure api methods", () => {
     expect(JSON.parse(call[1].body)).toMatchObject({ message: "Investigate ada@example.com" });
   });
 
+  it("loads the Azure privileged access review", async () => {
+    mockFetch({
+      generated_at: "2026-04-02T02:00:00Z",
+      inventory_last_refresh: "2026-04-02T01:50:00Z",
+      directory_last_refresh: "2026-04-02T01:51:00Z",
+      metrics: [],
+      flagged_principals: [],
+      assignments: [],
+      break_glass_candidates: [],
+      warnings: [],
+      scope_notes: [],
+    });
+    await api.getAzureSecurityAccessReview();
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/azure/security/access-review");
+    expect(call[1]).toBeUndefined();
+  });
+
+  it("loads the Azure application hygiene review", async () => {
+    mockFetch({
+      generated_at: "2026-04-02T02:00:00Z",
+      directory_last_refresh: "2026-04-02T01:51:00Z",
+      metrics: [],
+      flagged_apps: [],
+      credentials: [],
+      warnings: [],
+      scope_notes: [],
+    });
+    await api.getAzureSecurityAppHygiene();
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/azure/security/app-hygiene");
+    expect(call[1]).toBeUndefined();
+  });
+
   it("calls the Azure VM endpoint with query params", async () => {
     mockFetch({
       vms: [],

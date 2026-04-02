@@ -178,6 +178,8 @@ export default function Layout() {
     const currentLabel = azureBreadcrumbLabels[segment || ""] || "Azure";
     const params = new URLSearchParams(location.search);
     let detailLabel = "";
+    if (segment === "security" && subsegment === "access-review") detailLabel = "Privileged Access Review";
+    if (segment === "security" && subsegment === "app-hygiene") detailLabel = "Application Hygiene";
     if (segment === "security" && subsegment === "copilot") detailLabel = "Security Copilot";
     if (segment === "vms" && params.get("vmId")) detailLabel = "VM Detail";
     if (segment === "virtual-desktops" && params.get("desktopId")) detailLabel = "Desktop Detail";

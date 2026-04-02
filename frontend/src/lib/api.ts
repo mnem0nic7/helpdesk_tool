@@ -2353,6 +2353,130 @@ export interface SecurityCopilotAnswer {
   warnings: string[];
 }
 
+export interface SecurityAccessReviewMetric {
+  key: string;
+  label: string;
+  value: number;
+  detail: string;
+  tone: "slate" | "sky" | "emerald" | "amber" | "rose";
+}
+
+export interface SecurityAccessReviewPrincipal {
+  principal_id: string;
+  principal_type: string;
+  object_type: string;
+  display_name: string;
+  principal_name: string;
+  enabled: boolean | null;
+  user_type: string;
+  last_successful_utc: string;
+  role_names: string[];
+  assignment_count: number;
+  scope_count: number;
+  highest_privilege: "critical" | "elevated" | "limited";
+  flags: string[];
+  subscriptions: string[];
+}
+
+export interface SecurityAccessReviewAssignment {
+  assignment_id: string;
+  principal_id: string;
+  principal_type: string;
+  object_type: string;
+  display_name: string;
+  principal_name: string;
+  role_definition_id: string;
+  role_name: string;
+  privilege_level: "critical" | "elevated" | "limited";
+  scope: string;
+  subscription_id: string;
+  subscription_name: string;
+  enabled: boolean | null;
+  user_type: string;
+  last_successful_utc: string;
+  flags: string[];
+}
+
+export interface SecurityAccessReviewBreakGlassCandidate {
+  user_id: string;
+  display_name: string;
+  principal_name: string;
+  enabled: boolean | null;
+  last_successful_utc: string;
+  matched_terms: string[];
+  privileged_assignment_count: number;
+  has_privileged_access: boolean;
+  flags: string[];
+}
+
+export interface SecurityAccessReviewResponse {
+  generated_at: string;
+  inventory_last_refresh: string;
+  directory_last_refresh: string;
+  metrics: SecurityAccessReviewMetric[];
+  flagged_principals: SecurityAccessReviewPrincipal[];
+  assignments: SecurityAccessReviewAssignment[];
+  break_glass_candidates: SecurityAccessReviewBreakGlassCandidate[];
+  warnings: string[];
+  scope_notes: string[];
+}
+
+export interface SecurityAppHygieneMetric {
+  key: string;
+  label: string;
+  value: number;
+  detail: string;
+  tone: "slate" | "sky" | "emerald" | "amber" | "rose";
+}
+
+export interface SecurityAppHygieneApp {
+  application_id: string;
+  app_id: string;
+  display_name: string;
+  sign_in_audience: string;
+  created_datetime: string;
+  publisher_domain: string;
+  verified_publisher_name: string;
+  owner_count: number;
+  owners: string[];
+  owner_lookup_error: string;
+  credential_count: number;
+  password_credential_count: number;
+  key_credential_count: number;
+  next_credential_expiry: string;
+  expired_credential_count: number;
+  expiring_30d_count: number;
+  expiring_90d_count: number;
+  status: "critical" | "warning" | "healthy" | "info";
+  flags: string[];
+}
+
+export interface SecurityAppHygieneCredential {
+  application_id: string;
+  app_id: string;
+  application_display_name: string;
+  credential_type: "secret" | "certificate";
+  display_name: string;
+  key_id: string;
+  start_date_time: string;
+  end_date_time: string;
+  days_until_expiry: number | null;
+  status: "expired" | "expiring" | "active" | "unknown";
+  owner_count: number;
+  owners: string[];
+  flags: string[];
+}
+
+export interface SecurityAppHygieneResponse {
+  generated_at: string;
+  directory_last_refresh: string;
+  metrics: SecurityAppHygieneMetric[];
+  flagged_apps: SecurityAppHygieneApp[];
+  credentials: SecurityAppHygieneCredential[];
+  warnings: string[];
+  scope_notes: string[];
+}
+
 export interface SecurityCopilotChatRequest {
   message: string;
   history?: SecurityCopilotChatMessage[];
@@ -3412,6 +3536,14 @@ export const api = {
 
   askAzureCostCopilot(question: string, model?: string): Promise<AzureCostChatResponse> {
     return postJSON<AzureCostChatResponse>("/api/azure/ai/cost-chat", { question, model });
+  },
+
+  getAzureSecurityAccessReview(): Promise<SecurityAccessReviewResponse> {
+    return fetchJSON<SecurityAccessReviewResponse>("/api/azure/security/access-review");
+  },
+
+  getAzureSecurityAppHygiene(): Promise<SecurityAppHygieneResponse> {
+    return fetchJSON<SecurityAppHygieneResponse>("/api/azure/security/app-hygiene");
   },
 
   chatAzureSecurityCopilot(body: SecurityCopilotChatRequest): Promise<SecurityCopilotChatResponse> {

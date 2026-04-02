@@ -39,6 +39,7 @@ from routes_alerts import router as alerts_router
 from routes_kb import router as kb_router
 from routes_azure import router as azure_router
 from routes_azure_alerts import router as azure_alerts_router
+from routes_azure_security import router as azure_security_router
 from routes_azure_security_copilot import router as azure_security_copilot_router
 from routes_tools import router as tools_router
 from routes_user_admin import router as user_admin_router
@@ -420,6 +421,7 @@ app.include_router(alerts_router)
 app.include_router(kb_router)
 app.include_router(azure_router)
 app.include_router(azure_alerts_router)
+app.include_router(azure_security_router)
 app.include_router(azure_security_copilot_router)
 app.include_router(tools_router)
 app.include_router(user_admin_router)

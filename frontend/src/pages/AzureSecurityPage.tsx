@@ -111,22 +111,22 @@ const starterTools: ToolCardDefinition[] = [
     eyebrow: "Starter Tool",
     title: "Privileged Access Review",
     description:
-      "This slot is reserved for privileged group review, break-glass account checks, and role-assignment drift once the dedicated workflows are wired up.",
-    status: "In build",
+      "Review elevated Azure RBAC assignments, guest or external privileged principals, stale privileged users, and emergency account watchlists from one dedicated security lane.",
+    status: "Ready now",
     actions: [
-      { label: "Review Azure Users", to: "/users" },
-      { label: "Open Entra Admin", to: "https://entra.microsoft.com/", external: true, tone: "secondary" },
+      { label: "Open Access Review", to: "/security/access-review" },
+      { label: "Review Azure Users", to: "/users", tone: "secondary" },
     ],
   },
   {
     eyebrow: "Starter Tool",
     title: "Application Hygiene",
     description:
-      "Reserved for service principal ownership, app registration sprawl, and credential-expiry guardrails as we move security checks into first-class tools.",
-    status: "Planned",
+      "Review app registration owner coverage, expiring client secrets and certificates, external audience exposure, and publisher trust from one security lane.",
+    status: "Ready now",
     actions: [
-      { label: "Review App Inventory", to: "/identity" },
-      { label: "Review Resource Surface", to: "/resources", tone: "secondary" },
+      { label: "Open Application Hygiene", to: "/security/app-hygiene" },
+      { label: "Review App Inventory", to: "/identity", tone: "secondary" },
     ],
   },
 ];
@@ -141,12 +141,12 @@ const buildQueue: BuildQueueItem[] = [
     description: "Verify emergency accounts, MFA posture, and sign-in health on a repeatable schedule.",
   },
   {
-    title: "Privileged role review",
-    description: "Surface privileged assignments, stale ownership, and out-of-band access paths for operator review.",
+    title: "Directory role membership review",
+    description: "Add direct Entra directory-role membership coverage beside the shipped Azure RBAC privileged access review lane.",
   },
   {
-    title: "Application secret expiry watch",
-    description: "Flag expiring app credentials, missing owners, and low-confidence app registrations before they age into incidents.",
+    title: "Enterprise app permission review",
+    description: "Layer delegated consent, app permissions, and service principal grant review on top of the shipped application hygiene lane.",
   },
   {
     title: "Guest and external access review",

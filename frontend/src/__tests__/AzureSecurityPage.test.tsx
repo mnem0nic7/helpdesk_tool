@@ -96,9 +96,13 @@ describe("AzureSecurityPage", () => {
     expect(screen.getByText("Starter Security Tools")).toBeInTheDocument();
     expect(screen.getByText("Security Incident Copilot")).toBeInTheDocument();
     expect(screen.getByText("Identity Review Lane")).toBeInTheDocument();
+    expect(screen.getByText("Privileged Access Review")).toBeInTheDocument();
+    expect(screen.getByText("Application Hygiene")).toBeInTheDocument();
     expect(screen.getByText("2/2 configured datasets healthy")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open Alert Desk" })).toHaveAttribute("href", "/alerts");
     expect(screen.getAllByRole("link", { name: "Open Security Copilot" })).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "Open Access Review" })).toHaveAttribute("href", "/security/access-review");
+    expect(screen.getByRole("link", { name: "Open Application Hygiene" })).toHaveAttribute("href", "/security/app-hygiene");
     expect(screen.getByRole("link", { name: "Microsoft Defender" })).toHaveAttribute("href", "https://security.microsoft.com/");
   });
 

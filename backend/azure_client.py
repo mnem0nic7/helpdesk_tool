@@ -533,6 +533,31 @@ class AzureClient:
                 )
         return assignments
 
+    def list_role_definitions(self, subscription_ids: Iterable[str]) -> list[dict[str, Any]]:
+        definitions: list[dict[str, Any]] = []
+        for subscription_id in subscription_ids:
+            if not subscription_id:
+                continue
+            rows = self._paged_get(
+                f"{_ARM_BASE}/subscriptions/{subscription_id}/providers/Microsoft.Authorization/roleDefinitions",
+                scope=_ARM_SCOPE,
+                params={"api-version": "2022-04-01"},
+            )
+            for item in rows:
+                properties = item.get("properties") or {}
+                role_id = str(item.get("id") or "")
+                role_guid = str(item.get("name") or role_id.rsplit("/", 1)[-1] or "").strip()
+                definitions.append(
+                    {
+                        "id": role_id,
+                        "subscription_id": subscription_id,
+                        "role_guid": role_guid,
+                        "role_name": properties.get("roleName") or properties.get("displayName") or role_guid,
+                        "description": properties.get("description") or "",
+                    }
+                )
+        return definitions
+
     def list_reservations(self) -> list[dict[str, Any]]:
         rows = self._paged_get(
             f"{_ARM_BASE}/providers/Microsoft.Capacity/reservations",
@@ -1152,8 +1177,78 @@ Resources
     def list_applications(self) -> list[dict[str, Any]]:
         return self.list_graph_collection_custom(
             "applications",
-            select=["id", "appId", "displayName", "signInAudience"],
+            select=[
+                "id",
+                "appId",
+                "displayName",
+                "signInAudience",
+                "createdDateTime",
+                "publisherDomain",
+                "notes",
+                "passwordCredentials",
+                "keyCredentials",
+                "verifiedPublisher",
+            ],
         )
+
+    def list_application_owners(self, application_ids: list[str]) -> dict[str, dict[str, Any]]:
+        normalized_ids = [str(item).strip() for item in application_ids if str(item).strip()]
+        owners_by_application: dict[str, dict[str, Any]] = {
+            application_id: {"owners": [], "owner_lookup_error": ""}
+            for application_id in normalized_ids
+        }
+        if not normalized_ids:
+            return owners_by_application
+
+        owner_select = "id,displayName,userPrincipalName,mail,appId"
+        for start in range(0, len(normalized_ids), 20):
+            chunk = normalized_ids[start : start + 20]
+            requests_payload = [
+                {
+                    "id": str(index),
+                    "method": "GET",
+                    "url": f"/applications/{application_id}/owners?$select={owner_select}&$top=50",
+                }
+                for index, application_id in enumerate(chunk, start=1)
+            ]
+            payload = self.graph_batch_request(requests_payload)
+            responses = payload.get("responses")
+            if not isinstance(responses, list):
+                for application_id in chunk:
+                    owners_by_application[application_id]["owner_lookup_error"] = "Missing Microsoft Graph batch response."
+                continue
+
+            request_id_to_application = {
+                str(index): application_id for index, application_id in enumerate(chunk, start=1)
+            }
+            for response in responses:
+                if not isinstance(response, dict):
+                    continue
+                response_id = str(response.get("id") or "")
+                application_id = request_id_to_application.get(response_id)
+                if not application_id:
+                    continue
+                status_code = int(response.get("status") or 0)
+                if status_code != 200:
+                    body = response.get("body") if isinstance(response.get("body"), dict) else {}
+                    message = ""
+                    if isinstance(body.get("error"), dict):
+                        message = str(body["error"].get("message") or "")
+                    owners_by_application[application_id]["owner_lookup_error"] = (
+                        message or f"Microsoft Graph owner lookup returned {status_code}."
+                    )
+                    continue
+                body = response.get("body") if isinstance(response.get("body"), dict) else {}
+                value = body.get("value") if isinstance(body.get("value"), list) else []
+                owners_by_application[application_id]["owners"] = [
+                    item for item in value if isinstance(item, dict)
+                ]
+                if body.get("@odata.nextLink"):
+                    owners_by_application[application_id]["owner_lookup_error"] = (
+                        "Owner list truncated to the first 50 records."
+                    )
+
+        return owners_by_application
 
     def list_directory_roles(self) -> list[dict[str, Any]]:
         # Graph directoryRoles rejects custom page sizes, so omit $top.

@@ -1210,6 +1210,148 @@ class SecurityCopilotChatRequest(BaseModel):
     model: Optional[str] = None
 
 
+class SecurityAccessReviewMetric(BaseModel):
+    """Headline metric shown on the Azure privileged access review page."""
+
+    key: str
+    label: str
+    value: int = 0
+    detail: str = ""
+    tone: Literal["slate", "sky", "emerald", "amber", "rose"] = "slate"
+
+
+class SecurityAccessReviewPrincipal(BaseModel):
+    """One principal with privileged Azure RBAC access in review scope."""
+
+    principal_id: str
+    principal_type: str
+    object_type: str = ""
+    display_name: str = ""
+    principal_name: str = ""
+    enabled: Optional[bool] = None
+    user_type: str = ""
+    last_successful_utc: str = ""
+    role_names: list[str] = Field(default_factory=list)
+    assignment_count: int = 0
+    scope_count: int = 0
+    highest_privilege: Literal["critical", "elevated", "limited"] = "limited"
+    flags: list[str] = Field(default_factory=list)
+    subscriptions: list[str] = Field(default_factory=list)
+
+
+class SecurityAccessReviewAssignment(BaseModel):
+    """One privileged Azure RBAC assignment surfaced in the review."""
+
+    assignment_id: str
+    principal_id: str
+    principal_type: str
+    object_type: str = ""
+    display_name: str = ""
+    principal_name: str = ""
+    role_definition_id: str = ""
+    role_name: str = ""
+    privilege_level: Literal["critical", "elevated", "limited"] = "limited"
+    scope: str = ""
+    subscription_id: str = ""
+    subscription_name: str = ""
+    enabled: Optional[bool] = None
+    user_type: str = ""
+    last_successful_utc: str = ""
+    flags: list[str] = Field(default_factory=list)
+
+
+class SecurityAccessReviewBreakGlassCandidate(BaseModel):
+    """One account that looks like an emergency or break-glass identity."""
+
+    user_id: str
+    display_name: str = ""
+    principal_name: str = ""
+    enabled: Optional[bool] = None
+    last_successful_utc: str = ""
+    matched_terms: list[str] = Field(default_factory=list)
+    privileged_assignment_count: int = 0
+    has_privileged_access: bool = False
+    flags: list[str] = Field(default_factory=list)
+
+
+class SecurityAccessReviewResponse(BaseModel):
+    """Computed Azure privileged access review payload."""
+
+    generated_at: str
+    inventory_last_refresh: str = ""
+    directory_last_refresh: str = ""
+    metrics: list[SecurityAccessReviewMetric] = Field(default_factory=list)
+    flagged_principals: list[SecurityAccessReviewPrincipal] = Field(default_factory=list)
+    assignments: list[SecurityAccessReviewAssignment] = Field(default_factory=list)
+    break_glass_candidates: list[SecurityAccessReviewBreakGlassCandidate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    scope_notes: list[str] = Field(default_factory=list)
+
+
+class SecurityAppHygieneMetric(BaseModel):
+    """Headline metric shown on the Azure application hygiene page."""
+
+    key: str
+    label: str
+    value: int = 0
+    detail: str = ""
+    tone: Literal["slate", "sky", "emerald", "amber", "rose"] = "slate"
+
+
+class SecurityAppHygieneApp(BaseModel):
+    """One application registration summarized for hygiene review."""
+
+    application_id: str
+    app_id: str = ""
+    display_name: str = ""
+    sign_in_audience: str = ""
+    created_datetime: str = ""
+    publisher_domain: str = ""
+    verified_publisher_name: str = ""
+    owner_count: int = 0
+    owners: list[str] = Field(default_factory=list)
+    owner_lookup_error: str = ""
+    credential_count: int = 0
+    password_credential_count: int = 0
+    key_credential_count: int = 0
+    next_credential_expiry: str = ""
+    expired_credential_count: int = 0
+    expiring_30d_count: int = 0
+    expiring_90d_count: int = 0
+    status: Literal["critical", "warning", "healthy", "info"] = "info"
+    flags: list[str] = Field(default_factory=list)
+
+
+class SecurityAppHygieneCredential(BaseModel):
+    """One app credential row shown in the hygiene detail table."""
+
+    application_id: str
+    app_id: str = ""
+    application_display_name: str = ""
+    credential_type: Literal["secret", "certificate"] = "secret"
+    display_name: str = ""
+    key_id: str = ""
+    start_date_time: str = ""
+    end_date_time: str = ""
+    days_until_expiry: int | None = None
+    status: Literal["expired", "expiring", "active", "unknown"] = "unknown"
+    owner_count: int = 0
+    owners: list[str] = Field(default_factory=list)
+    flags: list[str] = Field(default_factory=list)
+
+
+class SecurityAppHygieneResponse(BaseModel):
+    """Computed Azure app registration hygiene payload."""
+
+    generated_at: str
+    directory_last_refresh: str = ""
+    metrics: list[SecurityAppHygieneMetric] = Field(default_factory=list)
+    flagged_apps: list[SecurityAppHygieneApp] = Field(default_factory=list)
+    credentials: list[SecurityAppHygieneCredential] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    scope_notes: list[str] = Field(default_factory=list)
+
+
 class AzureRecommendationDismissRequest(BaseModel):
     """Dismiss a persisted recommendation with an optional operator note."""
 

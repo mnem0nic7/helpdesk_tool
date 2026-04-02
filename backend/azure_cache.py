@@ -58,7 +58,7 @@ _DATASET_CONFIG: dict[str, dict[str, Any]] = {
     "directory": {
         "label": "Identity",
         "interval_minutes": AZURE_DIRECTORY_REFRESH_MINUTES,
-        "snapshots": ["users", "groups", "service_principals", "applications", "directory_roles"],
+        "snapshots": ["users", "groups", "service_principals", "applications", "application_security", "directory_roles"],
     },
     "cost": {
         "label": "Cost",
@@ -1013,17 +1013,133 @@ class AzureCache:
         }
 
     @staticmethod
-    def _normalize_application(item: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_application_owner(item: dict[str, Any]) -> dict[str, Any]:
+        principal_name = (
+            item.get("userPrincipalName")
+            or item.get("mail")
+            or item.get("appId")
+            or item.get("id")
+            or ""
+        )
+        object_type = "user"
+        if item.get("appId"):
+            object_type = "service_principal"
         return {
             "id": item.get("id") or "",
+            "display_name": item.get("displayName") or principal_name,
+            "principal_name": principal_name,
+            "object_type": object_type,
+        }
+
+    @staticmethod
+    def _application_credential_records(item: dict[str, Any]) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        password_credentials = item.get("passwordCredentials") or []
+        key_credentials = item.get("keyCredentials") or []
+
+        for raw in password_credentials:
+            if not isinstance(raw, dict):
+                continue
+            records.append(
+                {
+                    "credential_type": "secret",
+                    "display_name": raw.get("displayName") or raw.get("hint") or raw.get("keyId") or "Client secret",
+                    "key_id": str(raw.get("keyId") or ""),
+                    "start_date_time": str(raw.get("startDateTime") or ""),
+                    "end_date_time": str(raw.get("endDateTime") or ""),
+                    "hint": str(raw.get("hint") or ""),
+                }
+            )
+
+        for raw in key_credentials:
+            if not isinstance(raw, dict):
+                continue
+            records.append(
+                {
+                    "credential_type": "certificate",
+                    "display_name": raw.get("displayName") or raw.get("type") or raw.get("keyId") or "Certificate",
+                    "key_id": str(raw.get("keyId") or ""),
+                    "start_date_time": str(raw.get("startDateTime") or ""),
+                    "end_date_time": str(raw.get("endDateTime") or ""),
+                    "usage": str(raw.get("usage") or ""),
+                    "key_type": str(raw.get("type") or ""),
+                }
+            )
+
+        return records
+
+    @classmethod
+    def _build_application_security_record(
+        cls,
+        item: dict[str, Any],
+        *,
+        owner_info: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        owner_payload = owner_info if isinstance(owner_info, dict) else {}
+        owners = [
+            cls._normalize_application_owner(raw)
+            for raw in (owner_payload.get("owners") or [])
+            if isinstance(raw, dict)
+        ]
+        credentials = cls._application_credential_records(item)
+        verified_publisher = item.get("verifiedPublisher") if isinstance(item.get("verifiedPublisher"), dict) else {}
+        next_expiry = ""
+        future_end_dates = [
+            str(credential.get("end_date_time") or "").strip()
+            for credential in credentials
+            if str(credential.get("end_date_time") or "").strip()
+        ]
+        if future_end_dates:
+            next_expiry = min(future_end_dates)
+
+        return {
+            "id": item.get("id") or "",
+            "app_id": item.get("appId") or "",
             "display_name": item.get("displayName") or "",
+            "sign_in_audience": item.get("signInAudience") or "",
+            "created_datetime": str(item.get("createdDateTime") or ""),
+            "publisher_domain": str(item.get("publisherDomain") or ""),
+            "verified_publisher_name": str(verified_publisher.get("displayName") or ""),
+            "verified_publisher_id": str(verified_publisher.get("verifiedPublisherId") or ""),
+            "notes": str(item.get("notes") or ""),
+            "owner_count": len(owners),
+            "owners": owners,
+            "owner_lookup_error": str(owner_payload.get("owner_lookup_error") or ""),
+            "credential_count": len(credentials),
+            "password_credential_count": len([credential for credential in credentials if credential.get("credential_type") == "secret"]),
+            "key_credential_count": len([credential for credential in credentials if credential.get("credential_type") == "certificate"]),
+            "next_credential_expiry": next_expiry,
+            "credentials": credentials,
+        }
+
+    @classmethod
+    def _normalize_application(
+        cls,
+        item: dict[str, Any],
+        *,
+        owner_info: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        security_record = cls._build_application_security_record(item, owner_info=owner_info)
+        return {
+            "id": security_record["id"],
+            "display_name": security_record["display_name"],
             "object_type": "app_registration",
             "principal_name": "",
             "mail": "",
             "enabled": None,
-            "app_id": item.get("appId") or "",
+            "app_id": security_record["app_id"],
             "extra": {
-                "sign_in_audience": item.get("signInAudience") or "",
+                "sign_in_audience": security_record["sign_in_audience"],
+                "created_datetime": security_record["created_datetime"],
+                "publisher_domain": security_record["publisher_domain"],
+                "verified_publisher_name": security_record["verified_publisher_name"],
+                "owner_count": str(security_record["owner_count"]),
+                "owner_names": ", ".join(owner.get("display_name") or owner.get("principal_name") or "" for owner in security_record["owners"]),
+                "owner_lookup_error": security_record["owner_lookup_error"],
+                "credential_count": str(security_record["credential_count"]),
+                "password_credential_count": str(security_record["password_credential_count"]),
+                "certificate_credential_count": str(security_record["key_credential_count"]),
+                "next_credential_expiry": security_record["next_credential_expiry"],
             },
         }
 
@@ -1060,9 +1176,27 @@ class AzureCache:
                 self._normalize_service_principal(item)
                 for item in self._client.list_service_principals()
             ]
+            application_rows = self._client.list_applications()
+            try:
+                application_owner_lookup = self._client.list_application_owners(
+                    [str(item.get("id") or "") for item in application_rows if str(item.get("id") or "").strip()]
+                )
+            except AzureApiError as exc:
+                logger.warning("Azure application owner lookup failed: %s", exc)
+                application_owner_lookup = {}
+            application_security = [
+                self._build_application_security_record(
+                    item,
+                    owner_info=application_owner_lookup.get(str(item.get("id") or "")),
+                )
+                for item in application_rows
+            ]
             applications = [
-                self._normalize_application(item)
-                for item in self._client.list_applications()
+                self._normalize_application(
+                    item,
+                    owner_info=application_owner_lookup.get(str(item.get("id") or "")),
+                )
+                for item in application_rows
             ]
             directory_roles = [
                 self._normalize_directory_role(item)
@@ -1074,6 +1208,7 @@ class AzureCache:
                     "groups": groups,
                     "service_principals": service_principals,
                     "applications": applications,
+                    "application_security": application_security,
                     "directory_roles": directory_roles,
                 }
             )
@@ -3249,6 +3384,8 @@ class AzureCache:
             ("page", "storage", "Storage", "Storage accounts, disks, and snapshots", "/storage"),
             ("page", "identity", "Identity", "Users, groups, enterprise apps, and roles", "/identity"),
             ("page", "security", "Security", "Azure security workspace and investigation tools", "/security"),
+            ("page", "security-access-review", "Privileged Access Review", "Review elevated Azure RBAC access and break-glass candidates", "/security/access-review"),
+            ("page", "security-app-hygiene", "Application Hygiene", "Review app registration owners and credential expiry risk", "/security/app-hygiene"),
             ("page", "security-copilot", "Security Copilot", "Investigate security incidents across Azure and local sources", "/security/copilot"),
             ("page", "users", "Users", "Directory user health and sign-in analysis", "/users"),
             ("page", "cost", "Cost", "Spend trend and FinOps validation", "/cost"),
