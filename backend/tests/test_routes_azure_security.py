@@ -10,6 +10,11 @@ from models import (
     SecurityAppHygieneCredential,
     SecurityAppHygieneMetric,
     SecurityAppHygieneResponse,
+    SecurityBreakGlassValidationAccount,
+    SecurityBreakGlassValidationResponse,
+    SecurityDirectoryRoleReviewMembership,
+    SecurityDirectoryRoleReviewResponse,
+    SecurityDirectoryRoleReviewRole,
 )
 
 
@@ -141,6 +146,97 @@ def _app_hygiene_response() -> SecurityAppHygieneResponse:
     )
 
 
+def _break_glass_response() -> SecurityBreakGlassValidationResponse:
+    return SecurityBreakGlassValidationResponse(
+        generated_at="2026-04-02T02:00:00Z",
+        inventory_last_refresh="2026-04-02T01:55:00Z",
+        directory_last_refresh="2026-04-02T01:56:00Z",
+        metrics=[
+            SecurityAccessReviewMetric(
+                key="matched_accounts",
+                label="Matched accounts",
+                value=2,
+                detail="Two candidates matched the naming rules.",
+                tone="sky",
+            )
+        ],
+        accounts=[
+            SecurityBreakGlassValidationAccount(
+                user_id="user-1",
+                display_name="Emergency Admin",
+                principal_name="emergency-admin@example.com",
+                enabled=True,
+                user_type="Member",
+                account_class="person_cloud",
+                matched_terms=["Emergency naming"],
+                has_privileged_access=True,
+                privileged_assignment_count=1,
+                last_successful_utc="2026-04-01T00:00:00Z",
+                days_since_last_successful=1,
+                last_password_change="2026-03-01T00:00:00Z",
+                days_since_password_change=32,
+                is_licensed=False,
+                license_count=0,
+                on_prem_sync=False,
+                status="healthy",
+                flags=["Account currently holds 1 privileged Azure RBAC assignment."],
+            )
+        ],
+        warnings=["MFA registration posture is not cached in this workspace yet."],
+        scope_notes=["This lane reuses the same break-glass naming heuristics as the Privileged Access Review lane."],
+    )
+
+
+def _directory_role_review_response(_session=None) -> SecurityDirectoryRoleReviewResponse:
+    return SecurityDirectoryRoleReviewResponse(
+        generated_at="2026-04-02T02:00:00Z",
+        directory_last_refresh="2026-04-02T01:56:00Z",
+        access_available=True,
+        access_message="Live direct role review is available.",
+        metrics=[
+            SecurityAccessReviewMetric(
+                key="roles_with_members",
+                label="Roles with direct members",
+                value=2,
+                detail="Two roles currently have direct members.",
+                tone="sky",
+            )
+        ],
+        roles=[
+            SecurityDirectoryRoleReviewRole(
+                role_id="role-1",
+                display_name="Global Administrator",
+                description="Full tenant access.",
+                privilege_level="critical",
+                member_count=3,
+                flagged_member_count=3,
+                flags=["Membership list was truncated to the first 100 results."],
+            )
+        ],
+        memberships=[
+            SecurityDirectoryRoleReviewMembership(
+                role_id="role-1",
+                role_name="Global Administrator",
+                role_description="Full tenant access.",
+                privilege_level="critical",
+                principal_id="user-1",
+                principal_type="User",
+                object_type="user",
+                display_name="Ada Guest",
+                principal_name="ada.guest@example.com",
+                enabled=True,
+                user_type="Guest",
+                last_successful_utc="2026-04-01T00:00:00Z",
+                assignment_type="direct",
+                status="critical",
+                flags=["Guest user holds a direct Entra directory role."],
+            )
+        ],
+        warnings=["Membership list was truncated to the first 100 results."],
+        scope_notes=["This lane reviews direct Microsoft Entra directory-role memberships with live Graph membership lookup per role."],
+    )
+
+
 def test_security_access_review_route_returns_payload_on_azure_host(test_client, monkeypatch):
     import routes_azure_security
 
@@ -182,6 +278,53 @@ def test_security_app_hygiene_route_returns_payload_on_azure_host(test_client, m
 
 def test_security_app_hygiene_route_is_azure_only(test_client):
     resp = test_client.get("/api/azure/security/app-hygiene")
+
+    assert resp.status_code == 404
+    assert "only available on azure.movedocs.com" in resp.json()["detail"]
+
+
+def test_security_break_glass_route_returns_payload_on_azure_host(test_client, monkeypatch):
+    import routes_azure_security
+
+    monkeypatch.setattr(routes_azure_security, "build_security_break_glass_validation", _break_glass_response)
+
+    resp = test_client.get(
+        "/api/azure/security/break-glass-validation",
+        headers={"host": "azure.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["metrics"][0]["label"] == "Matched accounts"
+    assert payload["accounts"][0]["display_name"] == "Emergency Admin"
+
+
+def test_security_break_glass_route_is_azure_only(test_client):
+    resp = test_client.get("/api/azure/security/break-glass-validation")
+
+    assert resp.status_code == 404
+    assert "only available on azure.movedocs.com" in resp.json()["detail"]
+
+
+def test_security_directory_role_review_route_returns_payload_on_azure_host(test_client, monkeypatch):
+    import routes_azure_security
+
+    monkeypatch.setattr(routes_azure_security, "build_security_directory_role_review", _directory_role_review_response)
+
+    resp = test_client.get(
+        "/api/azure/security/directory-role-review",
+        headers={"host": "azure.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["metrics"][0]["label"] == "Roles with direct members"
+    assert payload["roles"][0]["display_name"] == "Global Administrator"
+    assert payload["memberships"][0]["principal_name"] == "ada.guest@example.com"
+
+
+def test_security_directory_role_review_route_is_azure_only(test_client):
+    resp = test_client.get("/api/azure/security/directory-role-review")
 
     assert resp.status_code == 404
     assert "only available on azure.movedocs.com" in resp.json()["detail"]

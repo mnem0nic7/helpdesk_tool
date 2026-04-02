@@ -3385,6 +3385,8 @@ class AzureCache:
             ("page", "security", "Security", "Azure security workspace and investigation tools", "/security"),
             ("page", "security-identity-review", "Identity Review", "Review groups, enterprise apps, app registrations, and directory roles", "/security/identity-review"),
             ("page", "security-access-review", "Privileged Access Review", "Review elevated Azure RBAC access and break-glass candidates", "/security/access-review"),
+            ("page", "security-break-glass-validation", "Break-glass Account Validation", "Review break glass and emergency accounts, sign-in freshness, and Azure RBAC exposure", "/security/break-glass-validation"),
+            ("page", "security-directory-role-review", "Directory Role Membership Review", "Review live direct Entra directory-role memberships", "/security/directory-role-review"),
             ("page", "security-user-review", "User Review", "Review stale sign-ins, guest identities, synced users, and disabled licensed accounts", "/security/user-review"),
             ("page", "security-guest-access-review", "Guest Access Review", "Review guest identities, collaboration surfaces, and external app exposure", "/security/guest-access-review"),
             ("page", "security-dlp-review", "DLP Findings Review", "Review pasted DLP findings against identity, mailbox, and local context", "/security/dlp-review"),

@@ -15,6 +15,9 @@ from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
+_AUTO_TRIAGE_ACTIVITY_BACKFILL_METADATA_KEY = "auto_triage_activity_backfill_v1"
+_AUTO_TRIAGE_ACTIVITY_OUTCOMES = frozenset({"changed", "no_change", "failed", "backfill"})
+
 
 class TriageStore:
     """Simple SQLite store for AI triage suggestions, keyed by issue key."""
@@ -24,6 +27,7 @@ class TriageStore:
         self._use_postgres = postgres_enabled() and db_path is None
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._init_db()
+        self.ensure_auto_triage_activity_backfill()
 
     def _sqlite_conn(self) -> sqlite3.Connection:
         return connect_sqlite(self._db_path, row_factory=None)
@@ -58,6 +62,13 @@ class TriageStore:
             technician_rows = sqlite_conn.execute(
                 "SELECT key, data, model, created_at, updated_at FROM technician_scores"
             ).fetchall()
+            try:
+                activity_rows = sqlite_conn.execute(
+                    "SELECT key, outcome, source, processed_at, model, fields_changed, error, legacy_backfill "
+                    "FROM auto_triage_activity"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                activity_rows = []
         with self._conn() as conn:
             if metadata_rows:
                 conn.executemany(
@@ -104,6 +115,16 @@ class TriageStore:
                     """,
                     technician_rows,
                 )
+            if activity_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO triage_auto_triage_activity (
+                        key, outcome, source, processed_at, model, fields_changed, error, legacy_backfill
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(key) DO NOTHING
+                    """,
+                    activity_rows,
+                )
 
     def _init_db(self) -> None:
         if self._use_postgres:
@@ -149,6 +170,13 @@ class TriageStore:
                 "created_at TEXT, updated_at TEXT)"
             )
             conn.execute(
+                "CREATE TABLE IF NOT EXISTS auto_triage_activity "
+                "(key TEXT PRIMARY KEY, outcome TEXT NOT NULL, "
+                "source TEXT NOT NULL DEFAULT 'auto', processed_at TEXT NOT NULL, "
+                "model TEXT, fields_changed TEXT NOT NULL DEFAULT '[]', "
+                "error TEXT, legacy_backfill INTEGER NOT NULL DEFAULT 0)"
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_triage_log_timestamp "
                 "ON auto_triage_log(timestamp)"
             )
@@ -156,6 +184,41 @@ class TriageStore:
                 "CREATE INDEX IF NOT EXISTS idx_suggestions_updated_at "
                 "ON suggestions(updated_at)"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_auto_triage_activity_processed_at "
+                "ON auto_triage_activity(processed_at DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_auto_triage_activity_outcome "
+                "ON auto_triage_activity(outcome, processed_at DESC)"
+            )
+
+    @staticmethod
+    def _normalize_activity_key(key: str) -> str:
+        return str(key or "").strip().upper()
+
+    @staticmethod
+    def _normalize_activity_outcome(outcome: str) -> str:
+        normalized = str(outcome or "").strip().lower()
+        if normalized not in _AUTO_TRIAGE_ACTIVITY_OUTCOMES:
+            raise ValueError(f"Unsupported auto-triage activity outcome: {outcome}")
+        return normalized
+
+    @staticmethod
+    def _normalize_fields_changed(fields_changed: list[str] | None) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for field in fields_changed or []:
+            value = str(field or "").strip()
+            if not value or value in seen:
+                continue
+            normalized.append(value)
+            seen.add(value)
+        return normalized
+
+    @staticmethod
+    def _chunked(values: list[str], size: int = 500) -> list[list[str]]:
+        return [values[index:index + size] for index in range(0, len(values), size)]
 
     def get(self, key: str) -> TriageResult | None:
         with self._conn() as conn:
@@ -319,17 +382,276 @@ class TriageStore:
         """Delete all rows from auto_triaged so tickets can be re-processed."""
         with self._conn() as conn:
             conn.execute(f"DELETE FROM {'triage_auto_triaged' if self._use_postgres else 'auto_triaged'}")
+            conn.execute(
+                f"DELETE FROM {'triage_auto_triage_activity' if self._use_postgres else 'auto_triage_activity'}"
+            )
 
     def clear_auto_triaged_keys(self, keys: list[str]) -> None:
         """Delete specific keys from auto_triaged so they can be re-processed."""
-        if not keys:
+        normalized_keys = [
+            self._normalize_activity_key(key)
+            for key in keys
+            if self._normalize_activity_key(key)
+        ]
+        if not normalized_keys:
             return
-        placeholders = ",".join(self._placeholder() for _ in keys)
+        with self._conn() as conn:
+            for chunk in self._chunked(normalized_keys):
+                placeholders = ",".join(self._placeholder() for _ in chunk)
+                conn.execute(
+                    f"DELETE FROM {'triage_auto_triaged' if self._use_postgres else 'auto_triaged'} WHERE key IN ({placeholders})",
+                    chunk,
+                )
+                conn.execute(
+                    f"DELETE FROM {'triage_auto_triage_activity' if self._use_postgres else 'auto_triage_activity'} WHERE key IN ({placeholders})",
+                    chunk,
+                )
+
+    def record_auto_triage_activity(
+        self,
+        key: str,
+        outcome: str,
+        *,
+        source: str = "auto",
+        processed_at: str | None = None,
+        model: str | None = None,
+        fields_changed: list[str] | None = None,
+        error: str | None = None,
+        legacy_backfill: bool = False,
+    ) -> None:
+        normalized_key = self._normalize_activity_key(key)
+        if not normalized_key:
+            return
+        normalized_outcome = self._normalize_activity_outcome(outcome)
+        fields_payload = json.dumps(self._normalize_fields_changed(fields_changed))
+        timestamp = str(processed_at or datetime.now(timezone.utc).isoformat())
+        params = (
+            normalized_key,
+            normalized_outcome,
+            str(source or "auto"),
+            timestamp,
+            str(model or "") or None,
+            fields_payload,
+            str(error or "") or None,
+            int(bool(legacy_backfill)),
+        )
         with self._conn() as conn:
             conn.execute(
-                f"DELETE FROM {'triage_auto_triaged' if self._use_postgres else 'auto_triaged'} WHERE key IN ({placeholders})",
-                keys,
+                (
+                    """
+                    INSERT INTO triage_auto_triage_activity (
+                        key, outcome, source, processed_at, model, fields_changed, error, legacy_backfill
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(key) DO UPDATE SET
+                        outcome = excluded.outcome,
+                        source = excluded.source,
+                        processed_at = excluded.processed_at,
+                        model = excluded.model,
+                        fields_changed = excluded.fields_changed,
+                        error = excluded.error,
+                        legacy_backfill = excluded.legacy_backfill
+                    """
+                    if self._use_postgres
+                    else
+                    """
+                    INSERT INTO auto_triage_activity (
+                        key, outcome, source, processed_at, model, fields_changed, error, legacy_backfill
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        outcome = excluded.outcome,
+                        source = excluded.source,
+                        processed_at = excluded.processed_at,
+                        model = excluded.model,
+                        fields_changed = excluded.fields_changed,
+                        error = excluded.error,
+                        legacy_backfill = excluded.legacy_backfill
+                    """
+                ),
+                params,
             )
+
+    def record_auto_triage_activities_if_missing(self, entries: list[dict[str, object]]) -> int:
+        normalized_entries: list[tuple[str, str, str, str, str | None, str, str | None, int]] = []
+        for entry in entries:
+            normalized_key = self._normalize_activity_key(str(entry.get("key") or ""))
+            if not normalized_key:
+                continue
+            normalized_entries.append(
+                (
+                    normalized_key,
+                    self._normalize_activity_outcome(str(entry.get("outcome") or "")),
+                    str(entry.get("source") or "auto"),
+                    str(entry.get("processed_at") or datetime.now(timezone.utc).isoformat()),
+                    str(entry.get("model") or "") or None,
+                    json.dumps(self._normalize_fields_changed(entry.get("fields_changed"))),  # type: ignore[arg-type]
+                    str(entry.get("error") or "") or None,
+                    int(bool(entry.get("legacy_backfill"))),
+                )
+            )
+        if not normalized_entries:
+            return 0
+
+        deduped_rows: list[tuple[str, str, str, str, str | None, str, str | None, int]] = []
+        seen_keys: set[str] = set()
+        for row in normalized_entries:
+            if row[0] in seen_keys:
+                continue
+            deduped_rows.append(row)
+            seen_keys.add(row[0])
+
+        with self._conn() as conn:
+            activity_table = "triage_auto_triage_activity" if self._use_postgres else "auto_triage_activity"
+            existing_keys: set[str] = set()
+            keys = [row[0] for row in deduped_rows]
+            for chunk in self._chunked(keys):
+                placeholders = ",".join(self._placeholder() for _ in chunk)
+                existing_keys.update(
+                    row[0]
+                    for row in conn.execute(
+                        f"SELECT key FROM {activity_table} WHERE key IN ({placeholders})",
+                        chunk,
+                    ).fetchall()
+                )
+            insert_rows = [row for row in deduped_rows if row[0] not in existing_keys]
+            if not insert_rows:
+                return 0
+            conn.executemany(
+                (
+                    """
+                    INSERT INTO triage_auto_triage_activity (
+                        key, outcome, source, processed_at, model, fields_changed, error, legacy_backfill
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(key) DO NOTHING
+                    """
+                    if self._use_postgres
+                    else
+                    """
+                    INSERT OR IGNORE INTO auto_triage_activity (
+                        key, outcome, source, processed_at, model, fields_changed, error, legacy_backfill
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                ),
+                insert_rows,
+            )
+            return len(insert_rows)
+
+    def list_auto_triage_activity(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT key, outcome, source, processed_at, model, fields_changed, error, legacy_backfill "
+                f"FROM {'triage_auto_triage_activity' if self._use_postgres else 'auto_triage_activity'} "
+                f"ORDER BY processed_at DESC"
+            ).fetchall()
+        results: list[dict] = []
+        for row in rows:
+            try:
+                fields_changed = json.loads(row[5] or "[]")
+            except Exception:
+                fields_changed = []
+            results.append(
+                {
+                    "key": row[0],
+                    "outcome": row[1],
+                    "source": row[2],
+                    "processed_at": row[3],
+                    "model": row[4],
+                    "fields_changed": fields_changed if isinstance(fields_changed, list) else [],
+                    "error": row[6],
+                    "legacy_backfill": bool(row[7]),
+                }
+            )
+        return results
+
+    def get_auto_triage_activity_keys(self, outcomes: list[str] | None = None) -> set[str]:
+        allowed_outcomes = (
+            {self._normalize_activity_outcome(outcome) for outcome in outcomes}
+            if outcomes
+            else None
+        )
+        keys: set[str] = set()
+        for entry in self.list_auto_triage_activity():
+            if allowed_outcomes and entry["outcome"] not in allowed_outcomes:
+                continue
+            keys.add(str(entry["key"] or ""))
+        return keys
+
+    def ensure_auto_triage_activity_backfill(self) -> int:
+        if self.get_metadata(_AUTO_TRIAGE_ACTIVITY_BACKFILL_METADATA_KEY) == "1":
+            return 0
+
+        auto_triaged_table = "triage_auto_triaged" if self._use_postgres else "auto_triaged"
+        log_table = "triage_auto_triage_log" if self._use_postgres else "auto_triage_log"
+
+        with self._conn() as conn:
+            auto_triaged_rows = conn.execute(
+                f"SELECT key, processed_at FROM {auto_triaged_table}"
+            ).fetchall()
+            if not auto_triaged_rows:
+                return 0
+            log_rows = conn.execute(
+                f"SELECT key, field, model, timestamp FROM {log_table} ORDER BY timestamp ASC"
+            ).fetchall()
+
+        existing_activity_keys = self.get_auto_triage_activity_keys()
+        if all(self._normalize_activity_key(row[0]) in existing_activity_keys for row in auto_triaged_rows):
+            self.set_metadata(_AUTO_TRIAGE_ACTIVITY_BACKFILL_METADATA_KEY, "1")
+            return 0
+
+        changed_by_key: dict[str, dict[str, object]] = {}
+        for row in log_rows:
+            key = self._normalize_activity_key(row[0])
+            if not key:
+                continue
+            entry = changed_by_key.setdefault(
+                key,
+                {
+                    "fields_changed": [],
+                    "model": None,
+                    "processed_at": None,
+                },
+            )
+            fields_changed = entry["fields_changed"]
+            if isinstance(fields_changed, list) and row[1] and row[1] not in fields_changed:
+                fields_changed.append(row[1])
+            entry["model"] = row[2]
+            entry["processed_at"] = row[3]
+
+        backfill_entries: list[dict[str, object]] = []
+        for key, processed_at in auto_triaged_rows:
+            normalized_key = self._normalize_activity_key(key)
+            if not normalized_key or normalized_key in existing_activity_keys:
+                continue
+            changed_entry = changed_by_key.get(normalized_key)
+            if changed_entry:
+                backfill_entries.append(
+                    {
+                        "key": normalized_key,
+                        "outcome": "changed",
+                        "source": "migration",
+                        "processed_at": changed_entry.get("processed_at") or processed_at,
+                        "model": changed_entry.get("model"),
+                        "fields_changed": changed_entry.get("fields_changed") or [],
+                        "error": None,
+                        "legacy_backfill": False,
+                    }
+                )
+            else:
+                backfill_entries.append(
+                    {
+                        "key": normalized_key,
+                        "outcome": "backfill",
+                        "source": "migration",
+                        "processed_at": processed_at,
+                        "model": None,
+                        "fields_changed": [],
+                        "error": None,
+                        "legacy_backfill": True,
+                    }
+                )
+
+        inserted = self.record_auto_triage_activities_if_missing(backfill_entries)
+        self.set_metadata(_AUTO_TRIAGE_ACTIVITY_BACKFILL_METADATA_KEY, "1")
+        return inserted
 
     def get_metadata(self, key: str) -> str | None:
         with self._conn() as conn:

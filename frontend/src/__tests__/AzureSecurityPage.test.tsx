@@ -96,6 +96,8 @@ describe("AzureSecurityPage", () => {
     expect(screen.getByText("Connected Consoles")).toBeInTheDocument();
     expect(screen.getByText("Security Incident Copilot")).toBeInTheDocument();
     expect(screen.getByText("Identity Review")).toBeInTheDocument();
+    expect(screen.getByText("Directory Role Membership Review")).toBeInTheDocument();
+    expect(screen.getByText("Break-glass Account Validation")).toBeInTheDocument();
     expect(screen.getByText("User Review")).toBeInTheDocument();
     expect(screen.getByText("Guest Access Review")).toBeInTheDocument();
     expect(screen.getByText("DLP Findings Review")).toBeInTheDocument();
@@ -104,8 +106,10 @@ describe("AzureSecurityPage", () => {
     expect(screen.getByText("Application Hygiene")).toBeInTheDocument();
     expect(screen.getByText("2/2 configured datasets healthy")).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "Open Security Copilot" })[0]).toHaveAttribute("href", "/security/copilot");
-    expect(screen.getByRole("link", { name: "Open Access Review" })).toHaveAttribute("href", "/security/access-review");
+    expect(screen.getAllByRole("link", { name: "Open Access Review" })[0]).toHaveAttribute("href", "/security/access-review");
+    expect(screen.getAllByRole("link", { name: "Open Break-glass Validation" })[0]).toHaveAttribute("href", "/security/break-glass-validation");
     expect(screen.getAllByRole("link", { name: "Open Identity Review" })[0]).toHaveAttribute("href", "/security/identity-review");
+    expect(screen.getAllByRole("link", { name: "Open Directory Role Review" })[0]).toHaveAttribute("href", "/security/directory-role-review");
     expect(screen.getAllByRole("link", { name: "Open User Review" })[0]).toHaveAttribute("href", "/security/user-review");
     expect(screen.getByRole("link", { name: "Open Guest Access Review" })).toHaveAttribute("href", "/security/guest-access-review");
     expect(screen.getByRole("link", { name: "Open DLP Findings Review" })).toHaveAttribute("href", "/security/dlp-review");
@@ -114,6 +118,8 @@ describe("AzureSecurityPage", () => {
     expect(screen.getByRole("link", { name: "Microsoft Defender" })).toHaveAttribute("href", "https://security.microsoft.com/");
     expect(screen.queryByText("Security Control Planes")).not.toBeInTheDocument();
     expect(screen.queryByText("Starter Security Tools")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Conditional access change tracker")).toHaveLength(1);
+    expect(screen.getAllByText("Emergency-account MFA posture validation")).toHaveLength(1);
   });
 
   it("falls back to overview datasets when the live status call is unavailable", async () => {

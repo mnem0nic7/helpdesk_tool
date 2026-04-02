@@ -20,6 +20,7 @@ const AzureVMsPage = lazy(() => import("./pages/AzureVMsPage"));
 const AzureResourcesPage = lazy(() => import("./pages/AzureResourcesPage"));
 const AzureIdentityPage = lazy(() => import("./pages/AzureIdentityPage"));
 const AzureSecurityIdentityReviewPage = lazy(() => import("./pages/AzureSecurityIdentityReviewPage"));
+const AzureSecurityBreakGlassValidationPage = lazy(() => import("./pages/AzureSecurityBreakGlassValidationPage"));
 const AzureSecurityGuestAccessReviewPage = lazy(() => import("./pages/AzureSecurityGuestAccessReviewPage"));
 const AzureSecurityDlpReviewPage = lazy(() => import("./pages/AzureSecurityDlpReviewPage"));
 const AzureCostPage = lazy(() => import("./pages/AzureCostPage"));
@@ -33,6 +34,7 @@ const AzureUsersPage = lazy(() => import("./pages/AzureUsersPage"));
 const AzureSecurityPage = lazy(() => import("./pages/AzureSecurityPage"));
 const AzureSecurityAccessReviewPage = lazy(() => import("./pages/AzureSecurityAccessReviewPage"));
 const AzureSecurityAppHygienePage = lazy(() => import("./pages/AzureSecurityAppHygienePage"));
+const AzureSecurityDirectoryRoleReviewPage = lazy(() => import("./pages/AzureSecurityDirectoryRoleReviewPage"));
 const AzureSecurityUserReviewPage = lazy(() => import("./pages/AzureSecurityUserReviewPage"));
 const AzureSecurityCopilotPage = lazy(() => import("./pages/AzureSecurityCopilotPage"));
 const AzureAlertsPage = lazy(() => import("./pages/AzureAlertsPage"));
@@ -68,6 +70,8 @@ export default function App() {
                 <Route path="identity" element={<AzureIdentityPage />} />
                 <Route path="security" element={<AzureSecurityPage />} />
                 <Route path="security/access-review" element={<AzureSecurityAccessReviewPage />} />
+                <Route path="security/break-glass-validation" element={<AzureSecurityBreakGlassValidationPage />} />
+                <Route path="security/directory-role-review" element={<AzureSecurityDirectoryRoleReviewPage />} />
                 <Route path="security/identity-review" element={<AzureSecurityIdentityReviewPage />} />
                 <Route path="security/guest-access-review" element={<AzureSecurityGuestAccessReviewPage />} />
                 <Route path="security/dlp-review" element={<AzureSecurityDlpReviewPage />} />

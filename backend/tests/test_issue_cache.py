@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import sqlite3
+from types import SimpleNamespace
+
+import pytest
 
 from issue_cache import IssueCache
+from models import AIModel, TriageResult, TriageSuggestion
 
 
 def _issue(
@@ -141,6 +145,18 @@ def test_auto_triage_status_marks_existing_old_tickets_processed_once(tmp_path, 
 
     assert first_status["pending_keys"] == ["OIT-101"]
     assert triage_store.store.get_auto_triaged_keys() == {"OIT-100"}
+    assert triage_store.store.list_auto_triage_activity() == [
+        {
+            "key": "OIT-100",
+            "outcome": "backfill",
+            "source": "legacy_backfill",
+            "processed_at": triage_store.store.list_auto_triage_activity()[0]["processed_at"],
+            "model": None,
+            "fields_changed": [],
+            "error": None,
+            "legacy_backfill": True,
+        }
+    ]
     assert (
         triage_store.store.get_metadata(
             "auto_triage_backfill_older_than_24h_processed_v1"
@@ -160,6 +176,242 @@ def test_auto_triage_status_marks_existing_old_tickets_processed_once(tmp_path, 
 
     assert second_status["pending_keys"] == ["OIT-101", "OIT-102"]
     assert triage_store.store.get_auto_triaged_keys() == {"OIT-100"}
+
+
+@pytest.mark.asyncio
+async def test_auto_triage_records_changed_activity_and_change_log(tmp_path, monkeypatch):
+    import ai_client
+    import issue_cache as issue_cache_module
+    import jira_client
+    import triage_store
+
+    monkeypatch.setattr(
+        triage_store,
+        "store",
+        triage_store.TriageStore(str(tmp_path / "triage.db")),
+    )
+
+    cache = IssueCache(str(tmp_path / "issues.db"))
+    cache._initialized = True
+    cache._auto_triage_seen = set()
+    issue = _issue("OIT-901", "Investigate printer outage")
+    cache._all_issues = {issue["key"]: issue}
+    cache._issues = dict(cache._all_issues)
+
+    monkeypatch.setattr(
+        ai_client,
+        "get_available_models",
+        lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+    )
+    monkeypatch.setattr(
+        ai_client,
+        "select_available_ollama_model",
+        lambda available, preferred_model_id, fallback_model_id: "qwen3.5:4b",
+    )
+    monkeypatch.setattr(ai_client, "validate_suggestions", lambda key, suggestions: suggestions)
+    monkeypatch.setattr(
+        ai_client,
+        "analyze_ticket",
+        lambda issue, model_id: TriageResult(
+            key=issue["key"],
+            suggestions=[
+                TriageSuggestion(
+                    field="priority",
+                    current_value="Medium",
+                    suggested_value="High",
+                    reasoning="Security symptoms require elevated priority.",
+                    confidence=0.95,
+                )
+            ],
+            model_used=model_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    class _FakeJiraClient:
+        def update_priority(self, key: str, priority: str) -> None:
+            assert key == "OIT-901"
+            assert priority == "High"
+
+        def set_request_type(self, key: str, request_type_id: str) -> None:
+            raise AssertionError("request type should not be updated in this test")
+
+        def update_reporter(self, key: str, account_id: str) -> None:
+            raise AssertionError("reporter should not be updated in this test")
+
+        def find_user_account_id(self, value: str) -> str | None:
+            return None
+
+    monkeypatch.setattr(jira_client, "JiraClient", _FakeJiraClient)
+    monkeypatch.setattr(
+        issue_cache_module,
+        "background_ai_worker",
+        SimpleNamespace(run_item=lambda lane, key, work: work()),
+    )
+
+    await cache._auto_triage_new_tickets(["OIT-901"], model_id="qwen3.5:4b")
+
+    assert triage_store.store.get_auto_triaged_keys() == {"OIT-901"}
+    assert triage_store.store.get_triage_log(limit=10) == [
+        {
+            "key": "OIT-901",
+            "field": "priority",
+            "old_value": "Medium",
+            "new_value": "High",
+            "confidence": 0.95,
+            "model": "qwen3.5:4b",
+            "source": "auto",
+            "approved_by": None,
+            "timestamp": triage_store.store.get_triage_log(limit=10)[0]["timestamp"],
+        }
+    ]
+    assert triage_store.store.list_auto_triage_activity() == [
+        {
+            "key": "OIT-901",
+            "outcome": "changed",
+            "source": "auto",
+            "processed_at": triage_store.store.list_auto_triage_activity()[0]["processed_at"],
+            "model": "qwen3.5:4b",
+            "fields_changed": ["priority"],
+            "error": None,
+            "legacy_backfill": False,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_auto_triage_records_no_change_activity_without_change_log(tmp_path, monkeypatch):
+    import ai_client
+    import issue_cache as issue_cache_module
+    import jira_client
+    import triage_store
+
+    monkeypatch.setattr(
+        triage_store,
+        "store",
+        triage_store.TriageStore(str(tmp_path / "triage.db")),
+    )
+
+    cache = IssueCache(str(tmp_path / "issues.db"))
+    cache._initialized = True
+    cache._auto_triage_seen = set()
+    issue = _issue("OIT-902", "Investigate VPN disconnect")
+    cache._all_issues = {issue["key"]: issue}
+    cache._issues = dict(cache._all_issues)
+
+    monkeypatch.setattr(
+        ai_client,
+        "get_available_models",
+        lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+    )
+    monkeypatch.setattr(
+        ai_client,
+        "select_available_ollama_model",
+        lambda available, preferred_model_id, fallback_model_id: "qwen3.5:4b",
+    )
+    monkeypatch.setattr(ai_client, "validate_suggestions", lambda key, suggestions: suggestions)
+    monkeypatch.setattr(
+        ai_client,
+        "analyze_ticket",
+        lambda issue, model_id: TriageResult(
+            key=issue["key"],
+            suggestions=[
+                TriageSuggestion(
+                    field="priority",
+                    current_value="Medium",
+                    suggested_value="High",
+                    reasoning="Not confident enough to auto-apply.",
+                    confidence=0.2,
+                )
+            ],
+            model_used=model_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    monkeypatch.setattr(jira_client, "JiraClient", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        issue_cache_module,
+        "background_ai_worker",
+        SimpleNamespace(run_item=lambda lane, key, work: work()),
+    )
+
+    await cache._auto_triage_new_tickets(["OIT-902"], model_id="qwen3.5:4b")
+
+    assert triage_store.store.get_auto_triaged_keys() == {"OIT-902"}
+    assert triage_store.store.get_triage_log(limit=10) == []
+    assert triage_store.store.list_auto_triage_activity() == [
+        {
+            "key": "OIT-902",
+            "outcome": "no_change",
+            "source": "auto",
+            "processed_at": triage_store.store.list_auto_triage_activity()[0]["processed_at"],
+            "model": "qwen3.5:4b",
+            "fields_changed": [],
+            "error": None,
+            "legacy_backfill": False,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_auto_triage_records_failed_activity_without_marking_ticket_done(tmp_path, monkeypatch):
+    import ai_client
+    import issue_cache as issue_cache_module
+    import jira_client
+    import triage_store
+
+    monkeypatch.setattr(
+        triage_store,
+        "store",
+        triage_store.TriageStore(str(tmp_path / "triage.db")),
+    )
+
+    cache = IssueCache(str(tmp_path / "issues.db"))
+    cache._initialized = True
+    cache._auto_triage_seen = set()
+    issue = _issue("OIT-903", "Investigate suspicious login")
+    cache._all_issues = {issue["key"]: issue}
+    cache._issues = dict(cache._all_issues)
+
+    monkeypatch.setattr(
+        ai_client,
+        "get_available_models",
+        lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+    )
+    monkeypatch.setattr(
+        ai_client,
+        "select_available_ollama_model",
+        lambda available, preferred_model_id, fallback_model_id: "qwen3.5:4b",
+    )
+    monkeypatch.setattr(ai_client, "validate_suggestions", lambda key, suggestions: suggestions)
+    monkeypatch.setattr(
+        ai_client,
+        "analyze_ticket",
+        lambda issue, model_id: (_ for _ in ()).throw(RuntimeError("ollama offline")),
+    )
+    monkeypatch.setattr(jira_client, "JiraClient", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        issue_cache_module,
+        "background_ai_worker",
+        SimpleNamespace(run_item=lambda lane, key, work: work()),
+    )
+
+    await cache._auto_triage_new_tickets(["OIT-903"], model_id="qwen3.5:4b")
+
+    assert triage_store.store.get_auto_triaged_keys() == set()
+    assert triage_store.store.get_triage_log(limit=10) == []
+    assert triage_store.store.list_auto_triage_activity() == [
+        {
+            "key": "OIT-903",
+            "outcome": "failed",
+            "source": "auto",
+            "processed_at": triage_store.store.list_auto_triage_activity()[0]["processed_at"],
+            "model": "qwen3.5:4b",
+            "fields_changed": [],
+            "error": "RuntimeError: ollama offline",
+            "legacy_backfill": False,
+        }
+    ]
 
 
 def test_followup_bootstrap_backfills_cached_recent_issues(tmp_path):

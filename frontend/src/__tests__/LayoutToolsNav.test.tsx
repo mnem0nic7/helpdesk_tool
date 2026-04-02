@@ -127,6 +127,22 @@ describe("Layout tools navigation", () => {
     expect(screen.getAllByText("DLP Findings Review").length).toBeGreaterThan(0);
   });
 
+  it("shows the break-glass validation breadcrumb on the azure host", async () => {
+    renderLayoutAt("/security/break-glass-validation", "azure");
+
+    expect(await screen.findByText("Page content")).toBeInTheDocument();
+    expect(screen.getAllByText("Security").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Break-glass Account Validation").length).toBeGreaterThan(0);
+  });
+
+  it("shows the directory role review breadcrumb on the azure host", async () => {
+    renderLayoutAt("/security/directory-role-review", "azure");
+
+    expect(await screen.findByText("Page content")).toBeInTheDocument();
+    expect(screen.getAllByText("Security").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Directory Role Membership Review").length).toBeGreaterThan(0);
+  });
+
   it("hides Tools on oasisdev", async () => {
     renderLayoutAt("/", "oasisdev");
     await screen.findByText("Page content");

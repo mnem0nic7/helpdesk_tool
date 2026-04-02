@@ -95,6 +95,58 @@ def test_list_application_owners_uses_graph_batch_and_tracks_errors(monkeypatch)
     assert result["app-2"]["owner_lookup_error"] == "Access denied"
 
 
+def test_list_directory_role_members_uses_graph_batch_and_tracks_errors(monkeypatch):
+    client = AzureClient()
+    captured: dict[str, object] = {}
+
+    def fake_batch_request(requests_payload):
+        captured["requests_payload"] = requests_payload
+        return {
+            "responses": [
+                {
+                    "id": "1",
+                    "status": 200,
+                    "body": {
+                        "value": [
+                            {
+                                "id": "user-1",
+                                "displayName": "Ada Lovelace",
+                                "userPrincipalName": "ada@example.com",
+                                "@odata.type": "#microsoft.graph.user",
+                            }
+                        ],
+                        "@odata.nextLink": "https://graph.microsoft.com/v1.0/$batch/next",
+                    },
+                },
+                {
+                    "id": "2",
+                    "status": 403,
+                    "body": {"error": {"message": "Access denied"}},
+                },
+            ]
+        }
+
+    monkeypatch.setattr(client, "graph_batch_request", fake_batch_request)
+
+    result = client.list_directory_role_members(["role-1", "role-2"])
+
+    assert captured["requests_payload"] == [
+        {
+            "id": "1",
+            "method": "GET",
+            "url": "/directoryRoles/role-1/members?$select=id,displayName,description,mail,userPrincipalName,appId,accountEnabled,securityEnabled,userType&$top=100",
+        },
+        {
+            "id": "2",
+            "method": "GET",
+            "url": "/directoryRoles/role-2/members?$select=id,displayName,description,mail,userPrincipalName,appId,accountEnabled,securityEnabled,userType&$top=100",
+        },
+    ]
+    assert result["role-1"]["members"][0]["displayName"] == "Ada Lovelace"
+    assert result["role-1"]["truncated"] is True
+    assert result["role-2"]["member_lookup_error"] == "Access denied"
+
+
 def test_query_resources_captures_vm_size_and_sku(monkeypatch):
     client = AzureClient()
 

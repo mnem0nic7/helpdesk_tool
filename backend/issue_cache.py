@@ -1113,6 +1113,21 @@ class IssueCache:
         ]
 
         inserted = store.mark_auto_triaged_if_missing(keys_to_mark)
+        store.record_auto_triage_activities_if_missing(
+            [
+                {
+                    "key": key,
+                    "outcome": "backfill",
+                    "source": "legacy_backfill",
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                    "model": None,
+                    "fields_changed": [],
+                    "error": None,
+                    "legacy_backfill": True,
+                }
+                for key in keys_to_mark
+            ]
+        )
         seen = self._load_auto_triage_seen()
         seen.update(keys_to_mark)
         store.set_metadata(_AUTO_TRIAGE_ONE_TIME_BACKFILL_METADATA_KEY, "1")
@@ -1180,6 +1195,7 @@ class IssueCache:
 
         try:
             for i, key in enumerate(keys_to_process):
+                applied_fields: list[str] = []
                 try:
                     with self._lock:
                         self._auto_triage_current_key = key
@@ -1195,7 +1211,11 @@ class IssueCache:
                         continue
 
                     # Apply deterministic rules first (e.g. Security Alert -> High)
-                    await loop.run_in_executor(None, self._apply_priority_rules, key, issue)
+                    priority_updated = await loop.run_in_executor(
+                        None, self._apply_priority_rules, key, issue
+                    )
+                    if priority_updated:
+                        applied_fields.append("priority")
 
                     async def _run_ai_triage() -> Any:
                         return await loop.run_in_executor(
@@ -1211,10 +1231,8 @@ class IssueCache:
                     store.save(result)
 
                     # Auto-apply priority, request_type, and explicit reporter hints when safe.
-                    priority_updated = False
                     request_type_updated = False
                     reporter_updated = False
-                    applied_fields: list[str] = []
                     for s in result.suggestions:
                         try:
                             if s.field == "priority" and s.confidence >= 0.7:
@@ -1229,7 +1247,8 @@ class IssueCache:
                                 # Update local cache
                                 self.update_cached_field(key, "priority", target_priority)
                                 priority_updated = True
-                                applied_fields.append("priority")
+                                if "priority" not in applied_fields:
+                                    applied_fields.append("priority")
                                 logger.info(
                                     "Auto-triage: %s priority %s -> %s (conf=%.2f)",
                                     key, s.current_value, target_priority, s.confidence,
@@ -1248,7 +1267,8 @@ class IssueCache:
                                     # Update local cache
                                     self.update_cached_field(key, "request_type", s.suggested_value)
                                     request_type_updated = True
-                                    applied_fields.append("request_type")
+                                    if "request_type" not in applied_fields:
+                                        applied_fields.append("request_type")
                                     logger.info(
                                         "Auto-triage: %s request_type %s -> %s (conf=%.2f)",
                                         key, s.current_value, s.suggested_value, s.confidence,
@@ -1269,22 +1289,29 @@ class IssueCache:
                                         {"displayName": s.suggested_value, "accountId": account_id},
                                     )
                                     reporter_updated = True
-                                    applied_fields.append("reporter")
+                                    if "reporter" not in applied_fields:
+                                        applied_fields.append("reporter")
                                     logger.info(
                                         "Auto-triage: %s reporter %s -> %s (conf=%.2f)",
                                         key, s.current_value, s.suggested_value, s.confidence,
                                     )
-                        except Exception:
-                            logger.exception("Auto-triage: failed to apply %s for %s", s.field, key)
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f"Failed to apply {s.field} suggestion for {key}: {exc}"
+                            ) from exc
 
                     # If AI reclassified the request type, re-run priority rules - the new type
                     # may now trigger a rule (e.g. newly classified as Security Alert -> High).
                     if request_type_updated and not priority_updated:
                         with self._lock:
                             updated_issue = self._all_issues.get(key, issue)
-                        await loop.run_in_executor(
+                        priority_rule_updated = await loop.run_in_executor(
                             None, self._apply_priority_rules, key, updated_issue
                         )
+                        if priority_rule_updated:
+                            priority_updated = True
+                            if "priority" not in applied_fields:
+                                applied_fields.append("priority")
 
                     # Remove priority and request_type suggestions entirely - auto-triage owns these fields.
                     # Applied ones are already written to Jira; unapplied ones (low confidence) should not
@@ -1294,11 +1321,30 @@ class IssueCache:
                     if reporter_updated:
                         store.remove_field(key, "reporter")
 
-                    store.mark_auto_triaged(key, priority_updated=priority_updated, request_type_updated=request_type_updated)
+                    store.record_auto_triage_activity(
+                        key,
+                        "changed" if applied_fields else "no_change",
+                        source="auto",
+                        model=resolved_model_id,
+                        fields_changed=applied_fields,
+                    )
+                    store.mark_auto_triaged(
+                        key,
+                        priority_updated=priority_updated,
+                        request_type_updated=request_type_updated,
+                    )
                     seen.add(key)
                     logger.info("Auto-triage: %s completed (%d suggestions)", key, len(result.suggestions))
 
-                except Exception:
+                except Exception as exc:
+                    store.record_auto_triage_activity(
+                        key,
+                        "failed",
+                        source="auto",
+                        model=resolved_model_id,
+                        fields_changed=applied_fields,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
                     logger.exception("Auto-triage: failed for %s", key)
 
             if progress is not None:

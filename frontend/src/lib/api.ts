@@ -759,6 +759,23 @@ export interface TriageLogEntry {
   timestamp: string;
 }
 
+export interface TriageRunStatus {
+  running: boolean;
+  processed: number;
+  total: number;
+  current_key: string | null;
+  remaining_count?: number;
+  processed_count?: number;
+  ai_processed_count?: number;
+  changed_count?: number;
+  no_change_count?: number;
+  backfilled_count?: number;
+  failed_count?: number;
+  last_activity_at?: string | null;
+  health?: "healthy" | "broken";
+  health_message?: string;
+}
+
 export interface TechnicianScoreEntry {
   key: string;
   communication_score: number;
@@ -2370,7 +2387,7 @@ export interface SecurityAccessReviewMetric {
   label: string;
   value: number;
   detail: string;
-  tone: "slate" | "sky" | "emerald" | "amber" | "rose";
+  tone: "slate" | "sky" | "emerald" | "amber" | "rose" | "violet";
 }
 
 export interface SecurityAccessReviewPrincipal {
@@ -2438,7 +2455,7 @@ export interface SecurityAppHygieneMetric {
   label: string;
   value: number;
   detail: string;
-  tone: "slate" | "sky" | "emerald" | "amber" | "rose";
+  tone: "slate" | "sky" | "emerald" | "amber" | "rose" | "violet";
 }
 
 export interface SecurityAppHygieneApp {
@@ -2485,6 +2502,77 @@ export interface SecurityAppHygieneResponse {
   metrics: SecurityAppHygieneMetric[];
   flagged_apps: SecurityAppHygieneApp[];
   credentials: SecurityAppHygieneCredential[];
+  warnings: string[];
+  scope_notes: string[];
+}
+
+export interface SecurityBreakGlassValidationAccount {
+  user_id: string;
+  display_name: string;
+  principal_name: string;
+  enabled: boolean | null;
+  user_type: string;
+  account_class: string;
+  matched_terms: string[];
+  has_privileged_access: boolean;
+  privileged_assignment_count: number;
+  last_successful_utc: string;
+  days_since_last_successful: number | null;
+  last_password_change: string;
+  days_since_password_change: number | null;
+  is_licensed: boolean | null;
+  license_count: number;
+  on_prem_sync: boolean;
+  status: "critical" | "warning" | "healthy";
+  flags: string[];
+}
+
+export interface SecurityBreakGlassValidationResponse {
+  generated_at: string;
+  inventory_last_refresh: string;
+  directory_last_refresh: string;
+  metrics: SecurityAccessReviewMetric[];
+  accounts: SecurityBreakGlassValidationAccount[];
+  warnings: string[];
+  scope_notes: string[];
+}
+
+export interface SecurityDirectoryRoleReviewRole {
+  role_id: string;
+  display_name: string;
+  description: string;
+  privilege_level: "critical" | "elevated" | "limited";
+  member_count: number;
+  flagged_member_count: number;
+  flags: string[];
+}
+
+export interface SecurityDirectoryRoleReviewMembership {
+  role_id: string;
+  role_name: string;
+  role_description: string;
+  privilege_level: "critical" | "elevated" | "limited";
+  principal_id: string;
+  principal_type: string;
+  object_type: string;
+  display_name: string;
+  principal_name: string;
+  enabled: boolean | null;
+  user_type: string;
+  last_successful_utc: string;
+  assignment_type: string;
+  status: "critical" | "warning" | "healthy";
+  flags: string[];
+}
+
+export interface SecurityDirectoryRoleReviewResponse {
+  generated_at: string;
+  directory_last_refresh: string;
+  access_available: boolean;
+  access_message: string;
+  metrics: SecurityAccessReviewMetric[];
+  roles: SecurityDirectoryRoleReviewRole[];
+  memberships: SecurityDirectoryRoleReviewMembership[];
   warnings: string[];
   scope_notes: string[];
 }
@@ -3558,6 +3646,14 @@ export const api = {
     return fetchJSON<SecurityAccessReviewResponse>("/api/azure/security/access-review");
   },
 
+  getAzureSecurityBreakGlassValidation(): Promise<SecurityBreakGlassValidationResponse> {
+    return fetchJSON<SecurityBreakGlassValidationResponse>("/api/azure/security/break-glass-validation");
+  },
+
+  getAzureSecurityDirectoryRoleReview(): Promise<SecurityDirectoryRoleReviewResponse> {
+    return fetchJSON<SecurityDirectoryRoleReviewResponse>("/api/azure/security/directory-role-review");
+  },
+
   getAzureSecurityAppHygiene(): Promise<SecurityAppHygieneResponse> {
     return fetchJSON<SecurityAppHygieneResponse>("/api/azure/security/app-hygiene");
   },
@@ -3743,8 +3839,8 @@ export const api = {
   },
 
   /** Get progress of the current run-all background task. */
-  getTriageRunStatus(): Promise<{ running: boolean; processed: number; total: number; current_key: string | null; remaining_count?: number; processed_count?: number }> {
-    return fetchJSON("/api/triage/run-status");
+  getTriageRunStatus(): Promise<TriageRunStatus> {
+    return fetchJSON<TriageRunStatus>("/api/triage/run-status");
   },
 
   /** Get progress of the current closed-ticket scoring run. */

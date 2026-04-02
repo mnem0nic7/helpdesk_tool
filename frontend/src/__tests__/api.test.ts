@@ -260,6 +260,24 @@ describe("azure api methods", () => {
     expect(call[1]).toBeUndefined();
   });
 
+  it("loads Azure directory role review data from the security endpoint", async () => {
+    mockFetch({
+      generated_at: "2026-04-02T02:00:00Z",
+      directory_last_refresh: "2026-04-02T01:56:00Z",
+      access_available: true,
+      access_message: "Live direct role review is available.",
+      metrics: [],
+      roles: [],
+      memberships: [],
+      warnings: [],
+      scope_notes: [],
+    });
+    await api.getAzureSecurityDirectoryRoleReview();
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/azure/security/directory-role-review");
+    expect(call[1]).toBeUndefined();
+  });
+
   it("posts Azure security copilot investigations", async () => {
     mockFetch({
       phase: "needs_input",
@@ -328,6 +346,22 @@ describe("azure api methods", () => {
     await api.getAzureSecurityAccessReview();
     const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(call[0]).toBe("/api/azure/security/access-review");
+    expect(call[1]).toBeUndefined();
+  });
+
+  it("loads the Azure break-glass validation review", async () => {
+    mockFetch({
+      generated_at: "2026-04-02T02:00:00Z",
+      inventory_last_refresh: "2026-04-02T01:50:00Z",
+      directory_last_refresh: "2026-04-02T01:51:00Z",
+      metrics: [],
+      accounts: [],
+      warnings: [],
+      scope_notes: [],
+    });
+    await api.getAzureSecurityBreakGlassValidation();
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/azure/security/break-glass-validation");
     expect(call[1]).toBeUndefined();
   });
 

@@ -44,7 +44,18 @@ const reviewLaneCards: ToolCardDefinition[] = [
     status: "Ready now",
     actions: [
       { label: "Open Access Review", to: "/security/access-review" },
-      { label: "Open User Review", to: "/security/user-review", tone: "secondary" },
+      { label: "Open Break-glass Validation", to: "/security/break-glass-validation", tone: "secondary" },
+    ],
+  },
+  {
+    eyebrow: "Review Lane",
+    title: "Break-glass Account Validation",
+    description:
+      "Validate likely emergency accounts against sign-in freshness, password age, sync source, licensing, and Azure RBAC exposure from one repeatable review lane.",
+    status: "Ready now",
+    actions: [
+      { label: "Open Break-glass Validation", to: "/security/break-glass-validation" },
+      { label: "Open Access Review", to: "/security/access-review", tone: "secondary" },
     ],
   },
   {
@@ -55,7 +66,18 @@ const reviewLaneCards: ToolCardDefinition[] = [
     status: "Ready now",
     actions: [
       { label: "Open Identity Review", to: "/security/identity-review" },
-      { label: "Open Application Hygiene", to: "/security/app-hygiene", tone: "secondary" },
+      { label: "Open Directory Role Review", to: "/security/directory-role-review", tone: "secondary" },
+    ],
+  },
+  {
+    eyebrow: "Review Lane",
+    title: "Directory Role Membership Review",
+    description:
+      "Review live direct Microsoft Entra directory-role memberships, then ground flagged users, groups, and service principals against cached sign-in and identity context.",
+    status: "Ready now",
+    actions: [
+      { label: "Open Directory Role Review", to: "/security/directory-role-review" },
+      { label: "Open Identity Review", to: "/security/identity-review", tone: "secondary" },
     ],
   },
   {
@@ -148,12 +170,8 @@ const buildQueue: BuildQueueItem[] = [
     description: "Track policy drift and highlight high-impact changes before they become user-impacting outages.",
   },
   {
-    title: "Break-glass account validation",
-    description: "Verify emergency accounts, MFA posture, and sign-in health on a repeatable schedule.",
-  },
-  {
-    title: "Directory role membership review",
-    description: "Add direct Entra directory-role membership coverage beside the shipped Azure RBAC privileged access review lane.",
+    title: "Emergency-account MFA posture validation",
+    description: "Add MFA registration and method-strength signals so the break-glass lane can verify emergency-access readiness end to end.",
   },
   {
     title: "Enterprise app permission review",

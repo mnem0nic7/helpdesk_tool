@@ -158,6 +158,7 @@ def test_quick_search_page_results_point_to_security_review_lanes(tmp_path):
 
     assert page_routes["Identity Review"] == "/security/identity-review"
     assert page_routes["Privileged Access Review"] == "/security/access-review"
+    assert page_routes["Break-glass Account Validation"] == "/security/break-glass-validation"
     assert page_routes["User Review"] == "/security/user-review"
     assert page_routes["Guest Access Review"] == "/security/guest-access-review"
     assert page_routes["DLP Findings Review"] == "/security/dlp-review"
@@ -175,6 +176,14 @@ def test_quick_search_page_results_point_to_security_review_lanes(tmp_path):
     dlp_results = cache.quick_search("dlp")
     dlp_pages = {item["label"]: item["route"] for item in dlp_results if item["kind"] == "page"}
     assert dlp_pages["DLP Findings Review"] == "/security/dlp-review"
+
+    break_glass_results = cache.quick_search("break glass")
+    break_glass_pages = {item["label"]: item["route"] for item in break_glass_results if item["kind"] == "page"}
+    assert break_glass_pages["Break-glass Account Validation"] == "/security/break-glass-validation"
+
+    directory_role_results = cache.quick_search("directory role")
+    directory_role_pages = {item["label"]: item["route"] for item in directory_role_results if item["kind"] == "page"}
+    assert directory_role_pages["Directory Role Membership Review"] == "/security/directory-role-review"
 
 
 def test_get_virtual_machine_detail_returns_related_resources_and_costs(tmp_path):

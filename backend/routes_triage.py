@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
@@ -15,7 +16,7 @@ from ai_client import (
     validate_suggestions,
 )
 from auth import get_session
-from config import TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES
+from config import AUTO_TRIAGE_MODEL, OLLAMA_MODEL, TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES
 from issue_cache import cache
 from jira_client import JiraClient
 from jira_write_service import add_fallback_internal_audit_note, get_jira_write_context, prepend_fallback_actor_line
@@ -51,6 +52,8 @@ technician_scoring_manager = TechnicianScoringManager(
     poll_interval_seconds=TECHNICIAN_SCORE_POLL_INTERVAL_MINUTES * 60,
 )
 
+_TRIAGE_HEALTH_STALE_MINUTES = 10
+
 
 def _normalize_requested_model(value: Any) -> str:
     normalized = str(value or "").strip()
@@ -75,6 +78,139 @@ def _current_score_progress() -> dict[str, Any]:
 
 def _visible_issue_keys() -> set[str]:
     return {issue.get("key", "") for issue in get_scoped_issues() if issue.get("key")}
+
+
+def _parse_status_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    if (
+        len(normalized) >= 5
+        and normalized[-5] in {"+", "-"}
+        and normalized[-3] != ":"
+        and normalized[-4:].isdigit()
+    ):
+        normalized = f"{normalized[:-2]}:{normalized[-2:]}"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _summarize_auto_triage_activity(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    changed_count = 0
+    no_change_count = 0
+    backfilled_count = 0
+    failed_count = 0
+    activity_keys: set[str] = set()
+    last_activity_at: datetime | None = None
+    last_live_activity_at: datetime | None = None
+    last_successful_activity_at: datetime | None = None
+
+    for entry in entries:
+        key = str(entry.get("key") or "").strip().upper()
+        if key:
+            activity_keys.add(key)
+        outcome = str(entry.get("outcome") or "").strip().lower()
+        if outcome == "changed":
+            changed_count += 1
+        elif outcome == "no_change":
+            no_change_count += 1
+        elif outcome == "backfill":
+            backfilled_count += 1
+        elif outcome == "failed":
+            failed_count += 1
+
+        processed_at = _parse_status_datetime(entry.get("processed_at"))
+        if not processed_at:
+            continue
+        if last_activity_at is None or processed_at > last_activity_at:
+            last_activity_at = processed_at
+        if str(entry.get("source") or "").strip().lower() == "auto":
+            if last_live_activity_at is None or processed_at > last_live_activity_at:
+                last_live_activity_at = processed_at
+            if outcome in {"changed", "no_change"} and (
+                last_successful_activity_at is None or processed_at > last_successful_activity_at
+            ):
+                last_successful_activity_at = processed_at
+
+    return {
+        "changed_count": changed_count,
+        "no_change_count": no_change_count,
+        "backfilled_count": backfilled_count,
+        "failed_count": failed_count,
+        "activity_keys": activity_keys,
+        "last_activity_at": last_activity_at.isoformat() if last_activity_at else None,
+        "last_live_activity_at": last_live_activity_at.isoformat() if last_live_activity_at else None,
+        "last_successful_activity_at": (
+            last_successful_activity_at.isoformat() if last_successful_activity_at else None
+        ),
+    }
+
+
+def _evaluate_triage_health(
+    *,
+    visible_keys: set[str],
+    activity_summary: dict[str, Any],
+    auto_status: dict[str, Any],
+) -> tuple[str, str]:
+    available_model = select_available_ollama_model(
+        get_available_models(),
+        preferred_model_id=AUTO_TRIAGE_MODEL,
+        fallback_model_id=OLLAMA_MODEL,
+    )
+    if not available_model:
+        return (
+            "broken",
+            "Auto-triage has no available AI model. Ensure Ollama is running and the configured local model is pulled.",
+        )
+
+    processed_keys = store.get_auto_triaged_keys() & visible_keys
+    activity_keys = set(activity_summary.get("activity_keys") or set())
+    missing_activity_count = len(processed_keys - activity_keys)
+    if missing_activity_count:
+        return (
+            "broken",
+            f"Auto-triage has {missing_activity_count} processed ticket(s) without matching activity records.",
+        )
+
+    pending_count = int(auto_status.get("pending_count") or 0)
+    running = bool(auto_status.get("running"))
+    current_key = str(auto_status.get("current_key") or "").strip()
+    stale_before = datetime.now(timezone.utc) - timedelta(minutes=_TRIAGE_HEALTH_STALE_MINUTES)
+    last_started = _parse_status_datetime(auto_status.get("last_started"))
+    last_live_activity = _parse_status_datetime(activity_summary.get("last_live_activity_at"))
+    last_success = _parse_status_datetime(activity_summary.get("last_successful_activity_at"))
+
+    if running:
+        last_progress = last_live_activity
+        if last_started and (last_progress is None or last_started > last_progress):
+            last_progress = last_started
+        if last_progress and last_progress <= stale_before:
+            target = current_key or "the current ticket"
+            return (
+                "broken",
+                f"Auto-triage still reports running on {target}, but no activity has been recorded in the last {_TRIAGE_HEALTH_STALE_MINUTES} minutes.",
+            )
+        if not last_progress and (last_started is None or last_started <= stale_before):
+            target = current_key or "the current ticket"
+            return (
+                "broken",
+                f"Auto-triage still reports running on {target}, but it has not produced any activity in the last {_TRIAGE_HEALTH_STALE_MINUTES} minutes.",
+            )
+
+    if pending_count > 0 and not running:
+        if not last_success or last_success <= stale_before:
+            return (
+                "broken",
+                f"{pending_count} ticket(s) are still pending, but there has been no successful auto-triage activity in the last {_TRIAGE_HEALTH_STALE_MINUTES} minutes.",
+            )
+
+    return ("healthy", "")
 
 
 def _ensure_ticket_visible(key: str) -> None:
@@ -122,12 +258,33 @@ async def get_triage_log(search: str = Query(default="", max_length=200)) -> lis
 async def get_run_status() -> dict[str, Any]:
     """Return progress of the current run-all background task, plus ticket counts."""
     result = dict(_current_run_progress())
-    # Add counts for button labels
-    _ensure_processed_backfill()
-    already_done = store.get_auto_triaged_keys()
-    all_keys = [iss.get("key", "") for iss in get_scoped_issues() if iss.get("key")]
-    result["remaining_count"] = len([k for k in all_keys if k not in already_done])
-    result["processed_count"] = len([k for k in all_keys if k in already_done])
+    visible_keys = _visible_issue_keys()
+    auto_status = cache.auto_triage_status(get_current_site_scope())
+    already_done = store.get_auto_triaged_keys() & visible_keys
+    activity_entries = [
+        entry
+        for entry in store.list_auto_triage_activity()
+        if str(entry.get("key") or "").strip().upper() in visible_keys
+    ]
+    activity_summary = _summarize_auto_triage_activity(activity_entries)
+    health, health_message = _evaluate_triage_health(
+        visible_keys=visible_keys,
+        activity_summary=activity_summary,
+        auto_status=auto_status,
+    )
+
+    result["remaining_count"] = len(visible_keys - already_done)
+    result["ai_processed_count"] = (
+        int(activity_summary["changed_count"]) + int(activity_summary["no_change_count"])
+    )
+    result["processed_count"] = result["ai_processed_count"]
+    result["changed_count"] = int(activity_summary["changed_count"])
+    result["no_change_count"] = int(activity_summary["no_change_count"])
+    result["backfilled_count"] = int(activity_summary["backfilled_count"])
+    result["failed_count"] = int(activity_summary["failed_count"])
+    result["last_activity_at"] = activity_summary["last_activity_at"]
+    result["health"] = health
+    result["health_message"] = health_message
     return result
 
 
@@ -144,8 +301,6 @@ async def cancel_triage_run() -> dict[str, Any]:
 @router.post("/run-all")
 async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any] | None = None) -> dict[str, Any]:
     """Run auto-triage on ALL existing cached tickets as a background task."""
-    from config import AUTO_TRIAGE_MODEL, OLLAMA_MODEL
-
     site_scope = get_current_site_scope()
     progress = _run_progress[site_scope]
 
@@ -185,14 +340,15 @@ async def run_triage_all(background_tasks: BackgroundTasks, body: dict[str, Any]
     reprocess = (body or {}).get("reprocess", False)
 
     already_done = store.get_auto_triaged_keys()
+    ai_processed_keys = store.get_auto_triage_activity_keys(["changed", "no_change"])
 
     if reset:
         store.clear_auto_triaged()
         cache.reset_auto_triage_seen()
         # Process all keys (tracking cleared)
     elif reprocess:
-        # Only re-process previously done tickets
-        all_keys = [k for k in all_keys if k in already_done]
+        # Only re-process live AI outcomes, not legacy backfill placeholders.
+        all_keys = [k for k in all_keys if k in ai_processed_keys]
         # Clear their tracking so they get re-processed
         store.clear_auto_triaged_keys(all_keys)
         cache.reset_auto_triage_seen()

@@ -1258,6 +1258,62 @@ Resources
             page_size=None,
         )
 
+    def list_directory_role_members(self, role_ids: list[str]) -> dict[str, dict[str, Any]]:
+        normalized_ids = [str(item).strip() for item in role_ids if str(item).strip()]
+        members_by_role: dict[str, dict[str, Any]] = {
+            role_id: {"members": [], "member_lookup_error": "", "truncated": False}
+            for role_id in normalized_ids
+        }
+        if not normalized_ids:
+            return members_by_role
+
+        member_select = "id,displayName,description,mail,userPrincipalName,appId,accountEnabled,securityEnabled,userType"
+        for start in range(0, len(normalized_ids), 20):
+            chunk = normalized_ids[start : start + 20]
+            requests_payload = [
+                {
+                    "id": str(index),
+                    "method": "GET",
+                    "url": f"/directoryRoles/{role_id}/members?$select={member_select}&$top=100",
+                }
+                for index, role_id in enumerate(chunk, start=1)
+            ]
+            payload = self.graph_batch_request(requests_payload)
+            responses = payload.get("responses")
+            if not isinstance(responses, list):
+                for role_id in chunk:
+                    members_by_role[role_id]["member_lookup_error"] = "Missing Microsoft Graph batch response."
+                continue
+
+            request_id_to_role = {
+                str(index): role_id for index, role_id in enumerate(chunk, start=1)
+            }
+            for response in responses:
+                if not isinstance(response, dict):
+                    continue
+                response_id = str(response.get("id") or "")
+                role_id = request_id_to_role.get(response_id)
+                if not role_id:
+                    continue
+                status_code = int(response.get("status") or 0)
+                if status_code != 200:
+                    body = response.get("body") if isinstance(response.get("body"), dict) else {}
+                    message = ""
+                    if isinstance(body.get("error"), dict):
+                        message = str(body["error"].get("message") or "")
+                    members_by_role[role_id]["member_lookup_error"] = (
+                        message or f"Microsoft Graph directory role member lookup returned {status_code}."
+                    )
+                    continue
+                body = response.get("body") if isinstance(response.get("body"), dict) else {}
+                value = body.get("value") if isinstance(body.get("value"), list) else []
+                members_by_role[role_id]["members"] = [
+                    item for item in value if isinstance(item, dict)
+                ]
+                if body.get("@odata.nextLink"):
+                    members_by_role[role_id]["truncated"] = True
+        return members_by_role
+
     @staticmethod
     def _cost_range(days: int | None = None) -> tuple[str, str]:
         lookback_days = days or AZURE_COST_LOOKBACK_DAYS

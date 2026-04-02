@@ -53,6 +53,8 @@ export default function AILogPage() {
   const isScoring = scoreRunStatus?.running ?? false;
   const technicianScoringPriorityBlocked = Boolean(scoreRunStatus?.priority_blocked);
   const technicianScoringBlockedMessage = scoreRunStatus?.priority_message?.trim() || "";
+  const triageHealthBroken = runStatus?.health === "broken";
+  const triageHealthMessage = runStatus?.health_message?.trim() || "";
 
   const cancelRun = useMutation({
     mutationFn: () => api.cancelTriageRun(),
@@ -74,8 +76,8 @@ export default function AILogPage() {
       const res = await api.runTriageAll(undefined, limit, reset, reprocess);
       if (res.total_tickets === 0) {
         const msg = reprocess
-          ? "No previously processed tickets found."
-          : "All tickets have already been processed. Use \u201cReprocess Done\u201d or \u201cRerun All\u201d.";
+          ? "No previously AI-processed tickets found."
+          : "All tickets have already been triaged or backfilled. Use \u201cReprocess AI Processed\u201d or \u201cRerun All Tickets\u201d.";
         setMessage({ text: msg, type: "info" });
       }
       queryClient.invalidateQueries({ queryKey: ["triage-run-status"] });
@@ -189,7 +191,7 @@ export default function AILogPage() {
                 disabled={starting}
                 className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {starting ? "Starting…" : `Reprocess Done (${runStatus?.processed_count?.toLocaleString() ?? "…"})`}
+                {starting ? "Starting…" : `Reprocess AI Processed (${runStatus?.ai_processed_count?.toLocaleString() ?? runStatus?.processed_count?.toLocaleString() ?? "…"})`}
               </button>
               <button
                 onClick={() => handleRun(undefined, true)}
@@ -202,6 +204,12 @@ export default function AILogPage() {
           )}
         </div>
       </div>
+      {triageHealthBroken && triageHealthMessage && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <span className="font-semibold">AI triage is broken.</span>{" "}
+          <span>{triageHealthMessage}</span>
+        </div>
+      )}
       {message && (
         <div className={`rounded-lg px-4 py-3 text-sm ${message.type === "error" ? "bg-red-50 text-red-700" : "bg-yellow-50 text-yellow-700"}`}>
           {message.text}
@@ -255,8 +263,31 @@ export default function AILogPage() {
         </div>
         <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
           <span className="rounded-full bg-slate-100 px-3 py-1">
+            AI processed: {runStatus?.ai_processed_count?.toLocaleString() ?? runStatus?.processed_count?.toLocaleString() ?? "…"}
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1">
+            Changed: {runStatus?.changed_count?.toLocaleString() ?? "…"}
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1">
+            No change: {runStatus?.no_change_count?.toLocaleString() ?? "…"}
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1">
+            Backfilled: {runStatus?.backfilled_count?.toLocaleString() ?? "…"}
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1">
+            Failed: {runStatus?.failed_count?.toLocaleString() ?? "…"}
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1">
+            Remaining: {runStatus?.remaining_count?.toLocaleString() ?? "…"}
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1">
             Change matches: {filteredEntries.length.toLocaleString()}
           </span>
+          {runStatus?.last_activity_at && (
+            <span className="rounded-full bg-slate-100 px-3 py-1">
+              Last activity: {formatTimestamp(runStatus.last_activity_at)}
+            </span>
+          )}
         </div>
       </section>
 

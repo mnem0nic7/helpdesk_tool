@@ -28,6 +28,14 @@ vi.mock("../pages/AzureSecurityDlpReviewPage.tsx", () => ({
   default: () => <div>DLP Findings Review Page</div>,
 }));
 
+vi.mock("../pages/AzureSecurityBreakGlassValidationPage.tsx", () => ({
+  default: () => <div>Break-glass Account Validation Page</div>,
+}));
+
+vi.mock("../pages/AzureSecurityDirectoryRoleReviewPage.tsx", () => ({
+  default: () => <div>Directory Role Membership Review Page</div>,
+}));
+
 describe("App azure security routes", () => {
   it("redirects the legacy account-health route to the new security lane", async () => {
     window.history.replaceState({}, "", "/account-health");
@@ -45,5 +53,17 @@ describe("App azure security routes", () => {
     window.history.replaceState({}, "", "/security/dlp-review");
     render(<App />);
     expect(await screen.findByText("DLP Findings Review Page")).toBeInTheDocument();
+  });
+
+  it("renders the break-glass validation lane on its dedicated route", async () => {
+    window.history.replaceState({}, "", "/security/break-glass-validation");
+    render(<App />);
+    expect(await screen.findByText("Break-glass Account Validation Page")).toBeInTheDocument();
+  });
+
+  it("renders the directory role review lane on its dedicated route", async () => {
+    window.history.replaceState({}, "", "/security/directory-role-review");
+    render(<App />);
+    expect(await screen.findByText("Directory Role Membership Review Page")).toBeInTheDocument();
   });
 });

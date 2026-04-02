@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 from models import AIModel, TechnicianScore, TriageResult, TriageSuggestion
 
 
 class TestAutoTriageRoutes:
-    def test_run_status_applies_one_time_processed_backfill_before_counting(
+    def test_run_status_returns_activity_counts_and_health(
         self,
         test_client,
         monkeypatch,
@@ -17,19 +18,74 @@ class TestAutoTriageRoutes:
         from triage_store import store
 
         store.clear_auto_triaged()
-        store.clear_auto_triaged_keys(["OIT-100", "OIT-200", "OIT-300", "OIT-400"])
-
-        def _backfill() -> None:
-            store.mark_auto_triaged("OIT-100")
-
-        monkeypatch.setattr(routes_triage.cache, "ensure_auto_triage_processed_backfill", _backfill)
+        now = datetime.now(timezone.utc).isoformat()
+        store.mark_auto_triaged("OIT-100")
+        store.record_auto_triage_activity(
+            "OIT-100",
+            "changed",
+            source="auto",
+            processed_at=now,
+            model="qwen3.5:4b",
+            fields_changed=["priority"],
+        )
+        store.mark_auto_triaged("OIT-200")
+        store.record_auto_triage_activity(
+            "OIT-200",
+            "no_change",
+            source="auto",
+            processed_at=now,
+            model="qwen3.5:4b",
+            fields_changed=[],
+        )
+        store.mark_auto_triaged("OIT-300")
+        store.record_auto_triage_activity(
+            "OIT-300",
+            "backfill",
+            source="legacy_backfill",
+            processed_at=now,
+            fields_changed=[],
+            legacy_backfill=True,
+        )
+        store.record_auto_triage_activity(
+            "OIT-400",
+            "failed",
+            source="auto",
+            processed_at=now,
+            model="qwen3.5:4b",
+            fields_changed=[],
+            error="RuntimeError: apply failed",
+        )
+        monkeypatch.setattr(
+            routes_triage.cache,
+            "auto_triage_status",
+            lambda scope: {
+                "running": False,
+                "current_key": None,
+                "pending_count": 1,
+                "pending_keys": ["OIT-400"],
+                "last_started": None,
+                "last_finished": now,
+            },
+        )
+        monkeypatch.setattr(
+            routes_triage,
+            "get_available_models",
+            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        )
 
         resp = test_client.get("/api/triage/run-status")
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["processed_count"] == 1
-        assert data["remaining_count"] == 3
+        assert data["processed_count"] == 2
+        assert data["ai_processed_count"] == 2
+        assert data["changed_count"] == 1
+        assert data["no_change_count"] == 1
+        assert data["backfilled_count"] == 1
+        assert data["failed_count"] == 1
+        assert data["remaining_count"] == 1
+        assert data["health"] == "healthy"
+        assert data["health_message"] == ""
 
         store.clear_auto_triaged()
 
@@ -42,6 +98,182 @@ class TestAutoTriageRoutes:
         from triage_store import store
 
         store.clear_auto_triaged()
+        auto_triage = AsyncMock()
+
+        def _backfill() -> None:
+            store.mark_auto_triaged("OIT-100")
+            store.record_auto_triage_activity(
+                "OIT-100",
+                "backfill",
+                source="legacy_backfill",
+                legacy_backfill=True,
+            )
+
+        monkeypatch.setattr(routes_triage.cache, "ensure_auto_triage_processed_backfill", _backfill)
+        monkeypatch.setattr(
+            routes_triage,
+            "get_available_models",
+            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        )
+        monkeypatch.setattr(routes_triage.cache, "_auto_triage_new_tickets", auto_triage)
+
+        resp = test_client.post("/api/triage/run-all", json={})
+
+        assert resp.status_code == 200
+        assert resp.json()["started"] is True
+        assert resp.json()["total_tickets"] == 3
+        auto_triage.assert_awaited_once()
+        assert auto_triage.await_args.args[0] == ["OIT-400", "OIT-300", "OIT-200"]
+
+        store.clear_auto_triaged()
+
+    def test_run_all_reprocess_excludes_backfill_activity(
+        self,
+        test_client,
+        monkeypatch,
+    ):
+        import routes_triage
+        from triage_store import store
+
+        store.clear_auto_triaged()
+        store.mark_auto_triaged("OIT-100")
+        store.record_auto_triage_activity("OIT-100", "changed", source="auto", model="qwen3.5:4b")
+        store.mark_auto_triaged("OIT-200")
+        store.record_auto_triage_activity("OIT-200", "no_change", source="auto", model="qwen3.5:4b")
+        store.mark_auto_triaged("OIT-300")
+        store.record_auto_triage_activity(
+            "OIT-300",
+            "backfill",
+            source="legacy_backfill",
+            legacy_backfill=True,
+        )
+        auto_triage = AsyncMock()
+
+        monkeypatch.setattr(
+            routes_triage,
+            "get_available_models",
+            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        )
+        monkeypatch.setattr(routes_triage.cache, "_auto_triage_new_tickets", auto_triage)
+
+        resp = test_client.post("/api/triage/run-all", json={"reprocess": True})
+
+        assert resp.status_code == 200
+        assert resp.json()["started"] is True
+        assert resp.json()["total_tickets"] == 2
+        auto_triage.assert_awaited_once()
+        assert auto_triage.await_args.args[0] == ["OIT-200", "OIT-100"]
+
+        store.clear_auto_triaged()
+
+    def test_run_status_reports_broken_when_no_models_are_available(
+        self,
+        test_client,
+        monkeypatch,
+    ):
+        import routes_triage
+        from triage_store import store
+
+        store.clear_auto_triaged()
+        monkeypatch.setattr(
+            routes_triage.cache,
+            "auto_triage_status",
+            lambda scope: {
+                "running": False,
+                "current_key": None,
+                "pending_count": 4,
+                "pending_keys": ["OIT-100", "OIT-200", "OIT-300", "OIT-400"],
+                "last_started": None,
+                "last_finished": None,
+            },
+        )
+        monkeypatch.setattr(routes_triage, "get_available_models", lambda: [])
+
+        resp = test_client.get("/api/triage/run-status")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["health"] == "broken"
+        assert "no available AI model" in data["health_message"]
+
+    def test_run_status_reports_broken_for_processed_keys_missing_activity(
+        self,
+        test_client,
+        monkeypatch,
+    ):
+        import routes_triage
+        from triage_store import store
+
+        store.clear_auto_triaged()
+        store.mark_auto_triaged("OIT-100")
+        monkeypatch.setattr(
+            routes_triage.cache,
+            "auto_triage_status",
+            lambda scope: {
+                "running": False,
+                "current_key": None,
+                "pending_count": 3,
+                "pending_keys": ["OIT-200", "OIT-300", "OIT-400"],
+                "last_started": None,
+                "last_finished": None,
+            },
+        )
+        monkeypatch.setattr(
+            routes_triage,
+            "get_available_models",
+            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        )
+
+        resp = test_client.get("/api/triage/run-status")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["health"] == "broken"
+        assert "without matching activity records" in data["health_message"]
+
+    def test_run_status_reports_broken_when_pending_without_recent_success(
+        self,
+        test_client,
+        monkeypatch,
+    ):
+        import routes_triage
+        from triage_store import store
+
+        store.clear_auto_triaged()
+        stale_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat()
+        store.mark_auto_triaged("OIT-100")
+        store.record_auto_triage_activity(
+            "OIT-100",
+            "changed",
+            source="auto",
+            processed_at=stale_timestamp,
+            model="qwen3.5:4b",
+            fields_changed=["priority"],
+        )
+        monkeypatch.setattr(
+            routes_triage.cache,
+            "auto_triage_status",
+            lambda scope: {
+                "running": False,
+                "current_key": None,
+                "pending_count": 3,
+                "pending_keys": ["OIT-200", "OIT-300", "OIT-400"],
+                "last_started": None,
+                "last_finished": stale_timestamp,
+            },
+        )
+        monkeypatch.setattr(
+            routes_triage,
+            "get_available_models",
+            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        )
+
+        resp = test_client.get("/api/triage/run-status")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["health"] == "broken"
+        assert "no successful auto-triage activity" in data["health_message"]
 
     def test_run_all_treats_placeholder_model_string_as_unset(
         self,

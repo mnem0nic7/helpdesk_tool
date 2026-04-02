@@ -1231,7 +1231,7 @@ class SecurityAccessReviewMetric(BaseModel):
     label: str
     value: int = 0
     detail: str = ""
-    tone: Literal["slate", "sky", "emerald", "amber", "rose"] = "slate"
+    tone: Literal["slate", "sky", "emerald", "amber", "rose", "violet"] = "slate"
 
 
 class SecurityAccessReviewPrincipal(BaseModel):
@@ -1309,7 +1309,7 @@ class SecurityAppHygieneMetric(BaseModel):
     label: str
     value: int = 0
     detail: str = ""
-    tone: Literal["slate", "sky", "emerald", "amber", "rose"] = "slate"
+    tone: Literal["slate", "sky", "emerald", "amber", "rose", "violet"] = "slate"
 
 
 class SecurityAppHygieneApp(BaseModel):
@@ -1362,6 +1362,87 @@ class SecurityAppHygieneResponse(BaseModel):
     metrics: list[SecurityAppHygieneMetric] = Field(default_factory=list)
     flagged_apps: list[SecurityAppHygieneApp] = Field(default_factory=list)
     credentials: list[SecurityAppHygieneCredential] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    scope_notes: list[str] = Field(default_factory=list)
+
+
+class SecurityBreakGlassValidationAccount(BaseModel):
+    """One account reviewed in the break-glass validation lane."""
+
+    user_id: str
+    display_name: str = ""
+    principal_name: str = ""
+    enabled: Optional[bool] = None
+    user_type: str = ""
+    account_class: str = ""
+    matched_terms: list[str] = Field(default_factory=list)
+    has_privileged_access: bool = False
+    privileged_assignment_count: int = 0
+    last_successful_utc: str = ""
+    days_since_last_successful: Optional[int] = None
+    last_password_change: str = ""
+    days_since_password_change: Optional[int] = None
+    is_licensed: Optional[bool] = None
+    license_count: int = 0
+    on_prem_sync: bool = False
+    status: Literal["critical", "warning", "healthy"] = "healthy"
+    flags: list[str] = Field(default_factory=list)
+
+
+class SecurityBreakGlassValidationResponse(BaseModel):
+    """Computed Azure break-glass validation payload."""
+
+    generated_at: str
+    inventory_last_refresh: str = ""
+    directory_last_refresh: str = ""
+    metrics: list[SecurityAccessReviewMetric] = Field(default_factory=list)
+    accounts: list[SecurityBreakGlassValidationAccount] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    scope_notes: list[str] = Field(default_factory=list)
+
+
+class SecurityDirectoryRoleReviewRole(BaseModel):
+    """One Entra directory role summarized for the security review lane."""
+
+    role_id: str
+    display_name: str = ""
+    description: str = ""
+    privilege_level: Literal["critical", "elevated", "limited"] = "limited"
+    member_count: int = 0
+    flagged_member_count: int = 0
+    flags: list[str] = Field(default_factory=list)
+
+
+class SecurityDirectoryRoleReviewMembership(BaseModel):
+    """One direct directory-role membership surfaced in the review."""
+
+    role_id: str
+    role_name: str = ""
+    role_description: str = ""
+    privilege_level: Literal["critical", "elevated", "limited"] = "limited"
+    principal_id: str
+    principal_type: str = ""
+    object_type: str = ""
+    display_name: str = ""
+    principal_name: str = ""
+    enabled: Optional[bool] = None
+    user_type: str = ""
+    last_successful_utc: str = ""
+    assignment_type: str = "direct"
+    status: Literal["critical", "warning", "healthy"] = "healthy"
+    flags: list[str] = Field(default_factory=list)
+
+
+class SecurityDirectoryRoleReviewResponse(BaseModel):
+    """Computed Azure direct directory-role review payload."""
+
+    generated_at: str
+    directory_last_refresh: str = ""
+    access_available: bool = False
+    access_message: str = ""
+    metrics: list[SecurityAccessReviewMetric] = Field(default_factory=list)
+    roles: list[SecurityDirectoryRoleReviewRole] = Field(default_factory=list)
+    memberships: list[SecurityDirectoryRoleReviewMembership] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     scope_notes: list[str] = Field(default_factory=list)
 

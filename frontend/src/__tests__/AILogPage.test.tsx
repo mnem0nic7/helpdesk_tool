@@ -100,6 +100,14 @@ describe("AILogPage", () => {
       current_key: null,
       remaining_count: 0,
       processed_count: 0,
+      ai_processed_count: 0,
+      changed_count: 0,
+      no_change_count: 0,
+      backfilled_count: 0,
+      failed_count: 0,
+      last_activity_at: null,
+      health: "healthy",
+      health_message: "",
     });
     const triageLogEntries = [
       {
@@ -256,6 +264,64 @@ describe("AILogPage", () => {
     await waitFor(() => {
       expect(mockApi.runClosedTicketScoring).toHaveBeenCalledWith();
     });
+  });
+
+  it("shows explicit AI triage metrics and the updated reprocess label", async () => {
+    mockApi.getTriageRunStatus.mockResolvedValue({
+      running: false,
+      processed: 0,
+      total: 0,
+      current_key: null,
+      remaining_count: 19,
+      processed_count: 45,
+      ai_processed_count: 45,
+      changed_count: 12,
+      no_change_count: 33,
+      backfilled_count: 18789,
+      failed_count: 2,
+      last_activity_at: "2026-03-03T12:00:00Z",
+      health: "healthy",
+      health_message: "",
+    });
+
+    render(<AILogPage />);
+
+    expect(await screen.findByText("AI processed: 45")).toBeInTheDocument();
+    expect(screen.getByText("Changed: 12")).toBeInTheDocument();
+    expect(screen.getByText("No change: 33")).toBeInTheDocument();
+    expect(screen.getByText("Backfilled: 18,789")).toBeInTheDocument();
+    expect(screen.getByText("Failed: 2")).toBeInTheDocument();
+    expect(screen.getByText("Remaining: 19")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reprocess AI Processed (45)" })).toBeInTheDocument();
+  });
+
+  it("shows the broken triage banner but keeps recovery controls enabled", async () => {
+    mockApi.getTriageRunStatus.mockResolvedValue({
+      running: false,
+      processed: 0,
+      total: 0,
+      current_key: null,
+      remaining_count: 19,
+      processed_count: 45,
+      ai_processed_count: 45,
+      changed_count: 12,
+      no_change_count: 33,
+      backfilled_count: 18789,
+      failed_count: 2,
+      last_activity_at: "2026-03-03T12:00:00Z",
+      health: "broken",
+      health_message: "19 ticket(s) are still pending, but there has been no successful auto-triage activity in the last 10 minutes.",
+    });
+
+    render(<AILogPage />);
+
+    expect(await screen.findByText("AI triage is broken.")).toBeInTheDocument();
+    expect(
+      screen.getByText(/19 ticket\(s\) are still pending, but there has been no successful auto-triage activity/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run Remaining (19)" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reprocess AI Processed (45)" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Rerun All Tickets" })).toBeEnabled();
   });
 
   it("disables technician QA scoring while new-ticket auto-triage has priority", async () => {
