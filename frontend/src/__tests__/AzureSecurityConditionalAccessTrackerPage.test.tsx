@@ -101,6 +101,24 @@ function buildResponse() {
   };
 }
 
+function buildLargeResponse(policyCount = 60, changeCount = 60) {
+  const response = buildResponse();
+  return {
+    ...response,
+    policies: Array.from({ length: policyCount }, (_, index) => ({
+      ...response.policies[0],
+      policy_id: `policy-${index + 1}`,
+      display_name: `Bulk Policy ${index + 1}`,
+    })),
+    changes: Array.from({ length: changeCount }, (_, index) => ({
+      ...response.changes[0],
+      event_id: `event-${index + 1}`,
+      target_policy_name: `Bulk Policy ${index + 1}`,
+      change_summary: `Change for Bulk Policy ${index + 1}`,
+    })),
+  };
+}
+
 describe("AzureSecurityConditionalAccessTrackerPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -129,5 +147,21 @@ describe("AzureSecurityConditionalAccessTrackerPage", () => {
 
     expect(screen.getAllByText("Require MFA for admins").length).toBeGreaterThan(0);
     expect(screen.queryByText("Require compliant device for all users")).not.toBeInTheDocument();
+  });
+
+  it("pages large policy watchlists and change feeds", async () => {
+    mockApi.getAzureSecurityConditionalAccessTracker.mockResolvedValue(buildLargeResponse());
+
+    render(<AzureSecurityConditionalAccessTrackerPage />);
+
+    expect(await screen.findByRole("heading", { name: "Policy watchlist" })).toBeInTheDocument();
+    expect(screen.getByText("Showing 1-50 of 60 matching policy record(s)")).toBeInTheDocument();
+    expect(screen.getAllByText("Bulk Policy 1").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Bulk Policy 60")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Next" })[0]);
+
+    expect(await screen.findByText("Showing 51-60 of 60 matching policy record(s)")).toBeInTheDocument();
+    expect(screen.getAllByText("Bulk Policy 60").length).toBeGreaterThan(0);
   });
 });

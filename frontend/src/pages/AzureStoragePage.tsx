@@ -6,6 +6,7 @@ import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
 type AccountSortKey = "name" | "kind" | "sku_name" | "access_tier" | "location" | "subscription" | "resource_group" | "cost";
@@ -564,12 +565,12 @@ export default function AzureStoragePage() {
       disk_unattached_only: showUnattachedOnly,
     }),
     placeholderData: (prev) => prev,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const storageSavingsQuery = useQuery({
     queryKey: ["azure", "savings", "storage-page"],
     queryFn: () => api.getAzureSavingsOpportunities({ category: "storage" }),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   if (isLoading) return <AzurePageSkeleton titleWidth="w-36" subtitleWidth="w-72" statCount={6} sectionCount={2} />;

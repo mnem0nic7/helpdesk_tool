@@ -10,6 +10,10 @@ import {
   type OneDriveCopyJobStatus,
   type OneDriveCopyUserOption,
 } from "../lib/api.ts";
+import {
+  getPollingQueryOptions,
+  resolvePollingIntervalMs,
+} from "../lib/queryPolling.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
 
 const EXCLUDED_ROOT_FOLDERS = [
@@ -1120,7 +1124,11 @@ export default function ToolsPage() {
     enabled: hasSignedInUser,
     refetchInterval: (query) => {
       const jobs = query.state.data as OneDriveCopyJobStatus[] | undefined;
-      return jobs?.some((job) => job.status === "queued" || job.status === "running") ? 3_000 : 15_000;
+      return resolvePollingIntervalMs(
+        jobs?.some((job) => job.status === "queued" || job.status === "running")
+          ? 3_000
+          : 60_000,
+      );
     },
   });
 
@@ -1144,7 +1152,10 @@ export default function ToolsPage() {
     enabled: hasSignedInUser && !!activeJobId,
     refetchInterval: (query) => {
       const job = query.state.data as OneDriveCopyJobStatus | undefined;
-      return job && (job.status === "queued" || job.status === "running") ? 3_000 : false;
+      return resolvePollingIntervalMs(
+        3_000,
+        Boolean(job && (job.status === "queued" || job.status === "running")),
+      );
     },
   });
 
@@ -1152,8 +1163,7 @@ export default function ToolsPage() {
     queryKey: ["onedrive-copy", "login-audit"],
     queryFn: () => api.listLoginAudit(50),
     enabled: hasSignedInUser,
-    staleTime: 15_000,
-    refetchInterval: 30_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const mailboxRulesQuery = useQuery({
@@ -1178,7 +1188,11 @@ export default function ToolsPage() {
     enabled: hasSignedInUser,
     refetchInterval: (query) => {
       const jobs = query.state.data as DelegateMailboxJobStatus[] | undefined;
-      return jobs?.some((job) => job.status === "queued" || job.status === "running") ? 3_000 : 15_000;
+      return resolvePollingIntervalMs(
+        jobs?.some((job) => job.status === "queued" || job.status === "running")
+          ? 3_000
+          : 60_000,
+      );
     },
   });
 
@@ -1202,7 +1216,10 @@ export default function ToolsPage() {
     enabled: hasSignedInUser && !!activeDelegateMailboxJobId,
     refetchInterval: (query) => {
       const job = query.state.data as DelegateMailboxJobStatus | undefined;
-      return job && (job.status === "queued" || job.status === "running") ? 3_000 : false;
+      return resolvePollingIntervalMs(
+        3_000,
+        Boolean(job && (job.status === "queued" || job.status === "running")),
+      );
     },
   });
 

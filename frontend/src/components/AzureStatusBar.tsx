@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type AzureCostExportStatus } from "../lib/api.ts";
+import { resolvePollingIntervalMs } from "../lib/queryPolling.ts";
 
 function formatLastRefresh(value: string | null): string {
   if (!value) return "—";
@@ -39,7 +40,8 @@ export default function AzureStatusBar({ isAdmin }: { isAdmin: boolean }) {
   const { data: status } = useQuery({
     queryKey: ["azure", "status"],
     queryFn: () => api.getAzureStatus(),
-    refetchInterval: (query) => (query.state.data?.refreshing ? 1_500 : 30_000),
+    refetchInterval: (query) =>
+      resolvePollingIntervalMs(query.state.data?.refreshing ? 1_500 : 60_000),
   });
 
   useEffect(() => {

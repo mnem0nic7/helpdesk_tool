@@ -44,6 +44,33 @@ function buildUser(overrides: Record<string, unknown>) {
   };
 }
 
+function buildLargeUserResponse(count = 60) {
+  return Array.from({ length: count }, (_, index) =>
+    buildUser({
+      id: `user-${index + 1}`,
+      display_name: `Bulk User ${index + 1}`,
+      principal_name: `bulk.user.${index + 1}@example.com`,
+      mail: `bulk.user.${index + 1}@example.com`,
+      extra: {
+        user_type: "Member",
+        on_prem_domain: "",
+        on_prem_sync: "",
+        is_licensed: "false",
+        license_count: "0",
+        last_successful_utc: "",
+        last_successful_local: "",
+        account_class: "person_cloud",
+        priority_band: "critical",
+        priority_score: "90",
+        priority_reason: "Bulk priority user.",
+        missing_profile_fields: "",
+        department: "IT",
+        job_title: "Engineer",
+      },
+    }),
+  );
+}
+
 describe("AzureSecurityUserReviewPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -163,5 +190,25 @@ describe("AzureSecurityUserReviewPage", () => {
     const scoped = within(reviewSection as HTMLElement);
     expect(scoped.getAllByText("Guest Vendor").length).toBeGreaterThan(0);
     expect(scoped.queryByText("Emergency Admin")).not.toBeInTheDocument();
+  });
+
+  it("pages large review queues instead of rendering every user at once", async () => {
+    mockApi.getAzureUsers.mockResolvedValue(buildLargeUserResponse());
+
+    render(<AzureSecurityUserReviewPage />);
+
+    const reviewHeading = await screen.findByRole("heading", { name: "Review queue" });
+    const reviewSection = reviewHeading.closest("section");
+    expect(reviewSection).not.toBeNull();
+
+    const scoped = within(reviewSection as HTMLElement);
+    expect(scoped.getByText("Showing 1-50 of 60 matching user record(s)")).toBeInTheDocument();
+    expect(scoped.getAllByText("Bulk User 1").length).toBeGreaterThan(0);
+    expect(scoped.queryByText("Bulk User 60")).not.toBeInTheDocument();
+
+    fireEvent.click(scoped.getByRole("button", { name: "Next" }));
+
+    expect(await scoped.findByText("Showing 51-60 of 60 matching user record(s)")).toBeInTheDocument();
+    expect(scoped.getAllByText("Bulk User 60").length).toBeGreaterThan(0);
   });
 });

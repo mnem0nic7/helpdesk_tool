@@ -6,6 +6,7 @@ import AzureExportSetupCard from "../components/AzureExportSetupCard.tsx";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
 type AdvisorSortKey = "title" | "subscription_name" | "impact" | "monthly_savings";
@@ -56,42 +57,42 @@ export default function AzureCostPage() {
   const summary = useQuery({
     queryKey: ["azure", "cost", "summary"],
     queryFn: () => api.getAzureCostSummary(),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const trend = useQuery({
     queryKey: ["azure", "cost", "trend"],
     queryFn: () => api.getAzureCostTrend(),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const byService = useQuery({
     queryKey: ["azure", "cost", "breakdown", "service"],
     queryFn: () => api.getAzureCostBreakdown("service"),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const bySubscription = useQuery({
     queryKey: ["azure", "cost", "breakdown", "subscription"],
     queryFn: () => api.getAzureCostBreakdown("subscription"),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const byResourceGroup = useQuery({
     queryKey: ["azure", "cost", "breakdown", "resource_group"],
     queryFn: () => api.getAzureCostBreakdown("resource_group"),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const advisor = useQuery({
     queryKey: ["azure", "advisor"],
     queryFn: () => api.getAzureAdvisor(),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const savings = useQuery({
     queryKey: ["azure", "savings", "cost-page"],
     queryFn: () => api.getAzureSavingsOpportunities({ quantified_only: true }),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const validation = useQuery({
     queryKey: ["azure", "finops", "validation"],
     queryFn: () => api.getAzureFinopsValidation(),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const advisorRows = advisor.data ?? [];
   const topSavingsRows = (savings.data ?? []).slice(0, 6);

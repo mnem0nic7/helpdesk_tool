@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import { api } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 type ToolAction = {
   label: string;
@@ -274,15 +275,14 @@ function formatTimestamp(value: string | null | undefined): string {
 
 export default function AzureSecurityPage() {
   const overviewQuery = useQuery({
-    queryKey: ["azure", "overview", "security-page"],
+    queryKey: ["azure", "overview"],
     queryFn: () => api.getAzureOverview(),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const statusQuery = useQuery({
-    queryKey: ["azure", "status", "security-page"],
+    queryKey: ["azure", "status"],
     queryFn: () => api.getAzureStatus(),
-    staleTime: 30_000,
-    refetchInterval: 30_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   if (overviewQuery.isLoading) {

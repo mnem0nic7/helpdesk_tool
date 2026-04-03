@@ -12,6 +12,7 @@ import {
   type SecurityCopilotLane,
   type SecurityCopilotSourceResult,
 } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 type SecurityCopilotPageMode = "general" | "dlp";
 
@@ -413,10 +414,9 @@ export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: 
     staleTime: 5 * 60 * 1000,
   });
   const statusQuery = useQuery({
-    queryKey: ["azure", "status", "security-copilot"],
+    queryKey: ["azure", "status"],
     queryFn: () => api.getAzureStatus(),
-    staleTime: 30_000,
-    refetchInterval: 30_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const chatMutation = useMutation({

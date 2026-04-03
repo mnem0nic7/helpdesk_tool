@@ -3,11 +3,13 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses } from "../components/AzureSecurityLane.tsx";
+import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import {
   api,
   type SecurityDirectoryRoleReviewMembership,
   type SecurityDirectoryRoleReviewRole,
 } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { formatDateTime } from "../lib/azureSecurityUsers.ts";
 
 type PrincipalFilter = "all" | "user" | "group" | "service_principal";
@@ -183,8 +185,7 @@ export default function AzureSecurityDirectoryRoleReviewPage() {
   const query = useQuery({
     queryKey: ["azure", "security", "directory-role-review"],
     queryFn: () => api.getAzureSecurityDirectoryRoleReview(),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const filteredMemberships = useMemo(() => {
@@ -204,6 +205,22 @@ export default function AzureSecurityDirectoryRoleReviewPage() {
     const rows = query.data?.roles ?? [];
     return rows.filter((item) => matchesSearch([item.display_name, item.description, item.flags], deferredSearch));
   }, [deferredSearch, query.data?.roles]);
+  const rolesPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${principalFilter}|${riskFilter}|roles|${filteredRoles.length}`,
+    filteredRoles.length,
+  );
+  const membershipsPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${principalFilter}|${riskFilter}|memberships|${filteredMemberships.length}`,
+    filteredMemberships.length,
+  );
+  const visibleRoles = useMemo(
+    () => sliceSecurityReviewPage(filteredRoles, rolesPagination.pageStart, rolesPagination.pageSize),
+    [filteredRoles, rolesPagination.pageSize, rolesPagination.pageStart],
+  );
+  const visibleMemberships = useMemo(
+    () => sliceSecurityReviewPage(filteredMemberships, membershipsPagination.pageStart, membershipsPagination.pageSize),
+    [filteredMemberships, membershipsPagination.pageSize, membershipsPagination.pageStart],
+  );
 
   if (query.isLoading) {
     return <AzurePageSkeleton titleWidth="w-72" subtitleWidth="w-[46rem]" statCount={6} sectionCount={4} />;
@@ -309,7 +326,20 @@ export default function AzureSecurityDirectoryRoleReviewPage() {
 
             <div className="mt-5 grid gap-4 xl:grid-cols-2">
               {filteredRoles.length > 0 ? (
-                filteredRoles.map((role) => <RoleCard key={role.role_id} role={role} />)
+                <>
+                  <div className="xl:col-span-2">
+                    <SecurityReviewPagination
+                      count={filteredRoles.length}
+                      currentPage={rolesPagination.currentPage}
+                      pageSize={rolesPagination.pageSize}
+                      setCurrentPage={rolesPagination.setCurrentPage}
+                      setPageSize={rolesPagination.setPageSize}
+                      totalPages={rolesPagination.totalPages}
+                      noun="matching directory role(s)"
+                    />
+                  </div>
+                  {visibleRoles.map((role) => <RoleCard key={role.role_id} role={role} />)}
+                </>
               ) : (
                 <div className="rounded-xl bg-slate-50 px-4 py-6 text-sm text-slate-500">No directory roles match the current search.</div>
               )}
@@ -326,7 +356,18 @@ export default function AzureSecurityDirectoryRoleReviewPage() {
 
             {filteredMemberships.length > 0 ? (
               <div className="grid gap-4 xl:grid-cols-2">
-                {filteredMemberships.map((membership) => (
+                <div className="xl:col-span-2">
+                  <SecurityReviewPagination
+                    count={filteredMemberships.length}
+                    currentPage={membershipsPagination.currentPage}
+                    pageSize={membershipsPagination.pageSize}
+                    setCurrentPage={membershipsPagination.setCurrentPage}
+                    setPageSize={membershipsPagination.setPageSize}
+                    totalPages={membershipsPagination.totalPages}
+                    noun="matching direct membership record(s)"
+                  />
+                </div>
+                {visibleMemberships.map((membership) => (
                   <MembershipCard key={`${membership.role_id}-${membership.principal_id}`} membership={membership} />
                 ))}
               </div>

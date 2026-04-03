@@ -20,6 +20,7 @@ import {
   type UserExitWorkflowStep,
 } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { getPollingQueryOptions, resolvePollingIntervalMs } from "../lib/queryPolling.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
 type UserColKey =
@@ -1712,14 +1713,15 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
   const { data: users = [], isLoading, isError, error } = useQuery<AzureDirectoryObject[]>({
     queryKey: ["directory", "users", mode, { search }],
     queryFn: () => api.getAzureUsers(search),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const { data: auditEntries = [] } = useQuery<UserAdminAuditEntry[]>({
     queryKey: ["user-admin", "audit"],
     queryFn: () => api.getUserAdminAudit(25),
     enabled: mode === "primary",
-    refetchInterval: activeJobId ? 15_000 : 60_000,
+    refetchInterval: () =>
+      resolvePollingIntervalMs(activeJobId ? 15_000 : 60_000),
   });
 
   const createJobMutation = useMutation({
@@ -1739,7 +1741,10 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
     enabled: !!activeJobId,
     refetchInterval: (query) => {
       const job = query.state.data as UserAdminJobStatus | undefined;
-      return job && ["completed", "failed"].includes(job.status) ? false : 2000;
+      return resolvePollingIntervalMs(
+        2_000,
+        !(job && ["completed", "failed"].includes(job.status)),
+      );
     },
   });
 

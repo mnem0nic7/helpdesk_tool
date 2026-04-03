@@ -12,6 +12,7 @@ import {
   type AzureAllocationRun,
   type AzureAllocationRunDimensionSummary,
 } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 const SURFACED_DIMENSIONS: AzureAllocationDimension[] = ["team", "application"];
 
@@ -342,17 +343,17 @@ export default function AzureAllocationPage() {
   const status = useQuery({
     queryKey: ["azure", "allocations", "status"],
     queryFn: () => api.getAzureAllocationStatus(),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const rules = useQuery({
     queryKey: ["azure", "allocations", "rules"],
     queryFn: () => api.getAzureAllocationRules(),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const runs = useQuery({
     queryKey: ["azure", "allocations", "runs"],
     queryFn: () => api.getAzureAllocationRuns(20),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   useEffect(() => {
@@ -367,31 +368,31 @@ export default function AzureAllocationPage() {
     queryKey: ["azure", "allocations", "run", selectedRunId],
     queryFn: () => api.getAzureAllocationRun(selectedRunId),
     enabled: !!selectedRunId,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("live_60s"),
   });
   const teamResults = useQuery({
     queryKey: ["azure", "allocations", "results", selectedRunId, "team"],
     queryFn: () => api.getAzureAllocationResults(selectedRunId, "team"),
     enabled: !!selectedRunId,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("live_60s"),
   });
   const teamResiduals = useQuery({
     queryKey: ["azure", "allocations", "residuals", selectedRunId, "team"],
     queryFn: () => api.getAzureAllocationResiduals(selectedRunId, "team"),
     enabled: !!selectedRunId,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("live_60s"),
   });
   const applicationResults = useQuery({
     queryKey: ["azure", "allocations", "results", selectedRunId, "application"],
     queryFn: () => api.getAzureAllocationResults(selectedRunId, "application"),
     enabled: !!selectedRunId,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("live_60s"),
   });
   const applicationResiduals = useQuery({
     queryKey: ["azure", "allocations", "residuals", selectedRunId, "application"],
     queryFn: () => api.getAzureAllocationResiduals(selectedRunId, "application"),
     enabled: !!selectedRunId,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("live_60s"),
   });
 
   const runAllocation = useMutation({

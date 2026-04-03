@@ -5,6 +5,7 @@ import { api, type AzureResourceRow } from "../lib/api.ts";
 import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
 type ResourceSortKey = "name" | "resource_type" | "subscription" | "resource_group" | "location" | "sku" | "state";
@@ -123,12 +124,12 @@ export default function AzureResourcesPage() {
       state,
     }),
     placeholderData: (prev) => prev,
-    refetchInterval: 30_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const networkSavingsQuery = useQuery({
     queryKey: ["azure", "savings", "resources-page"],
     queryFn: () => api.getAzureSavingsOpportunities({ category: "network" }),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const resources = data?.resources ?? [];
   const networkSavings = networkSavingsQuery.data ?? [];

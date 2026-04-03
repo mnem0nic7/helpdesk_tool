@@ -4,6 +4,7 @@ import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@ta
 import "./index.css";
 import App from "./App";
 import AppErrorBoundary from "./components/AppErrorBoundary";
+import QueryPollingDebugOverlay from "./components/QueryPollingDebugOverlay";
 import { installGlobalErrorLogging, logClientError } from "./lib/errorLogging";
 
 installGlobalErrorLogging()
@@ -25,8 +26,11 @@ const queryClient = new QueryClient({
   }),
   defaultOptions: {
     queries: {
-      staleTime: 30_000,
+      staleTime: 60_000,
       retry: 1,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchIntervalInBackground: false,
     },
   },
 });
@@ -35,7 +39,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <AppErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <App />
+        <App diagnostics={<QueryPollingDebugOverlay />} />
       </QueryClientProvider>
     </AppErrorBoundary>
   </StrictMode>

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
+import { resolvePollingIntervalMs } from "../lib/queryPolling.ts";
 
 function progressLabel(progress: { phase: string; current: number; total: number }): string {
   const { phase, current, total } = progress;
@@ -29,8 +30,7 @@ export default function CacheStatusBar() {
     queryFn: () => api.getCacheStatus(),
     refetchInterval: (query) => {
       const d = query.state.data;
-      // Poll fast during refresh for progress updates
-      return d?.refreshing ? 1_500 : 30_000;
+      return resolvePollingIntervalMs(d?.refreshing ? 1_500 : 60_000);
     },
   });
 

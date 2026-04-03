@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { api, type AzureDirectoryObject } from "../lib/api.ts";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { sortRows, useTableSort } from "../lib/tableSort.tsx";
 
 type IdentityTab = "users" | "groups" | "enterprise-apps" | "app-registrations" | "roles";
@@ -184,29 +185,29 @@ export default function AzureIdentityPage() {
   }, [activeTab, search, searchParams, selectedObjectId]);
 
   const users = useQuery({
-    queryKey: ["azure", "identity", "users", search],
+    queryKey: ["azure", "users", { search }],
     queryFn: () => api.getAzureUsers(search),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const groups = useQuery({
-    queryKey: ["azure", "identity", "groups", search],
+    queryKey: ["azure", "groups", { search }],
     queryFn: () => api.getAzureGroups(search),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const enterpriseApps = useQuery({
-    queryKey: ["azure", "identity", "enterprise-apps", search],
+    queryKey: ["azure", "enterprise-apps", { search }],
     queryFn: () => api.getAzureEnterpriseApps(search),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const appRegistrations = useQuery({
-    queryKey: ["azure", "identity", "app-registrations", search],
+    queryKey: ["azure", "app-registrations", { search }],
     queryFn: () => api.getAzureAppRegistrations(search),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const roles = useQuery({
-    queryKey: ["azure", "identity", "roles", search],
+    queryKey: ["azure", "directory-roles", { search }],
     queryFn: () => api.getAzureDirectoryRoles(search),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const loading = [users, groups, enterpriseApps, appRegistrations, roles].some((query) => query.isLoading);

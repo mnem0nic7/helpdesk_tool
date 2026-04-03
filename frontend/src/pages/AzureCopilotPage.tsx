@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, type AzureCostChatResponse } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 const starterPrompts = [
   "What are the highest-confidence savings opportunities right now?",
@@ -25,9 +26,9 @@ export default function AzureCopilotPage() {
     staleTime: 5 * 60 * 1000,
   });
   const statusQuery = useQuery({
-    queryKey: ["azure", "status", "copilot-page"],
+    queryKey: ["azure", "status"],
     queryFn: () => api.getAzureStatus(),
-    staleTime: 30_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const askMutation = useMutation({

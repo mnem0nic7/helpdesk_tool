@@ -14,6 +14,10 @@ import {
   type SecurityDeviceFixPlanExecuteRequest,
   type SecurityDeviceFixPlanResponse,
 } from "../lib/api.ts";
+import {
+  getPollingQueryOptions,
+  resolvePollingIntervalMs,
+} from "../lib/queryPolling.ts";
 import { formatDateTime } from "../lib/azureSecurityUsers.ts";
 
 type RiskFilter = "all" | "critical" | "high" | "medium" | "low";
@@ -478,8 +482,7 @@ export default function AzureSecurityDeviceCompliancePage() {
   const query = useQuery({
     queryKey: ["azure", "security", "device-compliance"],
     queryFn: () => api.getAzureSecurityDeviceCompliance(),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const devices = useMemo(() => query.data?.devices ?? [], [query.data?.devices]);
@@ -564,8 +567,11 @@ export default function AzureSecurityDeviceCompliancePage() {
     enabled: Boolean(activeJobId),
     refetchInterval: (current) => {
       const job = current.state.data;
-      if (!job) return 2_000;
-      return job.status === "completed" || job.status === "failed" ? false : 2_000;
+      if (!job) return resolvePollingIntervalMs(2_000);
+      return resolvePollingIntervalMs(
+        2_000,
+        job.status !== "completed" && job.status !== "failed",
+      );
     },
   });
 
@@ -581,8 +587,11 @@ export default function AzureSecurityDeviceCompliancePage() {
     enabled: Boolean(activeBatchId),
     refetchInterval: (current) => {
       const batch = current.state.data as SecurityDeviceActionBatchStatus | undefined;
-      if (!batch) return 2_000;
-      return batch.status === "completed" || batch.status === "failed" ? false : 2_000;
+      if (!batch) return resolvePollingIntervalMs(2_000);
+      return resolvePollingIntervalMs(
+        2_000,
+        batch.status !== "completed" && batch.status !== "failed",
+      );
     },
   });
 
@@ -592,8 +601,11 @@ export default function AzureSecurityDeviceCompliancePage() {
     enabled: Boolean(activeBatchId),
     refetchInterval: () => {
       const batch = activeBatchQuery.data;
-      if (!batch) return 2_000;
-      return batch.status === "completed" || batch.status === "failed" ? false : 2_000;
+      if (!batch) return resolvePollingIntervalMs(2_000);
+      return resolvePollingIntervalMs(
+        2_000,
+        batch.status !== "completed" && batch.status !== "failed",
+      );
     },
   });
 

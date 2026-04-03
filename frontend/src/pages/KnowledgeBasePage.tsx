@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
+import { resolvePollingIntervalMs } from "../lib/queryPolling.ts";
 import type {
   KnowledgeBaseArticle,
   KnowledgeBaseArticleUpsertPayload,
@@ -332,7 +333,11 @@ export default function KnowledgeBasePage() {
   const reformatStatusQuery = useQuery({
     queryKey: ["kb-reformat-status"],
     queryFn: () => api.getReformatStatus(),
-    refetchInterval: (q) => (q.state.data?.running ? 1500 : false),
+    refetchInterval: (query) =>
+      resolvePollingIntervalMs(1_500, query.state.data?.running ?? false),
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchIntervalInBackground: false,
   });
 
   const reformatAllMutation = useMutation({

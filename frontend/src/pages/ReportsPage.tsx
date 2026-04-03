@@ -19,6 +19,7 @@ import TicketFilters, {
   emptyFilters,
 } from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
+import { resolvePollingIntervalMs } from "../lib/queryPolling.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
 
 // ---------------------------------------------------------------------------
@@ -932,10 +933,16 @@ export default function ReportsPage() {
     refetchInterval: (query) => {
       const data = query.state.data as ReportAISummaryBatchStatus | undefined;
       if (!data) {
-        return 1500;
+        return resolvePollingIntervalMs(1_500);
       }
-      return data.status === "completed" || data.status === "failed" ? false : 1500;
+      return resolvePollingIntervalMs(
+        1_500,
+        data.status !== "completed" && data.status !== "failed",
+      );
     },
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchIntervalInBackground: false,
   });
 
   const completedAIBatchRef = useRef<string | null>(null);

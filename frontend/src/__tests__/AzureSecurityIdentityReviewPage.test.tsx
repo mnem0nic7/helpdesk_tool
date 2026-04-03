@@ -1,4 +1,4 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "../test-utils.tsx";
 import AzureSecurityIdentityReviewPage from "../pages/AzureSecurityIdentityReviewPage.tsx";
@@ -30,6 +30,26 @@ function buildDirectoryObject(overrides: Record<string, unknown>) {
     extra: {},
     ...overrides,
   };
+}
+
+function buildLargeAppRegistrations(count = 60) {
+  return Array.from({ length: count }, (_, index) =>
+    buildDirectoryObject({
+      id: `app-${index + 1}`,
+      display_name: `Bulk App ${index + 1}`,
+      object_type: "app_registration",
+      app_id: `bulk-app-${index + 1}`,
+      enabled: null,
+      extra: {
+        sign_in_audience: "AzureADandPersonalMicrosoftAccount",
+        owner_count: "0",
+        owner_names: "",
+        owner_lookup_error: "",
+        credential_count: "1",
+        next_credential_expiry: "2026-04-10T00:00:00Z",
+      },
+    }),
+  );
 }
 
 describe("AzureSecurityIdentityReviewPage", () => {
@@ -146,5 +166,25 @@ describe("AzureSecurityIdentityReviewPage", () => {
     expect(screen.getAllByText("Payroll Connector").length).toBeGreaterThan(0);
     expect(screen.queryByText("Internal Workflow")).not.toBeInTheDocument();
     expect(screen.queryByText("Finance Owners")).not.toBeInTheDocument();
+  });
+
+  it("pages large flagged-app cohorts instead of rendering every identity card at once", async () => {
+    mockApi.getAzureAppRegistrations.mockResolvedValue(buildLargeAppRegistrations());
+
+    render(<AzureSecurityIdentityReviewPage />);
+
+    const sectionHeading = await screen.findByRole("heading", { name: "Applications needing review" });
+    const section = sectionHeading.closest("section");
+    expect(section).not.toBeNull();
+
+    const scoped = within(section as HTMLElement);
+    expect(scoped.getByText("Showing 1-50 of 60 flagged application registration(s)")).toBeInTheDocument();
+    expect(scoped.getByText("Bulk App 1")).toBeInTheDocument();
+    expect(scoped.queryByText("Bulk App 60")).not.toBeInTheDocument();
+
+    fireEvent.click(scoped.getByRole("button", { name: "Next" }));
+
+    expect(await scoped.findByText("Showing 51-60 of 60 flagged application registration(s)")).toBeInTheDocument();
+    expect(scoped.getByText("Bulk App 60")).toBeInTheDocument();
   });
 });

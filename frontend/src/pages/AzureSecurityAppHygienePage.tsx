@@ -3,11 +3,13 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { AzureSecurityLaneHero, AzureSecurityMetricCard } from "../components/AzureSecurityLane.tsx";
+import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import {
   api,
   type SecurityAppHygieneApp,
   type SecurityAppHygieneCredential,
 } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 type AppStatusFilter = "all" | "critical" | "warning" | "healthy";
 type CredentialStatusFilter = "all" | "expired" | "expiring" | "active";
@@ -132,8 +134,7 @@ export default function AzureSecurityAppHygienePage() {
   const query = useQuery({
     queryKey: ["azure", "security", "app-hygiene"],
     queryFn: () => api.getAzureSecurityAppHygiene(),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const filteredApps = useMemo(() => {
@@ -161,6 +162,22 @@ export default function AzureSecurityAppHygienePage() {
       );
     });
   }, [credentialStatusFilter, deferredSearch, query.data?.credentials]);
+  const appsPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${appStatusFilter}|${credentialStatusFilter}|apps|${filteredApps.length}`,
+    filteredApps.length,
+  );
+  const credentialsPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${appStatusFilter}|${credentialStatusFilter}|credentials|${filteredCredentials.length}`,
+    filteredCredentials.length,
+  );
+  const visibleApps = useMemo(
+    () => sliceSecurityReviewPage(filteredApps, appsPagination.pageStart, appsPagination.pageSize),
+    [appsPagination.pageSize, appsPagination.pageStart, filteredApps],
+  );
+  const visibleCredentials = useMemo(
+    () => sliceSecurityReviewPage(filteredCredentials, credentialsPagination.pageStart, credentialsPagination.pageSize),
+    [credentialsPagination.pageSize, credentialsPagination.pageStart, filteredCredentials],
+  );
 
   if (query.isLoading) {
     return <AzurePageSkeleton titleWidth="w-64" subtitleWidth="w-[44rem]" statCount={6} sectionCount={4} />;
@@ -271,7 +288,18 @@ export default function AzureSecurityAppHygienePage() {
           </div>
         ) : (
           <div className="grid gap-4 xl:grid-cols-2">
-            {filteredApps.map((app) => (
+            <div className="xl:col-span-2">
+              <SecurityReviewPagination
+                count={filteredApps.length}
+                currentPage={appsPagination.currentPage}
+                pageSize={appsPagination.pageSize}
+                setCurrentPage={appsPagination.setCurrentPage}
+                setPageSize={appsPagination.setPageSize}
+                totalPages={appsPagination.totalPages}
+                noun="matching flagged app registration(s)"
+              />
+            </div>
+            {visibleApps.map((app) => (
               <AppCard key={app.application_id} app={app} />
             ))}
           </div>
@@ -282,6 +310,17 @@ export default function AzureSecurityAppHygienePage() {
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="text-lg font-semibold text-slate-900">Credential watch table</h2>
           <div className="mt-1 text-sm text-slate-500">Credential-level view for expired and expiring app secrets and certificates.</div>
+        </div>
+        <div className="border-b border-slate-200 px-5 py-4">
+          <SecurityReviewPagination
+            count={filteredCredentials.length}
+            currentPage={credentialsPagination.currentPage}
+            pageSize={credentialsPagination.pageSize}
+            setCurrentPage={credentialsPagination.setCurrentPage}
+            setPageSize={credentialsPagination.setPageSize}
+            totalPages={credentialsPagination.totalPages}
+            noun="matching credential record(s)"
+          />
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
@@ -302,7 +341,7 @@ export default function AzureSecurityAppHygienePage() {
                   </td>
                 </tr>
               ) : null}
-              {filteredCredentials.map((credential) => (
+              {visibleCredentials.map((credential) => (
                 <tr key={`${credential.application_id}-${credential.key_id || credential.display_name}`}>
                   <td className="px-4 py-4 align-top">
                     <div className="font-medium text-slate-900">{credential.application_display_name}</div>

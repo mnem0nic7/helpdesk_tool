@@ -3,12 +3,14 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { AzureSecurityLaneHero, AzureSecurityMetricCard } from "../components/AzureSecurityLane.tsx";
+import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import {
   api,
   type SecurityAccessReviewAssignment,
   type SecurityAccessReviewBreakGlassCandidate,
   type SecurityAccessReviewPrincipal,
 } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 type PrincipalFilter = "all" | "user" | "service_principal" | "group";
 type RiskFilter = "all" | "critical" | "elevated" | "flagged";
@@ -203,8 +205,7 @@ export default function AzureSecurityAccessReviewPage() {
   const query = useQuery({
     queryKey: ["azure", "security", "access-review"],
     queryFn: () => api.getAzureSecurityAccessReview(),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const filteredAssignments = useMemo(() => {
@@ -242,6 +243,30 @@ export default function AzureSecurityAccessReviewPage() {
       matchesSearch([item.display_name, item.principal_name, item.matched_terms, item.flags], deferredSearch),
     );
   }, [deferredSearch, query.data?.break_glass_candidates]);
+  const principalsPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${principalFilter}|${riskFilter}|principals|${filteredPrincipals.length}`,
+    filteredPrincipals.length,
+  );
+  const breakGlassPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${principalFilter}|${riskFilter}|breakglass|${filteredBreakGlass.length}`,
+    filteredBreakGlass.length,
+  );
+  const assignmentsPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${principalFilter}|${riskFilter}|assignments|${filteredAssignments.length}`,
+    filteredAssignments.length,
+  );
+  const visiblePrincipals = useMemo(
+    () => sliceSecurityReviewPage(filteredPrincipals, principalsPagination.pageStart, principalsPagination.pageSize),
+    [filteredPrincipals, principalsPagination.pageSize, principalsPagination.pageStart],
+  );
+  const visibleBreakGlass = useMemo(
+    () => sliceSecurityReviewPage(filteredBreakGlass, breakGlassPagination.pageStart, breakGlassPagination.pageSize),
+    [breakGlassPagination.pageSize, breakGlassPagination.pageStart, filteredBreakGlass],
+  );
+  const visibleAssignments = useMemo(
+    () => sliceSecurityReviewPage(filteredAssignments, assignmentsPagination.pageStart, assignmentsPagination.pageSize),
+    [assignmentsPagination.pageSize, assignmentsPagination.pageStart, filteredAssignments],
+  );
 
   if (query.isLoading) {
     return <AzurePageSkeleton titleWidth="w-64" subtitleWidth="w-[42rem]" statCount={6} sectionCount={4} />;
@@ -351,7 +376,18 @@ export default function AzureSecurityAccessReviewPage() {
           </div>
         ) : (
           <div className="grid gap-4 xl:grid-cols-2">
-            {filteredPrincipals.slice(0, 12).map((principal) => (
+            <div className="xl:col-span-2">
+              <SecurityReviewPagination
+                count={filteredPrincipals.length}
+                currentPage={principalsPagination.currentPage}
+                pageSize={principalsPagination.pageSize}
+                setCurrentPage={principalsPagination.setCurrentPage}
+                setPageSize={principalsPagination.setPageSize}
+                totalPages={principalsPagination.totalPages}
+                noun="matching privileged principal(s)"
+              />
+            </div>
+            {visiblePrincipals.map((principal) => (
               <PrincipalCard key={principal.principal_id} principal={principal} />
             ))}
           </div>
@@ -375,7 +411,18 @@ export default function AzureSecurityAccessReviewPage() {
           </div>
         ) : (
           <div className="grid gap-4 xl:grid-cols-2">
-            {filteredBreakGlass.map((candidate) => (
+            <div className="xl:col-span-2">
+              <SecurityReviewPagination
+                count={filteredBreakGlass.length}
+                currentPage={breakGlassPagination.currentPage}
+                pageSize={breakGlassPagination.pageSize}
+                setCurrentPage={breakGlassPagination.setCurrentPage}
+                setPageSize={breakGlassPagination.setPageSize}
+                totalPages={breakGlassPagination.totalPages}
+                noun="matching break-glass candidate(s)"
+              />
+            </div>
+            {visibleBreakGlass.map((candidate) => (
               <BreakGlassCard key={candidate.user_id} candidate={candidate} />
             ))}
           </div>
@@ -386,6 +433,17 @@ export default function AzureSecurityAccessReviewPage() {
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="text-lg font-semibold text-slate-900">Privileged assignment table</h2>
           <div className="mt-1 text-sm text-slate-500">Searchable Azure RBAC assignments in the current review scope.</div>
+        </div>
+        <div className="border-b border-slate-200 px-5 py-4">
+          <SecurityReviewPagination
+            count={filteredAssignments.length}
+            currentPage={assignmentsPagination.currentPage}
+            pageSize={assignmentsPagination.pageSize}
+            setCurrentPage={assignmentsPagination.setCurrentPage}
+            setPageSize={assignmentsPagination.setPageSize}
+            totalPages={assignmentsPagination.totalPages}
+            noun="matching privileged assignment(s)"
+          />
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
@@ -406,7 +464,7 @@ export default function AzureSecurityAccessReviewPage() {
                   </td>
                 </tr>
               ) : null}
-              {filteredAssignments.map((assignment: SecurityAccessReviewAssignment) => {
+              {visibleAssignments.map((assignment: SecurityAccessReviewAssignment) => {
                 const route = buildPrincipalRoute(assignment);
                 return (
                   <tr key={assignment.assignment_id}>

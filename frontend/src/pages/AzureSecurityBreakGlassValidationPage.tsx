@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses } from "../components/AzureSecurityLane.tsx";
+import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import { api, type SecurityBreakGlassValidationAccount } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { formatDateTime } from "../lib/azureSecurityUsers.ts";
 
 type StatusFilter = "all" | "critical" | "warning" | "healthy";
@@ -159,8 +161,7 @@ export default function AzureSecurityBreakGlassValidationPage() {
   const query = useQuery({
     queryKey: ["azure", "security", "break-glass-validation"],
     queryFn: () => api.getAzureSecurityBreakGlassValidation(),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const filteredAccounts = useMemo(() => {
@@ -179,6 +180,14 @@ export default function AzureSecurityBreakGlassValidationPage() {
       );
     });
   }, [accessFilter, deferredSearch, query.data?.accounts, statusFilter]);
+  const accountPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${statusFilter}|${accessFilter}|${filteredAccounts.length}`,
+    filteredAccounts.length,
+  );
+  const visibleAccounts = useMemo(
+    () => sliceSecurityReviewPage(filteredAccounts, accountPagination.pageStart, accountPagination.pageSize),
+    [accountPagination.pageSize, accountPagination.pageStart, filteredAccounts],
+  );
 
   if (query.isLoading) {
     return <AzurePageSkeleton titleWidth="w-72" subtitleWidth="w-[44rem]" statCount={6} sectionCount={4} />;
@@ -269,7 +278,20 @@ export default function AzureSecurityBreakGlassValidationPage() {
 
       <section className="grid gap-4 xl:grid-cols-2">
         {filteredAccounts.length > 0 ? (
-          filteredAccounts.map((account) => <AccountCard key={account.user_id} account={account} />)
+          <>
+            <div className="xl:col-span-2">
+              <SecurityReviewPagination
+                count={filteredAccounts.length}
+                currentPage={accountPagination.currentPage}
+                pageSize={accountPagination.pageSize}
+                setCurrentPage={accountPagination.setCurrentPage}
+                setPageSize={accountPagination.setPageSize}
+                totalPages={accountPagination.totalPages}
+                noun="matching candidate account(s)"
+              />
+            </div>
+            {visibleAccounts.map((account) => <AccountCard key={account.user_id} account={account} />)}
+          </>
         ) : (
           <div className="rounded-2xl border border-slate-200 bg-white px-5 py-6 text-sm text-slate-500 shadow-sm">
             No break-glass candidates matched the current filters.

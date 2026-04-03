@@ -10,6 +10,7 @@ import {
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import AzureSavingsHighlightsSection from "../components/AzureSavingsHighlightsSection.tsx";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
@@ -389,12 +390,12 @@ export default function AzureComputeOptimizationPage() {
   const savingsQuery = useQuery({
     queryKey: ["azure", "savings", "compute-page"],
     queryFn: () => api.getAzureSavingsOpportunities({ category: "compute" }),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const commitmentQuery = useQuery({
     queryKey: ["azure", "savings", "compute-page", "commitment"],
     queryFn: () => api.getAzureSavingsOpportunities({ category: "commitment" }),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   if (isLoading) {

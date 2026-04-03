@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses } from "../components/AzureSecurityLane.tsx";
+import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import { api, type AzureDirectoryObject } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { daysSince, formatDate, lastSuccessfulText, hasNoSuccessfulSignIn, isLicensedUser, licenseCount, missingFieldLabel } from "../lib/azureSecurityUsers.ts";
 
 type GuestFocus = "priority" | "all-guests" | "old-guests" | "stale-guests" | "disabled-guests";
@@ -198,28 +200,24 @@ export default function AzureSecurityGuestAccessReviewPage() {
   const deferredSearch = useDeferredValue(search);
 
   const usersQuery = useQuery({
-    queryKey: ["azure", "security", "guest-access-review", "users"],
+    queryKey: ["azure", "users", { search: "" }],
     queryFn: () => api.getAzureUsers(""),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const groupsQuery = useQuery({
-    queryKey: ["azure", "security", "guest-access-review", "groups"],
+    queryKey: ["azure", "groups", { search: "" }],
     queryFn: () => api.getAzureGroups(""),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const appRegistrationsQuery = useQuery({
-    queryKey: ["azure", "security", "guest-access-review", "app-registrations"],
+    queryKey: ["azure", "app-registrations", { search: "" }],
     queryFn: () => api.getAzureAppRegistrations(""),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const statusQuery = useQuery({
-    queryKey: ["azure", "status", "guest-access-review"],
+    queryKey: ["azure", "status"],
     queryFn: () => api.getAzureStatus(),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const loading = [usersQuery, groupsQuery, appRegistrationsQuery].some((query) => query.isLoading);
@@ -313,6 +311,30 @@ export default function AzureSecurityGuestAccessReviewPage() {
         ),
       ),
     [deferredSearch, externalAudienceApps],
+  );
+  const guestsPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${focus}|${guestAgeThreshold}|${signInThreshold}|guests|${filteredGuests.length}`,
+    filteredGuests.length,
+  );
+  const groupsPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${focus}|${guestAgeThreshold}|${signInThreshold}|groups|${filteredGroups.length}`,
+    filteredGroups.length,
+  );
+  const appsPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${focus}|${guestAgeThreshold}|${signInThreshold}|apps|${filteredApps.length}`,
+    filteredApps.length,
+  );
+  const visibleGuests = useMemo(
+    () => sliceSecurityReviewPage(filteredGuests, guestsPagination.pageStart, guestsPagination.pageSize),
+    [filteredGuests, guestsPagination.pageSize, guestsPagination.pageStart],
+  );
+  const visibleGroups = useMemo(
+    () => sliceSecurityReviewPage(filteredGroups, groupsPagination.pageStart, groupsPagination.pageSize),
+    [filteredGroups, groupsPagination.pageSize, groupsPagination.pageStart],
+  );
+  const visibleApps = useMemo(
+    () => sliceSecurityReviewPage(filteredApps, appsPagination.pageStart, appsPagination.pageSize),
+    [appsPagination.pageSize, appsPagination.pageStart, filteredApps],
   );
 
   if (loading) {
@@ -462,13 +484,25 @@ export default function AzureSecurityGuestAccessReviewPage() {
           </label>
         </div>
 
+        <div className="mb-5">
+          <SecurityReviewPagination
+            count={filteredGuests.length}
+            currentPage={guestsPagination.currentPage}
+            pageSize={guestsPagination.pageSize}
+            setCurrentPage={guestsPagination.setCurrentPage}
+            setPageSize={guestsPagination.setPageSize}
+            totalPages={guestsPagination.totalPages}
+            noun="matching guest account(s)"
+          />
+        </div>
+
         {filteredGuests.length === 0 ? (
           <div className="rounded-xl bg-slate-50 px-4 py-6 text-sm text-slate-500">
             No guest identities matched the current filters.
           </div>
         ) : (
           <div className="space-y-3">
-            {filteredGuests.map((user) => (
+            {visibleGuests.map((user) => (
               <div key={user.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -514,8 +548,18 @@ export default function AzureSecurityGuestAccessReviewPage() {
             No collaboration surfaces matched the current search.
           </div>
         ) : (
-          <div className="grid gap-4 xl:grid-cols-2">
-            {filteredGroups.map((group) => (
+          <div className="space-y-4">
+            <SecurityReviewPagination
+              count={filteredGroups.length}
+              currentPage={groupsPagination.currentPage}
+              pageSize={groupsPagination.pageSize}
+              setCurrentPage={groupsPagination.setCurrentPage}
+              setPageSize={groupsPagination.setPageSize}
+              totalPages={groupsPagination.totalPages}
+              noun="matching collaboration surface(s)"
+            />
+            <div className="grid gap-4 xl:grid-cols-2">
+              {visibleGroups.map((group) => (
               <section key={group.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -537,7 +581,8 @@ export default function AzureSecurityGuestAccessReviewPage() {
                   ))}
                 </div>
               </section>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </SectionFrame>
@@ -552,8 +597,18 @@ export default function AzureSecurityGuestAccessReviewPage() {
             No external-audience app registrations matched the current search.
           </div>
         ) : (
-          <div className="grid gap-4 xl:grid-cols-2">
-            {filteredApps.map((app) => (
+          <div className="space-y-4">
+            <SecurityReviewPagination
+              count={filteredApps.length}
+              currentPage={appsPagination.currentPage}
+              pageSize={appsPagination.pageSize}
+              setCurrentPage={appsPagination.setCurrentPage}
+              setPageSize={appsPagination.setPageSize}
+              totalPages={appsPagination.totalPages}
+              noun="matching external application surface(s)"
+            />
+            <div className="grid gap-4 xl:grid-cols-2">
+              {visibleApps.map((app) => (
               <section key={app.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -574,7 +629,8 @@ export default function AzureSecurityGuestAccessReviewPage() {
                   Owners: <span className="font-medium text-slate-900">{app.extra.owner_names || "No cached owners"}</span>
                 </div>
               </section>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </SectionFrame>

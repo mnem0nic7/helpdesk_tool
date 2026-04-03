@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type AzureAICostBreakdownItem } from "../lib/api.ts";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 const LOOKBACK_OPTIONS = [7, 30, 90];
 
@@ -80,32 +81,32 @@ export default function AzureAICostPage() {
   const summary = useQuery({
     queryKey: ["azure", "ai-costs", "summary", lookbackDays],
     queryFn: () => api.getAzureAICostSummary(lookbackDays),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const trend = useQuery({
     queryKey: ["azure", "ai-costs", "trend", lookbackDays],
     queryFn: () => api.getAzureAICostTrend(lookbackDays),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const byProvider = useQuery({
     queryKey: ["azure", "ai-costs", "breakdown", "provider", lookbackDays],
     queryFn: () => api.getAzureAICostBreakdown("provider", lookbackDays),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const byModel = useQuery({
     queryKey: ["azure", "ai-costs", "breakdown", "model", lookbackDays],
     queryFn: () => api.getAzureAICostBreakdown("model", lookbackDays),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const byApp = useQuery({
     queryKey: ["azure", "ai-costs", "breakdown", "app", lookbackDays],
     queryFn: () => api.getAzureAICostBreakdown("app", lookbackDays),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const byTeam = useQuery({
     queryKey: ["azure", "ai-costs", "breakdown", "team", lookbackDays],
     queryFn: () => api.getAzureAICostBreakdown("team", lookbackDays),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const models = useQuery({
     queryKey: ["azure", "ai-models", "ai-cost-page"],

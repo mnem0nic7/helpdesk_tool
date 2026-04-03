@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { AzureSecurityLaneHero, AzureSecurityMetricCard } from "../components/AzureSecurityLane.tsx";
+import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import { api, type AzureDirectoryObject } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 type IdentityFocus = "all" | "apps-needing-review" | "enterprise-apps" | "groups" | "roles";
 
@@ -108,34 +110,29 @@ export default function AzureSecurityIdentityReviewPage() {
   const deferredSearch = useDeferredValue(search);
 
   const groupsQuery = useQuery({
-    queryKey: ["azure", "security", "identity-review", "groups"],
+    queryKey: ["azure", "groups", { search: "" }],
     queryFn: () => api.getAzureGroups(""),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const enterpriseAppsQuery = useQuery({
-    queryKey: ["azure", "security", "identity-review", "enterprise-apps"],
+    queryKey: ["azure", "enterprise-apps", { search: "" }],
     queryFn: () => api.getAzureEnterpriseApps(""),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const appRegistrationsQuery = useQuery({
-    queryKey: ["azure", "security", "identity-review", "app-registrations"],
+    queryKey: ["azure", "app-registrations", { search: "" }],
     queryFn: () => api.getAzureAppRegistrations(""),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const rolesQuery = useQuery({
-    queryKey: ["azure", "security", "identity-review", "roles"],
+    queryKey: ["azure", "directory-roles", { search: "" }],
     queryFn: () => api.getAzureDirectoryRoles(""),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const statusQuery = useQuery({
-    queryKey: ["azure", "status", "identity-review"],
+    queryKey: ["azure", "status"],
     queryFn: () => api.getAzureStatus(),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const loading = [
@@ -208,6 +205,38 @@ export default function AzureSecurityIdentityReviewPage() {
         .filter((app) => app.extra.owner_lookup_error)
         .map((app) => `${app.display_name || app.app_id}: ${app.extra.owner_lookup_error}`),
     [appRegistrations],
+  );
+  const flaggedAppsPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${focus}|flagged|${filteredFlaggedApps.length}`,
+    filteredFlaggedApps.length,
+  );
+  const enterpriseAppsPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${focus}|enterprise|${filteredEnterpriseApps.length}`,
+    filteredEnterpriseApps.length,
+  );
+  const rolesPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${focus}|roles|${filteredRoles.length}`,
+    filteredRoles.length,
+  );
+  const groupsPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${focus}|groups|${filteredGroups.length}`,
+    filteredGroups.length,
+  );
+  const visibleFlaggedApps = useMemo(
+    () => sliceSecurityReviewPage(filteredFlaggedApps, flaggedAppsPagination.pageStart, flaggedAppsPagination.pageSize),
+    [filteredFlaggedApps, flaggedAppsPagination.pageSize, flaggedAppsPagination.pageStart],
+  );
+  const visibleEnterpriseApps = useMemo(
+    () => sliceSecurityReviewPage(filteredEnterpriseApps, enterpriseAppsPagination.pageStart, enterpriseAppsPagination.pageSize),
+    [enterpriseAppsPagination.pageSize, enterpriseAppsPagination.pageStart, filteredEnterpriseApps],
+  );
+  const visibleRoles = useMemo(
+    () => sliceSecurityReviewPage(filteredRoles, rolesPagination.pageStart, rolesPagination.pageSize),
+    [filteredRoles, rolesPagination.pageSize, rolesPagination.pageStart],
+  );
+  const visibleGroups = useMemo(
+    () => sliceSecurityReviewPage(filteredGroups, groupsPagination.pageStart, groupsPagination.pageSize),
+    [filteredGroups, groupsPagination.pageSize, groupsPagination.pageStart],
   );
 
   if (loading) {
@@ -334,8 +363,18 @@ export default function AzureSecurityIdentityReviewPage() {
         {filteredFlaggedApps.length === 0 ? (
           <div className="rounded-xl bg-slate-50 px-4 py-6 text-sm text-slate-500">No application registrations match the current review filters.</div>
         ) : (
-          <div className="grid gap-4 xl:grid-cols-2">
-            {filteredFlaggedApps.map((app) => (
+          <div className="space-y-4">
+            <SecurityReviewPagination
+              count={filteredFlaggedApps.length}
+              currentPage={flaggedAppsPagination.currentPage}
+              pageSize={flaggedAppsPagination.pageSize}
+              setCurrentPage={flaggedAppsPagination.setCurrentPage}
+              setPageSize={flaggedAppsPagination.setPageSize}
+              totalPages={flaggedAppsPagination.totalPages}
+              noun="flagged application registration(s)"
+            />
+            <div className="grid gap-4 xl:grid-cols-2">
+              {visibleFlaggedApps.map((app) => (
               <section key={app.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -370,7 +409,8 @@ export default function AzureSecurityIdentityReviewPage() {
                   ))}
                 </div>
               </section>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </SectionFrame>
@@ -383,8 +423,18 @@ export default function AzureSecurityIdentityReviewPage() {
         {filteredEnterpriseApps.length === 0 ? (
           <div className="rounded-xl bg-slate-50 px-4 py-6 text-sm text-slate-500">No enterprise applications match the current filters.</div>
         ) : (
-          <div className="grid gap-4 xl:grid-cols-2">
-            {filteredEnterpriseApps.map((app) => (
+          <div className="space-y-4">
+            <SecurityReviewPagination
+              count={filteredEnterpriseApps.length}
+              currentPage={enterpriseAppsPagination.currentPage}
+              pageSize={enterpriseAppsPagination.pageSize}
+              setCurrentPage={enterpriseAppsPagination.setCurrentPage}
+              setPageSize={enterpriseAppsPagination.setPageSize}
+              totalPages={enterpriseAppsPagination.totalPages}
+              noun="enterprise application(s)"
+            />
+            <div className="grid gap-4 xl:grid-cols-2">
+              {visibleEnterpriseApps.map((app) => (
               <section key={app.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -407,7 +457,8 @@ export default function AzureSecurityIdentityReviewPage() {
                   </span>
                 </div>
               </section>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </SectionFrame>
@@ -421,8 +472,18 @@ export default function AzureSecurityIdentityReviewPage() {
           {filteredRoles.length === 0 ? (
             <div className="rounded-xl bg-slate-50 px-4 py-6 text-sm text-slate-500">No directory roles match the current filters.</div>
           ) : (
-            <div className="space-y-3">
-              {filteredRoles.map((role) => (
+            <div className="space-y-4">
+              <SecurityReviewPagination
+                count={filteredRoles.length}
+                currentPage={rolesPagination.currentPage}
+                pageSize={rolesPagination.pageSize}
+                setCurrentPage={rolesPagination.setCurrentPage}
+                setPageSize={rolesPagination.setPageSize}
+                totalPages={rolesPagination.totalPages}
+                noun="directory role record(s)"
+              />
+              <div className="space-y-3">
+                {visibleRoles.map((role) => (
                 <section key={role.id} className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -437,7 +498,8 @@ export default function AzureSecurityIdentityReviewPage() {
                     </Link>
                   </div>
                 </section>
-              ))}
+                ))}
+              </div>
             </div>
           )}
         </SectionFrame>
@@ -450,8 +512,18 @@ export default function AzureSecurityIdentityReviewPage() {
           {filteredGroups.length === 0 ? (
             <div className="rounded-xl bg-slate-50 px-4 py-6 text-sm text-slate-500">No groups match the current filters.</div>
           ) : (
-            <div className="space-y-3">
-              {filteredGroups.map((group) => (
+            <div className="space-y-4">
+              <SecurityReviewPagination
+                count={filteredGroups.length}
+                currentPage={groupsPagination.currentPage}
+                pageSize={groupsPagination.pageSize}
+                setCurrentPage={groupsPagination.setCurrentPage}
+                setPageSize={groupsPagination.setPageSize}
+                totalPages={groupsPagination.totalPages}
+                noun="group record(s)"
+              />
+              <div className="space-y-3">
+                {visibleGroups.map((group) => (
                 <section key={group.id} className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -473,7 +545,8 @@ export default function AzureSecurityIdentityReviewPage() {
                     ))}
                   </div>
                 </section>
-              ))}
+                ))}
+              </div>
             </div>
           )}
         </SectionFrame>

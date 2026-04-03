@@ -128,6 +128,32 @@ function buildResponse() {
   };
 }
 
+function buildLargeAssignmentResponse(count = 60) {
+  const response = buildResponse();
+  return {
+    ...response,
+    flagged_principals: Array.from({ length: count }, (_, index) => ({
+      ...response.flagged_principals[0],
+      principal_id: `principal-${index + 1}`,
+      display_name: `Bulk Principal ${index + 1}`,
+      principal_name: `bulk.principal.${index + 1}@example.com`,
+    })),
+    assignments: Array.from({ length: count }, (_, index) => ({
+      ...response.assignments[0],
+      assignment_id: `assignment-${index + 1}`,
+      principal_id: `principal-${index + 1}`,
+      display_name: `Bulk Principal ${index + 1}`,
+      principal_name: `bulk.principal.${index + 1}@example.com`,
+    })),
+    break_glass_candidates: Array.from({ length: count }, (_, index) => ({
+      ...response.break_glass_candidates[0],
+      user_id: `user-${index + 1}`,
+      display_name: `Bulk Candidate ${index + 1}`,
+      principal_name: `bulk.candidate.${index + 1}@example.com`,
+    })),
+  };
+}
+
 describe("AzureSecurityAccessReviewPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -164,5 +190,21 @@ describe("AzureSecurityAccessReviewPage", () => {
     expect(screen.getAllByText("Automation SP").length).toBeGreaterThan(0);
     expect(screen.queryAllByText("Emergency Admin")).toHaveLength(0);
     expect(screen.getAllByText("Contributor").length).toBeGreaterThan(0);
+  });
+
+  it("pages large access-review queues instead of rendering the whole dataset at once", async () => {
+    mockApi.getAzureSecurityAccessReview.mockResolvedValue(buildLargeAssignmentResponse());
+
+    render(<AzureSecurityAccessReviewPage />);
+
+    expect(await screen.findByText("Privileged assignment table")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1-50 of 60 matching privileged assignment(s)")).toBeInTheDocument();
+    expect(screen.getAllByText("Bulk Principal 1").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Bulk Principal 60")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Next" })[2]);
+
+    expect(await screen.findByText("Showing 51-60 of 60 matching privileged assignment(s)")).toBeInTheDocument();
+    expect(screen.getAllByText("Bulk Principal 60").length).toBeGreaterThan(0);
   });
 });

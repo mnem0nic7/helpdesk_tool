@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api.ts";
 import { logClientError } from "../lib/errorLogging.ts";
+import { resolvePollingIntervalMs } from "../lib/queryPolling.ts";
 import type { TriageLogEntry } from "../lib/api.ts";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
@@ -41,12 +42,24 @@ export default function AILogPage() {
   const { data: runStatus } = useQuery({
     queryKey: ["triage-run-status"],
     queryFn: () => api.getTriageRunStatus(),
-    refetchInterval: 2_000,
+    refetchInterval: (query) => {
+      const current = query.state.data;
+      return resolvePollingIntervalMs(current?.running ? 2_000 : 10_000);
+    },
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchIntervalInBackground: false,
   });
   const { data: scoreRunStatus } = useQuery({
     queryKey: ["technician-score-run-status"],
     queryFn: () => api.getTechnicianScoreRunStatus(),
-    refetchInterval: 2_000,
+    refetchInterval: (query) => {
+      const current = query.state.data;
+      return resolvePollingIntervalMs(current?.running ? 2_000 : 10_000);
+    },
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchIntervalInBackground: false,
   });
 
   const isRunning = runStatus?.running ?? false;
@@ -120,7 +133,10 @@ export default function AILogPage() {
     queryKey: ["triage-log", deferredSearchQuery],
     queryFn: () => api.getTriageLog({ search: deferredSearchQuery }),
     placeholderData: (prev) => prev,
-    refetchInterval: isRunning ? 5_000 : 30_000,
+    refetchInterval: () => resolvePollingIntervalMs(isRunning ? 5_000 : 60_000),
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchIntervalInBackground: false,
   });
 
   const entries = log ?? [];

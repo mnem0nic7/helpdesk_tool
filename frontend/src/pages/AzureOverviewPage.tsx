@@ -4,6 +4,7 @@ import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzureExportSetupCard from "../components/AzureExportSetupCard.tsx";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { api, type AzureCostExportStatus, type AzureReportingTarget } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 function MetricCard({ label, value, accent = "text-sky-700" }: { label: string; value: string; accent?: string }) {
   return (
@@ -97,7 +98,7 @@ export default function AzureOverviewPage() {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["azure", "overview"],
     queryFn: () => api.getAzureOverview(),
-    refetchInterval: 30_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   if (isLoading) {

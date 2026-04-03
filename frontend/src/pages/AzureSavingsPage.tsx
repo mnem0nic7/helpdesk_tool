@@ -12,6 +12,7 @@ import {
   type AzureRecommendationSendAlertResponse,
   type JiraAuthStatus,
 } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import AzureSavingsHighlightsSection, { formatAzureCurrency } from "../components/AzureSavingsHighlightsSection.tsx";
@@ -752,7 +753,7 @@ export default function AzureSavingsPage() {
   const summaryQuery = useQuery({
     queryKey: ["azure", "recommendations", "summary"],
     queryFn: () => api.getAzureRecommendationsSummary(),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const opportunitiesQuery = useQuery({
@@ -768,7 +769,7 @@ export default function AzureSavingsPage() {
       confidence,
       quantified_only: quantifiedOnly,
     }),
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const detailQuery = useQuery({
     queryKey: ["azure", "recommendation", selectedOpportunityId],

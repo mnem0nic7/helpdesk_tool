@@ -4,6 +4,7 @@ import { api, type AzureDirectoryObject } from "../lib/api.ts";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { AzureSecurityLaneHero } from "../components/AzureSecurityLane.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -468,14 +469,12 @@ export default function AzureAccountHealthPage() {
   const { data: users = [], isLoading, isError, error } = useQuery({
     queryKey: ["azure", "users", { search: "" }],
     queryFn: () => api.getAzureUsers(""),
-    refetchInterval: 60_000,
-    staleTime: 30_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const statusQuery = useQuery({
-    queryKey: ["azure", "status", "security-account-health"],
+    queryKey: ["azure", "status"],
     queryFn: () => api.getAzureStatus(),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   if (isLoading) {

@@ -12,6 +12,10 @@ import {
   type AzureVirtualMachineDetailResponse,
   type AzureVirtualMachineRow,
 } from "../lib/api.ts";
+import {
+  getPollingQueryOptions,
+  resolvePollingIntervalMs,
+} from "../lib/queryPolling.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 
 const DEFAULT_VM_DRAWER_WIDTH = 960;
@@ -483,13 +487,13 @@ export default function AzureVMsPage() {
         location,
         state,
       }),
-    refetchInterval: 30_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const vmDetailQuery = useQuery({
     queryKey: ["azure", "vms", "detail", selectedVm?.id],
     queryFn: () => api.getAzureVMDetail(selectedVm!.id),
     enabled: !!selectedVm?.id,
-    refetchInterval: selectedVm ? 60_000 : false,
+    ...getPollingQueryOptions("live_60s"),
   });
   const createExportJobMutation = useMutation({
     mutationFn: () =>
@@ -515,7 +519,10 @@ export default function AzureVMsPage() {
     enabled: !!activeExportJobId,
     refetchInterval: (query) => {
       const status = (query.state.data as AzureVirtualMachineCostExportJobStatus | undefined)?.status;
-      return status === "completed" || status === "failed" ? false : 5_000;
+      return resolvePollingIntervalMs(
+        5_000,
+        status !== "completed" && status !== "failed",
+      );
     },
   });
   const vmRows = data?.vms ?? [];

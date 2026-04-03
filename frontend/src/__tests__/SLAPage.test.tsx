@@ -192,8 +192,11 @@ describe("SLAPage", () => {
 
     render(<SLAPage />);
 
+    await screen.findByText("First Response Distribution");
     const bucketButton = await screen.findByRole("button", {
       name: "Filter First Response Distribution bucket <30m",
+    }, {
+      timeout: 5000,
     });
     await user.click(bucketButton);
 

@@ -12,6 +12,7 @@ import {
   type AzureChatParseResponse,
 } from "../lib/api.ts";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -520,14 +521,14 @@ export default function AzureAlertsPage() {
   const rulesQuery = useQuery({
     queryKey: ["azure", "alerts", "rules"],
     queryFn: () => api.getAzureAlertRules(),
-    refetchInterval: 30_000,
+    ...getPollingQueryOptions("live_30s"),
   });
 
   const historyQuery = useQuery({
     queryKey: ["azure", "alerts", "history"],
     queryFn: () => api.getAzureAlertHistory({ limit: 200 }),
     enabled: tab === "history",
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("live_60s"),
   });
 
   const toggleMutation = useMutation({

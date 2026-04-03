@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, type ReactNode } from "react";
 import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
 import { getSiteBranding } from "./lib/siteContext";
@@ -54,7 +54,7 @@ function PageFallback() {
   );
 }
 
-export default function App() {
+export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
   const branding = getSiteBranding();
   const isAzureSite = branding.scope === "azure";
 
@@ -116,6 +116,7 @@ export default function App() {
           </Route>
         </Routes>
       </Suspense>
+      {diagnostics}
     </BrowserRouter>
   );
 }

@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { AzureSecurityLaneHero, AzureSecurityMetricCard } from "../components/AzureSecurityLane.tsx";
 import { api, type AzureDirectoryObject } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
+import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import {
   accountClassLabel,
   getDirectoryLabel,
@@ -87,16 +89,14 @@ export default function AzureSecurityUserReviewPage() {
   const deferredSearch = useDeferredValue(search);
 
   const usersQuery = useQuery({
-    queryKey: ["azure", "security", "user-review"],
+    queryKey: ["azure", "users", { search: "" }],
     queryFn: () => api.getAzureUsers(""),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
   const statusQuery = useQuery({
-    queryKey: ["azure", "status", "user-review"],
+    queryKey: ["azure", "status"],
     queryFn: () => api.getAzureStatus(),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const users = usersQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
@@ -144,6 +144,14 @@ export default function AzureSecurityUserReviewPage() {
       );
     });
   }, [deferredSearch, focus, users]);
+  const reviewPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${focus}|${filteredUsers.length}`,
+    filteredUsers.length,
+  );
+  const visibleUsers = useMemo(
+    () => sliceSecurityReviewPage(filteredUsers, reviewPagination.pageStart, reviewPagination.pageSize),
+    [filteredUsers, reviewPagination.pageSize, reviewPagination.pageStart],
+  );
 
   if (usersQuery.isLoading) {
     return <AzurePageSkeleton titleWidth="w-56" subtitleWidth="w-[42rem]" statCount={6} sectionCount={3} />;
@@ -282,6 +290,18 @@ export default function AzureSecurityUserReviewPage() {
           </select>
         </div>
 
+        <div className="mb-5">
+          <SecurityReviewPagination
+            count={filteredUsers.length}
+            currentPage={reviewPagination.currentPage}
+            pageSize={reviewPagination.pageSize}
+            setCurrentPage={reviewPagination.setCurrentPage}
+            setPageSize={reviewPagination.setPageSize}
+            totalPages={reviewPagination.totalPages}
+            noun="matching user record(s)"
+          />
+        </div>
+
         {filteredUsers.length === 0 ? (
           <div className="rounded-xl bg-slate-50 px-4 py-6 text-sm text-slate-500">No users match the current review filters.</div>
         ) : (
@@ -298,7 +318,7 @@ export default function AzureSecurityUserReviewPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredUsers.map((user, index) => (
+                {visibleUsers.map((user, index) => (
                   <tr key={user.id} className={index % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
                     <td className="px-4 py-3">
                       <div className="font-medium text-slate-900">{user.display_name}</div>

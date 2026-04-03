@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses } from "../components/AzureSecurityLane.tsx";
+import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import { api, type SecurityConditionalAccessChange, type SecurityConditionalAccessPolicy } from "../lib/api.ts";
+import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { formatDateTime } from "../lib/azureSecurityUsers.ts";
 
 type ImpactFilter = "all" | "critical" | "warning" | "healthy" | "info";
@@ -199,8 +201,7 @@ export default function AzureSecurityConditionalAccessTrackerPage() {
   const query = useQuery({
     queryKey: ["azure", "security", "conditional-access-tracker"],
     queryFn: () => api.getAzureSecurityConditionalAccessTracker(),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const filteredPolicies = useMemo(() => {
@@ -219,6 +220,22 @@ export default function AzureSecurityConditionalAccessTrackerPage() {
       return matchesChangeSearch(change, deferredSearch);
     });
   }, [deferredSearch, impactFilter, query.data?.changes]);
+  const policiesPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${impactFilter}|${scopeFilter}|policies|${filteredPolicies.length}`,
+    filteredPolicies.length,
+  );
+  const changesPagination = useSecurityReviewPagination(
+    `${deferredSearch}|${impactFilter}|${scopeFilter}|changes|${filteredChanges.length}`,
+    filteredChanges.length,
+  );
+  const visiblePolicies = useMemo(
+    () => sliceSecurityReviewPage(filteredPolicies, policiesPagination.pageStart, policiesPagination.pageSize),
+    [filteredPolicies, policiesPagination.pageSize, policiesPagination.pageStart],
+  );
+  const visibleChanges = useMemo(
+    () => sliceSecurityReviewPage(filteredChanges, changesPagination.pageStart, changesPagination.pageSize),
+    [changesPagination.pageSize, changesPagination.pageStart, filteredChanges],
+  );
 
   if (query.isLoading) {
     return <AzurePageSkeleton titleWidth="w-80" subtitleWidth="w-[46rem]" statCount={5} sectionCount={4} />;
@@ -316,7 +333,18 @@ export default function AzureSecurityConditionalAccessTrackerPage() {
 
       <section className="space-y-4">
         {filteredPolicies.length > 0 ? (
-          filteredPolicies.map((policy) => <PolicyCard key={policy.policy_id} policy={policy} />)
+          <>
+            <SecurityReviewPagination
+              count={filteredPolicies.length}
+              currentPage={policiesPagination.currentPage}
+              pageSize={policiesPagination.pageSize}
+              setCurrentPage={policiesPagination.setCurrentPage}
+              setPageSize={policiesPagination.setPageSize}
+              totalPages={policiesPagination.totalPages}
+              noun="matching policy record(s)"
+            />
+            {visiblePolicies.map((policy) => <PolicyCard key={policy.policy_id} policy={policy} />)}
+          </>
         ) : (
           <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-500">
             No policies match the current filter state.
@@ -336,7 +364,18 @@ export default function AzureSecurityConditionalAccessTrackerPage() {
 
       <section className="space-y-4">
         {filteredChanges.length > 0 ? (
-          filteredChanges.map((change) => <ChangeCard key={change.event_id} change={change} />)
+          <>
+            <SecurityReviewPagination
+              count={filteredChanges.length}
+              currentPage={changesPagination.currentPage}
+              pageSize={changesPagination.pageSize}
+              setCurrentPage={changesPagination.setCurrentPage}
+              setPageSize={changesPagination.setPageSize}
+              totalPages={changesPagination.totalPages}
+              noun="matching change event(s)"
+            />
+            {visibleChanges.map((change) => <ChangeCard key={change.event_id} change={change} />)}
+          </>
         ) : (
           <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-500">
             No change events match the current filter state.
