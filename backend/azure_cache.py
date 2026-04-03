@@ -18,6 +18,9 @@ from zoneinfo import ZoneInfo
 
 from azure_client import AzureApiError, AzureClient
 from config import (
+    AZURE_CONDITIONAL_ACCESS_LOOKBACK_DAYS,
+    AZURE_CONDITIONAL_ACCESS_REFRESH_MINUTES,
+    AZURE_DEVICE_COMPLIANCE_REFRESH_MINUTES,
     AZURE_AVD_SESSION_HISTORY_LOOKBACK_DAYS,
     AZURE_COST_LOOKBACK_DAYS,
     AZURE_COST_REFRESH_MINUTES,
@@ -59,6 +62,16 @@ _DATASET_CONFIG: dict[str, dict[str, Any]] = {
         "label": "Identity",
         "interval_minutes": AZURE_DIRECTORY_REFRESH_MINUTES,
         "snapshots": ["users", "groups", "service_principals", "applications", "application_security", "directory_roles"],
+    },
+    "device_compliance": {
+        "label": "Device Compliance",
+        "interval_minutes": AZURE_DEVICE_COMPLIANCE_REFRESH_MINUTES,
+        "snapshots": ["managed_devices"],
+    },
+    "conditional_access": {
+        "label": "Conditional Access",
+        "interval_minutes": AZURE_CONDITIONAL_ACCESS_REFRESH_MINUTES,
+        "snapshots": ["conditional_access_policies", "conditional_access_audit_events"],
     },
     "cost": {
         "label": "Cost",
@@ -387,6 +400,10 @@ class AzureCache:
                 self._refresh_inventory()
             if "directory" in dataset_keys:
                 self._refresh_directory()
+            if "device_compliance" in dataset_keys:
+                self._refresh_device_compliance()
+            if "conditional_access" in dataset_keys:
+                self._refresh_conditional_access()
             if "cost" in dataset_keys:
                 self._refresh_cost()
             with self._lock:
@@ -1217,6 +1234,40 @@ class AzureCache:
         except AzureApiError as exc:
             logger.warning("Azure directory refresh failed: %s", exc)
             self._set_dataset_status("directory", updated_at=self._dataset_state["directory"]["last_refresh"], error=str(exc))
+
+    def _refresh_device_compliance(self) -> None:
+        try:
+            managed_devices = self._client.list_managed_devices()
+            self._update_snapshots({"managed_devices": managed_devices})
+            updated_at = datetime.now(timezone.utc).isoformat()
+            self._set_dataset_status("device_compliance", updated_at=updated_at, error=None)
+        except AzureApiError as exc:
+            logger.warning("Azure device compliance refresh failed: %s", exc)
+            self._set_dataset_status(
+                "device_compliance",
+                updated_at=self._dataset_state["device_compliance"]["last_refresh"],
+                error=str(exc),
+            )
+
+    def _refresh_conditional_access(self) -> None:
+        try:
+            policies = self._client.list_conditional_access_policies()
+            audit_events = self._client.list_conditional_access_audit_events(AZURE_CONDITIONAL_ACCESS_LOOKBACK_DAYS)
+            self._update_snapshots(
+                {
+                    "conditional_access_policies": policies,
+                    "conditional_access_audit_events": audit_events,
+                }
+            )
+            updated_at = datetime.now(timezone.utc).isoformat()
+            self._set_dataset_status("conditional_access", updated_at=updated_at, error=None)
+        except AzureApiError as exc:
+            logger.warning("Azure conditional access refresh failed: %s", exc)
+            self._set_dataset_status(
+                "conditional_access",
+                updated_at=self._dataset_state["conditional_access"]["last_refresh"],
+                error=str(exc),
+            )
 
     def refresh_directory_users(self, user_ids: list[str]) -> None:
         normalized_user_ids = [str(item).strip() for item in user_ids if str(item).strip()]
@@ -3386,9 +3437,11 @@ class AzureCache:
             ("page", "security-identity-review", "Identity Review", "Review groups, enterprise apps, app registrations, and directory roles", "/security/identity-review"),
             ("page", "security-access-review", "Privileged Access Review", "Review elevated Azure RBAC access and break-glass candidates", "/security/access-review"),
             ("page", "security-break-glass-validation", "Break-glass Account Validation", "Review break glass and emergency accounts, sign-in freshness, and Azure RBAC exposure", "/security/break-glass-validation"),
+            ("page", "security-conditional-access-tracker", "Conditional Access Change Tracker", "Review policy drift, high-impact edits, and exception surfaces across Conditional Access", "/security/conditional-access-tracker"),
             ("page", "security-directory-role-review", "Directory Role Membership Review", "Review live direct Entra directory-role memberships", "/security/directory-role-review"),
             ("page", "security-user-review", "User Review", "Review stale sign-ins, guest identities, synced users, and disabled licensed accounts", "/security/user-review"),
             ("page", "security-guest-access-review", "Guest Access Review", "Review guest identities, collaboration surfaces, and external app exposure", "/security/guest-access-review"),
+            ("page", "security-device-compliance", "Device Compliance Review", "Review Intune-managed devices, noncompliance, stale sync, and remediation readiness", "/security/device-compliance"),
             ("page", "security-dlp-review", "DLP Findings Review", "Review pasted DLP findings against identity, mailbox, and local context", "/security/dlp-review"),
             ("page", "security-account-health", "Account Health", "Review account hygiene, stale passwords, old guests, and incomplete profiles", "/security/account-health"),
             ("page", "security-app-hygiene", "Application Hygiene", "Review app registration owners and credential expiry risk", "/security/app-hygiene"),

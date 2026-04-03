@@ -135,6 +135,22 @@ describe("Layout tools navigation", () => {
     expect(screen.getAllByText("Break-glass Account Validation").length).toBeGreaterThan(0);
   });
 
+  it("shows the conditional access tracker breadcrumb on the azure host", async () => {
+    renderLayoutAt("/security/conditional-access-tracker", "azure");
+
+    expect(await screen.findByText("Page content")).toBeInTheDocument();
+    expect(screen.getAllByText("Security").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Conditional Access Change Tracker").length).toBeGreaterThan(0);
+  });
+
+  it("shows the device compliance breadcrumb on the azure host", async () => {
+    renderLayoutAt("/security/device-compliance", "azure");
+
+    expect(await screen.findByText("Page content")).toBeInTheDocument();
+    expect(screen.getAllByText("Security").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Device Compliance Review").length).toBeGreaterThan(0);
+  });
+
   it("shows the directory role review breadcrumb on the azure host", async () => {
     renderLayoutAt("/security/directory-role-review", "azure");
 

@@ -21,6 +21,8 @@ const AzureResourcesPage = lazy(() => import("./pages/AzureResourcesPage"));
 const AzureIdentityPage = lazy(() => import("./pages/AzureIdentityPage"));
 const AzureSecurityIdentityReviewPage = lazy(() => import("./pages/AzureSecurityIdentityReviewPage"));
 const AzureSecurityBreakGlassValidationPage = lazy(() => import("./pages/AzureSecurityBreakGlassValidationPage"));
+const AzureSecurityConditionalAccessTrackerPage = lazy(() => import("./pages/AzureSecurityConditionalAccessTrackerPage"));
+const AzureSecurityDeviceCompliancePage = lazy(() => import("./pages/AzureSecurityDeviceCompliancePage"));
 const AzureSecurityGuestAccessReviewPage = lazy(() => import("./pages/AzureSecurityGuestAccessReviewPage"));
 const AzureSecurityDlpReviewPage = lazy(() => import("./pages/AzureSecurityDlpReviewPage"));
 const AzureCostPage = lazy(() => import("./pages/AzureCostPage"));
@@ -71,6 +73,8 @@ export default function App() {
                 <Route path="security" element={<AzureSecurityPage />} />
                 <Route path="security/access-review" element={<AzureSecurityAccessReviewPage />} />
                 <Route path="security/break-glass-validation" element={<AzureSecurityBreakGlassValidationPage />} />
+                <Route path="security/conditional-access-tracker" element={<AzureSecurityConditionalAccessTrackerPage />} />
+                <Route path="security/device-compliance" element={<AzureSecurityDeviceCompliancePage />} />
                 <Route path="security/directory-role-review" element={<AzureSecurityDirectoryRoleReviewPage />} />
                 <Route path="security/identity-review" element={<AzureSecurityIdentityReviewPage />} />
                 <Route path="security/guest-access-review" element={<AzureSecurityGuestAccessReviewPage />} />

@@ -104,6 +104,28 @@ const reviewLaneCards: ToolCardDefinition[] = [
   },
   {
     eyebrow: "Review Lane",
+    title: "Device Compliance Review",
+    description:
+      "Review tenant-wide Intune managed-device posture, stale sync, missing primary users, risky personal devices, and bulk remediation readiness from one security lane.",
+    status: "Ready now",
+    actions: [
+      { label: "Open Device Compliance Review", to: "/security/device-compliance" },
+      { label: "Open User Review", to: "/security/user-review", tone: "secondary" },
+    ],
+  },
+  {
+    eyebrow: "Review Lane",
+    title: "Conditional Access Change Tracker",
+    description:
+      "Track policy drift, recent add or update operations, broad-scope Conditional Access coverage, and exclusion-based exception surfaces before they become user-impacting outages.",
+    status: "Ready now",
+    actions: [
+      { label: "Open Conditional Access Tracker", to: "/security/conditional-access-tracker" },
+      { label: "Open Security Copilot", to: "/security/copilot", tone: "secondary" },
+    ],
+  },
+  {
+    eyebrow: "Review Lane",
     title: "DLP Findings Review",
     description:
       "Paste Purview or other DLP finding details, let the copilot normalize actors and destinations, and review grounded identity, mailbox, and local context before escalation.",
@@ -165,10 +187,6 @@ const connectedConsoles: ToolCardDefinition[] = [
 ];
 
 const buildQueue: BuildQueueItem[] = [
-  {
-    title: "Conditional access change tracker",
-    description: "Track policy drift and highlight high-impact changes before they become user-impacting outages.",
-  },
   {
     title: "Emergency-account MFA posture validation",
     description: "Add MFA registration and method-strength signals so the break-glass lane can verify emergency-access readiness end to end.",

@@ -177,6 +177,8 @@ export default function Layout() {
     let detailLabel = "";
     if (segment === "security" && subsegment === "access-review") detailLabel = "Privileged Access Review";
     if (segment === "security" && subsegment === "break-glass-validation") detailLabel = "Break-glass Account Validation";
+    if (segment === "security" && subsegment === "conditional-access-tracker") detailLabel = "Conditional Access Change Tracker";
+    if (segment === "security" && subsegment === "device-compliance") detailLabel = "Device Compliance Review";
     if (segment === "security" && subsegment === "directory-role-review") detailLabel = "Directory Role Membership Review";
     if (segment === "security" && subsegment === "identity-review") detailLabel = "Identity Review";
     if (segment === "security" && subsegment === "guest-access-review") detailLabel = "Guest Access Review";

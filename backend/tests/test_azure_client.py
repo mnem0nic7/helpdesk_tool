@@ -147,6 +147,180 @@ def test_list_directory_role_members_uses_graph_batch_and_tracks_errors(monkeypa
     assert result["role-2"]["member_lookup_error"] == "Access denied"
 
 
+def test_list_managed_devices_batches_primary_user_lookup(monkeypatch):
+    client = AzureClient()
+    captured: dict[str, object] = {}
+
+    def fake_graph_paged_get(path, *, api_version="v1.0", params=None, headers=None):
+        captured["path"] = path
+        captured["api_version"] = api_version
+        captured["params"] = params
+        del headers
+        return [
+            {
+                "id": "device-1",
+                "deviceName": "Payroll Laptop",
+                "operatingSystem": "Windows",
+                "osVersion": "11",
+                "complianceState": "noncompliant",
+                "managementState": "managed",
+                "ownerType": "company",
+                "enrollmentType": "windowsAzureADJoin",
+                "lastSyncDateTime": "2026-04-03T12:00:00Z",
+                "azureADDeviceId": "aad-1",
+            }
+        ]
+
+    def fake_graph_request(method, path, *, api_version="v1.0", params=None, json_body=None, headers=None):
+        captured["batch_method"] = method
+        captured["batch_path"] = path
+        captured["batch_version"] = api_version
+        captured["batch_body"] = json_body
+        del params, headers
+        return {
+            "responses": [
+                {
+                    "id": "1",
+                    "status": 200,
+                    "body": {
+                        "value": [
+                            {
+                                "id": "user-1",
+                                "displayName": "Ada Lovelace",
+                                "userPrincipalName": "ada@example.com",
+                                "mail": "ada@example.com",
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(client, "graph_paged_get", fake_graph_paged_get)
+    monkeypatch.setattr(client, "graph_request", fake_graph_request)
+
+    rows = client.list_managed_devices()
+
+    assert captured["path"] == "deviceManagement/managedDevices"
+    assert captured["batch_method"] == "POST"
+    assert captured["batch_path"] == "$batch"
+    assert captured["batch_version"] == "beta"
+    assert rows[0]["primary_users"][0]["display_name"] == "Ada Lovelace"
+    assert rows[0]["primary_users"][0]["principal_name"] == "ada@example.com"
+
+
+def test_list_conditional_access_policies_normalizes_scope_and_controls(monkeypatch):
+    client = AzureClient()
+    captured: dict[str, object] = {}
+
+    def fake_graph_paged_get(path, *, api_version="v1.0", params=None, headers=None):
+        captured["path"] = path
+        captured["api_version"] = api_version
+        captured["params"] = params
+        del headers
+        return [
+            {
+                "id": "policy-1",
+                "displayName": "Require MFA for admins",
+                "createdDateTime": "2026-01-01T00:00:00Z",
+                "modifiedDateTime": "2026-04-03T01:00:00Z",
+                "state": "enabled",
+                "conditions": {
+                    "users": {
+                        "includeUsers": [],
+                        "excludeUsers": ["user-1"],
+                        "includeGroups": [],
+                        "excludeGroups": [],
+                        "includeRoles": ["role-1", "role-2"],
+                        "excludeRoles": [],
+                        "includeGuestsOrExternalUsers": None,
+                        "excludeGuestsOrExternalUsers": None,
+                    },
+                    "applications": {
+                        "includeApplications": ["All"],
+                        "excludeApplications": [],
+                        "includeUserActions": [],
+                    },
+                },
+                "grantControls": {
+                    "builtInControls": ["mfa"],
+                    "customAuthenticationFactors": [],
+                    "termsOfUse": [],
+                    "authenticationStrength": {"displayName": "Phishing-resistant MFA"},
+                },
+                "sessionControls": {"applicationEnforcedRestrictions": {"isEnabled": True}},
+            }
+        ]
+
+    monkeypatch.setattr(client, "graph_paged_get", fake_graph_paged_get)
+
+    rows = client.list_conditional_access_policies()
+
+    assert captured["path"] == "identity/conditionalAccess/policies"
+    assert rows[0]["display_name"] == "Require MFA for admins"
+    assert rows[0]["include_roles"] == ["role-1", "role-2"]
+    assert rows[0]["exclude_users"] == ["user-1"]
+    assert rows[0]["grant_controls"] == ["mfa"]
+    assert rows[0]["authentication_strength"] == "Phishing-resistant MFA"
+    assert rows[0]["session_controls"] == ["applicationEnforcedRestrictions"]
+
+
+def test_list_conditional_access_audit_events_filters_and_normalizes(monkeypatch):
+    client = AzureClient()
+    captured: dict[str, object] = {}
+
+    def fake_graph_paged_get(path, *, api_version="v1.0", params=None, headers=None):
+        captured["path"] = path
+        captured["api_version"] = api_version
+        captured["params"] = params
+        del headers
+        return [
+            {
+                "id": "event-1",
+                "activityDateTime": "2026-04-03T02:15:00Z",
+                "activityDisplayName": "Update conditional access policy",
+                "category": "Policy",
+                "loggedByService": "Conditional Access",
+                "result": "success",
+                "initiatedBy": {
+                    "user": {
+                        "displayName": "Ada Lovelace",
+                        "userPrincipalName": "ada@example.com",
+                    }
+                },
+                "targetResources": [
+                    {
+                        "id": "policy-1",
+                        "displayName": "Require MFA for admins",
+                        "type": "Policy",
+                        "modifiedProperties": [{"displayName": "grantControls"}],
+                    }
+                ],
+            },
+            {
+                "id": "event-2",
+                "activityDateTime": "2026-04-03T01:15:00Z",
+                "activityDisplayName": "Update application",
+                "category": "ApplicationManagement",
+                "loggedByService": "Microsoft Entra ID",
+                "result": "success",
+                "initiatedBy": {},
+                "targetResources": [],
+            },
+        ]
+
+    monkeypatch.setattr(client, "graph_paged_get", fake_graph_paged_get)
+
+    rows = client.list_conditional_access_audit_events(lookback_days=14)
+
+    assert captured["path"] == "auditLogs/directoryAudits"
+    assert "activityDateTime ge" in str((captured["params"] or {}).get("$filter"))
+    assert len(rows) == 1
+    assert rows[0]["target_policy_name"] == "Require MFA for admins"
+    assert rows[0]["initiated_by_display_name"] == "Ada Lovelace"
+    assert rows[0]["modified_properties"] == ["grantControls"]
+
+
 def test_query_resources_captures_vm_size_and_sku(monkeypatch):
     client = AzureClient()
 

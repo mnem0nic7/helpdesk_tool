@@ -13,6 +13,7 @@ from typing import Any
 import requests
 
 from config import (
+    AZURE_CONDITIONAL_ACCESS_LOOKBACK_DAYS,
     AZURE_COST_INTER_QUERY_DELAY_SECONDS,
     AZURE_COST_LOOKBACK_DAYS,
     AZURE_COST_MAX_RETRIES,
@@ -1313,6 +1314,309 @@ Resources
                 if body.get("@odata.nextLink"):
                     members_by_role[role_id]["truncated"] = True
         return members_by_role
+
+    @staticmethod
+    def _graph_string_list(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            result.append(text)
+        return result
+
+    @staticmethod
+    def _graph_truthy(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        return value is not None
+
+    @classmethod
+    def _normalize_conditional_access_policy(cls, item: dict[str, Any]) -> dict[str, Any]:
+        conditions = item.get("conditions") if isinstance(item.get("conditions"), dict) else {}
+        users = conditions.get("users") if isinstance(conditions.get("users"), dict) else {}
+        applications = conditions.get("applications") if isinstance(conditions.get("applications"), dict) else {}
+        grant_controls = item.get("grantControls") if isinstance(item.get("grantControls"), dict) else {}
+        session_controls = item.get("sessionControls") if isinstance(item.get("sessionControls"), dict) else {}
+        authentication_strength = (
+            grant_controls.get("authenticationStrength")
+            if isinstance(grant_controls.get("authenticationStrength"), dict)
+            else {}
+        )
+        enabled_session_controls = [
+            key
+            for key, raw_value in session_controls.items()
+            if cls._graph_truthy(raw_value)
+        ]
+        return {
+            "id": str(item.get("id") or ""),
+            "display_name": str(item.get("displayName") or ""),
+            "state": str(item.get("state") or ""),
+            "created_date_time": str(item.get("createdDateTime") or ""),
+            "modified_date_time": str(item.get("modifiedDateTime") or ""),
+            "include_users": cls._graph_string_list(users.get("includeUsers")),
+            "exclude_users": cls._graph_string_list(users.get("excludeUsers")),
+            "include_groups": cls._graph_string_list(users.get("includeGroups")),
+            "exclude_groups": cls._graph_string_list(users.get("excludeGroups")),
+            "include_roles": cls._graph_string_list(users.get("includeRoles")),
+            "exclude_roles": cls._graph_string_list(users.get("excludeRoles")),
+            "include_guests_or_external": users.get("includeGuestsOrExternalUsers") is not None,
+            "exclude_guests_or_external": users.get("excludeGuestsOrExternalUsers") is not None,
+            "include_applications": cls._graph_string_list(applications.get("includeApplications")),
+            "exclude_applications": cls._graph_string_list(applications.get("excludeApplications")),
+            "include_user_actions": cls._graph_string_list(applications.get("includeUserActions")),
+            "grant_controls": cls._graph_string_list(grant_controls.get("builtInControls")),
+            "custom_authentication_factors": cls._graph_string_list(grant_controls.get("customAuthenticationFactors")),
+            "terms_of_use": cls._graph_string_list(grant_controls.get("termsOfUse")),
+            "authentication_strength": str(authentication_strength.get("displayName") or ""),
+            "session_controls": enabled_session_controls,
+        }
+
+    @staticmethod
+    def _looks_like_conditional_access_audit(item: dict[str, Any]) -> bool:
+        parts = [
+            str(item.get("activityDisplayName") or ""),
+            str(item.get("category") or ""),
+            str(item.get("loggedByService") or ""),
+        ]
+        for target in item.get("targetResources") or []:
+            if not isinstance(target, dict):
+                continue
+            parts.append(str(target.get("displayName") or ""))
+            parts.append(str(target.get("type") or ""))
+        haystack = " ".join(parts).lower()
+        return "conditional access" in haystack
+
+    @classmethod
+    def _normalize_conditional_access_audit(cls, item: dict[str, Any]) -> dict[str, Any]:
+        initiated_by = item.get("initiatedBy") if isinstance(item.get("initiatedBy"), dict) else {}
+        initiated_user = initiated_by.get("user") if isinstance(initiated_by.get("user"), dict) else {}
+        initiated_app = initiated_by.get("app") if isinstance(initiated_by.get("app"), dict) else {}
+        initiated_by_type = "unknown"
+        initiated_by_display_name = ""
+        initiated_by_principal_name = ""
+        if initiated_user:
+            initiated_by_type = "user"
+            initiated_by_display_name = str(initiated_user.get("displayName") or "")
+            initiated_by_principal_name = str(
+                initiated_user.get("userPrincipalName") or initiated_user.get("mail") or ""
+            )
+        elif initiated_app:
+            initiated_by_type = "app"
+            initiated_by_display_name = str(initiated_app.get("displayName") or "")
+            initiated_by_principal_name = str(
+                initiated_app.get("servicePrincipalName") or initiated_app.get("appId") or ""
+            )
+
+        target_policy_id = ""
+        target_policy_name = ""
+        modified_properties: list[str] = []
+        for target in item.get("targetResources") or []:
+            if not isinstance(target, dict):
+                continue
+            if not target_policy_id:
+                target_policy_id = str(target.get("id") or "")
+            if not target_policy_name:
+                target_policy_name = str(target.get("displayName") or "")
+            for prop in target.get("modifiedProperties") or []:
+                if not isinstance(prop, dict):
+                    continue
+                property_name = str(prop.get("displayName") or prop.get("name") or "").strip()
+                if property_name and property_name not in modified_properties:
+                    modified_properties.append(property_name)
+
+        return {
+            "id": str(item.get("id") or ""),
+            "activity_date_time": str(item.get("activityDateTime") or ""),
+            "activity_display_name": str(item.get("activityDisplayName") or ""),
+            "category": str(item.get("category") or ""),
+            "logged_by_service": str(item.get("loggedByService") or ""),
+            "result": str(item.get("result") or ""),
+            "initiated_by_type": initiated_by_type,
+            "initiated_by_display_name": initiated_by_display_name,
+            "initiated_by_principal_name": initiated_by_principal_name,
+            "target_policy_id": target_policy_id,
+            "target_policy_name": target_policy_name,
+            "modified_properties": modified_properties,
+        }
+
+    def list_conditional_access_policies(self) -> list[dict[str, Any]]:
+        rows = self.graph_paged_get(
+            "identity/conditionalAccess/policies",
+            params={
+                "$select": ",".join(
+                    [
+                        "id",
+                        "displayName",
+                        "createdDateTime",
+                        "modifiedDateTime",
+                        "state",
+                        "conditions",
+                        "grantControls",
+                        "sessionControls",
+                    ]
+                ),
+                "$top": "200",
+            },
+        )
+        return [self._normalize_conditional_access_policy(item) for item in rows if isinstance(item, dict)]
+
+    def list_conditional_access_audit_events(self, lookback_days: int | None = None) -> list[dict[str, Any]]:
+        window_days = max(1, int(lookback_days or AZURE_CONDITIONAL_ACCESS_LOOKBACK_DAYS))
+        window_start = (datetime.now(timezone.utc) - timedelta(days=window_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = self.graph_paged_get(
+            "auditLogs/directoryAudits",
+            params={
+                "$filter": f"activityDateTime ge {window_start} and category eq 'Policy'",
+                "$select": ",".join(
+                    [
+                        "id",
+                        "activityDateTime",
+                        "activityDisplayName",
+                        "category",
+                        "loggedByService",
+                        "result",
+                        "initiatedBy",
+                        "targetResources",
+                    ]
+                ),
+                "$orderby": "activityDateTime desc",
+                "$top": "200",
+            },
+        )
+        return [
+            self._normalize_conditional_access_audit(item)
+            for item in rows
+            if isinstance(item, dict) and self._looks_like_conditional_access_audit(item)
+        ]
+
+    def list_managed_device_primary_users(self, device_ids: list[str]) -> dict[str, dict[str, Any]]:
+        normalized_ids = [str(item).strip() for item in device_ids if str(item).strip()]
+        users_by_device: dict[str, dict[str, Any]] = {
+            device_id: {"users": [], "primary_user_lookup_error": "", "truncated": False}
+            for device_id in normalized_ids
+        }
+        if not normalized_ids:
+            return users_by_device
+
+        user_select = "id,displayName,userPrincipalName,mail"
+        for start in range(0, len(normalized_ids), 20):
+            chunk = normalized_ids[start : start + 20]
+            requests_payload = [
+                {
+                    "id": str(index),
+                    "method": "GET",
+                    "url": f"/deviceManagement/managedDevices/{device_id}/users?$select={user_select}&$top=20",
+                }
+                for index, device_id in enumerate(chunk, start=1)
+            ]
+            payload = self.graph_request(
+                "POST",
+                "$batch",
+                api_version="beta",
+                json_body={"requests": requests_payload},
+                headers={"Content-Type": "application/json"},
+            )
+            responses = payload.get("responses")
+            if not isinstance(responses, list):
+                for device_id in chunk:
+                    users_by_device[device_id]["primary_user_lookup_error"] = "Missing Microsoft Graph batch response."
+                continue
+
+            request_id_to_device = {
+                str(index): device_id for index, device_id in enumerate(chunk, start=1)
+            }
+            for response in responses:
+                if not isinstance(response, dict):
+                    continue
+                response_id = str(response.get("id") or "")
+                device_id = request_id_to_device.get(response_id)
+                if not device_id:
+                    continue
+                status_code = int(response.get("status") or 0)
+                if status_code != 200:
+                    body = response.get("body") if isinstance(response.get("body"), dict) else {}
+                    message = ""
+                    if isinstance(body.get("error"), dict):
+                        message = str(body["error"].get("message") or "")
+                    users_by_device[device_id]["primary_user_lookup_error"] = (
+                        message or f"Microsoft Graph primary user lookup returned {status_code}."
+                    )
+                    continue
+                body = response.get("body") if isinstance(response.get("body"), dict) else {}
+                value = body.get("value") if isinstance(body.get("value"), list) else []
+                users_by_device[device_id]["users"] = [
+                    item for item in value if isinstance(item, dict)
+                ]
+                if body.get("@odata.nextLink"):
+                    users_by_device[device_id]["truncated"] = True
+
+        return users_by_device
+
+    def list_managed_devices(self) -> list[dict[str, Any]]:
+        rows = self.graph_paged_get(
+            "deviceManagement/managedDevices",
+            params={
+                "$select": ",".join(
+                    [
+                        "id",
+                        "deviceName",
+                        "operatingSystem",
+                        "osVersion",
+                        "complianceState",
+                        "managementState",
+                        "ownerType",
+                        "enrollmentType",
+                        "lastSyncDateTime",
+                        "azureADDeviceId",
+                    ]
+                ),
+                "$top": "999",
+            },
+        )
+        primary_users_by_device = self.list_managed_device_primary_users(
+            [str(item.get("id") or "") for item in rows if str(item.get("id") or "").strip()]
+        )
+
+        devices: list[dict[str, Any]] = []
+        for item in rows:
+            device_id = str(item.get("id") or "").strip()
+            primary_info = primary_users_by_device.get(device_id) if device_id else {}
+            primary_users = primary_info.get("users") if isinstance(primary_info.get("users"), list) else []
+            devices.append(
+                {
+                    "id": device_id,
+                    "device_name": str(item.get("deviceName") or ""),
+                    "operating_system": str(item.get("operatingSystem") or ""),
+                    "operating_system_version": str(item.get("osVersion") or ""),
+                    "compliance_state": str(item.get("complianceState") or ""),
+                    "management_state": str(item.get("managementState") or ""),
+                    "owner_type": str(item.get("ownerType") or ""),
+                    "enrollment_type": str(item.get("enrollmentType") or ""),
+                    "last_sync_date_time": str(item.get("lastSyncDateTime") or ""),
+                    "azure_ad_device_id": str(item.get("azureADDeviceId") or ""),
+                    "primary_users": [
+                        {
+                            "id": str(user.get("id") or ""),
+                            "display_name": str(user.get("displayName") or user.get("userPrincipalName") or user.get("mail") or ""),
+                            "principal_name": str(user.get("userPrincipalName") or user.get("mail") or ""),
+                            "mail": str(user.get("mail") or ""),
+                        }
+                        for user in primary_users
+                        if isinstance(user, dict)
+                    ],
+                    "primary_user_lookup_error": str(primary_info.get("primary_user_lookup_error") or ""),
+                    "primary_user_lookup_truncated": bool(primary_info.get("truncated")),
+                }
+            )
+        return devices
 
     @staticmethod
     def _cost_range(days: int | None = None) -> tuple[str, str]:

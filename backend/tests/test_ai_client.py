@@ -579,6 +579,104 @@ def test_score_closed_ticket_uses_fast_path_output_cap_and_json_mode(monkeypatch
     assert captured["json_output"] is True
 
 
+def test_technician_score_prompt_explicitly_forbids_transcript_summaries_and_extra_text():
+    prompt = ai_client.TECHNICIAN_SCORE_PROMPT
+
+    assert "Do NOT summarize the whole ticket, transcript, timeline, or action plan." in prompt
+    assert "Do not return markdown, code fences, headings, bullets, numbered lists, or prose before/after the JSON." in prompt
+    assert "Return exactly one JSON object that starts with { and ends with }." in prompt
+    assert "Use exactly these keys and no extras:" in prompt
+
+
+def test_score_closed_ticket_retries_once_after_invalid_json(monkeypatch):
+    issue = {
+        "key": "OIT-88",
+        "fields": {
+            "summary": "Closed ticket",
+            "status": {"name": "Closed", "statusCategory": {"name": "Done"}},
+            "comment": {"comments": []},
+        },
+    }
+    responses = iter(
+        [
+            "Summary of the transcript and action plan without any JSON.",
+            """{
+              "communication_score": 3,
+              "communication_notes": "Some public communication is documented.",
+              "documentation_score": 4,
+              "documentation_notes": "Internal notes explain the fix clearly.",
+              "score_summary": "Adequate communication with solid documentation."
+            }""",
+        ]
+    )
+    captured_system_prompts: list[str] = []
+    captured_kwargs: list[dict[str, object]] = []
+
+    def fake_invoke(model_id, system, user_msg, **kwargs):
+        captured_system_prompts.append(system)
+        captured_kwargs.append(kwargs)
+        return next(responses)
+
+    monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke)
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id, **kwargs: "ollama")
+
+    score = score_closed_ticket(issue, [], "nemotron-3-nano:4b")
+
+    assert score.communication_score == 3
+    assert score.documentation_score == 4
+    assert len(captured_system_prompts) == 2
+    assert captured_system_prompts[1] == ai_client.TECHNICIAN_SCORE_RETRY_PROMPT
+    assert captured_kwargs[1]["temperature"] == 0.0
+
+
+def test_score_closed_ticket_falls_back_after_two_invalid_json_responses(monkeypatch):
+    issue = {
+        "key": "OIT-89",
+        "fields": {
+            "summary": "Closed ticket",
+            "status": {"name": "Closed", "statusCategory": {"name": "Done"}},
+            "resolution": {"name": "Done"},
+            "resolutiondate": "2026-04-03T14:00:00Z",
+            "comment": {"comments": []},
+        },
+    }
+    comments = [
+        {
+            "author": {"displayName": "Ada"},
+            "created": "2026-04-03T13:50:00Z",
+            "body": "Updated the user and confirmed next steps.",
+            "public": True,
+        },
+        {
+            "author": {"displayName": "Ada"},
+            "created": "2026-04-03T13:55:00Z",
+            "body": "Reset the setting and verified the fix internally.",
+            "public": False,
+        },
+    ]
+    responses = iter(
+        [
+            "Narrative response without JSON.",
+            "Still not JSON.",
+        ]
+    )
+
+    def fake_invoke(model_id, system, user_msg, **kwargs):
+        return next(responses)
+
+    monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke)
+    monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id, **kwargs: "ollama")
+
+    score = score_closed_ticket(issue, comments, "nemotron-3-nano:4b")
+
+    assert score.model_used == "nemotron-3-nano:4b"
+    assert score.communication_score == 2
+    assert score.documentation_score == 3
+    assert "Fallback QA score saved" in score.score_summary
+    assert "invalid model output" in score.communication_notes
+    assert "internal note" in score.documentation_notes
+
+
 def test_analyze_ticket_includes_relevant_kb_context(monkeypatch):
     captured: dict[str, str] = {}
 

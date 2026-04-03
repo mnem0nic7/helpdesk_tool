@@ -12,9 +12,17 @@ from models import (
     SecurityAppHygieneResponse,
     SecurityBreakGlassValidationAccount,
     SecurityBreakGlassValidationResponse,
+    SecurityConditionalAccessChange,
+    SecurityConditionalAccessPolicy,
+    SecurityConditionalAccessTrackerResponse,
+    SecurityDeviceActionJob,
+    SecurityDeviceActionJobResult,
+    SecurityDeviceComplianceDevice,
+    SecurityDeviceComplianceResponse,
     SecurityDirectoryRoleReviewMembership,
     SecurityDirectoryRoleReviewResponse,
     SecurityDirectoryRoleReviewRole,
+    UserAdminReference,
 )
 
 
@@ -237,6 +245,107 @@ def _directory_role_review_response(_session=None) -> SecurityDirectoryRoleRevie
     )
 
 
+def _conditional_access_tracker_response(_session=None) -> SecurityConditionalAccessTrackerResponse:
+    return SecurityConditionalAccessTrackerResponse(
+        generated_at="2026-04-03T03:00:00Z",
+        conditional_access_last_refresh="2026-04-03T02:45:00Z",
+        access_available=True,
+        access_message="Conditional Access policy drift review is available.",
+        metrics=[
+            SecurityAccessReviewMetric(
+                key="tracked_policies",
+                label="Tracked policies",
+                value=2,
+                detail="Two policies are cached.",
+                tone="sky",
+            )
+        ],
+        policies=[
+            SecurityConditionalAccessPolicy(
+                policy_id="policy-1",
+                display_name="Require MFA for admins",
+                state="enabled",
+                created_date_time="2026-01-01T00:00:00Z",
+                modified_date_time="2026-04-03T01:00:00Z",
+                user_scope_summary="2 role target(s) - 1 exception(s)",
+                application_scope_summary="All cloud apps",
+                grant_controls=["Mfa"],
+                session_controls=[],
+                impact_level="warning",
+                risk_tags=["role_targeted", "exception_surface"],
+            )
+        ],
+        changes=[
+            SecurityConditionalAccessChange(
+                event_id="event-1",
+                activity_date_time="2026-04-03T02:15:00Z",
+                activity_display_name="Update conditional access policy",
+                result="success",
+                initiated_by_display_name="Ada Lovelace",
+                initiated_by_principal_name="ada@example.com",
+                initiated_by_type="user",
+                target_policy_id="policy-1",
+                target_policy_name="Require MFA for admins",
+                impact_level="warning",
+                change_summary="Update conditional access policy for Require MFA for admins by Ada Lovelace",
+                modified_properties=["grantControls"],
+                flags=["Change touched policy scope or enforcement controls."],
+            )
+        ],
+        warnings=[],
+        scope_notes=["This lane tracks cached Microsoft Entra Conditional Access policies."],
+    )
+
+
+def _device_compliance_response(_session=None) -> SecurityDeviceComplianceResponse:
+    return SecurityDeviceComplianceResponse(
+        generated_at="2026-04-03T02:00:00Z",
+        device_last_refresh="2026-04-03T01:56:00Z",
+        access_available=True,
+        access_message="Tenant-wide device compliance review is available.",
+        metrics=[
+            SecurityAccessReviewMetric(
+                key="managed_devices",
+                label="Managed devices",
+                value=2,
+                detail="Two devices are cached.",
+                tone="sky",
+            )
+        ],
+        devices=[
+            SecurityDeviceComplianceDevice(
+                id="device-1",
+                device_name="Payroll Laptop",
+                operating_system="Windows",
+                operating_system_version="11",
+                compliance_state="noncompliant",
+                management_state="managed",
+                owner_type="company",
+                enrollment_type="windowsAzureADJoin",
+                last_sync_date_time="2026-04-03T01:00:00Z",
+                last_sync_age_days=0,
+                azure_ad_device_id="aad-1",
+                primary_users=[
+                    UserAdminReference(
+                        id="user-1",
+                        display_name="Ada Lovelace",
+                        principal_name="ada@example.com",
+                        mail="ada@example.com",
+                    )
+                ],
+                risk_level="critical",
+                finding_tags=["noncompliant_or_grace"],
+                recommended_actions=["Run an Intune device sync and review the failing compliance policies."],
+                action_ready=True,
+                supported_actions=["device_sync", "device_remote_lock", "device_retire", "device_wipe"],
+                action_blockers=[],
+            )
+        ],
+        warnings=[],
+        scope_notes=["This lane reviews cached Intune managed-device posture across the tenant."],
+    )
+
+
 def test_security_access_review_route_returns_payload_on_azure_host(test_client, monkeypatch):
     import routes_azure_security
 
@@ -306,6 +415,30 @@ def test_security_break_glass_route_is_azure_only(test_client):
     assert "only available on azure.movedocs.com" in resp.json()["detail"]
 
 
+def test_security_conditional_access_tracker_route_returns_payload_on_azure_host(test_client, monkeypatch):
+    import routes_azure_security
+
+    monkeypatch.setattr(routes_azure_security, "build_security_conditional_access_tracker", _conditional_access_tracker_response)
+
+    resp = test_client.get(
+        "/api/azure/security/conditional-access-tracker",
+        headers={"host": "azure.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["metrics"][0]["label"] == "Tracked policies"
+    assert payload["policies"][0]["display_name"] == "Require MFA for admins"
+    assert payload["changes"][0]["target_policy_name"] == "Require MFA for admins"
+
+
+def test_security_conditional_access_tracker_route_is_azure_only(test_client):
+    resp = test_client.get("/api/azure/security/conditional-access-tracker")
+
+    assert resp.status_code == 404
+    assert "only available on azure.movedocs.com" in resp.json()["detail"]
+
+
 def test_security_directory_role_review_route_returns_payload_on_azure_host(test_client, monkeypatch):
     import routes_azure_security
 
@@ -328,3 +461,124 @@ def test_security_directory_role_review_route_is_azure_only(test_client):
 
     assert resp.status_code == 404
     assert "only available on azure.movedocs.com" in resp.json()["detail"]
+
+
+def test_security_device_compliance_route_returns_payload_on_azure_host(test_client, monkeypatch):
+    import routes_azure_security
+
+    monkeypatch.setattr(routes_azure_security, "build_security_device_compliance_review", _device_compliance_response)
+
+    resp = test_client.get(
+        "/api/azure/security/device-compliance",
+        headers={"host": "azure.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["metrics"][0]["label"] == "Managed devices"
+    assert payload["devices"][0]["device_name"] == "Payroll Laptop"
+
+
+def test_security_device_action_routes_queue_and_return_results(test_client, monkeypatch):
+    import routes_azure_security
+
+    monkeypatch.setattr(
+        routes_azure_security.security_device_jobs,
+        "create_job",
+        lambda **_: SecurityDeviceActionJob(
+            job_id="job-1",
+            status="queued",
+            action_type="device_sync",
+            device_ids=["device-1"],
+            device_names=["Payroll Laptop"],
+            requested_by_email="test@example.com",
+            requested_by_name="Test User",
+            requested_at="2026-04-03T02:00:00Z",
+            progress_total=1,
+            progress_message="Queued",
+        ).model_dump(),
+    )
+    monkeypatch.setattr(
+        routes_azure_security.security_device_jobs,
+        "get_job",
+        lambda job_id: SecurityDeviceActionJob(
+            job_id=job_id,
+            status="completed",
+            action_type="device_sync",
+            device_ids=["device-1"],
+            device_names=["Payroll Laptop"],
+            requested_by_email="test@example.com",
+            requested_by_name="Test User",
+            requested_at="2026-04-03T02:00:00Z",
+            completed_at="2026-04-03T02:01:00Z",
+            progress_current=1,
+            progress_total=1,
+            progress_message="Completed",
+            success_count=1,
+            results_ready=True,
+        ).model_dump(),
+    )
+    monkeypatch.setattr(
+        routes_azure_security.security_device_jobs,
+        "get_job_results",
+        lambda job_id: [
+            SecurityDeviceActionJobResult(
+                device_id="device-1",
+                device_name="Payroll Laptop",
+                azure_ad_device_id="aad-1",
+                success=True,
+                summary=f"Completed {job_id}",
+                before_summary={"device_ids": ["device-1"]},
+                after_summary={"action": "device_sync"},
+            ).model_dump()
+        ],
+    )
+
+    create_resp = test_client.post(
+        "/api/azure/security/device-compliance/actions",
+        headers={"host": "azure.movedocs.com"},
+        json={
+            "action_type": "device_sync",
+            "device_ids": ["device-1"],
+            "reason": "Compliance drift",
+        },
+    )
+    assert create_resp.status_code == 200
+    assert create_resp.json()["job_id"] == "job-1"
+
+    status_resp = test_client.get(
+        "/api/azure/security/device-compliance/jobs/job-1",
+        headers={"host": "azure.movedocs.com"},
+    )
+    assert status_resp.status_code == 200
+    assert status_resp.json()["status"] == "completed"
+
+    results_resp = test_client.get(
+        "/api/azure/security/device-compliance/jobs/job-1/results",
+        headers={"host": "azure.movedocs.com"},
+    )
+    assert results_resp.status_code == 200
+    assert results_resp.json()[0]["device_name"] == "Payroll Laptop"
+
+
+def test_security_device_action_routes_require_manage_users(test_client):
+    from auth import create_session
+
+    sid = create_session(
+        "viewer@example.com",
+        "Viewer User",
+        auth_provider="atlassian",
+        can_manage_users=False,
+        is_admin=False,
+        site_scope="azure",
+    )
+    test_client.cookies.set("session_id", sid)
+
+    resp = test_client.post(
+        "/api/azure/security/device-compliance/actions",
+        headers={"host": "azure.movedocs.com"},
+        json={"action_type": "device_sync", "device_ids": ["device-1"]},
+    )
+
+    assert resp.status_code == 403
+    assert "required" in resp.json()["detail"].lower()

@@ -100,6 +100,8 @@ describe("AzureSecurityPage", () => {
     expect(screen.getByText("Break-glass Account Validation")).toBeInTheDocument();
     expect(screen.getByText("User Review")).toBeInTheDocument();
     expect(screen.getByText("Guest Access Review")).toBeInTheDocument();
+    expect(screen.getByText("Device Compliance Review")).toBeInTheDocument();
+    expect(screen.getByText("Conditional Access Change Tracker")).toBeInTheDocument();
     expect(screen.getByText("DLP Findings Review")).toBeInTheDocument();
     expect(screen.getByText("Account Health")).toBeInTheDocument();
     expect(screen.getByText("Privileged Access Review")).toBeInTheDocument();
@@ -112,13 +114,14 @@ describe("AzureSecurityPage", () => {
     expect(screen.getAllByRole("link", { name: "Open Directory Role Review" })[0]).toHaveAttribute("href", "/security/directory-role-review");
     expect(screen.getAllByRole("link", { name: "Open User Review" })[0]).toHaveAttribute("href", "/security/user-review");
     expect(screen.getByRole("link", { name: "Open Guest Access Review" })).toHaveAttribute("href", "/security/guest-access-review");
+    expect(screen.getByRole("link", { name: "Open Device Compliance Review" })).toHaveAttribute("href", "/security/device-compliance");
+    expect(screen.getByRole("link", { name: "Open Conditional Access Tracker" })).toHaveAttribute("href", "/security/conditional-access-tracker");
     expect(screen.getByRole("link", { name: "Open DLP Findings Review" })).toHaveAttribute("href", "/security/dlp-review");
     expect(screen.getAllByRole("link", { name: "Open Account Health" })[0]).toHaveAttribute("href", "/security/account-health");
     expect(screen.getAllByRole("link", { name: "Open Application Hygiene" })[0]).toHaveAttribute("href", "/security/app-hygiene");
     expect(screen.getByRole("link", { name: "Microsoft Defender" })).toHaveAttribute("href", "https://security.microsoft.com/");
     expect(screen.queryByText("Security Control Planes")).not.toBeInTheDocument();
     expect(screen.queryByText("Starter Security Tools")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Conditional access change tracker")).toHaveLength(1);
     expect(screen.getAllByText("Emergency-account MFA posture validation")).toHaveLength(1);
   });
 

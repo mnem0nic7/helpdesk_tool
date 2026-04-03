@@ -32,6 +32,14 @@ vi.mock("../pages/AzureSecurityBreakGlassValidationPage.tsx", () => ({
   default: () => <div>Break-glass Account Validation Page</div>,
 }));
 
+vi.mock("../pages/AzureSecurityConditionalAccessTrackerPage.tsx", () => ({
+  default: () => <div>Conditional Access Change Tracker Page</div>,
+}));
+
+vi.mock("../pages/AzureSecurityDeviceCompliancePage.tsx", () => ({
+  default: () => <div>Device Compliance Review Page</div>,
+}));
+
 vi.mock("../pages/AzureSecurityDirectoryRoleReviewPage.tsx", () => ({
   default: () => <div>Directory Role Membership Review Page</div>,
 }));
@@ -59,6 +67,18 @@ describe("App azure security routes", () => {
     window.history.replaceState({}, "", "/security/break-glass-validation");
     render(<App />);
     expect(await screen.findByText("Break-glass Account Validation Page")).toBeInTheDocument();
+  });
+
+  it("renders the conditional access tracker lane on its dedicated route", async () => {
+    window.history.replaceState({}, "", "/security/conditional-access-tracker");
+    render(<App />);
+    expect(await screen.findByText("Conditional Access Change Tracker Page")).toBeInTheDocument();
+  });
+
+  it("renders the device compliance lane on its dedicated route", async () => {
+    window.history.replaceState({}, "", "/security/device-compliance");
+    render(<App />);
+    expect(await screen.findByText("Device Compliance Review Page")).toBeInTheDocument();
   });
 
   it("renders the directory role review lane on its dedicated route", async () => {

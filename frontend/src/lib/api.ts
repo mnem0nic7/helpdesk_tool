@@ -2577,6 +2577,123 @@ export interface SecurityDirectoryRoleReviewResponse {
   scope_notes: string[];
 }
 
+export interface SecurityConditionalAccessPolicy {
+  policy_id: string;
+  display_name: string;
+  state: string;
+  created_date_time: string;
+  modified_date_time: string;
+  user_scope_summary: string;
+  application_scope_summary: string;
+  grant_controls: string[];
+  session_controls: string[];
+  impact_level: "critical" | "warning" | "healthy" | "info";
+  risk_tags: string[];
+}
+
+export interface SecurityConditionalAccessChange {
+  event_id: string;
+  activity_date_time: string;
+  activity_display_name: string;
+  result: string;
+  initiated_by_display_name: string;
+  initiated_by_principal_name: string;
+  initiated_by_type: "user" | "app" | "unknown";
+  target_policy_id: string;
+  target_policy_name: string;
+  impact_level: "critical" | "warning" | "healthy" | "info";
+  change_summary: string;
+  modified_properties: string[];
+  flags: string[];
+}
+
+export interface SecurityConditionalAccessTrackerResponse {
+  generated_at: string;
+  conditional_access_last_refresh: string;
+  access_available: boolean;
+  access_message: string;
+  metrics: SecurityAccessReviewMetric[];
+  policies: SecurityConditionalAccessPolicy[];
+  changes: SecurityConditionalAccessChange[];
+  warnings: string[];
+  scope_notes: string[];
+}
+
+export type SecurityDeviceActionType = "device_sync" | "device_remote_lock" | "device_retire" | "device_wipe";
+
+export interface SecurityDeviceComplianceDevice {
+  id: string;
+  device_name: string;
+  operating_system: string;
+  operating_system_version: string;
+  compliance_state: string;
+  management_state: string;
+  owner_type: string;
+  enrollment_type: string;
+  last_sync_date_time: string;
+  last_sync_age_days: number | null;
+  azure_ad_device_id: string;
+  primary_users: UserAdminReference[];
+  risk_level: "critical" | "high" | "medium" | "low";
+  finding_tags: string[];
+  recommended_actions: string[];
+  action_ready: boolean;
+  supported_actions: SecurityDeviceActionType[];
+  action_blockers: string[];
+}
+
+export interface SecurityDeviceComplianceResponse {
+  generated_at: string;
+  device_last_refresh: string;
+  access_available: boolean;
+  access_message: string;
+  metrics: SecurityAccessReviewMetric[];
+  devices: SecurityDeviceComplianceDevice[];
+  warnings: string[];
+  scope_notes: string[];
+}
+
+export interface SecurityDeviceActionRequest {
+  action_type: SecurityDeviceActionType;
+  device_ids: string[];
+  reason?: string;
+  confirm_device_count?: number;
+  confirm_device_names?: string[];
+  params?: Record<string, unknown>;
+}
+
+export interface SecurityDeviceActionJob {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  action_type: SecurityDeviceActionType;
+  device_ids: string[];
+  device_names: string[];
+  requested_by_email: string;
+  requested_by_name: string;
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  progress_current: number;
+  progress_total: number;
+  progress_message: string;
+  success_count: number;
+  failure_count: number;
+  results_ready: boolean;
+  reason: string;
+  error: string;
+}
+
+export interface SecurityDeviceActionJobResult {
+  device_id: string;
+  device_name: string;
+  azure_ad_device_id: string;
+  success: boolean;
+  summary: string;
+  error: string;
+  before_summary: Record<string, unknown>;
+  after_summary: Record<string, unknown>;
+}
+
 export interface SecurityCopilotChatRequest {
   message: string;
   history?: SecurityCopilotChatMessage[];
@@ -3650,8 +3767,30 @@ export const api = {
     return fetchJSON<SecurityBreakGlassValidationResponse>("/api/azure/security/break-glass-validation");
   },
 
+  getAzureSecurityConditionalAccessTracker(): Promise<SecurityConditionalAccessTrackerResponse> {
+    return fetchJSON<SecurityConditionalAccessTrackerResponse>("/api/azure/security/conditional-access-tracker");
+  },
+
   getAzureSecurityDirectoryRoleReview(): Promise<SecurityDirectoryRoleReviewResponse> {
     return fetchJSON<SecurityDirectoryRoleReviewResponse>("/api/azure/security/directory-role-review");
+  },
+
+  getAzureSecurityDeviceCompliance(): Promise<SecurityDeviceComplianceResponse> {
+    return fetchJSON<SecurityDeviceComplianceResponse>("/api/azure/security/device-compliance");
+  },
+
+  createAzureSecurityDeviceAction(body: SecurityDeviceActionRequest): Promise<SecurityDeviceActionJob> {
+    return postJSON<SecurityDeviceActionJob>("/api/azure/security/device-compliance/actions", body);
+  },
+
+  getAzureSecurityDeviceActionJob(jobId: string): Promise<SecurityDeviceActionJob> {
+    return fetchJSON<SecurityDeviceActionJob>(`/api/azure/security/device-compliance/jobs/${encodeURIComponent(jobId)}`);
+  },
+
+  getAzureSecurityDeviceActionJobResults(jobId: string): Promise<SecurityDeviceActionJobResult[]> {
+    return fetchJSON<SecurityDeviceActionJobResult[]>(
+      `/api/azure/security/device-compliance/jobs/${encodeURIComponent(jobId)}/results`,
+    );
   },
 
   getAzureSecurityAppHygiene(): Promise<SecurityAppHygieneResponse> {

@@ -1447,6 +1447,147 @@ class SecurityDirectoryRoleReviewResponse(BaseModel):
     scope_notes: list[str] = Field(default_factory=list)
 
 
+class SecurityConditionalAccessPolicy(BaseModel):
+    """One conditional access policy summarized for change tracking."""
+
+    policy_id: str
+    display_name: str = ""
+    state: str = ""
+    created_date_time: str = ""
+    modified_date_time: str = ""
+    user_scope_summary: str = ""
+    application_scope_summary: str = ""
+    grant_controls: list[str] = Field(default_factory=list)
+    session_controls: list[str] = Field(default_factory=list)
+    impact_level: Literal["critical", "warning", "healthy", "info"] = "info"
+    risk_tags: list[str] = Field(default_factory=list)
+
+
+class SecurityConditionalAccessChange(BaseModel):
+    """One recent conditional access change event."""
+
+    event_id: str
+    activity_date_time: str = ""
+    activity_display_name: str = ""
+    result: str = ""
+    initiated_by_display_name: str = ""
+    initiated_by_principal_name: str = ""
+    initiated_by_type: Literal["user", "app", "unknown"] = "unknown"
+    target_policy_id: str = ""
+    target_policy_name: str = ""
+    impact_level: Literal["critical", "warning", "healthy", "info"] = "info"
+    change_summary: str = ""
+    modified_properties: list[str] = Field(default_factory=list)
+    flags: list[str] = Field(default_factory=list)
+
+
+class SecurityConditionalAccessTrackerResponse(BaseModel):
+    """Computed Azure conditional access change-tracker payload."""
+
+    generated_at: str
+    conditional_access_last_refresh: str = ""
+    access_available: bool = False
+    access_message: str = ""
+    metrics: list[SecurityAccessReviewMetric] = Field(default_factory=list)
+    policies: list[SecurityConditionalAccessPolicy] = Field(default_factory=list)
+    changes: list[SecurityConditionalAccessChange] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    scope_notes: list[str] = Field(default_factory=list)
+
+
+SecurityDeviceActionType = Literal[
+    "device_sync",
+    "device_remote_lock",
+    "device_retire",
+    "device_wipe",
+]
+
+SecurityDeviceActionJobStatus = Literal["queued", "running", "completed", "failed"]
+
+
+class SecurityDeviceComplianceDevice(BaseModel):
+    """One Intune-managed device row surfaced in the security lane."""
+
+    id: str
+    device_name: str
+    operating_system: str = ""
+    operating_system_version: str = ""
+    compliance_state: str = ""
+    management_state: str = ""
+    owner_type: str = ""
+    enrollment_type: str = ""
+    last_sync_date_time: str = ""
+    last_sync_age_days: int | None = None
+    azure_ad_device_id: str = ""
+    primary_users: list[UserAdminReference] = Field(default_factory=list)
+    risk_level: Literal["critical", "high", "medium", "low"] = "low"
+    finding_tags: list[str] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+    action_ready: bool = False
+    supported_actions: list[SecurityDeviceActionType] = Field(default_factory=list)
+    action_blockers: list[str] = Field(default_factory=list)
+
+
+class SecurityDeviceComplianceResponse(BaseModel):
+    """Computed Azure device-compliance review payload."""
+
+    generated_at: str
+    device_last_refresh: str = ""
+    access_available: bool = False
+    access_message: str = ""
+    metrics: list[SecurityAccessReviewMetric] = Field(default_factory=list)
+    devices: list[SecurityDeviceComplianceDevice] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    scope_notes: list[str] = Field(default_factory=list)
+
+
+class SecurityDeviceActionRequest(BaseModel):
+    """Queue one Azure security device action job."""
+
+    action_type: SecurityDeviceActionType
+    device_ids: list[str] = Field(default_factory=list, min_length=1)
+    reason: str = ""
+    confirm_device_count: int | None = None
+    confirm_device_names: list[str] = Field(default_factory=list)
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class SecurityDeviceActionJob(BaseModel):
+    """Queued Azure security device action job."""
+
+    job_id: str
+    status: SecurityDeviceActionJobStatus
+    action_type: SecurityDeviceActionType
+    device_ids: list[str] = Field(default_factory=list)
+    device_names: list[str] = Field(default_factory=list)
+    requested_by_email: str
+    requested_by_name: str = ""
+    requested_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    progress_current: int = 0
+    progress_total: int = 0
+    progress_message: str = ""
+    success_count: int = 0
+    failure_count: int = 0
+    results_ready: bool = False
+    reason: str = ""
+    error: str = ""
+
+
+class SecurityDeviceActionJobResult(BaseModel):
+    """One per-device execution result from an Azure security device action job."""
+
+    device_id: str
+    device_name: str = ""
+    azure_ad_device_id: str = ""
+    success: bool
+    summary: str = ""
+    error: str = ""
+    before_summary: dict[str, Any] = Field(default_factory=dict)
+    after_summary: dict[str, Any] = Field(default_factory=dict)
+
+
 class AzureRecommendationDismissRequest(BaseModel):
     """Dismiss a persisted recommendation with an optional operator note."""
 

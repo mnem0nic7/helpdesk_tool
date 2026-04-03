@@ -229,6 +229,7 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     import user_admin_providers as user_admin_providers_module
     import user_exit_workflows as user_exit_workflows_module
     import report_ai_summary_service as report_ai_summary_service_module
+    import security_device_jobs as security_device_jobs_module
     import runtime_control as runtime_control_module
 
     for mod in [issue_cache, routes_metrics, routes_tickets, routes_chart, routes_export, routes_cache, routes_triage]:
@@ -494,6 +495,36 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     monkeypatch.setattr(routes_user_admin, "user_admin_providers", mock_user_admin_providers)
     monkeypatch.setattr(security_copilot_module, "user_admin_providers", mock_user_admin_providers)
 
+    mock_security_device_jobs = MagicMock()
+    mock_security_device_jobs.start_worker = AsyncMock()
+    mock_security_device_jobs.stop_worker = AsyncMock()
+    mock_security_device_jobs.get_job.return_value = None
+    mock_security_device_jobs.get_job_results.return_value = []
+    mock_security_device_jobs.create_job.return_value = {
+        "job_id": "device-job-1",
+        "status": "queued",
+        "action_type": "device_sync",
+        "device_ids": ["device-1"],
+        "device_names": ["Windows 11 Laptop"],
+        "requested_by_email": "test@example.com",
+        "requested_by_name": "Test User",
+        "requested_at": "2026-03-26T00:00:00+00:00",
+        "started_at": None,
+        "completed_at": None,
+        "progress_current": 0,
+        "progress_total": 1,
+        "progress_message": "Queued",
+        "success_count": 0,
+        "failure_count": 0,
+        "results_ready": False,
+        "reason": "",
+        "error": "",
+    }
+    monkeypatch.setattr(security_device_jobs_module, "security_device_jobs", mock_security_device_jobs)
+    import routes_azure_security
+
+    monkeypatch.setattr(routes_azure_security, "security_device_jobs", mock_security_device_jobs)
+
     mock_alert_store = MagicMock()
     mock_alert_store.get_history.return_value = []
     monkeypatch.setattr(azure_alert_store_module, "azure_alert_store", mock_alert_store)
@@ -572,6 +603,7 @@ def test_client(mock_cache, freeze_time, monkeypatch):
     monkeypatch.setattr(main, "mailbox_delegate_scan_jobs", mock_mailbox_delegate_scan_jobs)
     monkeypatch.setattr(main, "onedrive_copy_jobs", mock_onedrive_copy_jobs)
     monkeypatch.setattr(main, "report_ai_summary_service", mock_report_ai_summary_service)
+    monkeypatch.setattr(main, "security_device_jobs", mock_security_device_jobs)
     mock_runtime_role_manager = MagicMock()
     mock_runtime_role_manager.bootstrap = AsyncMock(
         return_value=runtime_control_module.RuntimeState(

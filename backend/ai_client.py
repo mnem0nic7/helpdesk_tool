@@ -840,8 +840,21 @@ Rules:
 - If there are no public replies, communication_score should usually be 1 or 2.
 - If the notes do not explain what was done to resolve the ticket, documentation_score should usually be 1 or 2.
 - Be strict about evidence. Do not assume work happened if it is not documented.
+- The input may include long ticket histories or call transcripts. Do NOT summarize the whole ticket, transcript, timeline, or action plan.
+- Keep communication_notes focused only on evidence for the communication score.
+- Keep documentation_notes focused only on evidence for the documentation score.
+- Keep score_summary to one short sentence.
+- If evidence is weak or missing, lower the score instead of writing a longer explanation.
+- Do not return markdown, code fences, headings, bullets, numbered lists, or prose before/after the JSON.
+- Return exactly one JSON object that starts with { and ends with }.
+- Use exactly these keys and no extras:
+  communication_score
+  communication_notes
+  documentation_score
+  documentation_notes
+  score_summary
 
-Respond with ONLY valid JSON:
+Return ONLY valid JSON in this shape:
 {
   "communication_score": 3,
   "communication_notes": "Short explanation of the communication quality.",
@@ -849,6 +862,30 @@ Respond with ONLY valid JSON:
   "documentation_notes": "Short explanation of the documentation quality.",
   "score_summary": "One-sentence overall assessment."
 }
+
+Invalid responses include:
+- transcript summaries
+- meeting note recaps
+- markdown fenced code blocks
+- any text before or after the JSON object
+"""
+
+TECHNICIAN_SCORE_RETRY_PROMPT = """You are retrying a failed technician QA scoring request.
+The previous answer was rejected because it was not valid JSON.
+
+Return exactly one valid JSON object for the technician QA schema.
+
+Rules:
+- Start with { and end with }.
+- Use only these keys:
+  communication_score
+  communication_notes
+  documentation_score
+  documentation_notes
+  score_summary
+- Do not include markdown, prose, commentary, bullets, headings, or code fences.
+- Do not summarize the transcript or timeline.
+- Keep notes short and evidence-based.
 """
 
 
@@ -1696,18 +1733,26 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
 
 def _parse_technician_score(raw: str, key: str, model_id: str) -> TechnicianScore:
     """Parse AI response JSON into a TechnicianScore."""
-    text = raw.strip()
+    text = str(raw or "").strip()
     if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        logger.error("Failed to parse technician score JSON: %s", text[:200])
-        raise ValueError("Model returned invalid technician score JSON") from exc
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(text[start : end + 1])
+            except json.JSONDecodeError as exc:
+                logger.error("Failed to parse technician score JSON: %s", text[:200])
+                raise ValueError("Model returned invalid technician score JSON") from exc
+        else:
+            logger.error("Failed to parse technician score JSON: %s", text[:200])
+            raise ValueError("Model returned invalid technician score JSON")
+    if not isinstance(data, dict):
+        raise ValueError("Model returned invalid technician score JSON")
 
     def _clamp_score(value: Any) -> int:
         try:
@@ -1723,6 +1768,80 @@ def _parse_technician_score(raw: str, key: str, model_id: str) -> TechnicianScor
         documentation_score=_clamp_score(data.get("documentation_score")),
         documentation_notes=str(data.get("documentation_notes", "")).strip(),
         score_summary=str(data.get("score_summary", "")).strip(),
+        model_used=model_id,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _build_fallback_technician_score(
+    issue: dict[str, Any],
+    request_comments: list[dict[str, Any]],
+    model_id: str,
+    *,
+    reason: str,
+) -> TechnicianScore:
+    """Return a conservative deterministic score when the model fails twice."""
+    public_count = 0
+    internal_count = 0
+    for comment in request_comments:
+        body = _truncate_text(_extract_comment_body(comment), _QA_COMMENT_CHAR_LIMIT).strip()
+        if not body:
+            continue
+        if comment.get("public"):
+            public_count += 1
+        else:
+            internal_count += 1
+
+    fields = issue.get("fields", {})
+    has_resolution = bool((fields.get("resolution") or {}).get("name") or fields.get("resolutiondate"))
+    has_description = bool(extract_adf_text(fields.get("description")).strip())
+    has_steps = bool(extract_adf_text(fields.get("customfield_11121")).strip())
+
+    communication_score = 1
+    if public_count >= 1:
+        communication_score = 2
+    if public_count >= 2:
+        communication_score = 3
+    if public_count >= 4:
+        communication_score = 4
+
+    documentation_score = 1
+    if has_resolution:
+        documentation_score += 1
+    if internal_count >= 1 or public_count >= 1:
+        documentation_score += 1
+    if internal_count >= 2 or (has_description and has_steps):
+        documentation_score += 1
+    documentation_score = max(1, min(4, documentation_score))
+
+    communication_notes = (
+        f"Fallback score after invalid model output. Ticket shows {public_count} public comment(s)."
+        if public_count
+        else "Fallback score after invalid model output. No public comments are documented."
+    )
+    documentation_evidence: list[str] = []
+    if internal_count:
+        documentation_evidence.append(f"{internal_count} internal note(s)")
+    if has_resolution:
+        documentation_evidence.append("a recorded resolution")
+    if has_description or has_steps:
+        documentation_evidence.append("ticket context")
+    documentation_notes = (
+        "Fallback score after invalid model output. Evidence includes "
+        + ", ".join(documentation_evidence)
+        + "."
+        if documentation_evidence
+        else "Fallback score after invalid model output. Very little documented resolution evidence is available."
+    )
+
+    summary_reason = reason.strip() or "the model failed twice"
+    return TechnicianScore(
+        key=issue.get("key", ""),
+        communication_score=communication_score,
+        communication_notes=communication_notes,
+        documentation_score=documentation_score,
+        documentation_notes=documentation_notes,
+        score_summary=f"Fallback QA score saved because {summary_reason}.",
         model_used=model_id,
         created_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -1793,8 +1912,37 @@ def score_closed_ticket(
         json_output=True,
         metadata={"ticket_key": issue.get("key", "")},
     )
-
-    return _parse_technician_score(raw, issue.get("key", ""), model_id)
+    try:
+        return _parse_technician_score(raw, issue.get("key", ""), model_id)
+    except ValueError as exc:
+        logger.warning("Retrying technician QA scoring for %s after invalid JSON output", issue.get("key"))
+        retry_raw = invoke_model_text(
+            model_id,
+            TECHNICIAN_SCORE_RETRY_PROMPT,
+            user_msg,
+            feature_surface="technician_qa",
+            app_surface="tickets",
+            actor_type="system",
+            actor_id="technician-qa",
+            temperature=0.0,
+            max_output_tokens=_TECHNICIAN_QA_MAX_OUTPUT_TOKENS,
+            json_output=True,
+            metadata={"ticket_key": issue.get("key", ""), "retry": "json_format"},
+        )
+        try:
+            return _parse_technician_score(retry_raw, issue.get("key", ""), model_id)
+        except ValueError as retry_exc:
+            logger.warning(
+                "Technician QA fallback scoring for %s after repeated invalid JSON output: %s",
+                issue.get("key"),
+                retry_exc,
+            )
+            return _build_fallback_technician_score(
+                issue,
+                request_comments,
+                model_id,
+                reason=str(retry_exc or exc),
+            )
 
 
 def draft_kb_article(

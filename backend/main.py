@@ -53,6 +53,7 @@ from azure_vm_export_jobs import azure_vm_export_jobs
 from mailbox_delegate_scan_jobs import mailbox_delegate_scan_jobs
 from onedrive_copy_jobs import onedrive_copy_jobs
 from report_ai_summary_service import report_ai_summary_service
+from security_device_jobs import security_device_jobs
 from user_admin_jobs import user_admin_jobs
 from user_exit_workflows import user_exit_workflows
 from knowledge_base import kb_store
@@ -116,6 +117,7 @@ async def _start_deferred_services(app: FastAPI) -> None:
         ("Mailbox delegate scan worker", mailbox_delegate_scan_jobs.start_worker),
         ("OneDrive copy worker", onedrive_copy_jobs.start_worker),
         ("Report AI summary worker", report_ai_summary_service.start_worker),
+        ("Security device job worker", security_device_jobs.start_worker),
         ("User admin worker", user_admin_jobs.start_worker),
         ("User exit workflow worker", user_exit_workflows.start_worker),
         ("Azure alert loop", start_azure_alert_loop),
@@ -155,6 +157,7 @@ async def _stop_leader_services(app: FastAPI) -> None:
     await stop_azure_alert_loop()
     await user_exit_workflows.stop_worker()
     await user_admin_jobs.stop_worker()
+    await security_device_jobs.stop_worker()
     await report_ai_summary_service.stop_worker()
     await onedrive_copy_jobs.stop_worker()
     await mailbox_delegate_scan_jobs.stop_worker()

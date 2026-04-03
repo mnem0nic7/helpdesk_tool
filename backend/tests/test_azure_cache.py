@@ -159,6 +159,7 @@ def test_quick_search_page_results_point_to_security_review_lanes(tmp_path):
     assert page_routes["Identity Review"] == "/security/identity-review"
     assert page_routes["Privileged Access Review"] == "/security/access-review"
     assert page_routes["Break-glass Account Validation"] == "/security/break-glass-validation"
+    assert page_routes["Conditional Access Change Tracker"] == "/security/conditional-access-tracker"
     assert page_routes["User Review"] == "/security/user-review"
     assert page_routes["Guest Access Review"] == "/security/guest-access-review"
     assert page_routes["DLP Findings Review"] == "/security/dlp-review"
@@ -173,6 +174,10 @@ def test_quick_search_page_results_point_to_security_review_lanes(tmp_path):
     guest_pages = {item["label"]: item["route"] for item in guest_results if item["kind"] == "page"}
     assert guest_pages["Guest Access Review"] == "/security/guest-access-review"
 
+    device_results = cache.quick_search("device compliance")
+    device_pages = {item["label"]: item["route"] for item in device_results if item["kind"] == "page"}
+    assert device_pages["Device Compliance Review"] == "/security/device-compliance"
+
     dlp_results = cache.quick_search("dlp")
     dlp_pages = {item["label"]: item["route"] for item in dlp_results if item["kind"] == "page"}
     assert dlp_pages["DLP Findings Review"] == "/security/dlp-review"
@@ -184,6 +189,78 @@ def test_quick_search_page_results_point_to_security_review_lanes(tmp_path):
     directory_role_results = cache.quick_search("directory role")
     directory_role_pages = {item["label"]: item["route"] for item in directory_role_results if item["kind"] == "page"}
     assert directory_role_pages["Directory Role Membership Review"] == "/security/directory-role-review"
+
+    conditional_access_results = cache.quick_search("conditional access")
+    conditional_access_pages = {item["label"]: item["route"] for item in conditional_access_results if item["kind"] == "page"}
+    assert conditional_access_pages["Conditional Access Change Tracker"] == "/security/conditional-access-tracker"
+
+
+def test_refresh_device_compliance_dataset_updates_snapshot_and_status(tmp_path, monkeypatch):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+
+    monkeypatch.setattr(
+        cache._client,
+        "list_managed_devices",
+        lambda: [
+            {
+                "id": "device-1",
+                "device_name": "Payroll Laptop",
+                "operating_system": "Windows",
+                "operating_system_version": "11",
+                "compliance_state": "noncompliant",
+                "management_state": "managed",
+                "owner_type": "company",
+                "enrollment_type": "windowsAzureADJoin",
+                "last_sync_date_time": "2026-04-03T12:00:00Z",
+                "azure_ad_device_id": "aad-1",
+                "primary_users": [],
+            }
+        ],
+    )
+
+    cache.refresh_datasets(["device_compliance"])
+
+    assert cache._snapshot("managed_devices")[0]["device_name"] == "Payroll Laptop"
+    status = cache.status()
+    device_dataset = next(item for item in status["datasets"] if item["key"] == "device_compliance")
+    assert device_dataset["item_count"] == 1
+    assert device_dataset["error"] is None
+
+
+def test_refresh_conditional_access_dataset_updates_snapshots_and_status(tmp_path, monkeypatch):
+    cache = AzureCache(db_path=str(tmp_path / "azure_cache.db"))
+
+    monkeypatch.setattr(
+        cache._client,
+        "list_conditional_access_policies",
+        lambda: [
+            {
+                "id": "policy-1",
+                "display_name": "Require MFA for admins",
+                "state": "enabled",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        cache._client,
+        "list_conditional_access_audit_events",
+        lambda lookback_days=None: [
+            {
+                "id": "event-1",
+                "activity_display_name": "Update conditional access policy",
+                "target_policy_name": "Require MFA for admins",
+            }
+        ],
+    )
+
+    cache.refresh_datasets(["conditional_access"])
+
+    assert cache._snapshot("conditional_access_policies")[0]["display_name"] == "Require MFA for admins"
+    assert cache._snapshot("conditional_access_audit_events")[0]["target_policy_name"] == "Require MFA for admins"
+    status = cache.status()
+    dataset = next(item for item in status["datasets"] if item["key"] == "conditional_access")
+    assert dataset["item_count"] == 2
+    assert dataset["error"] is None
 
 
 def test_get_virtual_machine_detail_returns_related_resources_and_costs(tmp_path):
