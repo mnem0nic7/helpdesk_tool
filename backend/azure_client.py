@@ -65,6 +65,29 @@ _USER_BASE_SELECT = [
     "preferredLanguage",
 ]
 _USER_OPTIONAL_SELECT = ["signInActivity"]
+_MANAGED_DEVICE_SELECT = [
+    "id",
+    "deviceName",
+    "operatingSystem",
+    "osVersion",
+    "complianceState",
+    "managementState",
+    "managedDeviceOwnerType",
+    "deviceEnrollmentType",
+    "lastSyncDateTime",
+    "azureADDeviceId",
+]
+_MANAGED_DEVICE_FALLBACK_SELECT = [
+    "id",
+    "deviceName",
+    "operatingSystem",
+    "osVersion",
+    "complianceState",
+    "managedDeviceOwnerType",
+    "deviceEnrollmentType",
+    "lastSyncDateTime",
+    "azureADDeviceId",
+]
 
 
 class AzureApiError(RuntimeError):
@@ -1561,26 +1584,33 @@ Resources
         return users_by_device
 
     def list_managed_devices(self) -> list[dict[str, Any]]:
-        rows = self.graph_paged_get(
-            "deviceManagement/managedDevices",
-            params={
-                "$select": ",".join(
-                    [
-                        "id",
-                        "deviceName",
-                        "operatingSystem",
-                        "osVersion",
-                        "complianceState",
-                        "managementState",
-                        "ownerType",
-                        "enrollmentType",
-                        "lastSyncDateTime",
-                        "azureADDeviceId",
-                    ]
-                ),
-                "$top": "999",
-            },
-        )
+        params = {
+            "$select": ",".join(_MANAGED_DEVICE_SELECT),
+            "$top": "999",
+        }
+        try:
+            rows = self.graph_paged_get(
+                "deviceManagement/managedDevices",
+                params=params,
+            )
+        except AzureApiError as exc:
+            message = str(exc).lower()
+            if (
+                "parsing odata select and expand failed" not in message
+                and "could not find a property named" not in message
+            ):
+                raise
+            logger.warning(
+                "Microsoft Graph managed-device list rejected one or more selected properties; retrying with the stable device field set: %s",
+                exc,
+            )
+            rows = self.graph_paged_get(
+                "deviceManagement/managedDevices",
+                params={
+                    "$select": ",".join(_MANAGED_DEVICE_FALLBACK_SELECT),
+                    "$top": "999",
+                },
+            )
         primary_users_by_device = self.list_managed_device_primary_users(
             [str(item.get("id") or "") for item in rows if str(item.get("id") or "").strip()]
         )
@@ -1598,8 +1628,8 @@ Resources
                     "operating_system_version": str(item.get("osVersion") or ""),
                     "compliance_state": str(item.get("complianceState") or ""),
                     "management_state": str(item.get("managementState") or ""),
-                    "owner_type": str(item.get("ownerType") or ""),
-                    "enrollment_type": str(item.get("enrollmentType") or ""),
+                    "owner_type": str(item.get("managedDeviceOwnerType") or item.get("ownerType") or ""),
+                    "enrollment_type": str(item.get("deviceEnrollmentType") or item.get("enrollmentType") or ""),
                     "last_sync_date_time": str(item.get("lastSyncDateTime") or ""),
                     "azure_ad_device_id": str(item.get("azureADDeviceId") or ""),
                     "primary_users": [

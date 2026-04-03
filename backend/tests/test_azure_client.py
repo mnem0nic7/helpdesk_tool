@@ -164,8 +164,8 @@ def test_list_managed_devices_batches_primary_user_lookup(monkeypatch):
                 "osVersion": "11",
                 "complianceState": "noncompliant",
                 "managementState": "managed",
-                "ownerType": "company",
-                "enrollmentType": "windowsAzureADJoin",
+                "managedDeviceOwnerType": "company",
+                "deviceEnrollmentType": "windowsAzureADJoin",
                 "lastSyncDateTime": "2026-04-03T12:00:00Z",
                 "azureADDeviceId": "aad-1",
             }
@@ -205,8 +205,56 @@ def test_list_managed_devices_batches_primary_user_lookup(monkeypatch):
     assert captured["batch_method"] == "POST"
     assert captured["batch_path"] == "$batch"
     assert captured["batch_version"] == "beta"
+    assert captured["params"]["$select"] == (
+        "id,deviceName,operatingSystem,osVersion,complianceState,managementState,"
+        "managedDeviceOwnerType,deviceEnrollmentType,lastSyncDateTime,azureADDeviceId"
+    )
     assert rows[0]["primary_users"][0]["display_name"] == "Ada Lovelace"
     assert rows[0]["primary_users"][0]["principal_name"] == "ada@example.com"
+
+
+def test_list_managed_devices_retries_with_stable_select_when_optional_field_is_rejected(monkeypatch):
+    client = AzureClient()
+    calls: list[dict[str, object]] = []
+
+    def fake_graph_paged_get(path, *, api_version="v1.0", params=None, headers=None):
+        del api_version, headers
+        calls.append({"path": path, "params": dict(params or {})})
+        if len(calls) == 1:
+            raise AzureApiError(
+                "GET https://graph.microsoft.com/v1.0/deviceManagement/managedDevices failed (400): "
+                "{\"error\":{\"code\":\"BadRequest\",\"message\":\"Parsing OData Select and Expand failed: "
+                "Could not find a property named 'managementState' on type 'microsoft.graph.managedDevice'.\"}}",
+                status_code=400,
+            )
+        return [
+            {
+                "id": "device-1",
+                "deviceName": "Payroll Laptop",
+                "operatingSystem": "Windows",
+                "osVersion": "11",
+                "complianceState": "noncompliant",
+                "managedDeviceOwnerType": "company",
+                "deviceEnrollmentType": "windowsAzureADJoin",
+                "lastSyncDateTime": "2026-04-03T12:00:00Z",
+                "azureADDeviceId": "aad-1",
+            }
+        ]
+
+    monkeypatch.setattr(client, "graph_paged_get", fake_graph_paged_get)
+    monkeypatch.setattr(client, "list_managed_device_primary_users", lambda device_ids: {device_ids[0]: {"users": []}})
+
+    rows = client.list_managed_devices()
+
+    assert len(calls) == 2
+    assert calls[0]["path"] == "deviceManagement/managedDevices"
+    assert "managementState" in str(calls[0]["params"]["$select"])
+    assert calls[1]["params"]["$select"] == (
+        "id,deviceName,operatingSystem,osVersion,complianceState,"
+        "managedDeviceOwnerType,deviceEnrollmentType,lastSyncDateTime,azureADDeviceId"
+    )
+    assert rows[0]["owner_type"] == "company"
+    assert rows[0]["enrollment_type"] == "windowsAzureADJoin"
 
 
 def test_list_conditional_access_policies_normalizes_scope_and_controls(monkeypatch):
