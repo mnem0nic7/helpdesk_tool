@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
@@ -36,6 +36,7 @@ const DIRECT_ACTION_ORDER: SecurityDeviceActionType[] = [
 ];
 
 const DESTRUCTIVE_ACTIONS = new Set<SecurityDeviceActionType>(["device_retire", "device_wipe"]);
+const PAGE_SIZE_OPTIONS = [25, 50, 100];
 
 function formatTimestamp(value: string | null | undefined): string {
   if (!value) return "No refresh recorded";
@@ -206,7 +207,7 @@ function AssignmentPicker({
   );
 }
 
-function DeviceCard({
+const DeviceCard = memo(function DeviceCard({
   device,
   selected,
   busy,
@@ -407,7 +408,7 @@ function DeviceCard({
       </div>
     </section>
   );
-}
+});
 
 function SmartPlanDeviceRow({
   item,
@@ -459,6 +460,8 @@ export default function AzureSecurityDeviceCompliancePage() {
   const [osFilter, setOsFilter] = useState("all");
   const [ownerFilter, setOwnerFilter] = useState("all");
   const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>("all");
+  const [pageSize, setPageSize] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [actionType, setActionType] = useState<SecurityDeviceActionType>("device_sync");
   const [reason, setReason] = useState("");
@@ -491,10 +494,23 @@ export default function AzureSecurityDeviceCompliancePage() {
       return matchesSearch(device, deferredSearch);
     });
   }, [devices, riskFilter, complianceFilter, osFilter, ownerFilter, readinessFilter, deferredSearch]);
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredDevices.length / pageSize)),
+    [filteredDevices.length, pageSize],
+  );
+  const pageStartIndex = filteredDevices.length === 0 ? 0 : (currentPage - 1) * pageSize;
+  const pageEndIndex = filteredDevices.length === 0 ? 0 : Math.min(pageStartIndex + pageSize, filteredDevices.length);
+  const visibleDevices = useMemo(
+    () => filteredDevices.slice(pageStartIndex, pageStartIndex + pageSize),
+    [filteredDevices, pageSize, pageStartIndex],
+  );
+  const visibleStartLabel = filteredDevices.length === 0 ? 0 : pageStartIndex + 1;
+  const visibleEndLabel = pageEndIndex;
 
   const selectedDevices = useMemo(
-    () => devices.filter((device) => selectedIds.includes(device.id)),
-    [devices, selectedIds],
+    () => devices.filter((device) => selectedIdSet.has(device.id)),
+    [devices, selectedIdSet],
   );
   const destructiveAction = DESTRUCTIVE_ACTIONS.has(actionType);
   const selectedNames = useMemo(
@@ -599,6 +615,16 @@ export default function AzureSecurityDeviceCompliancePage() {
     setFixPlanDestructiveConfirmed(false);
   }, [selectedIdsKey]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [deferredSearch, riskFilter, complianceFilter, osFilter, ownerFilter, readinessFilter, pageSize]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
   const distinctComplianceStates = useMemo(
     () => [...new Set(devices.map((device) => device.compliance_state || "unknown"))].sort((a, b) => a.localeCompare(b)),
     [devices],
@@ -617,7 +643,7 @@ export default function AzureSecurityDeviceCompliancePage() {
     return fixPlan.devices_requiring_primary_user.every((item) => Boolean(fixPlanAssignments[item.device_id]));
   }, [fixPlan, fixPlanAssignments]);
 
-  function toggleSelection(deviceId: string, nextSelected: boolean) {
+  const toggleSelection = useCallback((deviceId: string, nextSelected: boolean) => {
     setSelectedIds((current) => {
       if (nextSelected) {
         if (current.includes(deviceId)) return current;
@@ -625,7 +651,7 @@ export default function AzureSecurityDeviceCompliancePage() {
       }
       return current.filter((item) => item !== deviceId);
     });
-  }
+  }, []);
 
   function selectFilteredReady() {
     setSelectedIds(filteredDevices.filter((device) => device.action_ready).map((device) => device.id));
@@ -640,11 +666,11 @@ export default function AzureSecurityDeviceCompliancePage() {
     setFixPlanDestructiveConfirmed(false);
   }
 
-  function queueDirectAction(
+  const queueDirectAction = useCallback((
     action: SecurityDeviceActionType,
     device: SecurityDeviceComplianceDevice,
     params: Record<string, unknown> = {},
-  ) {
+  ) => {
     if (DESTRUCTIVE_ACTIONS.has(action)) {
       const confirmed = window.confirm(`Confirm ${ACTION_LABELS[action].toLowerCase()} for ${device.device_name}?`);
       if (!confirmed) return;
@@ -657,7 +683,7 @@ export default function AzureSecurityDeviceCompliancePage() {
       confirm_device_names: DESTRUCTIVE_ACTIONS.has(action) ? [device.device_name] : undefined,
       params,
     });
-  }
+  }, [jobMutation]);
 
   function submitExplicitBulkAction() {
     if (!selectedDevices.length) return;
@@ -1104,7 +1130,9 @@ export default function AzureSecurityDeviceCompliancePage() {
               Filter by compliance state, risk, operating system, owner type, and remediation readiness.
             </div>
           </div>
-          <div className="text-sm text-slate-500">{filteredDevices.length.toLocaleString()} device(s)</div>
+          <div className="text-sm text-slate-500">
+            Showing {visibleStartLabel}-{visibleEndLabel} of {filteredDevices.length.toLocaleString()} matching device(s)
+          </div>
         </div>
 
         <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_180px_180px_180px_180px]">
@@ -1175,15 +1203,57 @@ export default function AzureSecurityDeviceCompliancePage() {
             <option value="blocked">Blocked / review only</option>
           </select>
         </div>
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
+          <div className="text-sm text-slate-600">
+            Rendering a paged slice keeps this lane responsive even when the tenant has thousands of managed devices.
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label htmlFor="device-compliance-page-size" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Page size
+            </label>
+            <select
+              id="device-compliance-page-size"
+              value={pageSize}
+              onChange={(event) => setPageSize(Number(event.target.value))}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+            >
+              {PAGE_SIZE_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {value} per page
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              disabled={currentPage <= 1}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-white disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+            >
+              Previous
+            </button>
+            <div className="min-w-[112px] text-center text-sm text-slate-600">
+              Page {filteredDevices.length === 0 ? 0 : currentPage} of {filteredDevices.length === 0 ? 0 : totalPages}
+            </div>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+              disabled={currentPage >= totalPages || filteredDevices.length === 0}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-white disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
-        {filteredDevices.length > 0 ? (
-          filteredDevices.map((device) => (
+        {visibleDevices.length > 0 ? (
+          visibleDevices.map((device) => (
             <DeviceCard
               key={device.id}
               device={device}
-              selected={selectedIds.includes(device.id)}
+              selected={selectedIdSet.has(device.id)}
               busy={jobMutation.isPending || executePlanMutation.isPending}
               onToggle={toggleSelection}
               onRunAction={queueDirectAction}

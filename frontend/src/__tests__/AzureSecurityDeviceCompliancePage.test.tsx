@@ -168,6 +168,24 @@ function buildFixPlan() {
   };
 }
 
+function buildLargeResponse(deviceCount = 60) {
+  const response = buildResponse();
+  const template = response.devices[0];
+  return {
+    ...response,
+    metrics: response.metrics.map((metric) =>
+      metric.key === "managed_devices" ? { ...metric, value: deviceCount, detail: `${deviceCount} devices are cached.` } : metric,
+    ),
+    devices: Array.from({ length: deviceCount }, (_, index) => ({
+      ...template,
+      id: `bulk-device-${index + 1}`,
+      device_name: `Bulk Device ${index + 1}`,
+      azure_ad_device_id: `bulk-aad-${index + 1}`,
+      primary_users: index % 2 === 0 ? template.primary_users : [],
+    })),
+  };
+}
+
 describe("AzureSecurityDeviceCompliancePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -441,5 +459,21 @@ describe("AzureSecurityDeviceCompliancePage", () => {
     expect(await screen.findByRole("heading", { name: "Active fix batch" })).toBeInTheDocument();
     expect(await screen.findByText("Primary user updated")).toBeInTheDocument();
     expect(screen.getByText("Assigned user: Ada Lovelace")).toBeInTheDocument();
+  });
+
+  it("renders device cards in pages so large tenants do not mount the whole queue at once", async () => {
+    mockApi.getAzureSecurityDeviceCompliance.mockResolvedValue(buildLargeResponse());
+
+    render(<AzureSecurityDeviceCompliancePage />);
+
+    expect(await screen.findByText("Showing 1-50 of 60 matching device(s)")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Bulk Device 1" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Bulk Device 60" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    expect(await screen.findByText("Showing 51-60 of 60 matching device(s)")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Bulk Device 60" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Bulk Device 1" })).not.toBeInTheDocument();
   });
 });
