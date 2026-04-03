@@ -2619,7 +2619,12 @@ export interface SecurityConditionalAccessTrackerResponse {
   scope_notes: string[];
 }
 
-export type SecurityDeviceActionType = "device_sync" | "device_remote_lock" | "device_retire" | "device_wipe";
+export type SecurityDeviceActionType =
+  | "device_sync"
+  | "device_remote_lock"
+  | "device_retire"
+  | "device_wipe"
+  | "device_reassign_primary_user";
 
 export interface SecurityDeviceComplianceDevice {
   id: string;
@@ -2637,6 +2642,10 @@ export interface SecurityDeviceComplianceDevice {
   risk_level: "critical" | "high" | "medium" | "low";
   finding_tags: string[];
   recommended_actions: string[];
+  recommended_fix_action: SecurityDeviceActionType | null;
+  recommended_fix_label: string;
+  recommended_fix_reason: string;
+  recommended_fix_requires_user_picker: boolean;
   action_ready: boolean;
   supported_actions: SecurityDeviceActionType[];
   action_blockers: string[];
@@ -2692,6 +2701,102 @@ export interface SecurityDeviceActionJobResult {
   error: string;
   before_summary: Record<string, unknown>;
   after_summary: Record<string, unknown>;
+}
+
+export interface SecurityDeviceFixPlanRequest {
+  device_ids: string[];
+}
+
+export interface SecurityDeviceFixPlanDevice {
+  device_id: string;
+  device_name: string;
+  risk_level: "critical" | "high" | "medium" | "low";
+  finding_tags: string[];
+  action_type: SecurityDeviceActionType | null;
+  action_label: string;
+  action_reason: string;
+  requires_primary_user: boolean;
+  primary_users: UserAdminReference[];
+  skip_reason: string;
+}
+
+export interface SecurityDeviceFixPlanGroup {
+  action_type: SecurityDeviceActionType;
+  action_label: string;
+  device_count: number;
+  device_ids: string[];
+  device_names: string[];
+  requires_confirmation: boolean;
+}
+
+export interface SecurityDeviceFixPlanResponse {
+  generated_at: string;
+  device_ids: string[];
+  items: SecurityDeviceFixPlanDevice[];
+  groups: SecurityDeviceFixPlanGroup[];
+  devices_requiring_primary_user: SecurityDeviceFixPlanDevice[];
+  skipped_devices: SecurityDeviceFixPlanDevice[];
+  destructive_device_count: number;
+  destructive_device_names: string[];
+  requires_destructive_confirmation: boolean;
+  warnings: string[];
+}
+
+export interface SecurityDeviceFixPlanExecuteRequest {
+  device_ids: string[];
+  reason?: string;
+  assignment_map?: Record<string, string>;
+  confirm_device_count?: number;
+  confirm_device_names?: string[];
+}
+
+export interface SecurityDeviceActionBatchJob {
+  child_job_id: string;
+  action_type: SecurityDeviceActionType;
+  action_label: string;
+  device_ids: string[];
+  device_names: string[];
+  status: "queued" | "running" | "completed" | "failed";
+  progress_current: number;
+  progress_total: number;
+  success_count: number;
+  failure_count: number;
+  results_ready: boolean;
+}
+
+export interface SecurityDeviceActionBatchStatus {
+  batch_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  requested_by_email: string;
+  requested_by_name: string;
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  progress_current: number;
+  progress_total: number;
+  progress_message: string;
+  success_count: number;
+  failure_count: number;
+  results_ready: boolean;
+  item_count: number;
+  destructive_device_count: number;
+  destructive_device_names: string[];
+  child_jobs: SecurityDeviceActionBatchJob[];
+  error: string;
+}
+
+export interface SecurityDeviceActionBatchResult {
+  device_id: string;
+  device_name: string;
+  action_type: SecurityDeviceActionType;
+  action_label: string;
+  child_job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  success: boolean | null;
+  summary: string;
+  error: string;
+  assignment_user_id: string;
+  assignment_user_display_name: string;
 }
 
 export interface SecurityCopilotChatRequest {
@@ -3783,6 +3888,14 @@ export const api = {
     return postJSON<SecurityDeviceActionJob>("/api/azure/security/device-compliance/actions", body);
   },
 
+  previewAzureSecurityDeviceFixPlan(body: SecurityDeviceFixPlanRequest): Promise<SecurityDeviceFixPlanResponse> {
+    return postJSON<SecurityDeviceFixPlanResponse>("/api/azure/security/device-compliance/fix-plan", body);
+  },
+
+  executeAzureSecurityDeviceFixPlan(body: SecurityDeviceFixPlanExecuteRequest): Promise<SecurityDeviceActionBatchStatus> {
+    return postJSON<SecurityDeviceActionBatchStatus>("/api/azure/security/device-compliance/fix-plan/execute", body);
+  },
+
   getAzureSecurityDeviceActionJob(jobId: string): Promise<SecurityDeviceActionJob> {
     return fetchJSON<SecurityDeviceActionJob>(`/api/azure/security/device-compliance/jobs/${encodeURIComponent(jobId)}`);
   },
@@ -3790,6 +3903,18 @@ export const api = {
   getAzureSecurityDeviceActionJobResults(jobId: string): Promise<SecurityDeviceActionJobResult[]> {
     return fetchJSON<SecurityDeviceActionJobResult[]>(
       `/api/azure/security/device-compliance/jobs/${encodeURIComponent(jobId)}/results`,
+    );
+  },
+
+  getAzureSecurityDeviceActionBatch(batchId: string): Promise<SecurityDeviceActionBatchStatus> {
+    return fetchJSON<SecurityDeviceActionBatchStatus>(
+      `/api/azure/security/device-compliance/job-batches/${encodeURIComponent(batchId)}`,
+    );
+  },
+
+  getAzureSecurityDeviceActionBatchResults(batchId: string): Promise<SecurityDeviceActionBatchResult[]> {
+    return fetchJSON<SecurityDeviceActionBatchResult[]>(
+      `/api/azure/security/device-compliance/job-batches/${encodeURIComponent(batchId)}/results`,
     );
   },
 

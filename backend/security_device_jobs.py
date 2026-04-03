@@ -14,7 +14,12 @@ from typing import Any
 
 from azure_cache import azure_cache
 from config import DATA_DIR
-from models import SecurityDeviceActionType
+from models import (
+    SecurityDeviceActionBatchJob,
+    SecurityDeviceActionBatchResult,
+    SecurityDeviceActionBatchStatus,
+    SecurityDeviceActionType,
+)
 from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 from user_admin_providers import UserAdminProviderError, user_admin_providers
@@ -23,6 +28,13 @@ logger = logging.getLogger(__name__)
 
 _STATUS_VALUES = {"queued", "running", "completed", "failed"}
 _DESTRUCTIVE_ACTIONS = {"device_retire", "device_wipe"}
+_ACTION_LABELS: dict[str, str] = {
+    "device_sync": "Device sync",
+    "device_remote_lock": "Remote lock",
+    "device_retire": "Retire device",
+    "device_wipe": "Wipe device",
+    "device_reassign_primary_user": "Assign primary user",
+}
 
 
 def _utcnow() -> datetime:
@@ -105,6 +117,31 @@ class SecurityDeviceJobManager:
                 );
                 CREATE INDEX IF NOT EXISTS idx_security_device_action_job_results_job
                     ON security_device_action_job_results(job_id, id);
+                CREATE TABLE IF NOT EXISTS security_device_action_job_batches (
+                    batch_id TEXT PRIMARY KEY,
+                    requested_by_email TEXT NOT NULL,
+                    requested_by_name TEXT NOT NULL DEFAULT '',
+                    requested_at TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    item_count INTEGER NOT NULL DEFAULT 0,
+                    destructive_device_count INTEGER NOT NULL DEFAULT 0,
+                    destructive_device_names_json TEXT NOT NULL DEFAULT '[]',
+                    error TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_security_device_action_job_batches_requested_at
+                    ON security_device_action_job_batches(requested_at DESC);
+                CREATE TABLE IF NOT EXISTS security_device_action_batch_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id TEXT NOT NULL,
+                    child_job_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    device_name TEXT NOT NULL DEFAULT '',
+                    action_type TEXT NOT NULL,
+                    assignment_user_id TEXT NOT NULL DEFAULT '',
+                    assignment_user_display_name TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_security_device_action_batch_items_batch
+                    ON security_device_action_batch_items(batch_id, id);
                 """
             )
             conn.commit()
@@ -166,6 +203,10 @@ class SecurityDeviceJobManager:
         provider, provider_key = user_admin_providers.provider_for_action(action_type)  # type: ignore[arg-type]
         if not getattr(provider, "enabled", False):
             raise SecurityDeviceJobError("Intune device-management provider is not configured.")
+        if action_type == "device_reassign_primary_user":
+            primary_user_id = str((params or {}).get("primary_user_id") or "").strip()
+            if not primary_user_id:
+                raise SecurityDeviceJobError("primary_user_id is required for primary user reassignment.")
 
         device_lookup = self._device_lookup()
         target_rows = [device_lookup.get(device_id) for device_id in cleaned_ids]
@@ -321,6 +362,332 @@ class SecurityDeviceJobManager:
                     "before_summary": json.loads(str(row["before_summary_json"] or "{}")),
                     "after_summary": json.loads(str(row["after_summary_json"] or "{}")),
                 }
+            )
+        return results
+
+    @staticmethod
+    def _action_label(action_type: str) -> str:
+        return _ACTION_LABELS.get(action_type, action_type)
+
+    def _delete_job(self, job_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                self._sql("DELETE FROM security_device_action_job_results WHERE job_id = ?"),
+                (job_id,),
+            )
+            conn.execute(
+                self._sql("DELETE FROM security_device_action_jobs WHERE job_id = ?"),
+                (job_id,),
+            )
+            conn.commit()
+        self._pending_params.pop(job_id, None)
+
+    def create_batch(
+        self,
+        *,
+        plan_items: list[dict[str, Any]],
+        reason: str,
+        confirm_device_count: int | None,
+        confirm_device_names: list[str] | None,
+        requested_by_email: str,
+        requested_by_name: str,
+    ) -> dict[str, Any]:
+        normalized_items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in plan_items:
+            device_id = str(item.get("device_id") or "").strip()
+            action_type = str(item.get("action_type") or "").strip()
+            if not device_id or not action_type or device_id in seen:
+                continue
+            seen.add(device_id)
+            normalized_items.append(
+                {
+                    "device_id": device_id,
+                    "device_name": str(item.get("device_name") or device_id),
+                    "action_type": action_type,
+                    "params": dict(item.get("params") or {}),
+                    "assignment_user_id": str(item.get("assignment_user_id") or ""),
+                    "assignment_user_display_name": str(item.get("assignment_user_display_name") or ""),
+                }
+            )
+        if not normalized_items:
+            raise SecurityDeviceJobError("At least one planned device remediation is required.")
+
+        destructive_names = sorted(
+            [item["device_name"] for item in normalized_items if item["action_type"] in _DESTRUCTIVE_ACTIONS],
+            key=str.lower,
+        )
+        if destructive_names:
+            if int(confirm_device_count or 0) != len(destructive_names):
+                raise SecurityDeviceJobError(
+                    f"Destructive confirmation failed. Confirm the selected device count ({len(destructive_names)}) before continuing."
+                )
+            confirmed_names = sorted(
+                [str(item).strip() for item in (confirm_device_names or []) if str(item).strip()],
+                key=str.lower,
+            )
+            if confirmed_names != destructive_names:
+                raise SecurityDeviceJobError(
+                    "Destructive confirmation failed. Confirm the exact selected device names before continuing."
+                )
+
+        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for item in normalized_items:
+            params_json = json.dumps(item["params"], sort_keys=True)
+            grouped.setdefault((item["action_type"], params_json), []).append(item)
+
+        created_child_jobs: list[str] = []
+        batch_id = uuid.uuid4().hex
+        requested_at = _utcnow().isoformat()
+        try:
+            for (action_type, params_json), items in grouped.items():
+                params = json.loads(params_json)
+                job = self.create_job(
+                    action_type=action_type,  # type: ignore[arg-type]
+                    device_ids=[item["device_id"] for item in items],
+                    reason=reason,
+                    params=params,
+                    confirm_device_count=(len(items) if action_type in _DESTRUCTIVE_ACTIONS else None),
+                    confirm_device_names=([item["device_name"] for item in items] if action_type in _DESTRUCTIVE_ACTIONS else None),
+                    requested_by_email=requested_by_email,
+                    requested_by_name=requested_by_name,
+                )
+                created_child_jobs.append(str(job["job_id"]))
+                for item in items:
+                    item["child_job_id"] = str(job["job_id"])
+            with self._conn() as conn:
+                conn.execute(
+                    self._sql(
+                        """
+                        INSERT INTO security_device_action_job_batches (
+                            batch_id,
+                            requested_by_email,
+                            requested_by_name,
+                            requested_at,
+                            reason,
+                            item_count,
+                            destructive_device_count,
+                            destructive_device_names_json,
+                            error
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
+                        """
+                    ),
+                    (
+                        batch_id,
+                        requested_by_email,
+                        requested_by_name,
+                        requested_at,
+                        str(reason or "").strip(),
+                        len(normalized_items),
+                        len(destructive_names),
+                        json.dumps(destructive_names),
+                    ),
+                )
+                conn.executemany(
+                    self._sql(
+                        """
+                        INSERT INTO security_device_action_batch_items (
+                            batch_id,
+                            child_job_id,
+                            device_id,
+                            device_name,
+                            action_type,
+                            assignment_user_id,
+                            assignment_user_display_name
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """
+                    ),
+                    [
+                        (
+                            batch_id,
+                            item["child_job_id"],
+                            item["device_id"],
+                            item["device_name"],
+                            item["action_type"],
+                            item["assignment_user_id"],
+                            item["assignment_user_display_name"],
+                        )
+                        for item in normalized_items
+                    ],
+                )
+                conn.commit()
+        except Exception:
+            for job_id in created_child_jobs:
+                self._delete_job(job_id)
+            with self._conn() as conn:
+                conn.execute(
+                    self._sql("DELETE FROM security_device_action_batch_items WHERE batch_id = ?"),
+                    (batch_id,),
+                )
+                conn.execute(
+                    self._sql("DELETE FROM security_device_action_job_batches WHERE batch_id = ?"),
+                    (batch_id,),
+                )
+                conn.commit()
+            raise
+
+        batch = self.get_batch(batch_id)
+        if batch is None:
+            raise SecurityDeviceJobError("Failed to create the remediation batch.")
+        return batch
+
+    def _get_batch_row(self, batch_id: str) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                self._sql("SELECT * FROM security_device_action_job_batches WHERE batch_id = ?"),
+                (batch_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def _get_batch_items(self, batch_id: str) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                self._sql(
+                    """
+                    SELECT *
+                    FROM security_device_action_batch_items
+                    WHERE batch_id = ?
+                    ORDER BY id ASC
+                    """
+                ),
+                (batch_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_batch(self, batch_id: str) -> dict[str, Any] | None:
+        batch_row = self._get_batch_row(batch_id)
+        if not batch_row:
+            return None
+        batch_items = self._get_batch_items(batch_id)
+        seen_child_jobs: set[str] = set()
+        child_jobs: list[dict[str, Any]] = []
+        for item in batch_items:
+            child_job_id = str(item.get("child_job_id") or "")
+            if not child_job_id or child_job_id in seen_child_jobs:
+                continue
+            seen_child_jobs.add(child_job_id)
+            job = self.get_job(child_job_id)
+            if not job:
+                continue
+            child_jobs.append(
+                SecurityDeviceActionBatchJob(
+                    child_job_id=child_job_id,
+                    action_type=str(job.get("action_type") or ""),  # type: ignore[arg-type]
+                    action_label=self._action_label(str(job.get("action_type") or "")),
+                    device_ids=[str(value) for value in job.get("device_ids") or []],
+                    device_names=[str(value) for value in job.get("device_names") or []],
+                    status=str(job.get("status") or "queued"),  # type: ignore[arg-type]
+                    progress_current=int(job.get("progress_current") or 0),
+                    progress_total=int(job.get("progress_total") or 0),
+                    success_count=int(job.get("success_count") or 0),
+                    failure_count=int(job.get("failure_count") or 0),
+                    results_ready=bool(job.get("results_ready")),
+                ).model_dump()
+            )
+
+        progress_total = sum(int(job.get("progress_total") or 0) for job in child_jobs)
+        progress_current = sum(int(job.get("progress_current") or 0) for job in child_jobs)
+        success_count = sum(int(job.get("success_count") or 0) for job in child_jobs)
+        failure_count = sum(int(job.get("failure_count") or 0) for job in child_jobs)
+        statuses = [str(job.get("status") or "queued") for job in child_jobs]
+        started_times = [
+            str(job.get("started_at") or "")
+            for job in (self.get_job(str(item.get("child_job_id") or "")) for item in batch_items)
+            if job and str(job.get("started_at") or "")
+        ]
+        completed_times = [
+            str(job.get("completed_at") or "")
+            for job in (self.get_job(str(item.get("child_job_id") or "")) for item in batch_items)
+            if job and str(job.get("completed_at") or "")
+        ]
+        if not statuses:
+            status = "failed"
+        elif all(value == "queued" for value in statuses):
+            status = "queued"
+        elif any(value == "running" for value in statuses):
+            status = "running"
+        elif all(value == "failed" for value in statuses):
+            status = "failed"
+        elif all(value in {"completed", "failed"} for value in statuses):
+            status = "completed"
+        else:
+            status = "running"
+
+        try:
+            destructive_names = json.loads(str(batch_row.get("destructive_device_names_json") or "[]"))
+        except json.JSONDecodeError:
+            destructive_names = []
+        results_ready = bool(child_jobs) and all(bool(job.get("results_ready")) for job in child_jobs)
+        progress_message = (
+            "Queued"
+            if status == "queued"
+            else f"Processed {progress_current} of {progress_total} planned device action(s)"
+        )
+        return SecurityDeviceActionBatchStatus(
+            batch_id=str(batch_row.get("batch_id") or ""),
+            status=status,  # type: ignore[arg-type]
+            requested_by_email=str(batch_row.get("requested_by_email") or ""),
+            requested_by_name=str(batch_row.get("requested_by_name") or ""),
+            requested_at=str(batch_row.get("requested_at") or ""),
+            started_at=min(started_times) if started_times else None,
+            completed_at=max(completed_times) if results_ready and completed_times else None,
+            progress_current=progress_current,
+            progress_total=progress_total,
+            progress_message=progress_message,
+            success_count=success_count,
+            failure_count=failure_count,
+            results_ready=results_ready,
+            item_count=int(batch_row.get("item_count") or 0),
+            destructive_device_count=int(batch_row.get("destructive_device_count") or 0),
+            destructive_device_names=[str(item) for item in destructive_names if str(item).strip()],
+            child_jobs=[SecurityDeviceActionBatchJob.model_validate(item) for item in child_jobs],
+            error=(
+                str(batch_row.get("error") or "")
+                or ("One or more device actions failed." if failure_count and status in {"completed", "failed"} else "")
+            ),
+        ).model_dump()
+
+    def get_batch_results(self, batch_id: str) -> list[dict[str, Any]]:
+        batch_items = self._get_batch_items(batch_id)
+        child_job_ids = {str(item.get("child_job_id") or "") for item in batch_items if str(item.get("child_job_id") or "")}
+        child_jobs = {job_id: self.get_job(job_id) for job_id in child_job_ids}
+        child_results: dict[tuple[str, str], dict[str, Any]] = {}
+        for job_id in child_job_ids:
+            for result in self.get_job_results(job_id):
+                child_results[(job_id, str(result.get("device_id") or ""))] = result
+
+        results: list[dict[str, Any]] = []
+        for item in batch_items:
+            child_job_id = str(item.get("child_job_id") or "")
+            device_id = str(item.get("device_id") or "")
+            action_type = str(item.get("action_type") or "")
+            job = child_jobs.get(child_job_id) or {}
+            result = child_results.get((child_job_id, device_id))
+            status = str(job.get("status") or "queued")
+            success = None
+            summary = str(job.get("progress_message") or "")
+            error = ""
+            if result is not None:
+                success = bool(result.get("success"))
+                summary = str(result.get("summary") or summary)
+                error = str(result.get("error") or "")
+            elif status == "failed":
+                success = False
+                error = str(job.get("error") or "The device action job failed.")
+            results.append(
+                SecurityDeviceActionBatchResult(
+                    device_id=device_id,
+                    device_name=str(item.get("device_name") or device_id),
+                    action_type=action_type,  # type: ignore[arg-type]
+                    action_label=self._action_label(action_type),
+                    child_job_id=child_job_id,
+                    status=status,  # type: ignore[arg-type]
+                    success=success,
+                    summary=summary,
+                    error=error,
+                    assignment_user_id=str(item.get("assignment_user_id") or ""),
+                    assignment_user_display_name=str(item.get("assignment_user_display_name") or ""),
+                ).model_dump()
             )
         return results
 

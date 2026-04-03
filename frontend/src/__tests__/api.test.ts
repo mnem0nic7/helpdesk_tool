@@ -733,3 +733,108 @@ describe("user admin api methods", () => {
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("/api/user-admin/jobs/job-123/results");
   });
 });
+
+describe("azure security device compliance api methods", () => {
+  it("posts the fix-plan preview request", async () => {
+    mockFetch({
+      generated_at: "2026-04-03T02:05:00Z",
+      device_ids: ["device-1"],
+      items: [],
+      groups: [],
+      devices_requiring_primary_user: [],
+      skipped_devices: [],
+      destructive_device_count: 0,
+      destructive_device_names: [],
+      requires_destructive_confirmation: false,
+      warnings: [],
+    });
+    await api.previewAzureSecurityDeviceFixPlan({ device_ids: ["device-1"] });
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/azure/security/device-compliance/fix-plan");
+    expect(call[1].method).toBe("POST");
+    expect(JSON.parse(call[1].body)).toEqual({ device_ids: ["device-1"] });
+  });
+
+  it("posts the fix-plan execute request", async () => {
+    mockFetch({
+      batch_id: "batch-1",
+      status: "queued",
+      requested_by_email: "tech@example.com",
+      requested_by_name: "Tech User",
+      requested_at: "2026-04-03T02:10:00Z",
+      started_at: null,
+      completed_at: null,
+      progress_current: 0,
+      progress_total: 2,
+      progress_message: "Queued",
+      success_count: 0,
+      failure_count: 0,
+      results_ready: false,
+      item_count: 2,
+      destructive_device_count: 0,
+      destructive_device_names: [],
+      child_jobs: [],
+      error: "",
+    });
+    await api.executeAzureSecurityDeviceFixPlan({
+      device_ids: ["device-1", "device-2"],
+      reason: "Nightly remediation",
+      assignment_map: { "device-2": "user-1" },
+    });
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/azure/security/device-compliance/fix-plan/execute");
+    expect(call[1].method).toBe("POST");
+    expect(JSON.parse(call[1].body)).toEqual({
+      device_ids: ["device-1", "device-2"],
+      reason: "Nightly remediation",
+      assignment_map: { "device-2": "user-1" },
+    });
+  });
+
+  it("fetches device batch status and results", async () => {
+    mockFetch({
+      batch_id: "batch-1",
+      status: "completed",
+      requested_by_email: "tech@example.com",
+      requested_by_name: "Tech User",
+      requested_at: "2026-04-03T02:10:00Z",
+      started_at: "2026-04-03T02:10:05Z",
+      completed_at: "2026-04-03T02:10:30Z",
+      progress_current: 2,
+      progress_total: 2,
+      progress_message: "Completed",
+      success_count: 2,
+      failure_count: 0,
+      results_ready: true,
+      item_count: 2,
+      destructive_device_count: 0,
+      destructive_device_names: [],
+      child_jobs: [],
+      error: "",
+    });
+    await api.getAzureSecurityDeviceActionBatch("batch-1");
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      "/api/azure/security/device-compliance/job-batches/batch-1",
+    );
+
+    mockFetch([
+      {
+        device_id: "device-1",
+        device_name: "Payroll Laptop",
+        action_type: "device_sync",
+        action_label: "Device sync",
+        child_job_id: "job-1",
+        status: "completed",
+        success: true,
+        summary: "Sync queued",
+        error: "",
+        assignment_user_id: "",
+        assignment_user_display_name: "",
+      },
+    ]);
+    await api.getAzureSecurityDeviceActionBatchResults("batch-1");
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      "/api/azure/security/device-compliance/job-batches/batch-1/results",
+    );
+  });
+});

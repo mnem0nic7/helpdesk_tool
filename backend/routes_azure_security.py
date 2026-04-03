@@ -7,22 +7,28 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from auth import require_authenticated_user, session_can_manage_users
+from azure_cache import azure_cache
 from models import (
     SecurityAccessReviewResponse,
     SecurityAppHygieneResponse,
+    SecurityDeviceActionBatchResult,
+    SecurityDeviceActionBatchStatus,
     SecurityBreakGlassValidationResponse,
     SecurityConditionalAccessTrackerResponse,
     SecurityDeviceActionJob,
     SecurityDeviceActionJobResult,
     SecurityDeviceActionRequest,
     SecurityDeviceComplianceResponse,
+    SecurityDeviceFixPlanExecuteRequest,
+    SecurityDeviceFixPlanRequest,
+    SecurityDeviceFixPlanResponse,
     SecurityDirectoryRoleReviewResponse,
 )
 from security_application_hygiene import build_security_application_hygiene
 from security_access_review import build_security_access_review
 from security_break_glass_validation import build_security_break_glass_validation
 from security_conditional_access_tracker import build_security_conditional_access_tracker
-from security_device_compliance import build_security_device_compliance_review
+from security_device_compliance import build_security_device_compliance_review, build_security_device_fix_plan
 from security_device_jobs import SecurityDeviceJobError, security_device_jobs
 from security_directory_role_review import build_security_directory_role_review
 from site_context import get_current_site_scope
@@ -111,6 +117,90 @@ def create_security_device_action_job(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/device-compliance/fix-plan", response_model=SecurityDeviceFixPlanResponse)
+def preview_security_device_fix_plan(
+    body: SecurityDeviceFixPlanRequest,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> SecurityDeviceFixPlanResponse:
+    _ensure_azure_site()
+    if not session_can_manage_users(session):
+        raise HTTPException(status_code=403, detail="User administration access is required to preview device compliance fixes.")
+    return build_security_device_fix_plan(session, body.device_ids)
+
+
+@router.post("/device-compliance/fix-plan/execute", response_model=SecurityDeviceActionBatchStatus)
+def execute_security_device_fix_plan(
+    body: SecurityDeviceFixPlanExecuteRequest,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> SecurityDeviceActionBatchStatus:
+    _ensure_azure_site()
+    if not session_can_manage_users(session):
+        raise HTTPException(status_code=403, detail="User administration access is required to run device compliance fixes.")
+
+    plan = build_security_device_fix_plan(session, body.device_ids)
+    users = {
+        str(item.get("id") or ""): item
+        for item in (azure_cache._snapshot("users") or [])
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+
+    executable_items: list[dict[str, Any]] = []
+    for item in plan.items:
+        if item.action_type in {"device_sync", "device_retire"}:
+            executable_items.append(
+                {
+                    "device_id": item.device_id,
+                    "device_name": item.device_name,
+                    "action_type": item.action_type,
+                    "params": {},
+                }
+            )
+        elif item.action_type == "device_reassign_primary_user":
+            primary_user_id = str((body.assignment_map or {}).get(item.device_id) or "").strip()
+            if not primary_user_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Select a primary user for {item.device_name} before executing the remediation plan.",
+                )
+            user = users.get(primary_user_id)
+            if not user:
+                raise HTTPException(status_code=400, detail="One or more selected primary users are no longer present in the cached directory.")
+            executable_items.append(
+                {
+                    "device_id": item.device_id,
+                    "device_name": item.device_name,
+                    "action_type": "device_reassign_primary_user",
+                    "params": {
+                        "primary_user_id": primary_user_id,
+                        "primary_user_display_name": str(
+                            user.get("display_name") or user.get("principal_name") or user.get("mail") or primary_user_id
+                        ),
+                    },
+                    "assignment_user_id": primary_user_id,
+                    "assignment_user_display_name": str(
+                        user.get("display_name") or user.get("principal_name") or user.get("mail") or primary_user_id
+                    ),
+                }
+            )
+
+    if not executable_items:
+        raise HTTPException(status_code=400, detail="No smart remediation actions are available for the selected devices.")
+
+    try:
+        return SecurityDeviceActionBatchStatus.model_validate(
+            security_device_jobs.create_batch(
+                plan_items=executable_items,
+                reason=body.reason,
+                confirm_device_count=body.confirm_device_count,
+                confirm_device_names=body.confirm_device_names,
+                requested_by_email=str(session.get("email") or ""),
+                requested_by_name=str(session.get("name") or ""),
+            )
+        )
+    except SecurityDeviceJobError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/device-compliance/jobs/{job_id}", response_model=SecurityDeviceActionJob)
 def get_security_device_action_job(
     job_id: str,
@@ -137,3 +227,31 @@ def get_security_device_action_job_results(
     if not job:
         raise HTTPException(status_code=404, detail="Device action job not found.")
     return [SecurityDeviceActionJobResult.model_validate(item) for item in security_device_jobs.get_job_results(job_id)]
+
+
+@router.get("/device-compliance/job-batches/{batch_id}", response_model=SecurityDeviceActionBatchStatus)
+def get_security_device_action_batch(
+    batch_id: str,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> SecurityDeviceActionBatchStatus:
+    _ensure_azure_site()
+    if not session_can_manage_users(session):
+        raise HTTPException(status_code=403, detail="User administration access is required to view device compliance job batches.")
+    batch = security_device_jobs.get_batch(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Device action batch not found.")
+    return SecurityDeviceActionBatchStatus.model_validate(batch)
+
+
+@router.get("/device-compliance/job-batches/{batch_id}/results", response_model=list[SecurityDeviceActionBatchResult])
+def get_security_device_action_batch_results(
+    batch_id: str,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[SecurityDeviceActionBatchResult]:
+    _ensure_azure_site()
+    if not session_can_manage_users(session):
+        raise HTTPException(status_code=403, detail="User administration access is required to view device compliance job batches.")
+    batch = security_device_jobs.get_batch(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Device action batch not found.")
+    return [SecurityDeviceActionBatchResult.model_validate(item) for item in security_device_jobs.get_batch_results(batch_id)]

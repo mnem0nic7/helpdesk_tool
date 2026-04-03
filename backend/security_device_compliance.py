@@ -9,8 +9,12 @@ from auth import session_can_manage_users
 from azure_cache import azure_cache
 from models import (
     SecurityAccessReviewMetric,
+    SecurityDeviceActionType,
     SecurityDeviceComplianceDevice,
     SecurityDeviceComplianceResponse,
+    SecurityDeviceFixPlanDevice,
+    SecurityDeviceFixPlanGroup,
+    SecurityDeviceFixPlanResponse,
     UserAdminReference,
 )
 from security_access_review import _dataset_is_stale, _dataset_last_refresh, _parse_datetime, _utc_now
@@ -18,7 +22,21 @@ from security_access_review import _dataset_is_stale, _dataset_last_refresh, _pa
 _STALE_DEVICE_HOURS = 2
 _STALE_SYNC_DAYS = 7
 _INACTIVE_SYNC_DAYS = 30
-_ACTIONABLE_ACTIONS = ["device_sync", "device_remote_lock", "device_retire", "device_wipe"]
+_ACTIONABLE_ACTIONS = [
+    "device_sync",
+    "device_remote_lock",
+    "device_retire",
+    "device_wipe",
+    "device_reassign_primary_user",
+]
+_DESTRUCTIVE_ACTIONS = {"device_retire", "device_wipe"}
+_ACTION_LABELS: dict[str, str] = {
+    "device_sync": "Device sync",
+    "device_remote_lock": "Remote lock",
+    "device_retire": "Retire device",
+    "device_wipe": "Wipe device",
+    "device_reassign_primary_user": "Assign primary user",
+}
 
 
 def _days_since(value: str) -> int | None:
@@ -59,6 +77,46 @@ def _normalize_primary_users(raw_users: Any) -> list[UserAdminReference]:
     return users
 
 
+def _action_label(action_type: SecurityDeviceActionType | None) -> str:
+    if not action_type:
+        return ""
+    return _ACTION_LABELS.get(action_type, str(action_type))
+
+
+def _default_fix_for_device(
+    *,
+    finding_tags: list[str],
+    action_ready: bool,
+    supported_actions: list[SecurityDeviceActionType],
+) -> tuple[SecurityDeviceActionType | None, str, bool]:
+    if not action_ready:
+        return None, "", False
+    tags = set(finding_tags)
+    supported = set(supported_actions)
+    if "no_primary_user" in tags and "device_reassign_primary_user" in supported:
+        return (
+            "device_reassign_primary_user",
+            "Assign a primary user before broader remediation because the device currently has no resolved owner.",
+            True,
+        )
+    if ("inactive_or_unmanaged" in tags or "personal_risky_device" in tags) and "device_retire" in supported:
+        return (
+            "device_retire",
+            "Retire the device because cached posture shows a lifecycle, ownership, or management risk that is better handled through cleanup.",
+            False,
+        )
+    if (
+        {"stale_sync", "unknown_or_not_evaluated", "noncompliant_or_grace"} & tags
+        and "device_sync" in supported
+    ):
+        return (
+            "device_sync",
+            "Run an Intune sync first so compliance state and policy evaluation refresh before deeper escalation.",
+            False,
+        )
+    return None, "", False
+
+
 def _recommendations(
     *,
     compliance_state: str,
@@ -66,7 +124,7 @@ def _recommendations(
     owner_type: str,
     last_sync_age_days: int | None,
     primary_users: list[UserAdminReference],
-) -> tuple[str, list[str], list[str], bool, list[str], list[str]]:
+) -> tuple[str, list[str], list[str], bool, list[str], list[str], SecurityDeviceActionType | None, str, bool]:
     normalized_compliance = compliance_state.strip().lower()
     normalized_management = management_state.strip().lower()
     normalized_owner = owner_type.strip().lower()
@@ -121,13 +179,30 @@ def _recommendations(
         action_ready = False
 
     supported_actions = list(_ACTIONABLE_ACTIONS) if action_ready else []
-    if "noncompliant_or_grace" in tags and "device_remote_lock" not in supported_actions and action_ready:
-        supported_actions.append("device_remote_lock")
 
     if not recommendations:
         recommendations.append("No urgent remediation is recommended from the current cached Intune posture.")
 
-    return risk, _unique_list(tags), _unique_list(recommendations), action_ready, supported_actions, _unique_list(blockers)
+    unique_tags = _unique_list(tags)
+    unique_recommendations = _unique_list(recommendations)
+    unique_blockers = _unique_list(blockers)
+    recommended_fix_action, recommended_fix_reason, recommended_fix_requires_user_picker = _default_fix_for_device(
+        finding_tags=unique_tags,
+        action_ready=action_ready,
+        supported_actions=supported_actions,  # type: ignore[arg-type]
+    )
+
+    return (
+        risk,
+        unique_tags,
+        unique_recommendations,
+        action_ready,
+        supported_actions,
+        unique_blockers,
+        recommended_fix_action,
+        recommended_fix_reason,
+        recommended_fix_requires_user_picker,
+    )
 
 
 def build_security_device_compliance_review(session: dict[str, Any]) -> SecurityDeviceComplianceResponse:
@@ -177,7 +252,17 @@ def build_security_device_compliance_review(session: dict[str, Any]) -> Security
 
         last_sync_date_time = str(row.get("last_sync_date_time") or "")
         last_sync_age_days = _days_since(last_sync_date_time)
-        risk_level, finding_tags, recommended_actions, action_ready, supported_actions, action_blockers = _recommendations(
+        (
+            risk_level,
+            finding_tags,
+            recommended_actions,
+            action_ready,
+            supported_actions,
+            action_blockers,
+            recommended_fix_action,
+            recommended_fix_reason,
+            recommended_fix_requires_user_picker,
+        ) = _recommendations(
             compliance_state=str(row.get("compliance_state") or ""),
             management_state=str(row.get("management_state") or ""),
             owner_type=str(row.get("owner_type") or ""),
@@ -202,6 +287,10 @@ def build_security_device_compliance_review(session: dict[str, Any]) -> Security
                 risk_level=risk_level,  # type: ignore[arg-type]
                 finding_tags=finding_tags,
                 recommended_actions=recommended_actions,
+                recommended_fix_action=recommended_fix_action,
+                recommended_fix_label=_action_label(recommended_fix_action),
+                recommended_fix_reason=recommended_fix_reason,
+                recommended_fix_requires_user_picker=recommended_fix_requires_user_picker,
                 action_ready=action_ready,
                 supported_actions=supported_actions,  # type: ignore[arg-type]
                 action_blockers=action_blockers,
@@ -278,4 +367,142 @@ def build_security_device_compliance_review(session: dict[str, Any]) -> Security
         devices=devices,
         warnings=_unique_list(warnings),
         scope_notes=scope_notes,
+    )
+
+
+def _fix_plan_item_for_device(device: SecurityDeviceComplianceDevice) -> SecurityDeviceFixPlanDevice:
+    if not device.action_ready:
+        return SecurityDeviceFixPlanDevice(
+            device_id=device.id,
+            device_name=device.device_name,
+            risk_level=device.risk_level,
+            finding_tags=device.finding_tags,
+            action_type=None,
+            action_label="",
+            action_reason="",
+            requires_primary_user=False,
+            primary_users=device.primary_users,
+            skip_reason=(device.action_blockers[0] if device.action_blockers else "This device is review-only in the current cache."),
+        )
+    if device.recommended_fix_action == "device_reassign_primary_user":
+        return SecurityDeviceFixPlanDevice(
+            device_id=device.id,
+            device_name=device.device_name,
+            risk_level=device.risk_level,
+            finding_tags=device.finding_tags,
+            action_type="device_reassign_primary_user",
+            action_label=_action_label("device_reassign_primary_user"),
+            action_reason=device.recommended_fix_reason,
+            requires_primary_user=True,
+            primary_users=device.primary_users,
+            skip_reason="",
+        )
+    if device.recommended_fix_action in {"device_sync", "device_retire"}:
+        action_type = device.recommended_fix_action
+        return SecurityDeviceFixPlanDevice(
+            device_id=device.id,
+            device_name=device.device_name,
+            risk_level=device.risk_level,
+            finding_tags=device.finding_tags,
+            action_type=action_type,
+            action_label=_action_label(action_type),
+            action_reason=device.recommended_fix_reason,
+            requires_primary_user=False,
+            primary_users=device.primary_users,
+            skip_reason="",
+        )
+    return SecurityDeviceFixPlanDevice(
+        device_id=device.id,
+        device_name=device.device_name,
+        risk_level=device.risk_level,
+        finding_tags=device.finding_tags,
+        action_type=None,
+        action_label="",
+        action_reason="",
+        requires_primary_user=False,
+        primary_users=device.primary_users,
+        skip_reason="No default smart remediation was selected from the current device findings.",
+    )
+
+
+def build_security_device_fix_plan(session: dict[str, Any], device_ids: list[str]) -> SecurityDeviceFixPlanResponse:
+    review = build_security_device_compliance_review(session)
+    device_by_id = {device.id: device for device in review.devices}
+
+    cleaned_ids: list[str] = []
+    seen: set[str] = set()
+    for value in device_ids:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        cleaned_ids.append(text)
+
+    items: list[SecurityDeviceFixPlanDevice] = []
+    groups_map: dict[str, list[SecurityDeviceFixPlanDevice]] = {}
+    devices_requiring_primary_user: list[SecurityDeviceFixPlanDevice] = []
+    skipped_devices: list[SecurityDeviceFixPlanDevice] = []
+    warnings = list(review.warnings)
+
+    for device_id in cleaned_ids:
+        device = device_by_id.get(device_id)
+        if not device:
+            skipped = SecurityDeviceFixPlanDevice(
+                device_id=device_id,
+                device_name=device_id,
+                risk_level="low",
+                finding_tags=[],
+                action_type=None,
+                action_label="",
+                action_reason="",
+                requires_primary_user=False,
+                primary_users=[],
+                skip_reason="The current device compliance cache does not contain this device.",
+            )
+            items.append(skipped)
+            skipped_devices.append(skipped)
+            continue
+
+        plan_item = _fix_plan_item_for_device(device)
+        items.append(plan_item)
+        if plan_item.requires_primary_user:
+            devices_requiring_primary_user.append(plan_item)
+        elif plan_item.action_type:
+            groups_map.setdefault(plan_item.action_type, []).append(plan_item)
+        else:
+            skipped_devices.append(plan_item)
+
+    groups = [
+        SecurityDeviceFixPlanGroup(
+            action_type=action_type,  # type: ignore[arg-type]
+            action_label=_action_label(action_type),  # type: ignore[arg-type]
+            device_count=len(group_items),
+            device_ids=[item.device_id for item in group_items],
+            device_names=sorted([item.device_name for item in group_items], key=str.lower),
+            requires_confirmation=action_type in _DESTRUCTIVE_ACTIONS,
+        )
+        for action_type, group_items in sorted(groups_map.items(), key=lambda item: _action_label(item[0]).lower())
+    ]
+
+    destructive_device_names = sorted(
+        [
+            item.device_name
+            for group in groups
+            if group.action_type in _DESTRUCTIVE_ACTIONS
+            for item in groups_map.get(group.action_type, [])
+        ],
+        key=str.lower,
+    )
+
+    return SecurityDeviceFixPlanResponse(
+        generated_at=_utc_now(),
+        device_ids=cleaned_ids,
+        items=items,
+        groups=groups,
+        devices_requiring_primary_user=devices_requiring_primary_user,
+        skipped_devices=skipped_devices,
+        destructive_device_count=len(destructive_device_names),
+        destructive_device_names=destructive_device_names,
+        requires_destructive_confirmation=bool(destructive_device_names),
+        warnings=_unique_list(warnings),
     )

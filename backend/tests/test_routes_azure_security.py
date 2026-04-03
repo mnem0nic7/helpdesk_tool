@@ -16,9 +16,14 @@ from models import (
     SecurityConditionalAccessPolicy,
     SecurityConditionalAccessTrackerResponse,
     SecurityDeviceActionJob,
+    SecurityDeviceActionBatchResult,
+    SecurityDeviceActionBatchStatus,
     SecurityDeviceActionJobResult,
     SecurityDeviceComplianceDevice,
     SecurityDeviceComplianceResponse,
+    SecurityDeviceFixPlanDevice,
+    SecurityDeviceFixPlanGroup,
+    SecurityDeviceFixPlanResponse,
     SecurityDirectoryRoleReviewMembership,
     SecurityDirectoryRoleReviewResponse,
     SecurityDirectoryRoleReviewRole,
@@ -336,8 +341,12 @@ def _device_compliance_response(_session=None) -> SecurityDeviceComplianceRespon
                 risk_level="critical",
                 finding_tags=["noncompliant_or_grace"],
                 recommended_actions=["Run an Intune device sync and review the failing compliance policies."],
+                recommended_fix_action="device_sync",
+                recommended_fix_label="Device sync",
+                recommended_fix_reason="Run an Intune sync first so compliance state refreshes.",
+                recommended_fix_requires_user_picker=False,
                 action_ready=True,
-                supported_actions=["device_sync", "device_remote_lock", "device_retire", "device_wipe"],
+                supported_actions=["device_sync", "device_remote_lock", "device_retire", "device_wipe", "device_reassign_primary_user"],
                 action_blockers=[],
             )
         ],
@@ -559,6 +568,170 @@ def test_security_device_action_routes_queue_and_return_results(test_client, mon
     )
     assert results_resp.status_code == 200
     assert results_resp.json()[0]["device_name"] == "Payroll Laptop"
+
+
+def test_security_device_fix_plan_routes_preview_execute_and_return_results(test_client, monkeypatch):
+    import routes_azure_security
+
+    monkeypatch.setattr(
+        routes_azure_security,
+        "build_security_device_fix_plan",
+        lambda session, device_ids: SecurityDeviceFixPlanResponse(
+            generated_at="2026-04-03T03:00:00Z",
+            device_ids=device_ids,
+            items=[
+                SecurityDeviceFixPlanDevice(
+                    device_id="device-1",
+                    device_name="Payroll Laptop",
+                    risk_level="critical",
+                    finding_tags=["noncompliant_or_grace"],
+                    action_type="device_sync",
+                    action_label="Device sync",
+                    action_reason="Sync first",
+                    requires_primary_user=False,
+                    primary_users=[],
+                ),
+                SecurityDeviceFixPlanDevice(
+                    device_id="device-2",
+                    device_name="Warehouse Tablet",
+                    risk_level="high",
+                    finding_tags=["no_primary_user"],
+                    action_type="device_reassign_primary_user",
+                    action_label="Assign primary user",
+                    action_reason="Assign owner",
+                    requires_primary_user=True,
+                    primary_users=[],
+                ),
+            ],
+            groups=[
+                SecurityDeviceFixPlanGroup(
+                    action_type="device_sync",
+                    action_label="Device sync",
+                    device_count=1,
+                    device_ids=["device-1"],
+                    device_names=["Payroll Laptop"],
+                    requires_confirmation=False,
+                )
+            ],
+            devices_requiring_primary_user=[
+                SecurityDeviceFixPlanDevice(
+                    device_id="device-2",
+                    device_name="Warehouse Tablet",
+                    risk_level="high",
+                    finding_tags=["no_primary_user"],
+                    action_type="device_reassign_primary_user",
+                    action_label="Assign primary user",
+                    action_reason="Assign owner",
+                    requires_primary_user=True,
+                    primary_users=[],
+                )
+            ],
+            skipped_devices=[],
+            destructive_device_count=0,
+            destructive_device_names=[],
+            requires_destructive_confirmation=False,
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(
+        routes_azure_security.azure_cache,
+        "_snapshot",
+        lambda key: [
+            {
+                "id": "user-1",
+                "display_name": "Ada Lovelace",
+                "principal_name": "ada@example.com",
+                "mail": "ada@example.com",
+            }
+        ]
+        if key == "users"
+        else [],
+    )
+    monkeypatch.setattr(
+        routes_azure_security.security_device_jobs,
+        "create_batch",
+        lambda **_: SecurityDeviceActionBatchStatus(
+            batch_id="batch-1",
+            status="queued",
+            requested_by_email="test@example.com",
+            requested_by_name="Test User",
+            requested_at="2026-04-03T03:05:00Z",
+            progress_current=0,
+            progress_total=2,
+            progress_message="Queued",
+            item_count=2,
+            child_jobs=[],
+        ).model_dump(),
+    )
+    monkeypatch.setattr(
+        routes_azure_security.security_device_jobs,
+        "get_batch",
+        lambda batch_id: SecurityDeviceActionBatchStatus(
+            batch_id=batch_id,
+            status="completed",
+            requested_by_email="test@example.com",
+            requested_by_name="Test User",
+            requested_at="2026-04-03T03:05:00Z",
+            completed_at="2026-04-03T03:06:00Z",
+            progress_current=2,
+            progress_total=2,
+            progress_message="Completed",
+            success_count=2,
+            results_ready=True,
+            item_count=2,
+            child_jobs=[],
+        ).model_dump(),
+    )
+    monkeypatch.setattr(
+        routes_azure_security.security_device_jobs,
+        "get_batch_results",
+        lambda batch_id: [
+            SecurityDeviceActionBatchResult(
+                device_id="device-1",
+                device_name="Payroll Laptop",
+                action_type="device_sync",
+                action_label="Device sync",
+                child_job_id="job-1",
+                status="completed",
+                success=True,
+                summary=f"Completed {batch_id}",
+            ).model_dump()
+        ],
+    )
+
+    preview_resp = test_client.post(
+        "/api/azure/security/device-compliance/fix-plan",
+        headers={"host": "azure.movedocs.com"},
+        json={"device_ids": ["device-1", "device-2"]},
+    )
+    assert preview_resp.status_code == 200
+    assert preview_resp.json()["groups"][0]["action_type"] == "device_sync"
+
+    execute_resp = test_client.post(
+        "/api/azure/security/device-compliance/fix-plan/execute",
+        headers={"host": "azure.movedocs.com"},
+        json={
+            "device_ids": ["device-1", "device-2"],
+            "assignment_map": {"device-2": "user-1"},
+            "reason": "Smart remediation",
+        },
+    )
+    assert execute_resp.status_code == 200
+    assert execute_resp.json()["batch_id"] == "batch-1"
+
+    batch_resp = test_client.get(
+        "/api/azure/security/device-compliance/job-batches/batch-1",
+        headers={"host": "azure.movedocs.com"},
+    )
+    assert batch_resp.status_code == 200
+    assert batch_resp.json()["status"] == "completed"
+
+    results_resp = test_client.get(
+        "/api/azure/security/device-compliance/job-batches/batch-1/results",
+        headers={"host": "azure.movedocs.com"},
+    )
+    assert results_resp.status_code == 200
+    assert results_resp.json()[0]["action_type"] == "device_sync"
 
 
 def test_security_device_action_routes_require_manage_users(test_client):

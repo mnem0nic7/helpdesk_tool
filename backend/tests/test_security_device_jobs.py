@@ -107,3 +107,74 @@ def test_device_job_manager_processes_queued_actions(tmp_path, monkeypatch):
     assert results[0]["success"] is True
     assert stub_cache.refresh_calls == [(("device_compliance",), True)]
 
+
+def test_device_job_manager_requires_primary_user_id_for_reassignment(tmp_path, monkeypatch):
+    manager = SecurityDeviceJobManager(db_path=str(Path(tmp_path) / "security_device_jobs.db"))
+    monkeypatch.setattr("security_device_jobs.user_admin_providers", _StubProviderRegistry())
+    monkeypatch.setattr("security_device_jobs.azure_cache", _StubAzureCache())
+
+    try:
+        manager.create_job(
+            action_type="device_reassign_primary_user",
+            device_ids=["device-1"],
+            reason="Assign owner",
+            params={},
+            confirm_device_count=None,
+            confirm_device_names=None,
+            requested_by_email="tech@example.com",
+            requested_by_name="Tech User",
+        )
+    except SecurityDeviceJobError as exc:
+        assert "primary_user_id" in str(exc)
+    else:
+        raise AssertionError("Expected primary-user validation failure")
+
+
+def test_device_job_manager_creates_and_reports_batch_status(tmp_path, monkeypatch):
+    manager = SecurityDeviceJobManager(db_path=str(Path(tmp_path) / "security_device_jobs.db"))
+    monkeypatch.setattr("security_device_jobs.user_admin_providers", _StubProviderRegistry())
+    monkeypatch.setattr("security_device_jobs.azure_cache", _StubAzureCache())
+
+    batch = manager.create_batch(
+        plan_items=[
+            {
+                "device_id": "device-1",
+                "device_name": "Payroll Laptop",
+                "action_type": "device_sync",
+                "params": {},
+            },
+            {
+                "device_id": "device-2",
+                "device_name": "Warehouse Tablet",
+                "action_type": "device_reassign_primary_user",
+                "params": {"primary_user_id": "user-2", "primary_user_display_name": "Grace Hopper"},
+                "assignment_user_id": "user-2",
+                "assignment_user_display_name": "Grace Hopper",
+            },
+        ],
+        reason="Smart remediation",
+        confirm_device_count=None,
+        confirm_device_names=None,
+        requested_by_email="tech@example.com",
+        requested_by_name="Tech User",
+    )
+
+    assert batch["item_count"] == 2
+    assert len(batch["child_jobs"]) == 2
+    assert batch["status"] == "queued"
+
+    child_jobs = [manager._claim_next_job(), manager._claim_next_job()]
+    for child_job in child_jobs:
+        assert child_job is not None
+        manager._process_job(child_job["job_id"])
+
+    stored_batch = manager.get_batch(batch["batch_id"])
+    assert stored_batch is not None
+    assert stored_batch["status"] == "completed"
+    assert stored_batch["results_ready"] is True
+
+    results = manager.get_batch_results(batch["batch_id"])
+    assert len(results) == 2
+    assert {item["action_type"] for item in results} == {"device_sync", "device_reassign_primary_user"}
+    assignment_result = next(item for item in results if item["action_type"] == "device_reassign_primary_user")
+    assert assignment_result["assignment_user_display_name"] == "Grace Hopper"

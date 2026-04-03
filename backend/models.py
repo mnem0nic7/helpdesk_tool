@@ -1500,6 +1500,7 @@ SecurityDeviceActionType = Literal[
     "device_remote_lock",
     "device_retire",
     "device_wipe",
+    "device_reassign_primary_user",
 ]
 
 SecurityDeviceActionJobStatus = Literal["queued", "running", "completed", "failed"]
@@ -1523,6 +1524,10 @@ class SecurityDeviceComplianceDevice(BaseModel):
     risk_level: Literal["critical", "high", "medium", "low"] = "low"
     finding_tags: list[str] = Field(default_factory=list)
     recommended_actions: list[str] = Field(default_factory=list)
+    recommended_fix_action: SecurityDeviceActionType | None = None
+    recommended_fix_label: str = ""
+    recommended_fix_reason: str = ""
+    recommended_fix_requires_user_picker: bool = False
     action_ready: bool = False
     supported_actions: list[SecurityDeviceActionType] = Field(default_factory=list)
     action_blockers: list[str] = Field(default_factory=list)
@@ -1586,6 +1591,118 @@ class SecurityDeviceActionJobResult(BaseModel):
     error: str = ""
     before_summary: dict[str, Any] = Field(default_factory=dict)
     after_summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class SecurityDeviceFixPlanRequest(BaseModel):
+    """Request a deterministic remediation preview for selected devices."""
+
+    device_ids: list[str] = Field(default_factory=list, min_length=1)
+
+
+class SecurityDeviceFixPlanDevice(BaseModel):
+    """One device inside a smart remediation preview."""
+
+    device_id: str
+    device_name: str = ""
+    risk_level: Literal["critical", "high", "medium", "low"] = "low"
+    finding_tags: list[str] = Field(default_factory=list)
+    action_type: SecurityDeviceActionType | None = None
+    action_label: str = ""
+    action_reason: str = ""
+    requires_primary_user: bool = False
+    primary_users: list[UserAdminReference] = Field(default_factory=list)
+    skip_reason: str = ""
+
+
+class SecurityDeviceFixPlanGroup(BaseModel):
+    """Grouped action summary for a smart remediation preview."""
+
+    action_type: SecurityDeviceActionType
+    action_label: str
+    device_count: int = 0
+    device_ids: list[str] = Field(default_factory=list)
+    device_names: list[str] = Field(default_factory=list)
+    requires_confirmation: bool = False
+
+
+class SecurityDeviceFixPlanResponse(BaseModel):
+    """Deterministic smart-remediation preview for selected devices."""
+
+    generated_at: str
+    device_ids: list[str] = Field(default_factory=list)
+    items: list[SecurityDeviceFixPlanDevice] = Field(default_factory=list)
+    groups: list[SecurityDeviceFixPlanGroup] = Field(default_factory=list)
+    devices_requiring_primary_user: list[SecurityDeviceFixPlanDevice] = Field(default_factory=list)
+    skipped_devices: list[SecurityDeviceFixPlanDevice] = Field(default_factory=list)
+    destructive_device_count: int = 0
+    destructive_device_names: list[str] = Field(default_factory=list)
+    requires_destructive_confirmation: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SecurityDeviceFixPlanExecuteRequest(BaseModel):
+    """Execute an approved smart-remediation preview."""
+
+    device_ids: list[str] = Field(default_factory=list, min_length=1)
+    reason: str = ""
+    assignment_map: dict[str, str] = Field(default_factory=dict)
+    confirm_device_count: int | None = None
+    confirm_device_names: list[str] = Field(default_factory=list)
+
+
+class SecurityDeviceActionBatchJob(BaseModel):
+    """One child action job inside a smart-remediation batch."""
+
+    child_job_id: str
+    action_type: SecurityDeviceActionType
+    action_label: str = ""
+    device_ids: list[str] = Field(default_factory=list)
+    device_names: list[str] = Field(default_factory=list)
+    status: SecurityDeviceActionJobStatus = "queued"
+    progress_current: int = 0
+    progress_total: int = 0
+    success_count: int = 0
+    failure_count: int = 0
+    results_ready: bool = False
+
+
+class SecurityDeviceActionBatchStatus(BaseModel):
+    """Status payload for a smart-remediation device batch."""
+
+    batch_id: str
+    status: SecurityDeviceActionJobStatus = "queued"
+    requested_by_email: str
+    requested_by_name: str = ""
+    requested_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    progress_current: int = 0
+    progress_total: int = 0
+    progress_message: str = ""
+    success_count: int = 0
+    failure_count: int = 0
+    results_ready: bool = False
+    item_count: int = 0
+    destructive_device_count: int = 0
+    destructive_device_names: list[str] = Field(default_factory=list)
+    child_jobs: list[SecurityDeviceActionBatchJob] = Field(default_factory=list)
+    error: str = ""
+
+
+class SecurityDeviceActionBatchResult(BaseModel):
+    """Per-device result row for a smart-remediation batch."""
+
+    device_id: str
+    device_name: str = ""
+    action_type: SecurityDeviceActionType
+    action_label: str = ""
+    child_job_id: str = ""
+    status: SecurityDeviceActionJobStatus = "queued"
+    success: bool | None = None
+    summary: str = ""
+    error: str = ""
+    assignment_user_id: str = ""
+    assignment_user_display_name: str = ""
 
 
 class AzureRecommendationDismissRequest(BaseModel):
