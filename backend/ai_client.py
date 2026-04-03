@@ -1232,6 +1232,9 @@ def _invoke_ollama(
         payload["keep_alive"] = OLLAMA_KEEP_ALIVE
     if json_output:
         payload["format"] = "json"
+        # Qwen 3.x models expose Ollama thinking mode and can return an empty
+        # final content body for JSON tasks unless we explicitly disable it.
+        payload["think"] = False
     options: dict[str, Any] = {}
     if temperature is not None:
         options["temperature"] = temperature

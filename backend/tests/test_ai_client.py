@@ -392,6 +392,7 @@ def test_invoke_ollama_includes_keep_alive_json_format_and_output_cap(monkeypatc
     assert captured["timeout"] == 30.0
     assert payload["keep_alive"] == "15m"
     assert payload["format"] == "json"
+    assert payload["think"] is False
     assert payload["options"]["num_predict"] == 123
 
 
