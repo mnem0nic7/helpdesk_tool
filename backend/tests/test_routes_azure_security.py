@@ -27,6 +27,8 @@ from models import (
     SecurityDirectoryRoleReviewMembership,
     SecurityDirectoryRoleReviewResponse,
     SecurityDirectoryRoleReviewRole,
+    SecurityWorkspaceLaneSummary,
+    SecurityWorkspaceSummaryResponse,
     UserAdminReference,
 )
 
@@ -98,6 +100,41 @@ def _response() -> SecurityAccessReviewResponse:
         ],
         warnings=[],
         scope_notes=["This v1 review focuses on Azure RBAC role assignments from the cached inventory dataset."],
+    )
+
+
+def _workspace_summary_response(_session=None) -> SecurityWorkspaceSummaryResponse:
+    return SecurityWorkspaceSummaryResponse(
+        generated_at="2026-04-04T04:00:00Z",
+        workspace_last_refresh="2026-04-04T03:55:00Z",
+        lanes=[
+            SecurityWorkspaceLaneSummary(
+                lane_key="access-review",
+                status="critical",
+                attention_score=540,
+                attention_count=2,
+                attention_label="2 critical principals need review",
+                secondary_label="5 privileged assignments cached across 3 principals.",
+                refresh_at="2026-04-04T03:50:00Z",
+                access_available=True,
+                access_message="",
+                warning_count=0,
+                summary_mode="count",
+            ),
+            SecurityWorkspaceLaneSummary(
+                lane_key="directory-role-review",
+                status="healthy",
+                attention_score=28,
+                attention_count=0,
+                attention_label="Live review available",
+                secondary_label="3 directory roles cached.",
+                refresh_at="2026-04-04T03:50:00Z",
+                access_available=True,
+                access_message="Live directory-role membership lookup is available when you open the lane.",
+                warning_count=0,
+                summary_mode="availability",
+            ),
+        ],
     )
 
 
@@ -371,8 +408,32 @@ def test_security_access_review_route_returns_payload_on_azure_host(test_client,
     assert payload["assignments"][0]["role_name"] == "Owner"
 
 
+def test_security_workspace_summary_route_returns_payload_on_azure_host(test_client, monkeypatch):
+    import routes_azure_security
+
+    monkeypatch.setattr(routes_azure_security, "build_security_workspace_summary", _workspace_summary_response)
+
+    resp = test_client.get(
+        "/api/azure/security/workspace-summary",
+        headers={"host": "azure.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["workspace_last_refresh"] == "2026-04-04T03:55:00Z"
+    assert payload["lanes"][0]["lane_key"] == "access-review"
+    assert payload["lanes"][1]["summary_mode"] == "availability"
+
+
 def test_security_access_review_route_is_azure_only(test_client):
     resp = test_client.get("/api/azure/security/access-review")
+
+    assert resp.status_code == 404
+    assert "only available on azure.movedocs.com" in resp.json()["detail"]
+
+
+def test_security_workspace_summary_route_is_azure_only(test_client):
+    resp = test_client.get("/api/azure/security/workspace-summary")
 
     assert resp.status_code == 404
     assert "only available on azure.movedocs.com" in resp.json()["detail"]

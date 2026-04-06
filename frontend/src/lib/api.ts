@@ -2619,6 +2619,26 @@ export interface SecurityConditionalAccessTrackerResponse {
   scope_notes: string[];
 }
 
+export interface SecurityWorkspaceLaneSummary {
+  lane_key: string;
+  status: "critical" | "warning" | "healthy" | "info" | "unavailable";
+  attention_score: number;
+  attention_count: number;
+  attention_label: string;
+  secondary_label: string;
+  refresh_at: string;
+  access_available: boolean;
+  access_message: string;
+  warning_count: number;
+  summary_mode: "count" | "availability" | "manual";
+}
+
+export interface SecurityWorkspaceSummaryResponse {
+  generated_at: string;
+  workspace_last_refresh: string;
+  lanes: SecurityWorkspaceLaneSummary[];
+}
+
 export type SecurityDeviceActionType =
   | "device_sync"
   | "device_remote_lock"
@@ -3866,6 +3886,10 @@ export const api = {
 
   getAzureSecurityAccessReview(): Promise<SecurityAccessReviewResponse> {
     return fetchJSON<SecurityAccessReviewResponse>("/api/azure/security/access-review");
+  },
+
+  getAzureSecurityWorkspaceSummary(): Promise<SecurityWorkspaceSummaryResponse> {
+    return fetchJSON<SecurityWorkspaceSummaryResponse>("/api/azure/security/workspace-summary");
   },
 
   getAzureSecurityBreakGlassValidation(): Promise<SecurityBreakGlassValidationResponse> {

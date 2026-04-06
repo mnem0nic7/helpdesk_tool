@@ -23,6 +23,7 @@ from models import (
     SecurityDeviceFixPlanRequest,
     SecurityDeviceFixPlanResponse,
     SecurityDirectoryRoleReviewResponse,
+    SecurityWorkspaceSummaryResponse,
 )
 from security_application_hygiene import build_security_application_hygiene
 from security_access_review import build_security_access_review
@@ -31,6 +32,7 @@ from security_conditional_access_tracker import build_security_conditional_acces
 from security_device_compliance import build_security_device_compliance_review, build_security_device_fix_plan
 from security_device_jobs import SecurityDeviceJobError, security_device_jobs
 from security_directory_role_review import build_security_directory_role_review
+from security_workspace_summary import build_security_workspace_summary
 from site_context import get_current_site_scope
 
 router = APIRouter(prefix="/api/azure/security")
@@ -50,6 +52,14 @@ def get_security_access_review(
 ) -> SecurityAccessReviewResponse:
     _ensure_azure_site()
     return build_security_access_review()
+
+
+@router.get("/workspace-summary", response_model=SecurityWorkspaceSummaryResponse)
+def get_security_workspace_summary(
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> SecurityWorkspaceSummaryResponse:
+    _ensure_azure_site()
+    return build_security_workspace_summary(session)
 
 
 @router.get("/app-hygiene", response_model=SecurityAppHygieneResponse)

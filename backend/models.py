@@ -1495,6 +1495,30 @@ class SecurityConditionalAccessTrackerResponse(BaseModel):
     scope_notes: list[str] = Field(default_factory=list)
 
 
+class SecurityWorkspaceLaneSummary(BaseModel):
+    """One lightweight lane summary for the Azure security workspace hub."""
+
+    lane_key: str
+    status: Literal["critical", "warning", "healthy", "info", "unavailable"] = "info"
+    attention_score: int = 0
+    attention_count: int = 0
+    attention_label: str = ""
+    secondary_label: str = ""
+    refresh_at: str = ""
+    access_available: bool = True
+    access_message: str = ""
+    warning_count: int = 0
+    summary_mode: Literal["count", "availability", "manual"] = "count"
+
+
+class SecurityWorkspaceSummaryResponse(BaseModel):
+    """Top-level Azure security workspace summary payload."""
+
+    generated_at: str
+    workspace_last_refresh: str = ""
+    lanes: list[SecurityWorkspaceLaneSummary] = Field(default_factory=list)
+
+
 SecurityDeviceActionType = Literal[
     "device_sync",
     "device_remote_lock",
