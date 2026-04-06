@@ -246,6 +246,22 @@ describe("AzureSecurityUserReviewPage", () => {
     expect(scoped.getAllByText("Bulk User 60").length).toBeGreaterThan(0);
   });
 
+  it("opens the exception editor in a drawer and lets operators cancel it", async () => {
+    render(<AzureSecurityUserReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "User Review" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Mark exception" })[0]);
+
+    const drawer = await screen.findByRole("dialog", { name: "Mark finding as exception" });
+    expect(within(drawer).getByText("Emergency Admin")).toBeInTheDocument();
+    expect(within(drawer).getByPlaceholderText(/Document why this finding is expected/i)).toBeInTheDocument();
+
+    fireEvent.click(within(drawer).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog", { name: "Mark finding as exception" })).not.toBeInTheDocument();
+  });
+
   it("lets operators mark and restore approved finding exceptions", async () => {
     mockApi.getAzureSecurityFindingExceptions
       .mockResolvedValueOnce([])
@@ -273,12 +289,14 @@ describe("AzureSecurityUserReviewPage", () => {
     expect(await screen.findByRole("heading", { name: "User Review" })).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole("button", { name: "Mark exception" })[0]);
-    fireEvent.change(screen.getByPlaceholderText(/Document why this finding is expected/i), {
+    const drawer = await screen.findByRole("dialog", { name: "Mark finding as exception" });
+    fireEvent.change(within(drawer).getByPlaceholderText(/Document why this finding is expected/i), {
       target: { value: "Expected stale emergency account." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save exception" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "Save exception" }));
 
     expect(await screen.findByText(/is now an active exception/i)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Mark finding as exception" })).not.toBeInTheDocument();
     expect(mockApi.createAzureSecurityFindingException).toHaveBeenCalledWith(
       expect.objectContaining({
         entity_id: "user-1",

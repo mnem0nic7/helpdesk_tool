@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
@@ -90,6 +90,130 @@ function SectionFrame({
       </div>
       <div className="mt-5">{children}</div>
     </section>
+  );
+}
+
+function FindingExceptionDrawer({
+  user,
+  flags,
+  reason,
+  isSaving,
+  onReasonChange,
+  onClose,
+  onSave,
+}: {
+  user: AzureDirectoryObject | null;
+  flags: string[];
+  reason: string;
+  isSaving: boolean;
+  onReasonChange: (value: string) => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  const reasonInputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (!user) return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    const focusTimer = window.setTimeout(() => reasonInputRef.current?.focus(), 0);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [onClose, user]);
+
+  if (!user) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/35 backdrop-blur-[1px]" onClick={onClose}>
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="security-finding-exception-drawer-title"
+        aria-describedby="security-finding-exception-drawer-description"
+        data-testid="security-finding-exception-drawer"
+        className="flex h-full w-full max-w-2xl flex-col overflow-hidden bg-white shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="border-b border-slate-200 px-6 py-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Security finding exception</div>
+              <h2 id="security-finding-exception-drawer-title" className="mt-1 text-2xl font-semibold text-slate-900">
+                Mark finding as exception
+              </h2>
+              <p id="security-finding-exception-drawer-description" className="mt-2 max-w-xl text-sm text-slate-600">
+                Approved exceptions stay out of User Review, Guest Access Review, Account Health, and the shared workspace summary until you restore them.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
+          <section className="rounded-2xl border border-slate-200 bg-slate-50/80 p-5">
+            <div className="text-base font-semibold text-slate-900">{user.display_name}</div>
+            <div className="mt-1 text-sm text-slate-500">{user.principal_name || user.mail || user.id}</div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {flags.map((flag) => (
+                <span key={`${user.id}-${flag}`} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 shadow-sm ring-1 ring-slate-200">
+                  {flag}
+                </span>
+              ))}
+            </div>
+          </section>
+
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Exception reason</span>
+            <textarea
+              ref={reasonInputRef}
+              value={reason}
+              onChange={(event) => onReasonChange(event.target.value)}
+              rows={8}
+              placeholder="Document why this finding is expected or approved so it can stay out of recurring security reports."
+              className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+            />
+          </label>
+          <p className="text-xs text-slate-500">Exceptions require a reason so future reviews can understand why the finding was suppressed.</p>
+        </div>
+
+        <div className="border-t border-slate-200 bg-white px-6 py-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={isSaving || reason.trim().length === 0}
+              className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSaving ? "Saving exception..." : "Save exception"}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Keep in review queue
+            </button>
+          </div>
+        </div>
+      </aside>
+    </div>
   );
 }
 
@@ -227,6 +351,10 @@ export default function AzureSecurityUserReviewPage() {
     () => sliceSecurityReviewPage(filteredUsers, reviewPagination.pageStart, reviewPagination.pageSize),
     [filteredUsers, reviewPagination.pageSize, reviewPagination.pageStart],
   );
+  const closeExceptionDraft = useCallback(() => {
+    setExceptionDraftUser(null);
+    setExceptionReason("");
+  }, []);
 
   if (usersQuery.isLoading) {
     return <AzurePageSkeleton titleWidth="w-56" subtitleWidth="w-[42rem]" statCount={6} sectionCount={3} />;
@@ -278,67 +406,6 @@ export default function AzureSecurityUserReviewPage() {
           }`}
         >
           {exceptionNotice.text}
-        </section>
-      ) : null}
-
-      {exceptionDraftUser ? (
-        <section className="rounded-2xl border border-amber-200 bg-amber-50/70 p-5 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-900">Mark finding as exception</h2>
-              <p className="mt-1 text-sm text-slate-600">
-                Approved exceptions stay out of User Review, Guest Access Review, Account Health, and the shared workspace summary until you restore them.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setExceptionDraftUser(null);
-                setExceptionReason("");
-              }}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-            >
-              Cancel
-            </button>
-          </div>
-          <div className="mt-4 rounded-2xl border border-white/80 bg-white/80 p-4">
-            <div className="text-base font-semibold text-slate-900">{exceptionDraftUser.display_name}</div>
-            <div className="mt-1 text-sm text-slate-500">{exceptionDraftUser.principal_name || exceptionDraftUser.mail || exceptionDraftUser.id}</div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {exceptionDraftFlags.map((flag) => (
-                <span key={`${exceptionDraftUser.id}-${flag}`} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
-                  {flag}
-                </span>
-              ))}
-            </div>
-          </div>
-          <label className="mt-4 block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Exception reason</span>
-            <textarea
-              value={exceptionReason}
-              onChange={(event) => setExceptionReason(event.target.value)}
-              rows={4}
-              placeholder="Document why this finding is expected or approved so it can stay out of recurring security reports."
-              className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
-            />
-          </label>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                if (!exceptionDraftUser) return;
-                createExceptionMutation.mutate({
-                  user: exceptionDraftUser,
-                  reason: exceptionReason,
-                });
-              }}
-              disabled={createExceptionMutation.isPending || exceptionReason.trim().length === 0}
-              className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {createExceptionMutation.isPending ? "Saving exception..." : "Save exception"}
-            </button>
-            <span className="self-center text-xs text-slate-500">Exceptions require a reason so future reviews can understand why the finding was suppressed.</span>
-          </div>
         </section>
       ) : null}
 
@@ -575,6 +642,22 @@ export default function AzureSecurityUserReviewPage() {
           </div>
         )}
       </SectionFrame>
+
+      <FindingExceptionDrawer
+        user={exceptionDraftUser}
+        flags={exceptionDraftFlags}
+        reason={exceptionReason}
+        isSaving={createExceptionMutation.isPending}
+        onReasonChange={setExceptionReason}
+        onClose={closeExceptionDraft}
+        onSave={() => {
+          if (!exceptionDraftUser) return;
+          createExceptionMutation.mutate({
+            user: exceptionDraftUser,
+            reason: exceptionReason,
+          });
+        }}
+      />
     </div>
   );
 }
