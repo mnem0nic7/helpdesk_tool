@@ -1520,6 +1520,15 @@ class SecurityWorkspaceSummaryResponse(BaseModel):
 
 
 SecurityFindingExceptionScope = Literal["directory_user"]
+SecurityFindingExceptionFindingKey = Literal[
+    "all-findings",
+    "priority-user",
+    "stale-signin",
+    "disabled-licensed",
+    "guest-user",
+    "on-prem-synced",
+    "shared-service",
+]
 SecurityFindingExceptionStatus = Literal["active", "restored"]
 
 
@@ -1528,6 +1537,8 @@ class SecurityFindingException(BaseModel):
 
     exception_id: str
     scope: SecurityFindingExceptionScope = "directory_user"
+    finding_key: SecurityFindingExceptionFindingKey = "all-findings"
+    finding_label: str = "All user-security findings"
     entity_id: str
     entity_label: str = ""
     entity_subtitle: str = ""
@@ -1545,6 +1556,8 @@ class SecurityFindingExceptionCreateRequest(BaseModel):
     """Request body for marking a security finding as an approved exception."""
 
     scope: SecurityFindingExceptionScope = "directory_user"
+    finding_key: SecurityFindingExceptionFindingKey = "all-findings"
+    finding_label: str = Field(default="All user-security findings", max_length=120)
     entity_id: str = Field(min_length=1, max_length=200)
     entity_label: str = Field(default="", max_length=300)
     entity_subtitle: str = Field(default="", max_length=300)

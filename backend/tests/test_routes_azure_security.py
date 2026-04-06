@@ -143,6 +143,8 @@ def _finding_exception_payload() -> dict[str, str]:
     return SecurityFindingException(
         exception_id="exception-1",
         scope="directory_user",
+        finding_key="guest-user",
+        finding_label="Guest users",
         entity_id="user-1",
         entity_label="Guest Vendor",
         entity_subtitle="guest.vendor@example.com",
@@ -479,6 +481,8 @@ def test_security_finding_exceptions_routes_round_trip_on_azure_host(test_client
         headers={"host": "azure.movedocs.com"},
         json={
             "scope": "directory_user",
+            "finding_key": "guest-user",
+            "finding_label": "Guest users",
             "entity_id": "user-1",
             "entity_label": "Guest Vendor",
             "entity_subtitle": "guest.vendor@example.com",

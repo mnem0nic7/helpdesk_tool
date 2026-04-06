@@ -2640,11 +2640,21 @@ export interface SecurityWorkspaceSummaryResponse {
 }
 
 export type SecurityFindingExceptionScope = "directory_user";
+export type SecurityFindingExceptionFindingKey =
+  | "all-findings"
+  | "priority-user"
+  | "stale-signin"
+  | "disabled-licensed"
+  | "guest-user"
+  | "on-prem-synced"
+  | "shared-service";
 export type SecurityFindingExceptionStatus = "active" | "restored";
 
 export interface SecurityFindingException {
   exception_id: string;
   scope: SecurityFindingExceptionScope;
+  finding_key: SecurityFindingExceptionFindingKey;
+  finding_label: string;
   entity_id: string;
   entity_label: string;
   entity_subtitle: string;
@@ -2660,6 +2670,8 @@ export interface SecurityFindingException {
 
 export interface SecurityFindingExceptionCreateRequest {
   scope: SecurityFindingExceptionScope;
+  finding_key: SecurityFindingExceptionFindingKey;
+  finding_label?: string;
   entity_id: string;
   entity_label?: string;
   entity_subtitle?: string;

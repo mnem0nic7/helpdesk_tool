@@ -212,6 +212,8 @@ describe("AzureSecurityGuestAccessReviewPage", () => {
       {
         exception_id: "exception-1",
         scope: "directory_user",
+        finding_key: "guest-user",
+        finding_label: "Guest users",
         entity_id: "guest-1",
         entity_label: "Guest Vendor",
         entity_subtitle: "guest.vendor@example.com",
@@ -229,7 +231,7 @@ describe("AzureSecurityGuestAccessReviewPage", () => {
     render(<AzureSecurityGuestAccessReviewPage />);
 
     expect(await screen.findByRole("heading", { name: "Guest Access Review" })).toBeInTheDocument();
-    expect(screen.getByText(/approved user exception/i)).toBeInTheDocument();
+    expect(screen.getByText(/approved finding exception/i)).toBeInTheDocument();
     expect(screen.queryByText("Guest Vendor")).not.toBeInTheDocument();
   });
 });

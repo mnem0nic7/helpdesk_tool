@@ -44,6 +44,12 @@ _GUEST_SIGNIN_THRESHOLD_DAYS = 90
 _ACCOUNT_HEALTH_PASSWORD_THRESHOLD_DAYS = 90
 _ACCOUNT_HEALTH_GUEST_THRESHOLD_DAYS = 180
 _DIRECTORY_USER_EXCEPTION_SCOPE = "directory_user"
+_ALL_FINDINGS_EXCEPTION_KEY = "all-findings"
+_PRIORITY_USER_EXCEPTION_KEY = "priority-user"
+_STALE_SIGNIN_EXCEPTION_KEY = "stale-signin"
+_DISABLED_LICENSED_EXCEPTION_KEY = "disabled-licensed"
+_GUEST_USER_EXCEPTION_KEY = "guest-user"
+_SHARED_SERVICE_EXCEPTION_KEY = "shared-service"
 _PRIVILEGE_CRITICAL_FLAG_MARKERS = (
     "guest user holds privileged azure rbac access",
     "external or foreign group holds privileged azure rbac access",
@@ -202,12 +208,32 @@ def _is_shared_or_service(user: dict[str, Any]) -> bool:
     return str(_extra(user).get("account_class") or "") == "shared_or_service"
 
 
-def _active_directory_user_exception_ids() -> set[str]:
+def _active_directory_user_exceptions() -> dict[str, set[str]]:
     try:
-        return security_finding_exception_store.get_active_entity_ids(_DIRECTORY_USER_EXCEPTION_SCOPE)
+        exception_map: dict[str, set[str]] = {}
+        for item in security_finding_exception_store.list_exceptions(scope=_DIRECTORY_USER_EXCEPTION_SCOPE, active_only=True):
+            entity_id = str(item.get("entity_id") or "").strip()
+            finding_key = str(item.get("finding_key") or _ALL_FINDINGS_EXCEPTION_KEY).strip() or _ALL_FINDINGS_EXCEPTION_KEY
+            if not entity_id:
+                continue
+            exception_map.setdefault(entity_id, set()).add(finding_key)
+        return exception_map
     except Exception:
         logger.exception("Failed to load active security finding exceptions for workspace summary")
-        return set()
+        return {}
+
+
+def _has_directory_user_exception(
+    exception_map: dict[str, set[str]],
+    entity_id: str,
+    *finding_keys: str,
+) -> bool:
+    active_keys = exception_map.get(str(entity_id or "").strip())
+    if not active_keys:
+        return False
+    if _ALL_FINDINGS_EXCEPTION_KEY in active_keys:
+        return True
+    return any(key in active_keys for key in finding_keys)
 
 
 def _security_copilot_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummary:
@@ -629,28 +655,41 @@ def _conditional_access_summary(status: dict[str, Any], session: dict[str, Any])
 
 def _user_review_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummary:
     warning_count, refresh_at = _dataset_warning_count(status, [("directory", 4)])
-    exception_ids = _active_directory_user_exception_ids()
-    users = [
-        user
-        for user in (azure_cache._snapshot("users") or [])
-        if str(user.get("id") or "").strip() not in exception_ids
-    ]
+    exception_map = _active_directory_user_exceptions()
+    users = azure_cache._snapshot("users") or []
     priority_count = 0
     critical_priority_count = 0
     disabled_licensed_count = 0
     stale_signin_count = 0
 
     for user in users:
+        user_id = str(user.get("id") or "").strip()
         extra = _extra(user)
         priority_score = _int_value(extra.get("priority_score"))
         priority_band = str(extra.get("priority_band") or "").strip().lower()
-        if priority_score >= _PRIORITY_THRESHOLD:
+        if priority_score >= _PRIORITY_THRESHOLD and not _has_directory_user_exception(
+            exception_map,
+            user_id,
+            _PRIORITY_USER_EXCEPTION_KEY,
+        ):
             priority_count += 1
-        if priority_score >= _PRIORITY_CRITICAL_THRESHOLD or priority_band == "critical":
+        if (priority_score >= _PRIORITY_CRITICAL_THRESHOLD or priority_band == "critical") and not _has_directory_user_exception(
+            exception_map,
+            user_id,
+            _PRIORITY_USER_EXCEPTION_KEY,
+        ):
             critical_priority_count += 1
-        if user.get("enabled") is False and _is_licensed_user(user):
+        if (
+            user.get("enabled") is False
+            and _is_licensed_user(user)
+            and not _has_directory_user_exception(exception_map, user_id, _DISABLED_LICENSED_EXCEPTION_KEY)
+        ):
             disabled_licensed_count += 1
-        if _has_no_successful_signin(user, 30):
+        if _has_no_successful_signin(user, 30) and not _has_directory_user_exception(
+            exception_map,
+            user_id,
+            _STALE_SIGNIN_EXCEPTION_KEY,
+        ):
             stale_signin_count += 1
 
     if critical_priority_count:
@@ -691,12 +730,8 @@ def _user_review_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummary
 
 def _guest_access_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummary:
     warning_count, refresh_at = _dataset_warning_count(status, [("directory", 4)])
-    exception_ids = _active_directory_user_exception_ids()
-    users = [
-        user
-        for user in (azure_cache._snapshot("users") or [])
-        if str(user.get("id") or "").strip() not in exception_ids
-    ]
+    exception_map = _active_directory_user_exceptions()
+    users = azure_cache._snapshot("users") or []
     groups = azure_cache._snapshot("groups") or []
     app_registrations = azure_cache._snapshot("applications") or []
     priority_guest_count = 0
@@ -718,12 +753,27 @@ def _guest_access_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummar
     for user in users:
         if not _is_guest_user(user):
             continue
+        user_id = str(user.get("id") or "").strip()
+        if _has_directory_user_exception(exception_map, user_id, _GUEST_USER_EXCEPTION_KEY):
+            continue
         extra = _extra(user)
         created_days = _days_since(str(extra.get("created_datetime") or ""))
         old_guest = created_days is not None and created_days >= _GUEST_AGE_THRESHOLD_DAYS
-        stale_signin = _has_no_successful_signin(user, _GUEST_SIGNIN_THRESHOLD_DAYS)
-        disabled_guest = user.get("enabled") is False
-        licensed_guest = _is_licensed_user(user)
+        stale_signin = _has_no_successful_signin(user, _GUEST_SIGNIN_THRESHOLD_DAYS) and not _has_directory_user_exception(
+            exception_map,
+            user_id,
+            _STALE_SIGNIN_EXCEPTION_KEY,
+        )
+        disabled_guest = user.get("enabled") is False and not _has_directory_user_exception(
+            exception_map,
+            user_id,
+            _DISABLED_LICENSED_EXCEPTION_KEY,
+        )
+        licensed_guest = _is_licensed_user(user) and not _has_directory_user_exception(
+            exception_map,
+            user_id,
+            _DISABLED_LICENSED_EXCEPTION_KEY,
+        )
         if old_guest or stale_signin or disabled_guest or licensed_guest:
             priority_guest_count += 1
         if disabled_guest or licensed_guest:
@@ -767,12 +817,8 @@ def _guest_access_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummar
 
 def _account_health_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummary:
     warning_count, refresh_at = _dataset_warning_count(status, [("directory", 4)])
-    exception_ids = _active_directory_user_exception_ids()
-    users = [
-        user
-        for user in (azure_cache._snapshot("users") or [])
-        if str(user.get("id") or "").strip() not in exception_ids
-    ]
+    exception_map = _active_directory_user_exceptions()
+    users = azure_cache._snapshot("users") or []
     issue_user_ids: set[str] = set()
     stale_password_count = 0
     disabled_count = 0
@@ -782,11 +828,22 @@ def _account_health_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSumm
     for user in users:
         extra = _extra(user)
         user_id = str(user.get("id") or "")
-        if user.get("enabled") is False and not _is_shared_or_service(user):
+        if _has_directory_user_exception(exception_map, user_id, _ALL_FINDINGS_EXCEPTION_KEY):
+            continue
+        if (
+            user.get("enabled") is False
+            and not _is_shared_or_service(user)
+            and not (
+                _is_licensed_user(user)
+                and _has_directory_user_exception(exception_map, user_id, _DISABLED_LICENSED_EXCEPTION_KEY)
+            )
+        ):
             disabled_count += 1
             issue_user_ids.add(user_id)
 
         if _is_guest_user(user):
+            if _has_directory_user_exception(exception_map, user_id, _GUEST_USER_EXCEPTION_KEY):
+                continue
             created_days = _days_since(str(extra.get("created_datetime") or ""))
             if created_days is not None and created_days >= _ACCOUNT_HEALTH_GUEST_THRESHOLD_DAYS:
                 old_guest_count += 1
@@ -794,6 +851,8 @@ def _account_health_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSumm
             continue
 
         if _is_shared_or_service(user):
+            if _has_directory_user_exception(exception_map, user_id, _SHARED_SERVICE_EXCEPTION_KEY):
+                continue
             continue
 
         if user.get("enabled") is True and not _is_on_prem_synced(user):

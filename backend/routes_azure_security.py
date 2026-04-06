@@ -87,6 +87,8 @@ def create_security_finding_exception(
     return SecurityFindingException.model_validate(
         security_finding_exception_store.upsert_exception(
             scope=body.scope,
+            finding_key=body.finding_key,
+            finding_label=body.finding_label,
             entity_id=body.entity_id,
             entity_label=body.entity_label,
             entity_subtitle=body.entity_subtitle,

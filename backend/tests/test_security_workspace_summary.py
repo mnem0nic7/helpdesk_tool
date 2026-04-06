@@ -91,7 +91,7 @@ def test_workspace_summary_marks_user_review_as_warning_for_priority_queue(monke
     assert lane.attention_count == 1
 
 
-def test_workspace_summary_excludes_active_directory_user_exceptions(monkeypatch):
+def test_workspace_summary_excludes_wildcard_directory_user_exceptions(monkeypatch):
     monkeypatch.setattr(security_workspace_summary.azure_cache, "status", lambda: _status())
     monkeypatch.setattr(
         security_workspace_summary.azure_cache,
@@ -115,8 +115,26 @@ def test_workspace_summary_excludes_active_directory_user_exceptions(monkeypatch
     )
     monkeypatch.setattr(
         security_workspace_summary.security_finding_exception_store,
-        "get_active_entity_ids",
-        lambda scope: {"user-1"} if scope == "directory_user" else set(),
+        "list_exceptions",
+        lambda **_: [
+            {
+                "exception_id": "exception-1",
+                "scope": "directory_user",
+                "finding_key": "all-findings",
+                "finding_label": "All user-security findings",
+                "entity_id": "user-1",
+                "entity_label": "Approved Exception",
+                "entity_subtitle": "approved@example.com",
+                "reason": "Legacy wildcard exception.",
+                "status": "active",
+                "created_at": _iso(hours_ago=1),
+                "updated_at": _iso(hours_ago=1),
+                "created_by_email": "reviewer@example.com",
+                "created_by_name": "Review User",
+                "updated_by_email": "reviewer@example.com",
+                "updated_by_name": "Review User",
+            }
+        ],
     )
 
     summary = security_workspace_summary.build_security_workspace_summary({"email": "test@example.com"})
@@ -124,6 +142,59 @@ def test_workspace_summary_excludes_active_directory_user_exceptions(monkeypatch
     assert _lane(summary, "user-review").attention_count == 0
     assert _lane(summary, "guest-access-review").attention_count == 0
     assert _lane(summary, "account-health").attention_count == 0
+
+
+def test_workspace_summary_excludes_only_matching_finding_exceptions(monkeypatch):
+    monkeypatch.setattr(security_workspace_summary.azure_cache, "status", lambda: _status())
+    monkeypatch.setattr(
+        security_workspace_summary.azure_cache,
+        "_snapshot",
+        lambda name: {
+            "users": [
+                {
+                    "id": "user-1",
+                    "display_name": "Guest Vendor",
+                    "enabled": True,
+                    "extra": {
+                        "user_type": "Guest",
+                        "account_class": "guest_external",
+                        "priority_score": "85",
+                        "priority_band": "critical",
+                        "last_successful_utc": "",
+                        "created_datetime": _iso(days_ago=400),
+                    },
+                }
+            ],
+        }.get(name, []),
+    )
+    monkeypatch.setattr(
+        security_workspace_summary.security_finding_exception_store,
+        "list_exceptions",
+        lambda **_: [
+            {
+                "exception_id": "exception-1",
+                "scope": "directory_user",
+                "finding_key": "stale-signin",
+                "finding_label": "Stale sign-ins",
+                "entity_id": "user-1",
+                "entity_label": "Guest Vendor",
+                "entity_subtitle": "guest@example.com",
+                "reason": "Expected inactive guest sign-in.",
+                "status": "active",
+                "created_at": _iso(hours_ago=1),
+                "updated_at": _iso(hours_ago=1),
+                "created_by_email": "reviewer@example.com",
+                "created_by_name": "Review User",
+                "updated_by_email": "reviewer@example.com",
+                "updated_by_name": "Review User",
+            }
+        ],
+    )
+
+    summary = security_workspace_summary.build_security_workspace_summary({"email": "test@example.com"})
+
+    assert "0 stale sign-ins" in _lane(summary, "user-review").secondary_label
+    assert _lane(summary, "guest-access-review").attention_count == 1
 
 
 def test_workspace_summary_marks_access_gated_lanes_unavailable(monkeypatch):

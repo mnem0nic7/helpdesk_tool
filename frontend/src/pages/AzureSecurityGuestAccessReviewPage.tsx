@@ -7,11 +7,15 @@ import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPag
 import { api, type AzureDirectoryObject } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { daysSince, formatDate, lastSuccessfulText, hasNoSuccessfulSignIn, isLicensedUser, licenseCount, missingFieldLabel } from "../lib/azureSecurityUsers.ts";
+import {
+  buildSecurityFindingExceptionIndex,
+  DIRECTORY_USER_EXCEPTION_SCOPE,
+  hasSecurityFindingException,
+} from "../lib/securityFindingExceptions.ts";
 
 type GuestFocus = "priority" | "all-guests" | "old-guests" | "stale-guests" | "disabled-guests";
 
 const EMPTY_DIRECTORY_OBJECTS: AzureDirectoryObject[] = [];
-const DIRECTORY_USER_EXCEPTION_SCOPE = "directory_user";
 
 function formatTimestamp(value: string | null | undefined): string {
   if (!value) return "No refresh recorded";
@@ -229,18 +233,21 @@ export default function AzureSecurityGuestAccessReviewPage() {
   const loading = [usersQuery, groupsQuery, appRegistrationsQuery].some((query) => query.isLoading);
   const failure = [usersQuery, groupsQuery, appRegistrationsQuery].find((query) => query.isError);
 
-  const activeExceptionIds = useMemo(
-    () => new Set((exceptionsQuery.data ?? []).map((exception) => exception.entity_id)),
+  const exceptionIndex = useMemo(
+    () => buildSecurityFindingExceptionIndex(exceptionsQuery.data ?? []),
     [exceptionsQuery.data],
   );
-  const users = useMemo(
-    () => (usersQuery.data ?? EMPTY_DIRECTORY_OBJECTS).filter((user) => !activeExceptionIds.has(user.id)),
-    [activeExceptionIds, usersQuery.data],
-  );
+  const users = usersQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
   const groups = groupsQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
   const appRegistrations = appRegistrationsQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
 
-  const guestUsers = useMemo(() => users.filter((user) => isGuestUser(user)), [users]);
+  const guestUsers = useMemo(
+    () =>
+      users.filter(
+        (user) => isGuestUser(user) && !hasSecurityFindingException(exceptionIndex, user.id, "guest-user"),
+      ),
+    [exceptionIndex, users],
+  );
   const collaborationGroups = useMemo(() => groups.filter((group) => isCollaborationSurface(group)), [groups]);
   const externalAudienceApps = useMemo(
     () => appRegistrations.filter((app) => isExternalAudienceApp(app)),
@@ -252,12 +259,16 @@ export default function AzureSecurityGuestAccessReviewPage() {
     [guestAgeThreshold, guestUsers],
   );
   const staleGuestCount = useMemo(
-    () => guestUsers.filter((user) => hasStaleGuestSignIn(user, signInThreshold)).length,
-    [guestUsers, signInThreshold],
+    () =>
+      guestUsers.filter((user) => !hasSecurityFindingException(exceptionIndex, user.id, "stale-signin") && hasStaleGuestSignIn(user, signInThreshold)).length,
+    [exceptionIndex, guestUsers, signInThreshold],
   );
   const disabledGuestCount = useMemo(
-    () => guestUsers.filter((user) => user.enabled === false).length,
-    [guestUsers],
+    () =>
+      guestUsers.filter(
+        (user) => user.enabled === false && !(isLicensedUser(user) && hasSecurityFindingException(exceptionIndex, user.id, "disabled-licensed")),
+      ).length,
+    [exceptionIndex, guestUsers],
   );
 
   const priorityGuests = useMemo(
@@ -266,9 +277,9 @@ export default function AzureSecurityGuestAccessReviewPage() {
         .filter(
           (user) =>
             isOldGuest(user, guestAgeThreshold) ||
-            hasStaleGuestSignIn(user, signInThreshold) ||
-            user.enabled === false ||
-            isLicensedUser(user),
+            (!hasSecurityFindingException(exceptionIndex, user.id, "stale-signin") && hasStaleGuestSignIn(user, signInThreshold)) ||
+            (user.enabled === false && !(isLicensedUser(user) && hasSecurityFindingException(exceptionIndex, user.id, "disabled-licensed"))) ||
+            (isLicensedUser(user) && !hasSecurityFindingException(exceptionIndex, user.id, "disabled-licensed")),
         )
         .sort(
           (left, right) =>
@@ -277,7 +288,7 @@ export default function AzureSecurityGuestAccessReviewPage() {
             left.display_name.localeCompare(right.display_name),
         )
         .slice(0, 8),
-    [guestAgeThreshold, guestUsers, signInThreshold],
+    [exceptionIndex, guestAgeThreshold, guestUsers, signInThreshold],
   );
 
   const filteredGuests = useMemo(() => {
@@ -290,8 +301,18 @@ export default function AzureSecurityGuestAccessReviewPage() {
     return sorted.filter((user) => {
       if (focus === "priority" && !priorityGuests.some((candidate) => candidate.id === user.id)) return false;
       if (focus === "old-guests" && !isOldGuest(user, guestAgeThreshold)) return false;
-      if (focus === "stale-guests" && !hasStaleGuestSignIn(user, signInThreshold)) return false;
-      if (focus === "disabled-guests" && user.enabled !== false) return false;
+      if (
+        focus === "stale-guests" &&
+        (!hasStaleGuestSignIn(user, signInThreshold) || hasSecurityFindingException(exceptionIndex, user.id, "stale-signin"))
+      ) {
+        return false;
+      }
+      if (
+        focus === "disabled-guests" &&
+        (user.enabled !== false || (isLicensedUser(user) && hasSecurityFindingException(exceptionIndex, user.id, "disabled-licensed")))
+      ) {
+        return false;
+      }
       return matchesSearch(
         [
           user.display_name,
@@ -305,7 +326,7 @@ export default function AzureSecurityGuestAccessReviewPage() {
         deferredSearch,
       );
     });
-  }, [deferredSearch, focus, guestAgeThreshold, guestUsers, priorityGuests, signInThreshold]);
+  }, [deferredSearch, exceptionIndex, focus, guestAgeThreshold, guestUsers, priorityGuests, signInThreshold]);
 
   const filteredGroups = useMemo(
     () =>
@@ -389,11 +410,11 @@ export default function AzureSecurityGuestAccessReviewPage() {
 
       {exceptionsQuery.isError ? (
         <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">
-          Security finding exceptions could not be loaded right now, so approved user exceptions may temporarily reappear in this guest review lane.
+          Security finding exceptions could not be loaded right now, so approved finding exceptions may temporarily reappear in this guest review lane.
         </section>
-      ) : (exceptionsQuery.data ?? []).length > 0 ? (
+      ) : (exceptionsQuery.data ?? []).some((exception) => ["all-findings", "guest-user", "stale-signin", "disabled-licensed"].includes(exception.finding_key)) ? (
         <section className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900 shadow-sm">
-          {(exceptionsQuery.data ?? []).length.toLocaleString()} approved user exception{(exceptionsQuery.data ?? []).length === 1 ? "" : "s"} are currently hidden from this guest review lane.
+          {(exceptionsQuery.data ?? []).filter((exception) => ["all-findings", "guest-user", "stale-signin", "disabled-licensed"].includes(exception.finding_key)).length.toLocaleString()} approved finding exception{(exceptionsQuery.data ?? []).filter((exception) => ["all-findings", "guest-user", "stale-signin", "disabled-licensed"].includes(exception.finding_key)).length === 1 ? "" : "s"} are currently shaping this guest review lane.
         </section>
       ) : null}
 

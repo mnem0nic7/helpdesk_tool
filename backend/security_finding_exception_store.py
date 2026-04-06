@@ -13,6 +13,8 @@ from sqlite_utils import connect_sqlite
 
 _STATUS_ACTIVE = "active"
 _STATUS_RESTORED = "restored"
+_ALL_FINDINGS_KEY = "all-findings"
+_ALL_FINDINGS_LABEL = "All user-security findings"
 
 
 def _utcnow_iso() -> str:
@@ -42,6 +44,8 @@ class SecurityFindingExceptionStore:
                 CREATE TABLE IF NOT EXISTS security_finding_exceptions (
                     exception_id TEXT NOT NULL PRIMARY KEY,
                     scope TEXT NOT NULL,
+                    finding_key TEXT NOT NULL DEFAULT 'all-findings',
+                    finding_label TEXT NOT NULL DEFAULT 'All user-security findings',
                     entity_id TEXT NOT NULL,
                     entity_label TEXT NOT NULL DEFAULT '',
                     entity_subtitle TEXT NOT NULL DEFAULT '',
@@ -54,9 +58,41 @@ class SecurityFindingExceptionStore:
                     updated_by_email TEXT NOT NULL DEFAULT '',
                     updated_by_name TEXT NOT NULL DEFAULT ''
                 );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_security_finding_exceptions_scope_entity
-                    ON security_finding_exceptions (scope, entity_id);
+                """
+            )
+            columns = {
+                _text(row["name"]) if hasattr(row, "__getitem__") else _text(row[1])
+                for row in conn.execute("PRAGMA table_info(security_finding_exceptions)").fetchall()
+            }
+            if "finding_key" not in columns:
+                conn.execute(
+                    f"ALTER TABLE security_finding_exceptions ADD COLUMN finding_key TEXT NOT NULL DEFAULT '{_ALL_FINDINGS_KEY}'"
+                )
+            if "finding_label" not in columns:
+                conn.execute(
+                    f"ALTER TABLE security_finding_exceptions ADD COLUMN finding_label TEXT NOT NULL DEFAULT '{_ALL_FINDINGS_LABEL}'"
+                )
+            conn.execute(
+                """
+                UPDATE security_finding_exceptions
+                SET
+                    finding_key = CASE
+                        WHEN TRIM(COALESCE(finding_key, '')) = '' THEN ?
+                        ELSE TRIM(finding_key)
+                    END,
+                    finding_label = CASE
+                        WHEN TRIM(COALESCE(finding_label, '')) = '' THEN ?
+                        ELSE TRIM(finding_label)
+                    END
+                WHERE TRIM(COALESCE(finding_key, '')) = '' OR TRIM(COALESCE(finding_label, '')) = ''
+                """,
+                (_ALL_FINDINGS_KEY, _ALL_FINDINGS_LABEL),
+            )
+            conn.executescript(
+                """
+                DROP INDEX IF EXISTS idx_security_finding_exceptions_scope_entity;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_security_finding_exceptions_scope_entity_finding
+                    ON security_finding_exceptions (scope, entity_id, finding_key);
                 CREATE INDEX IF NOT EXISTS idx_security_finding_exceptions_scope_status
                     ON security_finding_exceptions (scope, status, updated_at DESC);
                 """
@@ -67,6 +103,8 @@ class SecurityFindingExceptionStore:
         return {
             "exception_id": _text(row["exception_id"]),
             "scope": _text(row["scope"]) or "directory_user",
+            "finding_key": _text(row["finding_key"]) or _ALL_FINDINGS_KEY,
+            "finding_label": _text(row["finding_label"]) or _ALL_FINDINGS_LABEL,
             "entity_id": _text(row["entity_id"]),
             "entity_label": _text(row["entity_label"]),
             "entity_subtitle": _text(row["entity_subtitle"]),
@@ -90,6 +128,8 @@ class SecurityFindingExceptionStore:
                 SELECT
                     exception_id,
                     scope,
+                    finding_key,
+                    finding_label,
                     entity_id,
                     entity_label,
                     entity_subtitle,
@@ -123,6 +163,8 @@ class SecurityFindingExceptionStore:
                 SELECT
                     exception_id,
                     scope,
+                    finding_key,
+                    finding_label,
                     entity_id,
                     entity_label,
                     entity_subtitle,
@@ -142,17 +184,25 @@ class SecurityFindingExceptionStore:
             ).fetchall()
         return [self._row_to_payload(row) for row in rows]
 
-    def get_active_entity_ids(self, scope: str) -> set[str]:
+    def get_active_entity_ids(self, scope: str, finding_keys: set[str] | None = None) -> set[str]:
+        normalized_keys = {_text(item) for item in (finding_keys or set()) if _text(item)}
         return {
             _text(item.get("entity_id"))
             for item in self.list_exceptions(scope=scope, active_only=True)
             if _text(item.get("entity_id"))
+            and (
+                not normalized_keys
+                or _text(item.get("finding_key")) == _ALL_FINDINGS_KEY
+                or _text(item.get("finding_key")) in normalized_keys
+            )
         }
 
     def upsert_exception(
         self,
         *,
         scope: str,
+        finding_key: str = _ALL_FINDINGS_KEY,
+        finding_label: str = _ALL_FINDINGS_LABEL,
         entity_id: str,
         entity_label: str = "",
         entity_subtitle: str = "",
@@ -161,9 +211,11 @@ class SecurityFindingExceptionStore:
         actor_name: str = "",
     ) -> dict[str, Any]:
         scope_text = _text(scope)
+        finding_key_text = _text(finding_key) or _ALL_FINDINGS_KEY
+        finding_label_text = _text(finding_label) or _ALL_FINDINGS_LABEL
         entity_id_text = _text(entity_id)
         if not scope_text or not entity_id_text:
-            raise ValueError("Both scope and entity_id are required.")
+            raise ValueError("Scope, finding_key, and entity_id are required.")
 
         timestamp = _utcnow_iso()
         reason_text = _text(reason)
@@ -176,9 +228,9 @@ class SecurityFindingExceptionStore:
                     """
                     SELECT exception_id, created_at, created_by_email, created_by_name
                     FROM security_finding_exceptions
-                    WHERE scope = ? AND entity_id = ?
+                    WHERE scope = ? AND entity_id = ? AND finding_key = ?
                     """,
-                    (scope_text, entity_id_text),
+                    (scope_text, entity_id_text, finding_key_text),
                 ).fetchone()
 
                 if existing:
@@ -187,6 +239,7 @@ class SecurityFindingExceptionStore:
                         """
                         UPDATE security_finding_exceptions
                         SET
+                            finding_label = ?,
                             entity_label = ?,
                             entity_subtitle = ?,
                             reason = ?,
@@ -197,6 +250,7 @@ class SecurityFindingExceptionStore:
                         WHERE exception_id = ?
                         """,
                         (
+                            finding_label_text,
                             _text(entity_label),
                             _text(entity_subtitle),
                             reason_text,
@@ -214,6 +268,8 @@ class SecurityFindingExceptionStore:
                         INSERT INTO security_finding_exceptions (
                             exception_id,
                             scope,
+                            finding_key,
+                            finding_label,
                             entity_id,
                             entity_label,
                             entity_subtitle,
@@ -225,11 +281,13 @@ class SecurityFindingExceptionStore:
                             created_by_name,
                             updated_by_email,
                             updated_by_name
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             exception_id,
                             scope_text,
+                            finding_key_text,
+                            finding_label_text,
                             entity_id_text,
                             _text(entity_label),
                             _text(entity_subtitle),

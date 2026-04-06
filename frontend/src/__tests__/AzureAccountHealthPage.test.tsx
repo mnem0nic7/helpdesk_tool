@@ -165,6 +165,8 @@ describe("AzureAccountHealthPage", () => {
       {
         exception_id: "exception-1",
         scope: "directory_user",
+        finding_key: "all-findings",
+        finding_label: "All user-security findings",
         entity_id: "user-1",
         entity_label: "Stale Password User",
         entity_subtitle: "stale@example.com",
@@ -182,7 +184,7 @@ describe("AzureAccountHealthPage", () => {
     render(<AzureAccountHealthPage />);
 
     expect(await screen.findByRole("heading", { name: "Account Health" })).toBeInTheDocument();
-    expect(screen.getByText(/approved user exception/i)).toBeInTheDocument();
+    expect(screen.getByText(/approved finding exception/i)).toBeInTheDocument();
     expect(screen.getByText("Stale Passwords (90d)")).toBeInTheDocument();
     expect(screen.queryByText("Stale Password User")).not.toBeInTheDocument();
   });

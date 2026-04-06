@@ -3,7 +3,12 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { AzureSecurityLaneHero, AzureSecurityMetricCard } from "../components/AzureSecurityLane.tsx";
-import { api, type AzureDirectoryObject, type SecurityFindingException } from "../lib/api.ts";
+import {
+  api,
+  type AzureDirectoryObject,
+  type SecurityFindingException,
+  type SecurityFindingExceptionFindingKey,
+} from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import {
@@ -18,12 +23,21 @@ import {
   missingFieldLabel,
   priorityScore,
 } from "../lib/azureSecurityUsers.ts";
+import {
+  buildSecurityFindingExceptionIndex,
+  defaultUserReviewFindingKey,
+  DIRECTORY_USER_EXCEPTION_SCOPE,
+  findingOptionsForUserReview,
+  getSecurityFindingException,
+  getSecurityFindingLabel,
+  hasSecurityFindingException,
+  matchingUserReviewFindingKeys,
+} from "../lib/securityFindingExceptions.ts";
 
 type UserFocus = "all" | "priority" | "stale" | "disabled-licensed" | "guests" | "synced" | "shared-service";
 type ExceptionNotice = { tone: "success" | "error"; text: string } | null;
 
 const EMPTY_DIRECTORY_OBJECTS: AzureDirectoryObject[] = [];
-const DIRECTORY_USER_EXCEPTION_SCOPE = "directory_user";
 
 function formatTimestamp(value: string | null | undefined): string {
   if (!value) return "No refresh recorded";
@@ -59,7 +73,7 @@ function userFlags(user: AzureDirectoryObject): string[] {
 }
 
 function isExceptionEligible(user: AzureDirectoryObject): boolean {
-  return priorityScore(user) >= 60 || userFlags(user).length > 0;
+  return matchingUserReviewFindingKeys(user).length > 0;
 }
 
 function actorLabel(exception: SecurityFindingException): string {
@@ -96,16 +110,24 @@ function SectionFrame({
 function FindingExceptionDrawer({
   user,
   flags,
+  findingOptions,
+  findingKey,
+  existingException,
   reason,
   isSaving,
+  onFindingKeyChange,
   onReasonChange,
   onClose,
   onSave,
 }: {
   user: AzureDirectoryObject | null;
   flags: string[];
+  findingOptions: Array<{ key: SecurityFindingExceptionFindingKey; label: string }>;
+  findingKey: SecurityFindingExceptionFindingKey;
+  existingException: SecurityFindingException | null;
   reason: string;
   isSaving: boolean;
+  onFindingKeyChange: (value: SecurityFindingExceptionFindingKey) => void;
   onReasonChange: (value: string) => void;
   onClose: () => void;
   onSave: () => void;
@@ -180,6 +202,21 @@ function FindingExceptionDrawer({
           </section>
 
           <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Exception applies to</span>
+            <select
+              value={findingKey}
+              onChange={(event) => onFindingKeyChange(event.target.value as SecurityFindingExceptionFindingKey)}
+              className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+            >
+              {findingOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Exception reason</span>
             <textarea
               ref={reasonInputRef}
@@ -190,7 +227,11 @@ function FindingExceptionDrawer({
               className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
             />
           </label>
-          <p className="text-xs text-slate-500">Exceptions require a reason so future reviews can understand why the finding was suppressed.</p>
+          <p className="text-xs text-slate-500">
+            {existingException
+              ? `This ${existingException.finding_label.toLowerCase()} exception already exists. Saving will update its reason.`
+              : "Exceptions require a reason so future reviews can understand why the finding was suppressed."}
+          </p>
         </div>
 
         <div className="border-t border-slate-200 bg-white px-6 py-4">
@@ -201,7 +242,7 @@ function FindingExceptionDrawer({
               disabled={isSaving || reason.trim().length === 0}
               className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isSaving ? "Saving exception..." : "Save exception"}
+              {isSaving ? "Saving exception..." : existingException ? "Update exception" : "Save exception"}
             </button>
             <button
               type="button"
@@ -222,6 +263,7 @@ export default function AzureSecurityUserReviewPage() {
   const [search, setSearch] = useState("");
   const [focus, setFocus] = useState<UserFocus>("priority");
   const [exceptionDraftUser, setExceptionDraftUser] = useState<AzureDirectoryObject | null>(null);
+  const [exceptionDraftFindingKey, setExceptionDraftFindingKey] = useState<SecurityFindingExceptionFindingKey>("priority-user");
   const [exceptionReason, setExceptionReason] = useState("");
   const [exceptionNotice, setExceptionNotice] = useState<ExceptionNotice>(null);
   const deferredSearch = useDeferredValue(search);
@@ -243,14 +285,11 @@ export default function AzureSecurityUserReviewPage() {
   });
 
   const activeExceptions = exceptionsQuery.data ?? [];
-  const activeExceptionIds = useMemo(
-    () => new Set(activeExceptions.map((exception) => exception.entity_id)),
+  const exceptionIndex = useMemo(
+    () => buildSecurityFindingExceptionIndex(activeExceptions),
     [activeExceptions],
   );
-  const users = useMemo(
-    () => (usersQuery.data ?? EMPTY_DIRECTORY_OBJECTS).filter((user) => !activeExceptionIds.has(user.id)),
-    [activeExceptionIds, usersQuery.data],
-  );
+  const users = usersQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
 
   const invalidateSecurityFindingViews = () => {
     queryClient.invalidateQueries({ queryKey: ["azure", "security", "finding-exceptions", DIRECTORY_USER_EXCEPTION_SCOPE] }).catch(() => undefined);
@@ -258,9 +297,11 @@ export default function AzureSecurityUserReviewPage() {
   };
 
   const createExceptionMutation = useMutation({
-    mutationFn: (body: { user: AzureDirectoryObject; reason: string }) =>
+    mutationFn: (body: { user: AzureDirectoryObject; reason: string; findingKey: SecurityFindingExceptionFindingKey }) =>
       api.createAzureSecurityFindingException({
         scope: DIRECTORY_USER_EXCEPTION_SCOPE,
+        finding_key: body.findingKey,
+        finding_label: getSecurityFindingLabel(body.findingKey),
         entity_id: body.user.id,
         entity_label: body.user.display_name,
         entity_subtitle: body.user.principal_name || body.user.mail || body.user.id,
@@ -269,7 +310,7 @@ export default function AzureSecurityUserReviewPage() {
     onSuccess: (exception) => {
       setExceptionNotice({
         tone: "success",
-        text: `${exception.entity_label || "This finding"} is now an active exception and will stay out of the shared user-security queues until restored.`,
+        text: `${exception.entity_label || "This finding"} is now an active ${exception.finding_label.toLowerCase()} exception.`,
       });
       setExceptionDraftUser(null);
       setExceptionReason("");
@@ -300,22 +341,40 @@ export default function AzureSecurityUserReviewPage() {
     },
   });
 
-  const disabledLicensedCount = useMemo(
-    () => users.filter((user) => user.enabled === false && isLicensedUser(user)).length,
-    [users],
+  const hasFindingException = useCallback(
+    (userId: string, findingKey: SecurityFindingExceptionFindingKey) =>
+      hasSecurityFindingException(exceptionIndex, userId, findingKey),
+    [exceptionIndex],
   );
-  const staleSignInCount = useMemo(() => users.filter((user) => hasNoSuccessfulSignIn(user)).length, [users]);
-  const guestCount = useMemo(() => users.filter((user) => user.extra.user_type === "Guest").length, [users]);
-  const onPremCount = useMemo(() => users.filter((user) => isOnPremSynced(user)).length, [users]);
-  const sharedServiceCount = useMemo(() => users.filter((user) => isSharedOrService(user)).length, [users]);
+
+  const disabledLicensedCount = useMemo(
+    () => users.filter((user) => user.enabled === false && isLicensedUser(user) && !hasFindingException(user.id, "disabled-licensed")).length,
+    [hasFindingException, users],
+  );
+  const staleSignInCount = useMemo(
+    () => users.filter((user) => hasNoSuccessfulSignIn(user) && !hasFindingException(user.id, "stale-signin")).length,
+    [hasFindingException, users],
+  );
+  const guestCount = useMemo(
+    () => users.filter((user) => user.extra.user_type === "Guest" && !hasFindingException(user.id, "guest-user")).length,
+    [hasFindingException, users],
+  );
+  const onPremCount = useMemo(
+    () => users.filter((user) => isOnPremSynced(user) && !hasFindingException(user.id, "on-prem-synced")).length,
+    [hasFindingException, users],
+  );
+  const sharedServiceCount = useMemo(
+    () => users.filter((user) => isSharedOrService(user) && !hasFindingException(user.id, "shared-service")).length,
+    [hasFindingException, users],
+  );
 
   const priorityQueue = useMemo(
     () =>
       [...users]
-        .filter((user) => priorityScore(user) >= 60)
+        .filter((user) => priorityScore(user) >= 60 && !hasFindingException(user.id, "priority-user"))
         .sort((left, right) => priorityScore(right) - priorityScore(left) || left.display_name.localeCompare(right.display_name))
         .slice(0, 8),
-    [users],
+    [hasFindingException, users],
   );
 
   const filteredUsers = useMemo(() => {
@@ -323,12 +382,18 @@ export default function AzureSecurityUserReviewPage() {
       (left, right) => priorityScore(right) - priorityScore(left) || left.display_name.localeCompare(right.display_name),
     );
     return sorted.filter((user) => {
-      if (focus === "priority" && priorityScore(user) < 60) return false;
-      if (focus === "stale" && !hasNoSuccessfulSignIn(user)) return false;
-      if (focus === "disabled-licensed" && !(user.enabled === false && isLicensedUser(user))) return false;
-      if (focus === "guests" && user.extra.user_type !== "Guest") return false;
-      if (focus === "synced" && !isOnPremSynced(user)) return false;
-      if (focus === "shared-service" && !isSharedOrService(user)) return false;
+      if (focus === "priority" && (priorityScore(user) < 60 || hasFindingException(user.id, "priority-user"))) return false;
+      if (focus === "stale" && (!hasNoSuccessfulSignIn(user) || hasFindingException(user.id, "stale-signin"))) return false;
+      if (
+        focus === "disabled-licensed" &&
+        (!(user.enabled === false && isLicensedUser(user)) || hasFindingException(user.id, "disabled-licensed"))
+      ) {
+        return false;
+      }
+      if (focus === "guests" && (user.extra.user_type !== "Guest" || hasFindingException(user.id, "guest-user"))) return false;
+      if (focus === "synced" && (!isOnPremSynced(user) || hasFindingException(user.id, "on-prem-synced"))) return false;
+      if (focus === "shared-service" && (!isSharedOrService(user) || hasFindingException(user.id, "shared-service"))) return false;
+      if (focus === "all" && hasFindingException(user.id, "all-findings")) return false;
       return matchesSearch(
         [
           user.display_name,
@@ -342,7 +407,7 @@ export default function AzureSecurityUserReviewPage() {
         deferredSearch,
       );
     });
-  }, [deferredSearch, focus, users]);
+  }, [deferredSearch, focus, hasFindingException, users]);
   const reviewPagination = useSecurityReviewPagination(
     `${deferredSearch}|${focus}|${filteredUsers.length}`,
     filteredUsers.length,
@@ -353,6 +418,7 @@ export default function AzureSecurityUserReviewPage() {
   );
   const closeExceptionDraft = useCallback(() => {
     setExceptionDraftUser(null);
+    setExceptionDraftFindingKey("priority-user");
     setExceptionReason("");
   }, []);
 
@@ -369,11 +435,18 @@ export default function AzureSecurityUserReviewPage() {
   }
 
   const directoryDataset = statusQuery.data?.datasets?.find((dataset) => dataset.key === "directory");
+  const exceptionDraftOptions = exceptionDraftUser ? findingOptionsForUserReview(exceptionDraftUser) : [];
   const exceptionDraftFlags = exceptionDraftUser ? userFlags(exceptionDraftUser) : [];
+  const existingDraftException = exceptionDraftUser
+    ? getSecurityFindingException(exceptionIndex, exceptionDraftUser.id, exceptionDraftFindingKey)
+    : null;
 
-  const startExceptionDraft = (user: AzureDirectoryObject) => {
+  const startExceptionDraft = (user: AzureDirectoryObject, draftFocus: UserFocus = focus) => {
+    const nextFindingKey = defaultUserReviewFindingKey(draftFocus, user);
+    const existingException = getSecurityFindingException(exceptionIndex, user.id, nextFindingKey);
     setExceptionDraftUser(user);
-    setExceptionReason("");
+    setExceptionDraftFindingKey(nextFindingKey);
+    setExceptionReason(existingException?.reason || "");
     setExceptionNotice(null);
   };
 
@@ -493,7 +566,7 @@ export default function AzureSecurityUserReviewPage() {
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => startExceptionDraft(user)}
+                    onClick={() => startExceptionDraft(user, "priority")}
                     className="inline-flex items-center rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 transition hover:bg-amber-100"
                   >
                     Mark exception
@@ -590,7 +663,7 @@ export default function AzureSecurityUserReviewPage() {
                         {isExceptionEligible(user) ? (
                           <button
                             type="button"
-                            onClick={() => startExceptionDraft(user)}
+                            onClick={() => startExceptionDraft(user, focus)}
                             className="inline-flex items-center rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 transition hover:bg-amber-100"
                           >
                             Mark exception
@@ -621,7 +694,12 @@ export default function AzureSecurityUserReviewPage() {
               <section key={exception.exception_id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <h3 className="text-lg font-semibold text-slate-900">{exception.entity_label || exception.entity_id}</h3>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-lg font-semibold text-slate-900">{exception.entity_label || exception.entity_id}</h3>
+                      <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
+                        {exception.finding_label}
+                      </span>
+                    </div>
                     <div className="mt-1 text-sm text-slate-500">{exception.entity_subtitle || exception.entity_id}</div>
                   </div>
                   <button
@@ -646,8 +724,16 @@ export default function AzureSecurityUserReviewPage() {
       <FindingExceptionDrawer
         user={exceptionDraftUser}
         flags={exceptionDraftFlags}
+        findingOptions={exceptionDraftOptions}
+        findingKey={exceptionDraftFindingKey}
+        existingException={existingDraftException}
         reason={exceptionReason}
         isSaving={createExceptionMutation.isPending}
+        onFindingKeyChange={(nextFindingKey) => {
+          if (!exceptionDraftUser) return;
+          setExceptionDraftFindingKey(nextFindingKey);
+          setExceptionReason(getSecurityFindingException(exceptionIndex, exceptionDraftUser.id, nextFindingKey)?.reason || "");
+        }}
         onReasonChange={setExceptionReason}
         onClose={closeExceptionDraft}
         onSave={() => {
@@ -655,6 +741,7 @@ export default function AzureSecurityUserReviewPage() {
           createExceptionMutation.mutate({
             user: exceptionDraftUser,
             reason: exceptionReason,
+            findingKey: exceptionDraftFindingKey,
           });
         }}
       />

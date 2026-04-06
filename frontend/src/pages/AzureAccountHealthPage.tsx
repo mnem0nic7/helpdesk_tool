@@ -6,8 +6,11 @@ import { AzureSecurityLaneHero } from "../components/AzureSecurityLane.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
-
-const DIRECTORY_USER_EXCEPTION_SCOPE = "directory_user";
+import {
+  buildSecurityFindingExceptionIndex,
+  DIRECTORY_USER_EXCEPTION_SCOPE,
+  hasSecurityFindingException,
+} from "../lib/securityFindingExceptions.ts";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -495,18 +498,20 @@ export default function AzureAccountHealthPage() {
     );
   }
 
-  const activeExceptionIds = new Set((exceptionsQuery.data ?? []).map((exception) => exception.entity_id));
-  const visibleUsers = users.filter((user) => !activeExceptionIds.has(user.id));
-  const scopedUsers = includeSharedService ? visibleUsers : visibleUsers.filter((user) => !isSharedOrService(user));
-  const disabledCount   = scopedUsers.filter((u) => u.enabled === false).length;
+  const exceptionIndex = buildSecurityFindingExceptionIndex(exceptionsQuery.data ?? []);
+  const visibleUsers = users.filter((user) => !hasSecurityFindingException(exceptionIndex, user.id, "all-findings"));
+  const scopedUsers = includeSharedService
+    ? visibleUsers.filter((user) => !hasSecurityFindingException(exceptionIndex, user.id, "shared-service"))
+    : visibleUsers.filter((user) => !isSharedOrService(user));
+  const disabledCount   = scopedUsers.filter((u) => u.enabled === false && !(String(u.extra.is_licensed || "").toLowerCase() === "true" && hasSecurityFindingException(exceptionIndex, u.id, "disabled-licensed"))).length;
   const staleCount      = scopedUsers.filter((u) => u.enabled && u.extra.on_prem_sync !== "true" && u.extra.user_type !== "Guest" && u.extra.last_password_change && daysSince(u.extra.last_password_change) >= staleThreshold).length;
-  const oldGuestCount   = visibleUsers.filter((u) => u.extra.user_type === "Guest" && u.extra.created_datetime && daysSince(u.extra.created_datetime) >= guestThreshold).length;
+  const oldGuestCount   = visibleUsers.filter((u) => u.extra.user_type === "Guest" && !hasSecurityFindingException(exceptionIndex, u.id, "guest-user") && u.extra.created_datetime && daysSince(u.extra.created_datetime) >= guestThreshold).length;
   const incompleteCount = scopedUsers.filter((u) => u.enabled && u.extra.user_type !== "Guest" && (!u.extra.department || !u.extra.job_title)).length;
   const totalIssues     = disabledCount + staleCount + oldGuestCount + incompleteCount;
   const triageRows = [
     ...scopedUsers.filter((u) => u.enabled && u.extra.on_prem_sync !== "true" && u.extra.user_type !== "Guest" && u.extra.last_password_change && daysSince(u.extra.last_password_change) >= staleThreshold),
-    ...scopedUsers.filter((u) => u.enabled === false),
-    ...visibleUsers.filter((u) => u.extra.user_type === "Guest" && u.extra.created_datetime && daysSince(u.extra.created_datetime) >= guestThreshold),
+    ...scopedUsers.filter((u) => u.enabled === false && !(String(u.extra.is_licensed || "").toLowerCase() === "true" && hasSecurityFindingException(exceptionIndex, u.id, "disabled-licensed"))),
+    ...visibleUsers.filter((u) => u.extra.user_type === "Guest" && !hasSecurityFindingException(exceptionIndex, u.id, "guest-user") && u.extra.created_datetime && daysSince(u.extra.created_datetime) >= guestThreshold),
     ...scopedUsers.filter((u) => u.enabled && u.extra.user_type !== "Guest" && (!u.extra.department || !u.extra.job_title)),
   ]
     .sort((a, b) => priorityScore(b) - priorityScore(a))
@@ -530,11 +535,11 @@ export default function AzureAccountHealthPage() {
 
       {exceptionsQuery.isError ? (
         <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">
-          Security finding exceptions could not be loaded right now, so approved user exceptions may temporarily reappear in this account health lane.
+          Security finding exceptions could not be loaded right now, so approved finding exceptions may temporarily reappear in this account health lane.
         </section>
-      ) : (exceptionsQuery.data ?? []).length > 0 ? (
+      ) : (exceptionsQuery.data ?? []).some((exception) => ["all-findings", "disabled-licensed", "guest-user", "shared-service"].includes(exception.finding_key)) ? (
         <section className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900 shadow-sm">
-          {(exceptionsQuery.data ?? []).length.toLocaleString()} approved user exception{(exceptionsQuery.data ?? []).length === 1 ? "" : "s"} are currently hidden from this account health lane.
+          {(exceptionsQuery.data ?? []).filter((exception) => ["all-findings", "disabled-licensed", "guest-user", "shared-service"].includes(exception.finding_key)).length.toLocaleString()} approved finding exception{(exceptionsQuery.data ?? []).filter((exception) => ["all-findings", "disabled-licensed", "guest-user", "shared-service"].includes(exception.finding_key)).length === 1 ? "" : "s"} are currently shaping this account health lane.
         </section>
       ) : null}
 

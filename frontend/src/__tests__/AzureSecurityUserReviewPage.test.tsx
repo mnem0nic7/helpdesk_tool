@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "../test-utils.tsx";
 import AzureSecurityUserReviewPage from "../pages/AzureSecurityUserReviewPage.tsx";
@@ -166,6 +166,8 @@ describe("AzureSecurityUserReviewPage", () => {
     mockApi.createAzureSecurityFindingException.mockImplementation(async (body: Record<string, unknown>) => ({
       exception_id: "exception-1",
       scope: "directory_user",
+      finding_key: String(body.finding_key || "priority-user"),
+      finding_label: String(body.finding_label || "Priority queue"),
       entity_id: String(body.entity_id || ""),
       entity_label: String(body.entity_label || ""),
       entity_subtitle: String(body.entity_subtitle || ""),
@@ -181,6 +183,8 @@ describe("AzureSecurityUserReviewPage", () => {
     mockApi.restoreAzureSecurityFindingException.mockResolvedValue({
       exception_id: "exception-1",
       scope: "directory_user",
+      finding_key: "priority-user",
+      finding_label: "Priority queue",
       entity_id: "user-1",
       entity_label: "Emergency Admin",
       entity_subtitle: "emergency.admin@example.com",
@@ -255,6 +259,7 @@ describe("AzureSecurityUserReviewPage", () => {
 
     const drawer = await screen.findByRole("dialog", { name: "Mark finding as exception" });
     expect(within(drawer).getByText("Emergency Admin")).toBeInTheDocument();
+    expect(within(drawer).getByDisplayValue("Priority queue")).toBeInTheDocument();
     expect(within(drawer).getByPlaceholderText(/Document why this finding is expected/i)).toBeInTheDocument();
 
     fireEvent.click(within(drawer).getByRole("button", { name: "Cancel" }));
@@ -269,6 +274,8 @@ describe("AzureSecurityUserReviewPage", () => {
         {
           exception_id: "exception-1",
           scope: "directory_user",
+          finding_key: "priority-user",
+          finding_label: "Priority queue",
           entity_id: "user-1",
           entity_label: "Emergency Admin",
           entity_subtitle: "emergency.admin@example.com",
@@ -295,17 +302,21 @@ describe("AzureSecurityUserReviewPage", () => {
     });
     fireEvent.click(within(drawer).getByRole("button", { name: "Save exception" }));
 
-    expect(await screen.findByText(/is now an active exception/i)).toBeInTheDocument();
+    expect(await screen.findByText(/is now an active .* exception/i)).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Mark finding as exception" })).not.toBeInTheDocument();
     expect(mockApi.createAzureSecurityFindingException).toHaveBeenCalledWith(
       expect.objectContaining({
+        finding_key: "priority-user",
         entity_id: "user-1",
         reason: "Expected stale emergency account.",
       }),
     );
 
-    expect(await screen.findByRole("heading", { name: "Active exceptions" })).toBeInTheDocument();
-    expect(screen.getByText("Expected stale emergency account.")).toBeInTheDocument();
+    const exceptionsHeading = await screen.findByRole("heading", { name: "Active exceptions" });
+    const exceptionsSection = exceptionsHeading.closest("section");
+    expect(exceptionsSection).not.toBeNull();
+    expect(within(exceptionsSection as HTMLElement).getByText("Priority queue")).toBeInTheDocument();
+    expect(within(exceptionsSection as HTMLElement).getByText("Expected stale emergency account.")).toBeInTheDocument();
     const prioritySection = screen.getByRole("heading", { name: "Priority queue" }).closest("section");
     const reviewSection = screen.getByRole("heading", { name: "Review queue" }).closest("section");
     expect(prioritySection).not.toBeNull();
@@ -317,5 +328,31 @@ describe("AzureSecurityUserReviewPage", () => {
 
     expect(await screen.findByText(/was restored to the security review queues/i)).toBeInTheDocument();
     expect(mockApi.restoreAzureSecurityFindingException).toHaveBeenCalledWith("exception-1");
+  });
+
+  it("lets operators choose a separate finding type before saving the exception", async () => {
+    render(<AzureSecurityUserReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "User Review" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Mark exception" })[0]);
+
+    const drawer = await screen.findByRole("dialog", { name: "Mark finding as exception" });
+    fireEvent.change(within(drawer).getByDisplayValue("Priority queue"), {
+      target: { value: "stale-signin" },
+    });
+    fireEvent.change(within(drawer).getByPlaceholderText(/Document why this finding is expected/i), {
+      target: { value: "Expected emergency account inactivity." },
+    });
+    fireEvent.click(within(drawer).getByRole("button", { name: "Save exception" }));
+
+    await waitFor(() => {
+      expect(mockApi.createAzureSecurityFindingException).toHaveBeenCalledWith(
+        expect.objectContaining({
+          finding_key: "stale-signin",
+          finding_label: "Stale sign-ins",
+        }),
+      );
+    });
   });
 });
