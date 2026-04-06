@@ -7,6 +7,8 @@ import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
 
+const DIRECTORY_USER_EXCEPTION_SCOPE = "directory_user";
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function daysSince(iso: string): number {
@@ -476,6 +478,11 @@ export default function AzureAccountHealthPage() {
     queryFn: () => api.getAzureStatus(),
     ...getPollingQueryOptions("slow_5m"),
   });
+  const exceptionsQuery = useQuery({
+    queryKey: ["azure", "security", "finding-exceptions", DIRECTORY_USER_EXCEPTION_SCOPE],
+    queryFn: () => api.getAzureSecurityFindingExceptions(DIRECTORY_USER_EXCEPTION_SCOPE),
+    ...getPollingQueryOptions("slow_5m"),
+  });
 
   if (isLoading) {
     return <AzurePageSkeleton titleWidth="w-56" subtitleWidth="w-[40rem]" statCount={5} sectionCount={5} />;
@@ -488,16 +495,18 @@ export default function AzureAccountHealthPage() {
     );
   }
 
-  const scopedUsers = includeSharedService ? users : users.filter((user) => !isSharedOrService(user));
+  const activeExceptionIds = new Set((exceptionsQuery.data ?? []).map((exception) => exception.entity_id));
+  const visibleUsers = users.filter((user) => !activeExceptionIds.has(user.id));
+  const scopedUsers = includeSharedService ? visibleUsers : visibleUsers.filter((user) => !isSharedOrService(user));
   const disabledCount   = scopedUsers.filter((u) => u.enabled === false).length;
   const staleCount      = scopedUsers.filter((u) => u.enabled && u.extra.on_prem_sync !== "true" && u.extra.user_type !== "Guest" && u.extra.last_password_change && daysSince(u.extra.last_password_change) >= staleThreshold).length;
-  const oldGuestCount   = users.filter((u) => u.extra.user_type === "Guest" && u.extra.created_datetime && daysSince(u.extra.created_datetime) >= guestThreshold).length;
+  const oldGuestCount   = visibleUsers.filter((u) => u.extra.user_type === "Guest" && u.extra.created_datetime && daysSince(u.extra.created_datetime) >= guestThreshold).length;
   const incompleteCount = scopedUsers.filter((u) => u.enabled && u.extra.user_type !== "Guest" && (!u.extra.department || !u.extra.job_title)).length;
   const totalIssues     = disabledCount + staleCount + oldGuestCount + incompleteCount;
   const triageRows = [
     ...scopedUsers.filter((u) => u.enabled && u.extra.on_prem_sync !== "true" && u.extra.user_type !== "Guest" && u.extra.last_password_change && daysSince(u.extra.last_password_change) >= staleThreshold),
     ...scopedUsers.filter((u) => u.enabled === false),
-    ...users.filter((u) => u.extra.user_type === "Guest" && u.extra.created_datetime && daysSince(u.extra.created_datetime) >= guestThreshold),
+    ...visibleUsers.filter((u) => u.extra.user_type === "Guest" && u.extra.created_datetime && daysSince(u.extra.created_datetime) >= guestThreshold),
     ...scopedUsers.filter((u) => u.enabled && u.extra.user_type !== "Guest" && (!u.extra.department || !u.extra.job_title)),
   ]
     .sort((a, b) => priorityScore(b) - priorityScore(a))
@@ -518,6 +527,16 @@ export default function AzureAccountHealthPage() {
           { label: "Open raw user inventory", to: "/users", tone: "secondary" },
         ]}
       />
+
+      {exceptionsQuery.isError ? (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">
+          Security finding exceptions could not be loaded right now, so approved user exceptions may temporarily reappear in this account health lane.
+        </section>
+      ) : (exceptionsQuery.data ?? []).length > 0 ? (
+        <section className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900 shadow-sm">
+          {(exceptionsQuery.data ?? []).length.toLocaleString()} approved user exception{(exceptionsQuery.data ?? []).length === 1 ? "" : "s"} are currently hidden from this account health lane.
+        </section>
+      ) : null}
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center gap-4 text-sm text-slate-600">
@@ -625,7 +644,7 @@ export default function AzureAccountHealthPage() {
       {/* Sections */}
       <StalePasswordSection users={scopedUsers} threshold={staleThreshold} />
       <DisabledSection users={scopedUsers} />
-      <OldGuestSection users={users} threshold={guestThreshold} />
+      <OldGuestSection users={visibleUsers} threshold={guestThreshold} />
       <IncompleteProfileSection users={scopedUsers} />
     </div>
   );

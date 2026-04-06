@@ -7,6 +7,9 @@ const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     getAzureUsers: vi.fn(),
     getAzureStatus: vi.fn(),
+    getAzureSecurityFindingExceptions: vi.fn(),
+    createAzureSecurityFindingException: vi.fn(),
+    restoreAzureSecurityFindingException: vi.fn(),
   },
 }));
 
@@ -159,6 +162,37 @@ describe("AzureSecurityUserReviewPage", () => {
         },
       ],
     });
+    mockApi.getAzureSecurityFindingExceptions.mockResolvedValue([]);
+    mockApi.createAzureSecurityFindingException.mockImplementation(async (body: Record<string, unknown>) => ({
+      exception_id: "exception-1",
+      scope: "directory_user",
+      entity_id: String(body.entity_id || ""),
+      entity_label: String(body.entity_label || ""),
+      entity_subtitle: String(body.entity_subtitle || ""),
+      reason: String(body.reason || ""),
+      status: "active",
+      created_at: "2026-04-03T03:00:00Z",
+      updated_at: "2026-04-03T03:00:00Z",
+      created_by_email: "reviewer@example.com",
+      created_by_name: "Review User",
+      updated_by_email: "reviewer@example.com",
+      updated_by_name: "Review User",
+    }));
+    mockApi.restoreAzureSecurityFindingException.mockResolvedValue({
+      exception_id: "exception-1",
+      scope: "directory_user",
+      entity_id: "user-1",
+      entity_label: "Emergency Admin",
+      entity_subtitle: "emergency.admin@example.com",
+      reason: "Expected stale emergency account.",
+      status: "restored",
+      created_at: "2026-04-03T03:00:00Z",
+      updated_at: "2026-04-03T04:00:00Z",
+      created_by_email: "reviewer@example.com",
+      created_by_name: "Review User",
+      updated_by_email: "reviewer@example.com",
+      updated_by_name: "Review User",
+    });
   });
 
   it("renders the user review lane with raw user pivots", async () => {
@@ -210,5 +244,60 @@ describe("AzureSecurityUserReviewPage", () => {
 
     expect(await scoped.findByText("Showing 51-60 of 60 matching user record(s)")).toBeInTheDocument();
     expect(scoped.getAllByText("Bulk User 60").length).toBeGreaterThan(0);
+  });
+
+  it("lets operators mark and restore approved finding exceptions", async () => {
+    mockApi.getAzureSecurityFindingExceptions
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          exception_id: "exception-1",
+          scope: "directory_user",
+          entity_id: "user-1",
+          entity_label: "Emergency Admin",
+          entity_subtitle: "emergency.admin@example.com",
+          reason: "Expected stale emergency account.",
+          status: "active",
+          created_at: "2026-04-03T03:00:00Z",
+          updated_at: "2026-04-03T03:00:00Z",
+          created_by_email: "reviewer@example.com",
+          created_by_name: "Review User",
+          updated_by_email: "reviewer@example.com",
+          updated_by_name: "Review User",
+        },
+      ])
+      .mockResolvedValueOnce([]);
+
+    render(<AzureSecurityUserReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "User Review" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Mark exception" })[0]);
+    fireEvent.change(screen.getByPlaceholderText(/Document why this finding is expected/i), {
+      target: { value: "Expected stale emergency account." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save exception" }));
+
+    expect(await screen.findByText(/is now an active exception/i)).toBeInTheDocument();
+    expect(mockApi.createAzureSecurityFindingException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity_id: "user-1",
+        reason: "Expected stale emergency account.",
+      }),
+    );
+
+    expect(await screen.findByRole("heading", { name: "Active exceptions" })).toBeInTheDocument();
+    expect(screen.getByText("Expected stale emergency account.")).toBeInTheDocument();
+    const prioritySection = screen.getByRole("heading", { name: "Priority queue" }).closest("section");
+    const reviewSection = screen.getByRole("heading", { name: "Review queue" }).closest("section");
+    expect(prioritySection).not.toBeNull();
+    expect(reviewSection).not.toBeNull();
+    expect(within(prioritySection as HTMLElement).queryByText("Emergency Admin")).not.toBeInTheDocument();
+    expect(within(reviewSection as HTMLElement).queryByText("Emergency Admin")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore finding" }));
+
+    expect(await screen.findByText(/was restored to the security review queues/i)).toBeInTheDocument();
+    expect(mockApi.restoreAzureSecurityFindingException).toHaveBeenCalledWith("exception-1");
   });
 });

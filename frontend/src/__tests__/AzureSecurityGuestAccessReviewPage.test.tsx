@@ -9,6 +9,7 @@ const { mockApi } = vi.hoisted(() => ({
     getAzureGroups: vi.fn(),
     getAzureAppRegistrations: vi.fn(),
     getAzureStatus: vi.fn(),
+    getAzureSecurityFindingExceptions: vi.fn(),
   },
 }));
 
@@ -168,6 +169,7 @@ describe("AzureSecurityGuestAccessReviewPage", () => {
         },
       ],
     });
+    mockApi.getAzureSecurityFindingExceptions.mockResolvedValue([]);
   });
 
   it("renders the guest access review lane with raw pivots", async () => {
@@ -203,5 +205,31 @@ describe("AzureSecurityGuestAccessReviewPage", () => {
     expect(scoped.getAllByText("Guest Vendor").length).toBeGreaterThan(0);
     expect(scoped.queryByText("Disabled Guest")).not.toBeInTheDocument();
     expect(scoped.queryByText("Recent Guest")).not.toBeInTheDocument();
+  });
+
+  it("hides approved user exceptions from the guest lane", async () => {
+    mockApi.getAzureSecurityFindingExceptions.mockResolvedValue([
+      {
+        exception_id: "exception-1",
+        scope: "directory_user",
+        entity_id: "guest-1",
+        entity_label: "Guest Vendor",
+        entity_subtitle: "guest.vendor@example.com",
+        reason: "Approved guest exception.",
+        status: "active",
+        created_at: "2026-04-03T03:00:00Z",
+        updated_at: "2026-04-03T03:00:00Z",
+        created_by_email: "reviewer@example.com",
+        created_by_name: "Review User",
+        updated_by_email: "reviewer@example.com",
+        updated_by_name: "Review User",
+      },
+    ]);
+
+    render(<AzureSecurityGuestAccessReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "Guest Access Review" })).toBeInTheDocument();
+    expect(screen.getByText(/approved user exception/i)).toBeInTheDocument();
+    expect(screen.queryByText("Guest Vendor")).not.toBeInTheDocument();
   });
 });

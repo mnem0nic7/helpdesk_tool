@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from auth import session_can_manage_users
 from azure_cache import azure_cache
 from models import SecurityWorkspaceLaneSummary, SecurityWorkspaceSummaryResponse
+from security_finding_exception_store import security_finding_exception_store
 from security_access_review import (
     _break_glass_matches,
     _classify_privilege,
@@ -41,6 +43,7 @@ _GUEST_AGE_THRESHOLD_DAYS = 180
 _GUEST_SIGNIN_THRESHOLD_DAYS = 90
 _ACCOUNT_HEALTH_PASSWORD_THRESHOLD_DAYS = 90
 _ACCOUNT_HEALTH_GUEST_THRESHOLD_DAYS = 180
+_DIRECTORY_USER_EXCEPTION_SCOPE = "directory_user"
 _PRIVILEGE_CRITICAL_FLAG_MARKERS = (
     "guest user holds privileged azure rbac access",
     "external or foreign group holds privileged azure rbac access",
@@ -49,6 +52,8 @@ _PRIVILEGE_CRITICAL_FLAG_MARKERS = (
     "subscription root",
     "service principal holds privileged azure rbac access",
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _dataset_row(status: dict[str, Any], dataset_key: str) -> dict[str, Any]:
@@ -195,6 +200,14 @@ def _is_on_prem_synced(user: dict[str, Any]) -> bool:
 
 def _is_shared_or_service(user: dict[str, Any]) -> bool:
     return str(_extra(user).get("account_class") or "") == "shared_or_service"
+
+
+def _active_directory_user_exception_ids() -> set[str]:
+    try:
+        return security_finding_exception_store.get_active_entity_ids(_DIRECTORY_USER_EXCEPTION_SCOPE)
+    except Exception:
+        logger.exception("Failed to load active security finding exceptions for workspace summary")
+        return set()
 
 
 def _security_copilot_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummary:
@@ -616,7 +629,12 @@ def _conditional_access_summary(status: dict[str, Any], session: dict[str, Any])
 
 def _user_review_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummary:
     warning_count, refresh_at = _dataset_warning_count(status, [("directory", 4)])
-    users = azure_cache._snapshot("users") or []
+    exception_ids = _active_directory_user_exception_ids()
+    users = [
+        user
+        for user in (azure_cache._snapshot("users") or [])
+        if str(user.get("id") or "").strip() not in exception_ids
+    ]
     priority_count = 0
     critical_priority_count = 0
     disabled_licensed_count = 0
@@ -673,7 +691,12 @@ def _user_review_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummary
 
 def _guest_access_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummary:
     warning_count, refresh_at = _dataset_warning_count(status, [("directory", 4)])
-    users = azure_cache._snapshot("users") or []
+    exception_ids = _active_directory_user_exception_ids()
+    users = [
+        user
+        for user in (azure_cache._snapshot("users") or [])
+        if str(user.get("id") or "").strip() not in exception_ids
+    ]
     groups = azure_cache._snapshot("groups") or []
     app_registrations = azure_cache._snapshot("applications") or []
     priority_guest_count = 0
@@ -744,7 +767,12 @@ def _guest_access_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummar
 
 def _account_health_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummary:
     warning_count, refresh_at = _dataset_warning_count(status, [("directory", 4)])
-    users = azure_cache._snapshot("users") or []
+    exception_ids = _active_directory_user_exception_ids()
+    users = [
+        user
+        for user in (azure_cache._snapshot("users") or [])
+        if str(user.get("id") or "").strip() not in exception_ids
+    ]
     issue_user_ids: set[str] = set()
     stale_password_count = 0
     disabled_count = 0

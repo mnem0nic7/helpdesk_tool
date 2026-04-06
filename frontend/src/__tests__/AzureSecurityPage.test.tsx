@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import { render } from "../test-utils.tsx";
 import AzureSecurityPage from "../pages/AzureSecurityPage.tsx";
 
@@ -184,6 +184,7 @@ function buildWorkspaceSummary() {
 describe("AzureSecurityPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     mockApi.getAzureOverview.mockResolvedValue({
       subscriptions: 4,
       management_groups: 2,
@@ -264,6 +265,9 @@ describe("AzureSecurityPage", () => {
     expect(screen.getByText("Grouped Lane Catalog")).toBeInTheDocument();
     expect(screen.getByText("Support Tools")).toBeInTheDocument();
     expect(screen.getByText("Workspace summary ready")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Review top priorities/i })).toHaveAttribute("href", "#needs-attention");
+    expect(screen.getByRole("link", { name: "Jump to lane explorer" })).toHaveAttribute("href", "#lane-explorer");
+    expect(screen.getAllByText("Catalog lanes")[0]).toBeInTheDocument();
     expect(screen.getAllByText("6 critical principals need review")[0]).toBeInTheDocument();
     expect(screen.getAllByText("2 guest accounts need immediate review")[0]).toBeInTheDocument();
     expect(screen.getAllByText("Access limited")[0]).toBeInTheDocument();
@@ -290,11 +294,74 @@ describe("AzureSecurityPage", () => {
     fireEvent.change(screen.getByPlaceholderText("Search incidents, privileged access, guests, devices, apps..."), {
       target: { value: "guest" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Needs attention" }));
+    fireEvent.click(screen.getByRole("button", { name: "Needs attention 4" }));
 
     expect(screen.getAllByText("Guest Access Review")[0]).toBeInTheDocument();
     expect(screen.queryByText("Application Hygiene")).not.toBeInTheDocument();
     expect(screen.queryByText("Security Incident Copilot")).not.toBeInTheDocument();
+    expect(screen.getByText('Search: "guest"')).toBeInTheDocument();
+    expect(screen.getByText("State: Needs attention")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear all filters" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear all filters" }));
+
+    expect(screen.getByText("All lanes visible")).toBeInTheDocument();
+    expect(screen.queryByText('Search: "guest"')).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Clear all filters" })).not.toBeInTheDocument();
+  });
+
+  it("supports quick-focus presets and collapsible lane groups", async () => {
+    render(<AzureSecurityPage />);
+
+    expect(await screen.findByText("Quick focus")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "External access" }));
+
+    expect(screen.getByText("Group: Accounts & External Access")).toBeInTheDocument();
+    const groupedCatalog = screen.getByRole("heading", { level: 2, name: "Grouped Lane Catalog" }).closest("section");
+    expect(groupedCatalog).not.toBeNull();
+    expect(within(groupedCatalog as HTMLElement).queryByRole("button", { name: /Respond Now/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse all groups" }));
+
+    const externalAccessToggle = within(groupedCatalog as HTMLElement)
+      .getAllByRole("button")
+      .find((button) => button.getAttribute("aria-controls") === "security-group-accounts-external-access");
+
+    expect(externalAccessToggle).toBeDefined();
+    expect(within(groupedCatalog as HTMLElement).getByText(/This group is collapsed\./i)).toBeInTheDocument();
+
+    fireEvent.click(externalAccessToggle as HTMLButtonElement);
+
+    expect(screen.getAllByText("Guest Access Review")[0]).toBeInTheDocument();
+    expect(screen.getByText("Catalog guidance")).toBeInTheDocument();
+  });
+
+  it("persists the workspace view locally and restores defaults on demand", async () => {
+    const firstRender = render(<AzureSecurityPage />);
+
+    expect(await screen.findByText("Lane Explorer")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Guests" }));
+    fireEvent.click(screen.getByRole("button", { name: /Roadmap/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Collapse all groups" }));
+
+    firstRender.unmount();
+
+    render(<AzureSecurityPage />);
+
+    expect(await screen.findByDisplayValue("guest")).toBeInTheDocument();
+    expect(screen.getByText('Search: "guest"')).toBeInTheDocument();
+    expect(screen.getByText("Emergency-account MFA posture validation")).toBeInTheDocument();
+    expect(screen.getAllByText(/This group is collapsed\./i).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Restore default view" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore default view" }));
+
+    expect(screen.getByPlaceholderText("Search incidents, privileged access, guests, devices, apps...")).toHaveValue("");
+    expect(screen.getByText("All lanes visible")).toBeInTheDocument();
+    expect(screen.queryByText('Search: "guest"')).not.toBeInTheDocument();
+    expect(screen.queryByText("Emergency-account MFA posture validation")).not.toBeInTheDocument();
   });
 
   it("shows a non-blocking fallback when the workspace summary query fails", async () => {
@@ -305,7 +372,7 @@ describe("AzureSecurityPage", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Azure Security" })).toBeInTheDocument();
     expect(screen.getByText(/static workspace catalog/i)).toBeInTheDocument();
     expect(screen.getByText("Grouped Lane Catalog")).toBeInTheDocument();
-    expect(screen.getByText("Security Incident Copilot")).toBeInTheDocument();
+    expect(screen.getAllByText("Security Incident Copilot")[0]).toBeInTheDocument();
   });
 
   it("keeps the roadmap collapsed by default and expands on demand", async () => {

@@ -1,9 +1,9 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import { AzureSecurityLaneHero, AzureSecurityMetricCard } from "../components/AzureSecurityLane.tsx";
-import { api, type AzureDirectoryObject } from "../lib/api.ts";
+import { api, type AzureDirectoryObject, type SecurityFindingException } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import {
@@ -20,8 +20,10 @@ import {
 } from "../lib/azureSecurityUsers.ts";
 
 type UserFocus = "all" | "priority" | "stale" | "disabled-licensed" | "guests" | "synced" | "shared-service";
+type ExceptionNotice = { tone: "success" | "error"; text: string } | null;
 
 const EMPTY_DIRECTORY_OBJECTS: AzureDirectoryObject[] = [];
+const DIRECTORY_USER_EXCEPTION_SCOPE = "directory_user";
 
 function formatTimestamp(value: string | null | undefined): string {
   if (!value) return "No refresh recorded";
@@ -56,6 +58,14 @@ function userFlags(user: AzureDirectoryObject): string[] {
   return flags;
 }
 
+function isExceptionEligible(user: AzureDirectoryObject): boolean {
+  return priorityScore(user) >= 60 || userFlags(user).length > 0;
+}
+
+function actorLabel(exception: SecurityFindingException): string {
+  return exception.updated_by_name || exception.updated_by_email || exception.created_by_name || exception.created_by_email || "Unknown operator";
+}
+
 function SectionFrame({
   title,
   description,
@@ -84,8 +94,12 @@ function SectionFrame({
 }
 
 export default function AzureSecurityUserReviewPage() {
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [focus, setFocus] = useState<UserFocus>("priority");
+  const [exceptionDraftUser, setExceptionDraftUser] = useState<AzureDirectoryObject | null>(null);
+  const [exceptionReason, setExceptionReason] = useState("");
+  const [exceptionNotice, setExceptionNotice] = useState<ExceptionNotice>(null);
   const deferredSearch = useDeferredValue(search);
 
   const usersQuery = useQuery({
@@ -98,8 +112,69 @@ export default function AzureSecurityUserReviewPage() {
     queryFn: () => api.getAzureStatus(),
     ...getPollingQueryOptions("slow_5m"),
   });
+  const exceptionsQuery = useQuery({
+    queryKey: ["azure", "security", "finding-exceptions", DIRECTORY_USER_EXCEPTION_SCOPE],
+    queryFn: () => api.getAzureSecurityFindingExceptions(DIRECTORY_USER_EXCEPTION_SCOPE),
+    ...getPollingQueryOptions("slow_5m"),
+  });
 
-  const users = usersQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
+  const activeExceptions = exceptionsQuery.data ?? [];
+  const activeExceptionIds = useMemo(
+    () => new Set(activeExceptions.map((exception) => exception.entity_id)),
+    [activeExceptions],
+  );
+  const users = useMemo(
+    () => (usersQuery.data ?? EMPTY_DIRECTORY_OBJECTS).filter((user) => !activeExceptionIds.has(user.id)),
+    [activeExceptionIds, usersQuery.data],
+  );
+
+  const invalidateSecurityFindingViews = () => {
+    queryClient.invalidateQueries({ queryKey: ["azure", "security", "finding-exceptions", DIRECTORY_USER_EXCEPTION_SCOPE] }).catch(() => undefined);
+    queryClient.invalidateQueries({ queryKey: ["azure", "security", "workspace-summary"] }).catch(() => undefined);
+  };
+
+  const createExceptionMutation = useMutation({
+    mutationFn: (body: { user: AzureDirectoryObject; reason: string }) =>
+      api.createAzureSecurityFindingException({
+        scope: DIRECTORY_USER_EXCEPTION_SCOPE,
+        entity_id: body.user.id,
+        entity_label: body.user.display_name,
+        entity_subtitle: body.user.principal_name || body.user.mail || body.user.id,
+        reason: body.reason,
+      }),
+    onSuccess: (exception) => {
+      setExceptionNotice({
+        tone: "success",
+        text: `${exception.entity_label || "This finding"} is now an active exception and will stay out of the shared user-security queues until restored.`,
+      });
+      setExceptionDraftUser(null);
+      setExceptionReason("");
+      invalidateSecurityFindingViews();
+    },
+    onError: (error) => {
+      setExceptionNotice({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Failed to save the security finding exception.",
+      });
+    },
+  });
+
+  const restoreExceptionMutation = useMutation({
+    mutationFn: (exception: SecurityFindingException) => api.restoreAzureSecurityFindingException(exception.exception_id),
+    onSuccess: (exception) => {
+      setExceptionNotice({
+        tone: "success",
+        text: `${exception.entity_label || "The finding"} was restored to the security review queues.`,
+      });
+      invalidateSecurityFindingViews();
+    },
+    onError: (error) => {
+      setExceptionNotice({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Failed to restore the security finding.",
+      });
+    },
+  });
 
   const disabledLicensedCount = useMemo(
     () => users.filter((user) => user.enabled === false && isLicensedUser(user)).length,
@@ -166,6 +241,13 @@ export default function AzureSecurityUserReviewPage() {
   }
 
   const directoryDataset = statusQuery.data?.datasets?.find((dataset) => dataset.key === "directory");
+  const exceptionDraftFlags = exceptionDraftUser ? userFlags(exceptionDraftUser) : [];
+
+  const startExceptionDraft = (user: AzureDirectoryObject) => {
+    setExceptionDraftUser(user);
+    setExceptionReason("");
+    setExceptionNotice(null);
+  };
 
   return (
     <div className="space-y-6">
@@ -180,6 +262,85 @@ export default function AzureSecurityUserReviewPage() {
           { label: "Open raw user inventory", to: "/users", tone: "secondary" },
         ]}
       />
+
+      {exceptionsQuery.isError ? (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">
+          Security finding exceptions could not be loaded right now, so approved exceptions may temporarily reappear in this lane and the shared user-security summaries.
+        </section>
+      ) : null}
+
+      {exceptionNotice ? (
+        <section
+          className={`rounded-2xl border p-4 text-sm shadow-sm ${
+            exceptionNotice.tone === "success"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+              : "border-red-200 bg-red-50 text-red-700"
+          }`}
+        >
+          {exceptionNotice.text}
+        </section>
+      ) : null}
+
+      {exceptionDraftUser ? (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50/70 p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Mark finding as exception</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Approved exceptions stay out of User Review, Guest Access Review, Account Health, and the shared workspace summary until you restore them.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setExceptionDraftUser(null);
+                setExceptionReason("");
+              }}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="mt-4 rounded-2xl border border-white/80 bg-white/80 p-4">
+            <div className="text-base font-semibold text-slate-900">{exceptionDraftUser.display_name}</div>
+            <div className="mt-1 text-sm text-slate-500">{exceptionDraftUser.principal_name || exceptionDraftUser.mail || exceptionDraftUser.id}</div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {exceptionDraftFlags.map((flag) => (
+                <span key={`${exceptionDraftUser.id}-${flag}`} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+                  {flag}
+                </span>
+              ))}
+            </div>
+          </div>
+          <label className="mt-4 block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Exception reason</span>
+            <textarea
+              value={exceptionReason}
+              onChange={(event) => setExceptionReason(event.target.value)}
+              rows={4}
+              placeholder="Document why this finding is expected or approved so it can stay out of recurring security reports."
+              className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+            />
+          </label>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (!exceptionDraftUser) return;
+                createExceptionMutation.mutate({
+                  user: exceptionDraftUser,
+                  reason: exceptionReason,
+                });
+              }}
+              disabled={createExceptionMutation.isPending || exceptionReason.trim().length === 0}
+              className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {createExceptionMutation.isPending ? "Saving exception..." : "Save exception"}
+            </button>
+            <span className="self-center text-xs text-slate-500">Exceptions require a reason so future reviews can understand why the finding was suppressed.</span>
+          </div>
+        </section>
+      ) : null}
 
       <section className="grid gap-4 xl:grid-cols-3 md:grid-cols-2">
         <AzureSecurityMetricCard
@@ -218,6 +379,12 @@ export default function AzureSecurityUserReviewPage() {
           detail="Accounts classified from naming and employee-type markers as shared or service-style."
           tone="emerald"
         />
+        <AzureSecurityMetricCard
+          label="Active exceptions"
+          value={activeExceptions.length}
+          detail="Approved findings currently suppressed from the shared user-security queues and workspace summary."
+          tone="sky"
+        />
       </section>
 
       <SectionFrame
@@ -255,6 +422,15 @@ export default function AzureSecurityUserReviewPage() {
                       {flag}
                     </span>
                   ))}
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => startExceptionDraft(user)}
+                    className="inline-flex items-center rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 transition hover:bg-amber-100"
+                  >
+                    Mark exception
+                  </button>
                 </div>
               </section>
             ))}
@@ -337,17 +513,65 @@ export default function AzureSecurityUserReviewPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <Link
-                        to={buildUserRoute(user.id)}
-                        className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                      >
-                        Open source record
-                      </Link>
+                      <div className="flex flex-wrap gap-2">
+                        <Link
+                          to={buildUserRoute(user.id)}
+                          className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                        >
+                          Open source record
+                        </Link>
+                        {isExceptionEligible(user) ? (
+                          <button
+                            type="button"
+                            onClick={() => startExceptionDraft(user)}
+                            className="inline-flex items-center rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 transition hover:bg-amber-100"
+                          >
+                            Mark exception
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </SectionFrame>
+
+      <SectionFrame
+        title="Active exceptions"
+        description="Approved user findings hidden from the shared user-security reports until you restore them."
+        count={activeExceptions.length}
+      >
+        {activeExceptions.length === 0 ? (
+          <div className="rounded-xl bg-slate-50 px-4 py-6 text-sm text-slate-500">
+            No active exceptions are suppressing user findings right now.
+          </div>
+        ) : (
+          <div className="grid gap-4 xl:grid-cols-2">
+            {activeExceptions.map((exception) => (
+              <section key={exception.exception_id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-lg font-semibold text-slate-900">{exception.entity_label || exception.entity_id}</h3>
+                    <div className="mt-1 text-sm text-slate-500">{exception.entity_subtitle || exception.entity_id}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => restoreExceptionMutation.mutate(exception)}
+                    disabled={restoreExceptionMutation.isPending}
+                    className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {restoreExceptionMutation.isPending ? "Restoring..." : "Restore finding"}
+                  </button>
+                </div>
+                <div className="mt-4 rounded-xl bg-white px-4 py-3 text-sm text-slate-700">{exception.reason}</div>
+                <div className="mt-3 text-xs text-slate-500">
+                  Active since {formatTimestamp(exception.created_at)} by {actorLabel(exception)}
+                </div>
+              </section>
+            ))}
           </div>
         )}
       </SectionFrame>

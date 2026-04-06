@@ -11,6 +11,7 @@ import { daysSince, formatDate, lastSuccessfulText, hasNoSuccessfulSignIn, isLic
 type GuestFocus = "priority" | "all-guests" | "old-guests" | "stale-guests" | "disabled-guests";
 
 const EMPTY_DIRECTORY_OBJECTS: AzureDirectoryObject[] = [];
+const DIRECTORY_USER_EXCEPTION_SCOPE = "directory_user";
 
 function formatTimestamp(value: string | null | undefined): string {
   if (!value) return "No refresh recorded";
@@ -219,11 +220,23 @@ export default function AzureSecurityGuestAccessReviewPage() {
     queryFn: () => api.getAzureStatus(),
     ...getPollingQueryOptions("slow_5m"),
   });
+  const exceptionsQuery = useQuery({
+    queryKey: ["azure", "security", "finding-exceptions", DIRECTORY_USER_EXCEPTION_SCOPE],
+    queryFn: () => api.getAzureSecurityFindingExceptions(DIRECTORY_USER_EXCEPTION_SCOPE),
+    ...getPollingQueryOptions("slow_5m"),
+  });
 
   const loading = [usersQuery, groupsQuery, appRegistrationsQuery].some((query) => query.isLoading);
   const failure = [usersQuery, groupsQuery, appRegistrationsQuery].find((query) => query.isError);
 
-  const users = usersQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
+  const activeExceptionIds = useMemo(
+    () => new Set((exceptionsQuery.data ?? []).map((exception) => exception.entity_id)),
+    [exceptionsQuery.data],
+  );
+  const users = useMemo(
+    () => (usersQuery.data ?? EMPTY_DIRECTORY_OBJECTS).filter((user) => !activeExceptionIds.has(user.id)),
+    [activeExceptionIds, usersQuery.data],
+  );
   const groups = groupsQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
   const appRegistrations = appRegistrationsQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
 
@@ -373,6 +386,16 @@ export default function AzureSecurityGuestAccessReviewPage() {
           dataset. It does not enumerate live guest membership for every group or active sharing links in downstream workloads.
         </p>
       </section>
+
+      {exceptionsQuery.isError ? (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">
+          Security finding exceptions could not be loaded right now, so approved user exceptions may temporarily reappear in this guest review lane.
+        </section>
+      ) : (exceptionsQuery.data ?? []).length > 0 ? (
+        <section className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900 shadow-sm">
+          {(exceptionsQuery.data ?? []).length.toLocaleString()} approved user exception{(exceptionsQuery.data ?? []).length === 1 ? "" : "s"} are currently hidden from this guest review lane.
+        </section>
+      ) : null}
 
       <section className="grid gap-4 xl:grid-cols-3 md:grid-cols-2">
         <AzureSecurityMetricCard

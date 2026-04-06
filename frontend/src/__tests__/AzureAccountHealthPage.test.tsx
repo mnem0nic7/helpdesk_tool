@@ -7,6 +7,7 @@ const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     getAzureUsers: vi.fn(),
     getAzureStatus: vi.fn(),
+    getAzureSecurityFindingExceptions: vi.fn(),
   },
 }));
 
@@ -130,6 +131,7 @@ describe("AzureAccountHealthPage", () => {
         },
       ],
     });
+    mockApi.getAzureSecurityFindingExceptions.mockResolvedValue([]);
   });
 
   it("renders the account health lane inside the security shell", async () => {
@@ -156,5 +158,32 @@ describe("AzureAccountHealthPage", () => {
 
     expect(screen.getByText("Stale Passwords (365d)")).toBeInTheDocument();
     expect(screen.getByText(/Cloud accounts with no password change in 365\+ days/i)).toBeInTheDocument();
+  });
+
+  it("hides approved user exceptions from account health counts", async () => {
+    mockApi.getAzureSecurityFindingExceptions.mockResolvedValue([
+      {
+        exception_id: "exception-1",
+        scope: "directory_user",
+        entity_id: "user-1",
+        entity_label: "Stale Password User",
+        entity_subtitle: "stale@example.com",
+        reason: "Expected exception.",
+        status: "active",
+        created_at: "2026-04-03T03:00:00Z",
+        updated_at: "2026-04-03T03:00:00Z",
+        created_by_email: "reviewer@example.com",
+        created_by_name: "Review User",
+        updated_by_email: "reviewer@example.com",
+        updated_by_name: "Review User",
+      },
+    ]);
+
+    render(<AzureAccountHealthPage />);
+
+    expect(await screen.findByRole("heading", { name: "Account Health" })).toBeInTheDocument();
+    expect(screen.getByText(/approved user exception/i)).toBeInTheDocument();
+    expect(screen.getByText("Stale Passwords (90d)")).toBeInTheDocument();
+    expect(screen.queryByText("Stale Password User")).not.toBeInTheDocument();
   });
 });

@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import require_authenticated_user, session_can_manage_users
 from azure_cache import azure_cache
 from models import (
     SecurityAccessReviewResponse,
     SecurityAppHygieneResponse,
+    SecurityFindingException,
+    SecurityFindingExceptionCreateRequest,
     SecurityDeviceActionBatchResult,
     SecurityDeviceActionBatchStatus,
     SecurityBreakGlassValidationResponse,
@@ -32,6 +34,7 @@ from security_conditional_access_tracker import build_security_conditional_acces
 from security_device_compliance import build_security_device_compliance_review, build_security_device_fix_plan
 from security_device_jobs import SecurityDeviceJobError, security_device_jobs
 from security_directory_role_review import build_security_directory_role_review
+from security_finding_exception_store import security_finding_exception_store
 from security_workspace_summary import build_security_workspace_summary
 from site_context import get_current_site_scope
 
@@ -60,6 +63,54 @@ def get_security_workspace_summary(
 ) -> SecurityWorkspaceSummaryResponse:
     _ensure_azure_site()
     return build_security_workspace_summary(session)
+
+
+@router.get("/finding-exceptions", response_model=list[SecurityFindingException])
+def list_security_finding_exceptions(
+    scope: Literal["directory_user"] = Query(default="directory_user"),
+    active_only: bool = Query(default=True),
+    _session: dict[str, Any] = Depends(require_authenticated_user),
+) -> list[SecurityFindingException]:
+    _ensure_azure_site()
+    return [
+        SecurityFindingException.model_validate(item)
+        for item in security_finding_exception_store.list_exceptions(scope=scope, active_only=active_only)
+    ]
+
+
+@router.post("/finding-exceptions", response_model=SecurityFindingException)
+def create_security_finding_exception(
+    body: SecurityFindingExceptionCreateRequest,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> SecurityFindingException:
+    _ensure_azure_site()
+    return SecurityFindingException.model_validate(
+        security_finding_exception_store.upsert_exception(
+            scope=body.scope,
+            entity_id=body.entity_id,
+            entity_label=body.entity_label,
+            entity_subtitle=body.entity_subtitle,
+            reason=body.reason,
+            actor_email=str(session.get("email") or ""),
+            actor_name=str(session.get("name") or ""),
+        )
+    )
+
+
+@router.post("/finding-exceptions/{exception_id}/restore", response_model=SecurityFindingException)
+def restore_security_finding_exception(
+    exception_id: str,
+    session: dict[str, Any] = Depends(require_authenticated_user),
+) -> SecurityFindingException:
+    _ensure_azure_site()
+    payload = security_finding_exception_store.restore_exception(
+        exception_id,
+        actor_email=str(session.get("email") or ""),
+        actor_name=str(session.get("name") or ""),
+    )
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Security finding exception not found.")
+    return SecurityFindingException.model_validate(payload)
 
 
 @router.get("/app-hygiene", response_model=SecurityAppHygieneResponse)

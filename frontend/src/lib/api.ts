@@ -2639,6 +2639,33 @@ export interface SecurityWorkspaceSummaryResponse {
   lanes: SecurityWorkspaceLaneSummary[];
 }
 
+export type SecurityFindingExceptionScope = "directory_user";
+export type SecurityFindingExceptionStatus = "active" | "restored";
+
+export interface SecurityFindingException {
+  exception_id: string;
+  scope: SecurityFindingExceptionScope;
+  entity_id: string;
+  entity_label: string;
+  entity_subtitle: string;
+  reason: string;
+  status: SecurityFindingExceptionStatus;
+  created_at: string;
+  updated_at: string;
+  created_by_email: string;
+  created_by_name: string;
+  updated_by_email: string;
+  updated_by_name: string;
+}
+
+export interface SecurityFindingExceptionCreateRequest {
+  scope: SecurityFindingExceptionScope;
+  entity_id: string;
+  entity_label?: string;
+  entity_subtitle?: string;
+  reason: string;
+}
+
 export type SecurityDeviceActionType =
   | "device_sync"
   | "device_remote_lock"
@@ -3890,6 +3917,28 @@ export const api = {
 
   getAzureSecurityWorkspaceSummary(): Promise<SecurityWorkspaceSummaryResponse> {
     return fetchJSON<SecurityWorkspaceSummaryResponse>("/api/azure/security/workspace-summary");
+  },
+
+  getAzureSecurityFindingExceptions(
+    scope: SecurityFindingExceptionScope = "directory_user",
+    activeOnly = true,
+  ): Promise<SecurityFindingException[]> {
+    return fetchJSON<SecurityFindingException[]>(
+      `/api/azure/security/finding-exceptions${buildQuery({ scope, active_only: activeOnly })}`,
+    );
+  },
+
+  createAzureSecurityFindingException(
+    body: SecurityFindingExceptionCreateRequest,
+  ): Promise<SecurityFindingException> {
+    return postJSON<SecurityFindingException>("/api/azure/security/finding-exceptions", body);
+  },
+
+  restoreAzureSecurityFindingException(exceptionId: string): Promise<SecurityFindingException> {
+    return postJSON<SecurityFindingException>(
+      `/api/azure/security/finding-exceptions/${encodeURIComponent(exceptionId)}/restore`,
+      {},
+    );
   },
 
   getAzureSecurityBreakGlassValidation(): Promise<SecurityBreakGlassValidationResponse> {

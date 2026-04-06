@@ -15,6 +15,7 @@ from models import (
     SecurityConditionalAccessChange,
     SecurityConditionalAccessPolicy,
     SecurityConditionalAccessTrackerResponse,
+    SecurityFindingException,
     SecurityDeviceActionJob,
     SecurityDeviceActionBatchResult,
     SecurityDeviceActionBatchStatus,
@@ -136,6 +137,24 @@ def _workspace_summary_response(_session=None) -> SecurityWorkspaceSummaryRespon
             ),
         ],
     )
+
+
+def _finding_exception_payload() -> dict[str, str]:
+    return SecurityFindingException(
+        exception_id="exception-1",
+        scope="directory_user",
+        entity_id="user-1",
+        entity_label="Guest Vendor",
+        entity_subtitle="guest.vendor@example.com",
+        reason="Approved long-lived vendor guest account.",
+        status="active",
+        created_at="2026-04-04T04:00:00Z",
+        updated_at="2026-04-04T04:00:00Z",
+        created_by_email="reviewer@example.com",
+        created_by_name="Review User",
+        updated_by_email="reviewer@example.com",
+        updated_by_name="Review User",
+    ).model_dump()
 
 
 def _app_hygiene_response() -> SecurityAppHygieneResponse:
@@ -425,6 +444,58 @@ def test_security_workspace_summary_route_returns_payload_on_azure_host(test_cli
     assert payload["lanes"][1]["summary_mode"] == "availability"
 
 
+def test_security_finding_exceptions_routes_round_trip_on_azure_host(test_client, monkeypatch):
+    import routes_azure_security
+
+    monkeypatch.setattr(
+        routes_azure_security.security_finding_exception_store,
+        "list_exceptions",
+        lambda **_: [_finding_exception_payload()],
+    )
+    monkeypatch.setattr(
+        routes_azure_security.security_finding_exception_store,
+        "upsert_exception",
+        lambda **_: _finding_exception_payload(),
+    )
+    monkeypatch.setattr(
+        routes_azure_security.security_finding_exception_store,
+        "restore_exception",
+        lambda *_args, **_kwargs: {
+            **_finding_exception_payload(),
+            "status": "restored",
+            "updated_at": "2026-04-04T05:00:00Z",
+        },
+    )
+
+    list_resp = test_client.get(
+        "/api/azure/security/finding-exceptions",
+        headers={"host": "azure.movedocs.com"},
+    )
+    assert list_resp.status_code == 200
+    assert list_resp.json()[0]["entity_label"] == "Guest Vendor"
+
+    create_resp = test_client.post(
+        "/api/azure/security/finding-exceptions",
+        headers={"host": "azure.movedocs.com"},
+        json={
+            "scope": "directory_user",
+            "entity_id": "user-1",
+            "entity_label": "Guest Vendor",
+            "entity_subtitle": "guest.vendor@example.com",
+            "reason": "Approved long-lived vendor guest account.",
+        },
+    )
+    assert create_resp.status_code == 200
+    assert create_resp.json()["status"] == "active"
+
+    restore_resp = test_client.post(
+        "/api/azure/security/finding-exceptions/exception-1/restore",
+        headers={"host": "azure.movedocs.com"},
+    )
+    assert restore_resp.status_code == 200
+    assert restore_resp.json()["status"] == "restored"
+
+
 def test_security_access_review_route_is_azure_only(test_client):
     resp = test_client.get("/api/azure/security/access-review")
 
@@ -434,6 +505,13 @@ def test_security_access_review_route_is_azure_only(test_client):
 
 def test_security_workspace_summary_route_is_azure_only(test_client):
     resp = test_client.get("/api/azure/security/workspace-summary")
+
+    assert resp.status_code == 404
+    assert "only available on azure.movedocs.com" in resp.json()["detail"]
+
+
+def test_security_finding_exceptions_routes_are_azure_only(test_client):
+    resp = test_client.get("/api/azure/security/finding-exceptions")
 
     assert resp.status_code == 404
     assert "only available on azure.movedocs.com" in resp.json()["detail"]

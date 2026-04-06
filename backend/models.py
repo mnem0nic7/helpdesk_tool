@@ -1519,6 +1519,38 @@ class SecurityWorkspaceSummaryResponse(BaseModel):
     lanes: list[SecurityWorkspaceLaneSummary] = Field(default_factory=list)
 
 
+SecurityFindingExceptionScope = Literal["directory_user"]
+SecurityFindingExceptionStatus = Literal["active", "restored"]
+
+
+class SecurityFindingException(BaseModel):
+    """One durable exception that suppresses a security finding from review queues."""
+
+    exception_id: str
+    scope: SecurityFindingExceptionScope = "directory_user"
+    entity_id: str
+    entity_label: str = ""
+    entity_subtitle: str = ""
+    reason: str = ""
+    status: SecurityFindingExceptionStatus = "active"
+    created_at: str
+    updated_at: str
+    created_by_email: str = ""
+    created_by_name: str = ""
+    updated_by_email: str = ""
+    updated_by_name: str = ""
+
+
+class SecurityFindingExceptionCreateRequest(BaseModel):
+    """Request body for marking a security finding as an approved exception."""
+
+    scope: SecurityFindingExceptionScope = "directory_user"
+    entity_id: str = Field(min_length=1, max_length=200)
+    entity_label: str = Field(default="", max_length=300)
+    entity_subtitle: str = Field(default="", max_length=300)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 SecurityDeviceActionType = Literal[
     "device_sync",
     "device_remote_lock",

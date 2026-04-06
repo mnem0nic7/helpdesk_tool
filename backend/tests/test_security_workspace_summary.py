@@ -91,6 +91,41 @@ def test_workspace_summary_marks_user_review_as_warning_for_priority_queue(monke
     assert lane.attention_count == 1
 
 
+def test_workspace_summary_excludes_active_directory_user_exceptions(monkeypatch):
+    monkeypatch.setattr(security_workspace_summary.azure_cache, "status", lambda: _status())
+    monkeypatch.setattr(
+        security_workspace_summary.azure_cache,
+        "_snapshot",
+        lambda name: {
+            "users": [
+                {
+                    "id": "user-1",
+                    "display_name": "Approved Exception",
+                    "enabled": True,
+                    "extra": {
+                        "user_type": "Member",
+                        "account_class": "person_cloud",
+                        "priority_score": "85",
+                        "priority_band": "critical",
+                        "last_successful_utc": "",
+                    },
+                }
+            ],
+        }.get(name, []),
+    )
+    monkeypatch.setattr(
+        security_workspace_summary.security_finding_exception_store,
+        "get_active_entity_ids",
+        lambda scope: {"user-1"} if scope == "directory_user" else set(),
+    )
+
+    summary = security_workspace_summary.build_security_workspace_summary({"email": "test@example.com"})
+
+    assert _lane(summary, "user-review").attention_count == 0
+    assert _lane(summary, "guest-access-review").attention_count == 0
+    assert _lane(summary, "account-health").attention_count == 0
+
+
 def test_workspace_summary_marks_access_gated_lanes_unavailable(monkeypatch):
     monkeypatch.setattr(security_workspace_summary.azure_cache, "status", lambda: _status())
     monkeypatch.setattr(security_workspace_summary.azure_cache, "_snapshot", lambda name: [])
