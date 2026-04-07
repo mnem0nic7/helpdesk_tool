@@ -245,6 +245,46 @@ class OllamaRequestCoordinator:
 
 _OLLAMA_REQUEST_COORDINATORS: dict[str, OllamaRequestCoordinator] = {}
 
+
+def get_ollama_queue_snapshot() -> list[dict[str, Any]]:
+    """Return a snapshot of every active Ollama request coordinator.
+
+    Each entry has:
+      url         – base URL of the Ollama instance
+      label       – short human-readable name (primary/secondary/security)
+      active      – number of requests currently executing
+      queued      – list of waiting requests [{priority, label}, ...]
+    Only coordinators that have been touched at least once are included.
+    """
+    # Build a label map from known configured URLs
+    label_map: dict[str, str] = {
+        _normalize_ollama_base_url(OLLAMA_BASE_URL): "primary",
+        _normalize_ollama_base_url(OLLAMA_SECURITY_BASE_URL): "security",
+    }
+    if OLLAMA_SECONDARY_BASE_URL:
+        label_map[_normalize_ollama_base_url(OLLAMA_SECONDARY_BASE_URL)] = "secondary"
+
+    lanes: list[dict[str, Any]] = []
+    with _OLLAMA_RUNTIME_STATE_LOCK:
+        items = list(_OLLAMA_REQUEST_COORDINATORS.items())
+    for url, coordinator in items:
+        snap = coordinator.snapshot()
+        lanes.append({
+            "url": url,
+            "label": label_map.get(url, url),
+            "active": snap["active_count"],
+            "queued": [{"priority": q["priority"], "label": q["label"]} for q in snap["queued"]],
+        })
+    # Always include primary/secondary/security even if not yet touched, so the
+    # UI can show them as idle before any work starts.
+    existing_urls = {lane["url"] for lane in lanes}
+    for url, label in label_map.items():
+        if url and url not in existing_urls:
+            lanes.append({"url": url, "label": label, "active": 0, "queued": []})
+    lanes.sort(key=lambda x: {"primary": 0, "secondary": 1, "security": 2}.get(x["label"], 3))
+    return lanes
+
+
 # ---------------------------------------------------------------------------
 # Secondary Ollama round-robin for triage / QA
 # ---------------------------------------------------------------------------

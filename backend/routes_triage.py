@@ -11,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from ai_client import (
     analyze_ticket,
     get_available_models,
+    get_ollama_queue_snapshot,
     normalize_triage_priority_value,
     select_available_ollama_model,
     validate_suggestions,
@@ -286,6 +287,12 @@ async def get_run_status() -> dict[str, Any]:
     result["health"] = health
     result["health_message"] = health_message
     return result
+
+
+@router.get("/ollama-queue")
+async def get_ollama_queue() -> list[dict[str, Any]]:
+    """Return a live snapshot of every Ollama request coordinator (primary, secondary, security)."""
+    return get_ollama_queue_snapshot()
 
 
 @router.post("/run-cancel")

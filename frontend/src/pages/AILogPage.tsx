@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../lib/api.ts";
 import { logClientError } from "../lib/errorLogging.ts";
 import { resolvePollingIntervalMs } from "../lib/queryPolling.ts";
-import type { TriageLogEntry } from "../lib/api.ts";
+import type { TriageLogEntry, OllamaLaneSnapshot } from "../lib/api.ts";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import useTicketDrawerNavigation from "../hooks/useTicketDrawerNavigation.ts";
 
@@ -56,6 +56,19 @@ export default function AILogPage() {
     refetchInterval: (query) => {
       const current = query.state.data;
       return resolvePollingIntervalMs(current?.running ? 2_000 : 10_000);
+    },
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchIntervalInBackground: false,
+  });
+
+  const { data: ollamaLanes } = useQuery({
+    queryKey: ["ollama-queue"],
+    queryFn: () => api.getOllamaQueueStatus(),
+    refetchInterval: (query) => {
+      const lanes: OllamaLaneSnapshot[] = query.state.data ?? [];
+      const busy = lanes.some((l) => l.active > 0 || l.queued.length > 0);
+      return resolvePollingIntervalMs(busy ? 1_000 : 5_000);
     },
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -306,6 +319,56 @@ export default function AILogPage() {
           )}
         </div>
       </section>
+
+      {/* Ollama lanes panel */}
+      {ollamaLanes && ollamaLanes.length > 0 && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-base font-semibold text-slate-900 mb-3">Ollama Lanes</h2>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {ollamaLanes.map((lane) => {
+              const busy = lane.active > 0 || lane.queued.length > 0;
+              return (
+                <div
+                  key={lane.url}
+                  className={`rounded-xl border p-4 text-sm ${busy ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-slate-50"}`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold capitalize text-slate-800">{lane.label}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${busy ? "bg-blue-200 text-blue-800" : "bg-slate-200 text-slate-500"}`}>
+                      {busy ? (lane.active > 0 ? "active" : "queued") : "idle"}
+                    </span>
+                  </div>
+                  {lane.active > 0 && (
+                    <div className="mb-1 flex items-center gap-1.5 text-blue-700">
+                      <span className="inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+                      <span className="truncate font-medium">
+                        {lane.queued[0]?.label ?? "working…"}
+                      </span>
+                    </div>
+                  )}
+                  {lane.queued.length > 0 && (
+                    <ul className="mt-1 space-y-0.5 text-xs text-slate-500">
+                      {lane.queued.slice(0, 4).map((q, i) => (
+                        <li key={i} className="flex items-center gap-1 truncate">
+                          <span className="shrink-0 text-slate-400">#{i + 1}</span>
+                          <span className="truncate">{q.label}</span>
+                          <span className="ml-auto shrink-0 text-slate-400">p{q.priority}</span>
+                        </li>
+                      ))}
+                      {lane.queued.length > 4 && (
+                        <li className="text-slate-400">+{lane.queued.length - 4} more</li>
+                      )}
+                    </ul>
+                  )}
+                  {!busy && (
+                    <p className="text-xs text-slate-400">No work in progress</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">

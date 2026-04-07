@@ -776,6 +776,13 @@ export interface TriageRunStatus {
   health_message?: string;
 }
 
+export interface OllamaLaneSnapshot {
+  url: string;
+  label: string;       // "primary" | "secondary" | "security"
+  active: number;
+  queued: { priority: number; label: string }[];
+}
+
 export interface TechnicianScoreEntry {
   key: string;
   communication_score: number;
@@ -4190,6 +4197,11 @@ export const api = {
   /** Get progress of the current run-all background task. */
   getTriageRunStatus(): Promise<TriageRunStatus> {
     return fetchJSON<TriageRunStatus>("/api/triage/run-status");
+  },
+
+  /** Get live queue snapshot for every Ollama request coordinator. */
+  getOllamaQueueStatus(): Promise<OllamaLaneSnapshot[]> {
+    return fetchJSON<OllamaLaneSnapshot[]>("/api/triage/ollama-queue");
   },
 
   /** Get progress of the current closed-ticket scoring run. */
