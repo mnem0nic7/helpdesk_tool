@@ -446,11 +446,24 @@ class RequestorSyncService:
 
         created_customer = False
         if jira_identity is None:
-            jira_identity = self._jira_client().create_customer(
-                email=canonical_email,
-                display_name=directory_display_name or extracted_display_name or canonical_email,
-            )
-            created_customer = True
+            try:
+                jira_identity = self._jira_client().create_customer(
+                    email=canonical_email,
+                    display_name=directory_display_name or extracted_display_name or canonical_email,
+                )
+                created_customer = True
+            except Exception as exc:
+                # Jira returns 400 "An account already exists for this email" when
+                # the user is already a Jira account but not yet a service desk
+                # customer.  Look up the existing account and continue.
+                if "already exists" in str(exc).lower():
+                    results = self._jira_client().search_users(canonical_email, max_results=5)
+                    for result in results:
+                        if str(result.get("emailAddress") or "").lower() == canonical_email.lower():
+                            jira_identity = result
+                            break
+                if jira_identity is None:
+                    raise
 
         jira_account_id = str(jira_identity.get("accountId") or "").strip()
         jira_display_name = str(jira_identity.get("displayName") or directory_display_name or canonical_email).strip()
@@ -872,8 +885,9 @@ class RequestorSyncService:
         if self.needs_reconcile(issue):
             try:
                 return self.reconcile_issue(issue)
-            except Exception:
+            except Exception as exc:
                 logger.exception("Requestor sync failed for %s", issue.get("key"))
+                self._save_failed_state(issue, exc)
         return {
             "updated": False,
             "message": "",
@@ -886,8 +900,27 @@ class RequestorSyncService:
                 continue
             try:
                 self.reconcile_issue(issue)
-            except Exception:
+            except Exception as exc:
                 logger.exception("Requestor sync failed for %s", issue.get("key"))
+                self._save_failed_state(issue, exc)
+
+    def _save_failed_state(self, issue: dict[str, Any], exc: Exception) -> None:
+        """Persist a sync_failed state so needs_reconcile suppresses retries for 60 min."""
+        try:
+            key = str(issue.get("key") or "").strip()
+            if not key:
+                return
+            extracted = self.extract_requestor_identity(issue)
+            email_key = _normalize_email(extracted["email"]) or ""
+            self._store.upsert_requestor_link(
+                email_key=email_key,
+                ticket_key=key,
+                extracted_email=email_key,
+                sync_status="sync_failed",
+                message=str(exc)[:500],
+            )
+        except Exception:
+            pass
 
     def list_recent_status(self, *, limit: int = 100, failures_only: bool = False) -> list[dict[str, Any]]:
         return self._store.list_recent_status(limit=limit, failures_only=failures_only)
