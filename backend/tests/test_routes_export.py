@@ -1473,7 +1473,7 @@ class TestReportAISummaries:
                 "summary": "Summary text",
                 "bullets": ["Bullet one"],
                 "fallback_used": False,
-                "model_used": "qwen3.5:4b",
+                "model_used": "nemotron-3-nano:4b",
                 "generated_at": "2026-03-26T00:00:00+00:00",
                 "template_version": "2026-03-26T00:00:00+00:00",
                 "data_version": "2026-03-26T00:00:00+00:00",

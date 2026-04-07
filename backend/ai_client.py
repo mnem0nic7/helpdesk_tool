@@ -90,7 +90,6 @@ _DEFAULT_COPILOT_MODEL_ORDER = (
 )
 _DEFAULT_COPILOT_MODEL_RANK = {model_id: index for index, model_id in enumerate(_DEFAULT_COPILOT_MODEL_ORDER)}
 _DEFAULT_OLLAMA_FALLBACK_MODEL_ORDER = (
-    "qwen3.5:4b",
     "nemotron-3-nano:4b",
 )
 _OLLAMA_HTTP_POOL_CONNECTIONS = 8
@@ -1332,8 +1331,6 @@ def _invoke_ollama(
         payload["keep_alive"] = OLLAMA_KEEP_ALIVE
     if json_output:
         payload["format"] = "json"
-        # Qwen 3.x models expose Ollama thinking mode and can return an empty
-        # final content body for JSON tasks unless we explicitly disable it.
         payload["think"] = False
     options: dict[str, Any] = {}
     if temperature is not None:

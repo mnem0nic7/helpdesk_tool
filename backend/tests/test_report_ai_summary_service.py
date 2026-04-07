@@ -54,7 +54,7 @@ async def test_start_manual_batch_only_queues_master_export_templates(monkeypatc
             summary=f"{template.name} summary",
             bullets=[f"{template.name} bullet"],
             fallback_used=False,
-            model_used="qwen3.5:4b",
+            model_used="nemotron-3-nano:4b",
             generated_at="2026-03-26T00:00:00+00:00",
             template_version=template.updated_at,
             data_version=data_version,
@@ -114,7 +114,7 @@ def test_list_current_summaries_ignores_stale_summary_versions(monkeypatch, tmp_
         summary="Old summary",
         bullets=["Old bullet"],
         fallback_used=False,
-        model_used="qwen3.5:4b",
+        model_used="nemotron-3-nano:4b",
         generated_at="2026-03-26T00:00:00+00:00",
         template_version="2026-03-25T00:00:00+00:00",
         data_version="data-1",
@@ -139,7 +139,7 @@ def test_list_current_summaries_reuses_latest_summary_after_restart_when_refresh
         summary="Persisted summary",
         bullets=["Persisted bullet"],
         fallback_used=False,
-        model_used="qwen3.5:4b",
+        model_used="nemotron-3-nano:4b",
         generated_at="2026-03-26T00:00:00+00:00",
         template_version=template.updated_at,
         data_version=f"2026-03-26T08:00:00+00:00|{prompt_version}",
@@ -287,7 +287,7 @@ def test_generate_summary_result_accepts_summary_without_bullets(monkeypatch, tm
             return context
 
     monkeypatch.setattr(service, "_issues_for_site_scope", lambda scope: [])
-    monkeypatch.setattr(service, "_resolve_model_id", lambda: "qwen3.5:4b")
+    monkeypatch.setattr(service, "_resolve_model_id", lambda: "nemotron-3-nano:4b")
     monkeypatch.setattr(summary_module, "ReportWorkbookBuilder", _FakeBuilder)
     monkeypatch.setattr(
         summary_module,

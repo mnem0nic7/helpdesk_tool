@@ -14,7 +14,7 @@ def test_auto_triage_activity_backfill_seeds_changed_and_backfill_rows(tmp_path)
         "Medium",
         "High",
         0.97,
-        "qwen3.5:4b",
+        "nemotron-3-nano:4b",
     )
 
     inserted = store.ensure_auto_triage_activity_backfill()
@@ -26,7 +26,7 @@ def test_auto_triage_activity_backfill_seeds_changed_and_backfill_rows(tmp_path)
     }
     assert activities["OIT-100"]["outcome"] == "changed"
     assert activities["OIT-100"]["source"] == "migration"
-    assert activities["OIT-100"]["model"] == "qwen3.5:4b"
+    assert activities["OIT-100"]["model"] == "nemotron-3-nano:4b"
     assert activities["OIT-100"]["fields_changed"] == ["priority"]
     assert activities["OIT-100"]["legacy_backfill"] is False
 
@@ -44,7 +44,7 @@ def test_clear_auto_triaged_keys_clears_activity_rows_too(tmp_path):
         "OIT-300",
         "changed",
         source="auto",
-        model="qwen3.5:4b",
+        model="nemotron-3-nano:4b",
         fields_changed=["priority"],
     )
 

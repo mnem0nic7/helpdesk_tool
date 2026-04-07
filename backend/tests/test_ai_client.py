@@ -177,32 +177,32 @@ def test_get_available_security_copilot_models_uses_security_runtime(monkeypatch
     monkeypatch.setattr(
         ai_client,
         "_list_ollama_models_from_api",
-        lambda **kwargs: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        lambda **kwargs: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
     )
 
     models = get_available_security_copilot_models()
 
-    assert [model.id for model in models] == ["qwen3.5:4b"]
+    assert [model.id for model in models] == ["nemotron-3-nano:4b"]
 
 
 def test_get_available_models_includes_ollama_when_enabled(monkeypatch):
     monkeypatch.setattr(ai_client, "OPENAI_API_KEY", "")
     monkeypatch.setattr(ai_client, "ANTHROPIC_API_KEY", "")
     monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
     monkeypatch.setattr(ai_client, "_OLLAMA_MODEL_CACHE", None)
     monkeypatch.setattr(
         ai_client,
         "_list_ollama_models_from_api",
         lambda **kwargs: [
-            AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama"),
             AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
+            AIModel(id="nemotron-mini:4b", name="nemotron-mini:4b", provider="ollama"),
         ],
     )
 
     models = get_available_models()
 
-    assert [model.id for model in models] == ["qwen3.5:4b", "nemotron-3-nano:4b"]
+    assert [model.id for model in models] == ["nemotron-3-nano:4b", "nemotron-mini:4b"]
 
 
 def test_list_ollama_models_uses_thread_local_session_helper(monkeypatch):
@@ -215,8 +215,8 @@ def test_list_ollama_models_uses_thread_local_session_helper(monkeypatch):
         def json(self) -> dict[str, object]:
             return {
                 "models": [
-                    {"model": "qwen3.5:4b", "name": "qwen3.5:4b"},
                     {"model": "nemotron-3-nano:4b", "name": "nemotron-3-nano:4b"},
+                    {"model": "nemotron-mini:4b", "name": "nemotron-mini:4b"},
                 ]
             }
 
@@ -229,13 +229,13 @@ def test_list_ollama_models_uses_thread_local_session_helper(monkeypatch):
     monkeypatch.setattr(ai_client, "_get_ollama_session", lambda base_url="": _Session())
     monkeypatch.setattr(ai_client, "OLLAMA_BASE_URL", "http://ollama.local:11434")
     monkeypatch.setattr(ai_client, "OLLAMA_REQUEST_TIMEOUT_SECONDS", 42.0)
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
 
     models = ai_client._list_ollama_models_from_api()
 
     assert captured["url"] == "http://ollama.local:11434/api/tags"
     assert captured["timeout"] == 42.0
-    assert [model.id for model in models] == ["qwen3.5:4b", "nemotron-3-nano:4b"]
+    assert [model.id for model in models] == ["nemotron-3-nano:4b", "nemotron-mini:4b"]
 
 
 def test_list_security_ollama_models_uses_security_runtime_base_url(monkeypatch):
@@ -246,7 +246,7 @@ def test_list_security_ollama_models_uses_security_runtime_base_url(monkeypatch)
             return None
 
         def json(self) -> dict[str, object]:
-            return {"models": [{"model": "qwen3.5:4b", "name": "qwen3.5:4b"}]}
+            return {"models": [{"model": "nemotron-3-nano:4b", "name": "nemotron-3-nano:4b"}]}
 
     class _Session:
         def get(self, url: str, *, timeout: float):
@@ -256,13 +256,13 @@ def test_list_security_ollama_models_uses_security_runtime_base_url(monkeypatch)
 
     monkeypatch.setattr(ai_client, "_get_ollama_session", lambda base_url="": _Session())
     monkeypatch.setattr(ai_client, "OLLAMA_SECURITY_BASE_URL", "http://security-ollama.local:11434")
-    monkeypatch.setattr(ai_client, "OLLAMA_SECURITY_MODEL", "qwen3.5:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_SECURITY_MODEL", "nemotron-3-nano:4b")
 
     models = ai_client._list_ollama_models_from_api(runtime="security")
 
     assert captured["url"] == "http://security-ollama.local:11434/api/tags"
     assert captured["timeout"] == ai_client.OLLAMA_REQUEST_TIMEOUT_SECONDS
-    assert [model.id for model in models] == ["qwen3.5:4b"]
+    assert [model.id for model in models] == ["nemotron-3-nano:4b"]
 
 
 def test_get_available_models_ignores_cloud_keys_and_uses_ollama_only(monkeypatch):
@@ -273,7 +273,7 @@ def test_get_available_models_ignores_cloud_keys_and_uses_ollama_only(monkeypatc
     monkeypatch.setattr(
         ai_client,
         "_list_ollama_models_from_api",
-        lambda **kwargs: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        lambda **kwargs: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
     )
 
     models = get_available_models()
@@ -283,19 +283,19 @@ def test_get_available_models_ignores_cloud_keys_and_uses_ollama_only(monkeypatc
 
 def test_select_available_ollama_model_prefers_requested_model_then_repo_fallbacks(monkeypatch):
     available = [
-        AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama"),
+        AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
         AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
     ]
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
-    monkeypatch.setattr(ai_client, "OLLAMA_FAST_MODEL", "qwen3.5:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_FAST_MODEL", "nemotron-3-nano:4b")
 
     assert (
         ai_client.select_available_ollama_model(
             available,
-            preferred_model_id="qwen3.5:4b",
+            preferred_model_id="nemotron-3-nano:4b",
             fallback_model_id="nemotron-3-nano:4b",
         )
-        == "qwen3.5:4b"
+        == "nemotron-3-nano:4b"
     )
     assert (
         ai_client.select_available_ollama_model(
@@ -303,12 +303,12 @@ def test_select_available_ollama_model_prefers_requested_model_then_repo_fallbac
             preferred_model_id="missing-model",
             fallback_model_id="missing-fallback",
         )
-        == "qwen3.5:4b"
+        == "nemotron-3-nano:4b"
     )
 
 
-def test_get_default_copilot_model_id_falls_back_to_nemotron_when_qwen_missing(monkeypatch):
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
+def test_get_default_copilot_model_id_falls_back_to_nemotron_when_preferred_missing(monkeypatch):
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
 
     models = [
         AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
@@ -318,14 +318,14 @@ def test_get_default_copilot_model_id_falls_back_to_nemotron_when_qwen_missing(m
 
 
 def test_get_default_security_copilot_model_id_prefers_supported_security_default(monkeypatch):
-    monkeypatch.setattr(ai_client, "OLLAMA_SECURITY_MODEL", "qwen3.5:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_SECURITY_MODEL", "nemotron-3-nano:4b")
 
     models = [
         AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
-        AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama"),
+        AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
     ]
 
-    assert get_default_security_copilot_model_id(models) == "qwen3.5:4b"
+    assert get_default_security_copilot_model_id(models) == "nemotron-3-nano:4b"
 
 
 def test_invoke_model_text_rejects_non_ollama_models(monkeypatch):
@@ -334,7 +334,7 @@ def test_invoke_model_text_rejects_non_ollama_models(monkeypatch):
     monkeypatch.setattr(
         ai_client,
         "_list_ollama_models_from_api",
-        lambda **kwargs: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        lambda **kwargs: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
     )
 
     try:
@@ -378,7 +378,7 @@ def test_invoke_ollama_includes_keep_alive_json_format_and_output_cap(monkeypatc
     monkeypatch.setattr(ai_client, "OLLAMA_REQUEST_TIMEOUT_SECONDS", 30.0)
 
     text, usage = ai_client._invoke_ollama(
-        "qwen3.5:4b",
+        "nemotron-3-nano:4b",
         "system",
         "user",
         max_output_tokens=123,
@@ -431,7 +431,7 @@ def test_score_closed_ticket_parses_scores(monkeypatch):
     )
     monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id, **kwargs: "ollama")
 
-    score = score_closed_ticket(issue, [{"author": {"displayName": "Ada"}, "body": "Resolved and confirmed.", "public": True}], "qwen3.5:4b")
+    score = score_closed_ticket(issue, [{"author": {"displayName": "Ada"}, "body": "Resolved and confirmed.", "public": True}], "nemotron-3-nano:4b")
 
     assert score.key == "OIT-42"
     assert score.communication_score == 4
@@ -455,7 +455,7 @@ def test_analyze_ticket_uses_ollama_provider(monkeypatch):
     }
 
     monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
     monkeypatch.setattr(ai_client, "get_request_type_names", lambda: ["VPN", "Get IT help"])
     monkeypatch.setattr(
         ai_client,
@@ -475,9 +475,9 @@ def test_analyze_ticket_uses_ollama_provider(monkeypatch):
 
     monkeypatch.setattr(knowledge_base.kb_store, "find_relevant_articles", lambda **kwargs: [])
 
-    result = analyze_ticket(issue, "qwen3.5:4b")
+    result = analyze_ticket(issue, "nemotron-3-nano:4b")
 
-    assert result.model_used == "qwen3.5:4b"
+    assert result.model_used == "nemotron-3-nano:4b"
     assert result.suggestions[0].field == "request_type"
     assert result.suggestions[0].suggested_value == "VPN"
 
@@ -543,7 +543,7 @@ def test_score_closed_ticket_clamps_invalid_scores(monkeypatch):
     )
     monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id, **kwargs: "ollama")
 
-    score = score_closed_ticket(issue, [], "qwen3.5:4b")
+    score = score_closed_ticket(issue, [], "nemotron-3-nano:4b")
 
     assert score.communication_score == 5
     assert score.documentation_score == 1
@@ -734,7 +734,7 @@ def test_analyze_ticket_includes_relevant_kb_context(monkeypatch):
         ],
     )
 
-    result = ai_client.analyze_ticket(issue, "qwen3.5:4b")
+    result = ai_client.analyze_ticket(issue, "nemotron-3-nano:4b")
 
     assert result.suggestions[0].suggested_value == "Email or Outlook"
     assert "Relevant Knowledge Base Articles" in captured["user_msg"]
@@ -897,7 +897,7 @@ def test_draft_kb_article_parses_model_response(monkeypatch):
     )
     monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id, **kwargs: "ollama")
 
-    draft = draft_kb_article(issue, [], "qwen3.5:4b", existing_article)
+    draft = draft_kb_article(issue, [], "nemotron-3-nano:4b", existing_article)
 
     assert draft.title == "Email or Outlook"
     assert draft.recommended_action == "update_existing"
@@ -930,7 +930,7 @@ def test_draft_kb_article_uses_json_mode_and_output_cap(monkeypatch):
     monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke)
     monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id, **kwargs: "ollama")
 
-    draft_kb_article(issue, [], "qwen3.5:4b", None)
+    draft_kb_article(issue, [], "nemotron-3-nano:4b", None)
 
     assert captured["max_output_tokens"] == 2200
     assert captured["json_output"] is True
@@ -938,7 +938,7 @@ def test_draft_kb_article_uses_json_mode_and_output_cap(monkeypatch):
 
 def test_draft_kb_from_sop_supports_ollama(monkeypatch):
     monkeypatch.setattr(ai_client, "OLLAMA_ENABLED", True)
-    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "qwen3.5:4b")
+    monkeypatch.setattr(ai_client, "OLLAMA_MODEL", "nemotron-3-nano:4b")
     monkeypatch.setattr(
         ai_client,
         "invoke_model_text",
@@ -951,10 +951,10 @@ def test_draft_kb_from_sop_supports_ollama(monkeypatch):
         }""",
     )
 
-    draft = draft_kb_from_sop("VPN troubleshooting steps", "vpn_access.docx", "qwen3.5:4b")
+    draft = draft_kb_from_sop("VPN troubleshooting steps", "vpn_access.docx", "nemotron-3-nano:4b")
 
     assert draft.title == "VPN Access"
-    assert draft.model_used == "qwen3.5:4b"
+    assert draft.model_used == "nemotron-3-nano:4b"
     assert draft.request_type == "VPN"
 
 
@@ -985,7 +985,7 @@ def test_answer_azure_cost_question_uses_compact_context_and_output_cap(monkeypa
     monkeypatch.setattr(ai_client, "invoke_model_text", fake_invoke)
     monkeypatch.setattr(ai_client, "_get_model_provider", lambda model_id, **kwargs: "ollama")
 
-    response = ai_client.answer_azure_cost_question("Where can we save?", context, "qwen3.5:4b")
+    response = ai_client.answer_azure_cost_question("Where can we save?", context, "nemotron-3-nano:4b")
 
     compact_payload = json.loads(str(captured["user_msg"]).split("Grounding data:\n", 1)[1])
     assert response.answer == "All good."
@@ -1015,7 +1015,7 @@ def test_invoke_model_text_records_ai_usage(monkeypatch):
     )
 
     result = ai_client.invoke_model_text(
-        "qwen3.5:4b",
+        "nemotron-3-nano:4b",
         "system prompt",
         "user prompt",
         feature_surface="azure_cost_copilot",
@@ -1051,7 +1051,7 @@ def test_invoke_model_text_uses_highest_ollama_priority_for_security_copilot(mon
     )
 
     ai_client.invoke_model_text(
-        "qwen3.5:4b",
+        "nemotron-3-nano:4b",
         "system prompt",
         "user prompt",
         feature_surface="azure_security_copilot",
@@ -1081,7 +1081,7 @@ def test_invoke_model_text_keeps_ticket_auto_triage_on_default_ollama_runtime(mo
     )
 
     ai_client.invoke_model_text(
-        "qwen3.5:4b",
+        "nemotron-3-nano:4b",
         "system prompt",
         "user prompt",
         feature_surface="ticket_auto_triage",
@@ -1165,7 +1165,7 @@ def test_invoke_model_text_prefers_explicit_team_over_mappings(monkeypatch):
     )
 
     ai_client.invoke_model_text(
-        "qwen3.5:4b",
+        "nemotron-3-nano:4b",
         "system prompt",
         "user prompt",
         feature_surface="azure_cost_copilot",
@@ -1201,7 +1201,7 @@ def test_invoke_model_text_uses_actor_mapping_before_defaults(monkeypatch):
     )
 
     ai_client.invoke_model_text(
-        "qwen3.5:4b",
+        "nemotron-3-nano:4b",
         "system prompt",
         "user prompt",
         feature_surface="ticket_auto_triage",

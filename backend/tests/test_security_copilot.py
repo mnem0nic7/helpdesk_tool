@@ -23,7 +23,7 @@ def test_resolve_incident_profile_falls_back_to_heuristics(monkeypatch):
     incident = security_copilot._resolve_incident_profile(
         "Shared mailbox payroll@example.com is forwarding mail externally since 2 AM UTC.",
         SecurityCopilotIncident(),
-        "qwen3.5:4b",
+        "nemotron-3-nano:4b",
     )
 
     assert incident.lane == "mailbox_abuse"
@@ -41,7 +41,7 @@ def test_resolve_incident_profile_classifies_dlp_findings(monkeypatch):
     incident = security_copilot._resolve_incident_profile(
         "Purview DLP alert blocked payroll@example.com from emailing employee SSNs outside the organization this morning.",
         SecurityCopilotIncident(),
-        "qwen3.5:4b",
+        "nemotron-3-nano:4b",
     )
 
     assert incident.lane == "dlp_finding"
@@ -75,7 +75,7 @@ def test_resolve_incident_profile_includes_recent_chat_history_in_model_payload(
     incident = security_copilot._resolve_incident_profile(
         "Check her account first.",
         SecurityCopilotIncident(),
-        "qwen3.5:4b",
+        "nemotron-3-nano:4b",
         history=[
             SecurityCopilotChatMessage(role="user", content="ada@example.com reported impossible travel alerts."),
             SecurityCopilotChatMessage(role="assistant", content="I still need the timeframe."),
@@ -116,7 +116,7 @@ def test_run_security_copilot_chat_resolves_display_name_to_identity_confirmatio
             incident=SecurityCopilotIncident(),
         ),
         {"email": "test@example.com", "name": "Test User"},
-        model_id="qwen3.5:4b",
+        model_id="nemotron-3-nano:4b",
     )
 
     assert response.phase == "needs_input"
@@ -151,7 +151,7 @@ def test_resolve_incident_profile_accepts_identity_confirmation_reply(monkeypatc
                 )
             ],
         ),
-        "qwen3.5:4b",
+        "nemotron-3-nano:4b",
     )
 
     assert incident.summary == "Abhishek Mishra had impossible travel."
@@ -210,7 +210,7 @@ def test_run_security_copilot_chat_returns_needs_input_for_missing_fields(monkey
             ),
         ),
         {"email": "test@example.com", "name": "Test User"},
-        model_id="qwen3.5:4b",
+        model_id="nemotron-3-nano:4b",
     )
 
     assert response.phase == "needs_input"
@@ -253,7 +253,7 @@ def test_run_security_copilot_chat_reports_source_errors(monkeypatch):
             ),
         ),
         {"email": "test@example.com", "name": "Test User"},
-        model_id="qwen3.5:4b",
+        model_id="nemotron-3-nano:4b",
     )
 
     assert response.phase == "complete"
@@ -317,7 +317,7 @@ def test_run_security_copilot_chat_returns_running_jobs(monkeypatch):
             ),
         ),
         {"email": "test@example.com", "name": "Test User"},
-        model_id="qwen3.5:4b",
+        model_id="nemotron-3-nano:4b",
     )
 
     assert response.phase == "running_jobs"
@@ -374,7 +374,7 @@ def test_run_security_copilot_chat_warns_when_tenant_data_is_stale(monkeypatch):
             ),
         ),
         {"email": "test@example.com", "name": "Test User"},
-        model_id="qwen3.5:4b",
+        model_id="nemotron-3-nano:4b",
     )
 
     assert response.phase == "complete"
@@ -427,7 +427,7 @@ def test_run_security_copilot_chat_handles_no_relevant_findings(monkeypatch):
             ),
         ),
         {"email": "test@example.com", "name": "Test User"},
-        model_id="qwen3.5:4b",
+        model_id="nemotron-3-nano:4b",
     )
 
     assert response.phase == "complete"

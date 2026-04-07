@@ -25,7 +25,7 @@ class TestAutoTriageRoutes:
             "changed",
             source="auto",
             processed_at=now,
-            model="qwen3.5:4b",
+            model="nemotron-3-nano:4b",
             fields_changed=["priority"],
         )
         store.mark_auto_triaged("OIT-200")
@@ -34,7 +34,7 @@ class TestAutoTriageRoutes:
             "no_change",
             source="auto",
             processed_at=now,
-            model="qwen3.5:4b",
+            model="nemotron-3-nano:4b",
             fields_changed=[],
         )
         store.mark_auto_triaged("OIT-300")
@@ -51,7 +51,7 @@ class TestAutoTriageRoutes:
             "failed",
             source="auto",
             processed_at=now,
-            model="qwen3.5:4b",
+            model="nemotron-3-nano:4b",
             fields_changed=[],
             error="RuntimeError: apply failed",
         )
@@ -70,7 +70,7 @@ class TestAutoTriageRoutes:
         monkeypatch.setattr(
             routes_triage,
             "get_available_models",
-            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+            lambda: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
         )
 
         resp = test_client.get("/api/triage/run-status")
@@ -113,7 +113,7 @@ class TestAutoTriageRoutes:
         monkeypatch.setattr(
             routes_triage,
             "get_available_models",
-            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+            lambda: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
         )
         monkeypatch.setattr(routes_triage.cache, "_auto_triage_new_tickets", auto_triage)
 
@@ -137,9 +137,9 @@ class TestAutoTriageRoutes:
 
         store.clear_auto_triaged()
         store.mark_auto_triaged("OIT-100")
-        store.record_auto_triage_activity("OIT-100", "changed", source="auto", model="qwen3.5:4b")
+        store.record_auto_triage_activity("OIT-100", "changed", source="auto", model="nemotron-3-nano:4b")
         store.mark_auto_triaged("OIT-200")
-        store.record_auto_triage_activity("OIT-200", "no_change", source="auto", model="qwen3.5:4b")
+        store.record_auto_triage_activity("OIT-200", "no_change", source="auto", model="nemotron-3-nano:4b")
         store.mark_auto_triaged("OIT-300")
         store.record_auto_triage_activity(
             "OIT-300",
@@ -152,7 +152,7 @@ class TestAutoTriageRoutes:
         monkeypatch.setattr(
             routes_triage,
             "get_available_models",
-            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+            lambda: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
         )
         monkeypatch.setattr(routes_triage.cache, "_auto_triage_new_tickets", auto_triage)
 
@@ -221,7 +221,7 @@ class TestAutoTriageRoutes:
         monkeypatch.setattr(
             routes_triage,
             "get_available_models",
-            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+            lambda: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
         )
 
         resp = test_client.get("/api/triage/run-status")
@@ -247,7 +247,7 @@ class TestAutoTriageRoutes:
             "changed",
             source="auto",
             processed_at=stale_timestamp,
-            model="qwen3.5:4b",
+            model="nemotron-3-nano:4b",
             fields_changed=["priority"],
         )
         monkeypatch.setattr(
@@ -265,7 +265,7 @@ class TestAutoTriageRoutes:
         monkeypatch.setattr(
             routes_triage,
             "get_available_models",
-            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+            lambda: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
         )
 
         resp = test_client.get("/api/triage/run-status")
@@ -290,7 +290,7 @@ class TestAutoTriageRoutes:
             routes_triage,
             "get_available_models",
             lambda: [
-                AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama"),
+                AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
                 AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
             ],
         )
@@ -321,7 +321,7 @@ class TestAutoTriageRoutes:
             routes_triage,
             "get_available_models",
             lambda: [
-                AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama"),
+                AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
                 AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
             ],
         )
@@ -395,7 +395,7 @@ class TestTechnicianScoringRoutes:
         monkeypatch.setattr(
             scoring_manager_module,
             "get_available_models",
-            lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+            lambda: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
         )
         monkeypatch.setattr(routes_triage._client, "get_request_comments", lambda key: [])
         monkeypatch.setattr(
@@ -513,7 +513,7 @@ class TestTechnicianScoringRoutes:
                 documentation_score=4,
                 documentation_notes="Clear resolution notes.",
                 score_summary="Strong closeout quality.",
-                model_used="qwen3.5:4b",
+                model_used="nemotron-3-nano:4b",
                 created_at="2026-03-04T12:00:00+00:00",
             )
             if key == "OIT-300"

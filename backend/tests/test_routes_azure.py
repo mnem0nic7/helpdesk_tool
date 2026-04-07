@@ -380,7 +380,7 @@ def test_finops_status_and_ai_cost_routes_return_local_finops_data(test_client, 
         "estimated_tokens": 1800,
         "estimated_cost": 0.025,
         "currency": "USD",
-        "top_model": "qwen3.5:4b",
+        "top_model": "nemotron-3-nano:4b",
         "top_feature": "azure_cost_copilot",
         "window_start": "2026-03-20",
         "window_end": "2026-03-20",
@@ -389,7 +389,7 @@ def test_finops_status_and_ai_cost_routes_return_local_finops_data(test_client, 
         {"date": "2026-03-20", "request_count": 2, "estimated_cost": 0.025, "currency": "USD"}
     ]
     mock_finops.get_ai_cost_breakdown.return_value = [
-        {"label": "qwen3.5:4b", "request_count": 2, "estimated_cost": 0.025, "currency": "USD", "share": 1.0}
+        {"label": "nemotron-3-nano:4b", "request_count": 2, "estimated_cost": 0.025, "currency": "USD", "share": 1.0}
     ]
     mock_cache = MagicMock()
     mock_cache.get_cost_summary.return_value = {"total_cost": 25.5}
@@ -415,7 +415,7 @@ def test_finops_status_and_ai_cost_routes_return_local_finops_data(test_client, 
     assert ai_summary_resp.status_code == 200
     assert ai_summary_resp.json()["estimated_cost"] == 0.025
     assert ai_trend_resp.json()[0]["request_count"] == 2
-    assert ai_breakdown_resp.json()[0]["label"] == "qwen3.5:4b"
+    assert ai_breakdown_resp.json()[0]["label"] == "nemotron-3-nano:4b"
 
 
 def test_azure_ai_models_returns_active_ollama_models(test_client, monkeypatch):
@@ -425,7 +425,7 @@ def test_azure_ai_models_returns_active_ollama_models(test_client, monkeypatch):
         routes_azure,
         "get_available_copilot_models",
         lambda: [
-            AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama"),
+            AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
             AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
         ],
     )
@@ -434,7 +434,7 @@ def test_azure_ai_models_returns_active_ollama_models(test_client, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json() == [
-        {"id": "qwen3.5:4b", "name": "qwen3.5:4b", "provider": "ollama"},
+        {"id": "nemotron-3-nano:4b", "name": "nemotron-3-nano:4b", "provider": "ollama"},
         {"id": "nemotron-3-nano:4b", "name": "nemotron-3-nano:4b", "provider": "ollama"},
     ]
 
@@ -1627,7 +1627,7 @@ def test_azure_cost_chat_returns_grounded_answer(test_client, monkeypatch):
     monkeypatch.setattr(
         routes_azure,
         "get_available_copilot_models",
-        lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        lambda: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
     )
     monkeypatch.setattr(routes_azure, "get_default_copilot_model_id", lambda models: models[0].id)
     monkeypatch.setattr(
@@ -1647,7 +1647,7 @@ def test_azure_cost_chat_returns_grounded_answer(test_client, monkeypatch):
         json={"question": "Where can we save money?"},
     )
     assert resp.status_code == 200
-    assert resp.json()["model_used"] == "qwen3.5:4b"
+    assert resp.json()["model_used"] == "nemotron-3-nano:4b"
     assert "save money" in resp.json()["answer"]
 
 
@@ -1672,10 +1672,10 @@ def test_azure_cost_chat_uses_preferred_default_model(test_client, monkeypatch):
         "get_available_copilot_models",
         lambda: [
             AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
-            AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama"),
+            AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama"),
         ],
     )
-    monkeypatch.setattr(routes_azure, "get_default_copilot_model_id", lambda models: "qwen3.5:4b")
+    monkeypatch.setattr(routes_azure, "get_default_copilot_model_id", lambda models: "nemotron-3-nano:4b")
 
     seen: dict[str, str] = {}
 
@@ -1697,7 +1697,7 @@ def test_azure_cost_chat_uses_preferred_default_model(test_client, monkeypatch):
     )
 
     assert resp.status_code == 200
-    assert seen["model_id"] == "qwen3.5:4b"
+    assert seen["model_id"] == "nemotron-3-nano:4b"
 
 
 def test_azure_vms_returns_cached_vm_inventory(test_client, monkeypatch):

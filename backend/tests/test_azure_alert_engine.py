@@ -258,14 +258,14 @@ def test_parse_azure_alert_rule_uses_shared_ai_invocation(monkeypatch):
         provider = "ollama"
 
     class _QualityModel:
-        id = "qwen3.5:4b"
+        id = "nemotron-3-nano:4b"
         provider = "ollama"
 
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(ai_client, "get_available_models", lambda: [_FastModel(), _QualityModel()])
     monkeypatch.setattr(config, "AZURE_ALERT_RULE_MODEL", "nemotron-3-nano:4b")
-    monkeypatch.setattr(config, "OLLAMA_MODEL", "qwen3.5:4b")
+    monkeypatch.setattr(config, "OLLAMA_MODEL", "nemotron-3-nano:4b")
     monkeypatch.setattr(
         ai_client,
         "invoke_model_text",

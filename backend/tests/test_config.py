@@ -127,11 +127,11 @@ def test_ollama_config_defaults_and_overrides(monkeypatch):
 
     assert config.OLLAMA_ENABLED is True
     assert config.OLLAMA_BASE_URL == "http://localhost:11434"
-    assert config.OLLAMA_MODEL == "qwen3.5:4b"
+    assert config.OLLAMA_MODEL == "nemotron-3-nano:4b"
     assert config.OLLAMA_FAST_MODEL == "nemotron-3-nano:4b"
     assert config.OLLAMA_SECURITY_ENABLED is True
     assert config.OLLAMA_SECURITY_BASE_URL == "http://localhost:11434"
-    assert config.OLLAMA_SECURITY_MODEL == "qwen3.5:4b"
+    assert config.OLLAMA_SECURITY_MODEL == "nemotron-3-nano:4b"
     assert config.OLLAMA_REQUEST_TIMEOUT_SECONDS == 300
     assert config.OLLAMA_KEEP_ALIVE == "15m"
     assert config.AUTO_TRIAGE_MODEL == "nemotron-3-nano:4b"

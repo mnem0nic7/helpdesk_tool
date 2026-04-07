@@ -201,12 +201,12 @@ async def test_auto_triage_records_changed_activity_and_change_log(tmp_path, mon
     monkeypatch.setattr(
         ai_client,
         "get_available_models",
-        lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        lambda: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
     )
     monkeypatch.setattr(
         ai_client,
         "select_available_ollama_model",
-        lambda available, preferred_model_id, fallback_model_id: "qwen3.5:4b",
+        lambda available, preferred_model_id, fallback_model_id: "nemotron-3-nano:4b",
     )
     monkeypatch.setattr(ai_client, "validate_suggestions", lambda key, suggestions: suggestions)
     monkeypatch.setattr(
@@ -249,7 +249,7 @@ async def test_auto_triage_records_changed_activity_and_change_log(tmp_path, mon
         SimpleNamespace(run_item=lambda lane, key, work: work()),
     )
 
-    await cache._auto_triage_new_tickets(["OIT-901"], model_id="qwen3.5:4b")
+    await cache._auto_triage_new_tickets(["OIT-901"], model_id="nemotron-3-nano:4b")
 
     assert triage_store.store.get_auto_triaged_keys() == {"OIT-901"}
     assert triage_store.store.get_triage_log(limit=10) == [
@@ -259,7 +259,7 @@ async def test_auto_triage_records_changed_activity_and_change_log(tmp_path, mon
             "old_value": "Medium",
             "new_value": "High",
             "confidence": 0.95,
-            "model": "qwen3.5:4b",
+            "model": "nemotron-3-nano:4b",
             "source": "auto",
             "approved_by": None,
             "timestamp": triage_store.store.get_triage_log(limit=10)[0]["timestamp"],
@@ -271,7 +271,7 @@ async def test_auto_triage_records_changed_activity_and_change_log(tmp_path, mon
             "outcome": "changed",
             "source": "auto",
             "processed_at": triage_store.store.list_auto_triage_activity()[0]["processed_at"],
-            "model": "qwen3.5:4b",
+            "model": "nemotron-3-nano:4b",
             "fields_changed": ["priority"],
             "error": None,
             "legacy_backfill": False,
@@ -302,12 +302,12 @@ async def test_auto_triage_records_no_change_activity_without_change_log(tmp_pat
     monkeypatch.setattr(
         ai_client,
         "get_available_models",
-        lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        lambda: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
     )
     monkeypatch.setattr(
         ai_client,
         "select_available_ollama_model",
-        lambda available, preferred_model_id, fallback_model_id: "qwen3.5:4b",
+        lambda available, preferred_model_id, fallback_model_id: "nemotron-3-nano:4b",
     )
     monkeypatch.setattr(ai_client, "validate_suggestions", lambda key, suggestions: suggestions)
     monkeypatch.setattr(
@@ -335,7 +335,7 @@ async def test_auto_triage_records_no_change_activity_without_change_log(tmp_pat
         SimpleNamespace(run_item=lambda lane, key, work: work()),
     )
 
-    await cache._auto_triage_new_tickets(["OIT-902"], model_id="qwen3.5:4b")
+    await cache._auto_triage_new_tickets(["OIT-902"], model_id="nemotron-3-nano:4b")
 
     assert triage_store.store.get_auto_triaged_keys() == {"OIT-902"}
     assert triage_store.store.get_triage_log(limit=10) == []
@@ -345,7 +345,7 @@ async def test_auto_triage_records_no_change_activity_without_change_log(tmp_pat
             "outcome": "no_change",
             "source": "auto",
             "processed_at": triage_store.store.list_auto_triage_activity()[0]["processed_at"],
-            "model": "qwen3.5:4b",
+            "model": "nemotron-3-nano:4b",
             "fields_changed": [],
             "error": None,
             "legacy_backfill": False,
@@ -376,12 +376,12 @@ async def test_auto_triage_records_failed_activity_without_marking_ticket_done(t
     monkeypatch.setattr(
         ai_client,
         "get_available_models",
-        lambda: [AIModel(id="qwen3.5:4b", name="qwen3.5:4b", provider="ollama")],
+        lambda: [AIModel(id="nemotron-3-nano:4b", name="nemotron-3-nano:4b", provider="ollama")],
     )
     monkeypatch.setattr(
         ai_client,
         "select_available_ollama_model",
-        lambda available, preferred_model_id, fallback_model_id: "qwen3.5:4b",
+        lambda available, preferred_model_id, fallback_model_id: "nemotron-3-nano:4b",
     )
     monkeypatch.setattr(ai_client, "validate_suggestions", lambda key, suggestions: suggestions)
     monkeypatch.setattr(
@@ -396,7 +396,7 @@ async def test_auto_triage_records_failed_activity_without_marking_ticket_done(t
         SimpleNamespace(run_item=lambda lane, key, work: work()),
     )
 
-    await cache._auto_triage_new_tickets(["OIT-903"], model_id="qwen3.5:4b")
+    await cache._auto_triage_new_tickets(["OIT-903"], model_id="nemotron-3-nano:4b")
 
     assert triage_store.store.get_auto_triaged_keys() == set()
     assert triage_store.store.get_triage_log(limit=10) == []
@@ -406,7 +406,7 @@ async def test_auto_triage_records_failed_activity_without_marking_ticket_done(t
             "outcome": "failed",
             "source": "auto",
             "processed_at": triage_store.store.list_auto_triage_activity()[0]["processed_at"],
-            "model": "qwen3.5:4b",
+            "model": "nemotron-3-nano:4b",
             "fields_changed": [],
             "error": "RuntimeError: ollama offline",
             "legacy_backfill": False,
