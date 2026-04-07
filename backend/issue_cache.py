@@ -295,11 +295,15 @@ class IssueCache:
         elif scope == "azure":
             issues = []
 
-        pending_keys = [
-            issue.get("key", "")
-            for issue in issues
+        pending_issues = [
+            issue for issue in issues
             if issue.get("key") and issue.get("key") not in seen
         ]
+        pending_issues.sort(
+            key=lambda iss: (iss.get("fields") or {}).get("created") or "",
+            reverse=True,  # newest first
+        )
+        pending_keys = [issue.get("key", "") for issue in pending_issues]
 
         return {
             "running": running,
