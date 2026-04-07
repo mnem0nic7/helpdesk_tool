@@ -25,6 +25,8 @@ from config import (
     OLLAMA_KEEP_ALIVE,
     OLLAMA_MODEL,
     OLLAMA_REQUEST_TIMEOUT_SECONDS,
+    OLLAMA_SECONDARY_BASE_URL,
+    OLLAMA_SECONDARY_ENABLED,
     OLLAMA_SECURITY_BASE_URL,
     OLLAMA_SECURITY_ENABLED,
     OLLAMA_SECURITY_MODEL,
@@ -243,6 +245,64 @@ class OllamaRequestCoordinator:
 
 
 _OLLAMA_REQUEST_COORDINATORS: dict[str, OllamaRequestCoordinator] = {}
+
+# ---------------------------------------------------------------------------
+# Secondary Ollama round-robin for triage / QA
+# ---------------------------------------------------------------------------
+
+# Features that participate in secondary-instance load sharing
+_SECONDARY_OLLAMA_FEATURES = frozenset({"ticket_auto_triage", "technician_qa"})
+
+# Health-check cache: {url: (checked_at, is_healthy)}
+_SECONDARY_HEALTH_CACHE: tuple[float, bool] = (0.0, False)
+_SECONDARY_HEALTH_TTL = 30.0  # seconds
+_SECONDARY_HEALTH_LOCK = threading.Lock()
+
+# Round-robin counter (shared across threads; atomic via GIL for CPython)
+_SECONDARY_ROUND_ROBIN_COUNTER = 0
+
+
+def _check_secondary_healthy() -> bool:
+    """Return True if the secondary Ollama instance is reachable (cached 30s)."""
+    global _SECONDARY_HEALTH_CACHE
+    if not OLLAMA_SECONDARY_ENABLED or not OLLAMA_SECONDARY_BASE_URL:
+        return False
+    now = time.time()
+    with _SECONDARY_HEALTH_LOCK:
+        checked_at, healthy = _SECONDARY_HEALTH_CACHE
+        if now - checked_at < _SECONDARY_HEALTH_TTL:
+            return healthy
+    try:
+        resp = _get_ollama_session(OLLAMA_SECONDARY_BASE_URL).get(
+            f"{OLLAMA_SECONDARY_BASE_URL}/api/tags",
+            timeout=3.0,
+        )
+        is_healthy = resp.status_code == 200
+    except Exception:
+        is_healthy = False
+    with _SECONDARY_HEALTH_LOCK:
+        _SECONDARY_HEALTH_CACHE = (now, is_healthy)
+    if not is_healthy:
+        logger.debug("Secondary Ollama at %s is unreachable", OLLAMA_SECONDARY_BASE_URL)
+    return is_healthy
+
+
+def _pick_ollama_base_url_for_feature(feature_surface: str, runtime: str = "default") -> str:
+    """Return the Ollama base URL to use for this feature invocation.
+
+    For triage/QA features: round-robin between primary and secondary when
+    secondary is healthy; fall back to primary when it is not.
+    For all other features: always use the runtime's configured base URL.
+    """
+    global _SECONDARY_ROUND_ROBIN_COUNTER
+    if runtime != "default" or feature_surface not in _SECONDARY_OLLAMA_FEATURES:
+        return _get_ollama_runtime_settings(runtime).base_url
+    if not _check_secondary_healthy():
+        return OLLAMA_BASE_URL
+    # Thread-safe round-robin (GIL makes integer increment atomic in CPython)
+    counter = _SECONDARY_ROUND_ROBIN_COUNTER
+    _SECONDARY_ROUND_ROBIN_COUNTER = counter + 1
+    return OLLAMA_SECONDARY_BASE_URL if counter % 2 == 0 else OLLAMA_BASE_URL
 
 
 def _get_ollama_request_coordinator(base_url: str) -> OllamaRequestCoordinator:
@@ -1254,9 +1314,12 @@ def _invoke_ollama(
     priority: int | None = None,
     queue_label: str = "",
     runtime: str = "default",
+    feature_surface: str = "",
 ) -> tuple[str, dict[str, Any]]:
     """Call a local Ollama model and return response text plus usage."""
     runtime_settings = _get_ollama_runtime_settings(runtime)
+    # For triage/QA features, round-robin between primary and secondary Ollama
+    base_url = _pick_ollama_base_url_for_feature(feature_surface, runtime)
     payload: dict[str, Any] = {
         "model": model_id,
         "messages": [
@@ -1281,8 +1344,8 @@ def _invoke_ollama(
         payload["options"] = options
 
     def _run_request() -> tuple[str, dict[str, Any]]:
-        response = _get_ollama_session(runtime_settings.base_url).post(
-            f"{runtime_settings.base_url}/api/chat",
+        response = _get_ollama_session(base_url).post(
+            f"{base_url}/api/chat",
             json=payload,
             timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
         )
@@ -1298,7 +1361,7 @@ def _invoke_ollama(
             }
         raise RuntimeError(f"Ollama model '{model_id}' returned no text output")
 
-    return _get_ollama_request_coordinator(runtime_settings.base_url).run(
+    return _get_ollama_request_coordinator(base_url).run(
         priority=_resolve_ollama_request_priority(explicit_priority=priority),
         label=queue_label or model_id,
         work=_run_request,
@@ -1393,6 +1456,7 @@ def invoke_model_text(
                 ),
                 queue_label=feature_surface or app_surface or model_id,
                 runtime=resolved_ollama_runtime,
+                feature_surface=feature_surface,
             )
         else:
             raise ValueError(f"Unsupported provider: {provider}")

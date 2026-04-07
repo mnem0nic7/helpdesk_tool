@@ -280,6 +280,10 @@ OLLAMA_SECURITY_ENABLED: bool = _env_bool(
 OLLAMA_SECURITY_BASE_URL: str = os.getenv("OLLAMA_SECURITY_BASE_URL", OLLAMA_BASE_URL).rstrip("/")
 OLLAMA_SECURITY_MODEL: str = os.getenv("OLLAMA_SECURITY_MODEL", OLLAMA_MODEL).strip() or OLLAMA_MODEL
 
+# Secondary Ollama instance for load-sharing triage/QA (optional)
+OLLAMA_SECONDARY_BASE_URL: str = os.getenv("OLLAMA_SECONDARY_BASE_URL", "").strip().rstrip("/")
+OLLAMA_SECONDARY_ENABLED: bool = _env_bool("OLLAMA_SECONDARY_ENABLED", "1" if OLLAMA_SECONDARY_BASE_URL else "0")
+
 # Auto-triage and fast structured AI defaults
 AUTO_TRIAGE_MODEL: str = os.getenv("AUTO_TRIAGE_MODEL", OLLAMA_FAST_MODEL).strip() or OLLAMA_FAST_MODEL
 TECHNICIAN_SCORE_MODEL: str = os.getenv("TECHNICIAN_SCORE_MODEL", OLLAMA_FAST_MODEL).strip() or OLLAMA_FAST_MODEL
