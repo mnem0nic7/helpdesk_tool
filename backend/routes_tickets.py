@@ -423,7 +423,11 @@ async def get_filter_options() -> dict[str, list[str]]:
 @router.get("/priorities")
 async def get_priorities() -> list[dict[str, str]]:
     """Return available Jira priorities."""
-    priorities = _client.get_priorities()
+    try:
+        priorities = await asyncio.get_event_loop().run_in_executor(None, _client.get_priorities)
+    except Exception:
+        logger.warning("Failed to fetch Jira priorities, returning empty list")
+        return []
     return [
         {"id": str(priority.get("id", "")), "name": priority.get("name", "")}
         for priority in priorities

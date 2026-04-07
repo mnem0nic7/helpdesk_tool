@@ -453,17 +453,41 @@ class RequestorSyncService:
                 )
                 created_customer = True
             except Exception as exc:
+                exc_str = str(exc)
                 # Jira returns 400 "An account already exists for this email" when
-                # the user is already a Jira account but not yet a service desk
-                # customer.  Look up the existing account and continue.
-                if "already exists" in str(exc).lower():
-                    results = self._jira_client().search_users(canonical_email, max_results=5)
-                    for result in results:
-                        if str(result.get("emailAddress") or "").lower() == canonical_email.lower():
-                            jira_identity = result
-                            break
-                if jira_identity is None:
-                    raise
+                # the account is already in Jira but we can't resolve it (e.g. email
+                # is masked in Jira Cloud search results).  Mark as already_synced so
+                # we stop retrying — the account exists and that's sufficient.
+                if "already exists" in exc_str.lower():
+                    message = (
+                        f"Jira account already exists for {canonical_email} but could not be "
+                        "resolved via directory search (email may be masked). Reporter not updated."
+                    )
+                    logger.info("Requestor sync: %s for ticket %s", message, ticket_key)
+                    self._store.upsert_requestor_link(
+                        email_key=email_key,
+                        ticket_key=ticket_key,
+                        extracted_email=extracted_email,
+                        directory_user_id=str(directory_match.get("entra_user_id") or "").strip(),
+                        directory_display_name=directory_display_name,
+                        canonical_email=canonical_email,
+                        match_source=match_source,
+                        sync_status="already_synced",
+                        message=message,
+                    )
+                    state = self._store.get_ticket_state(ticket_key)
+                    return {
+                        "updated": False,
+                        "message": message,
+                        "requestor_identity": self._build_identity_payload(
+                            issue,
+                            extracted_email=extracted_email,
+                            directory_matches=matches,
+                            state=state,
+                            fallback_match_source=match_source,
+                        ),
+                    }
+                raise
 
         jira_account_id = str(jira_identity.get("accountId") or "").strip()
         jira_display_name = str(jira_identity.get("displayName") or directory_display_name or canonical_email).strip()
