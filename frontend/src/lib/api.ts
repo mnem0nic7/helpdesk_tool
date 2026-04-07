@@ -780,6 +780,7 @@ export interface OllamaLaneSnapshot {
   url: string;
   label: string;       // "primary" | "secondary" | "security"
   active: number;
+  active_labels: string[];
   queued: { priority: number; label: string }[];
 }
 

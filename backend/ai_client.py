@@ -207,12 +207,14 @@ class OllamaRequestCoordinator:
         self._condition = threading.Condition()
         self._queue: list[_QueuedOllamaRequest] = []
         self._active_count = 0
+        self._active_labels: list[str] = []
         self._counter = 0
 
     def snapshot(self) -> dict[str, Any]:
         with self._condition:
             return {
                 "active_count": self._active_count,
+                "active_labels": list(self._active_labels),
                 "queued": [
                     {"priority": item.priority, "order": item.order, "label": item.label}
                     for item in sorted(self._queue)
@@ -233,6 +235,7 @@ class OllamaRequestCoordinator:
                 if is_next and self._active_count < self._max_concurrent_requests:
                     heapq.heappop(self._queue)
                     self._active_count += 1
+                    self._active_labels.append(label)
                     break
                 self._condition.wait()
         try:
@@ -240,6 +243,10 @@ class OllamaRequestCoordinator:
         finally:
             with self._condition:
                 self._active_count = max(0, self._active_count - 1)
+                try:
+                    self._active_labels.remove(label)
+                except ValueError:
+                    pass
                 self._condition.notify_all()
 
 
@@ -273,6 +280,7 @@ def get_ollama_queue_snapshot() -> list[dict[str, Any]]:
             "url": url,
             "label": label_map.get(url, url),
             "active": snap["active_count"],
+            "active_labels": snap["active_labels"],
             "queued": [{"priority": q["priority"], "label": q["label"]} for q in snap["queued"]],
         })
     # Always include primary/secondary/security even if not yet touched, so the
@@ -280,7 +288,7 @@ def get_ollama_queue_snapshot() -> list[dict[str, Any]]:
     existing_urls = {lane["url"] for lane in lanes}
     for url, label in label_map.items():
         if url and url not in existing_urls:
-            lanes.append({"url": url, "label": label, "active": 0, "queued": []})
+            lanes.append({"url": url, "label": label, "active": 0, "active_labels": [], "queued": []})
     lanes.sort(key=lambda x: {"primary": 0, "secondary": 1, "security": 2}.get(x["label"], 3))
     return lanes
 

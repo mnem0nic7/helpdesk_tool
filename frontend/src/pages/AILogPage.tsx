@@ -339,11 +339,13 @@ export default function AILogPage() {
                     </span>
                   </div>
                   {lane.active > 0 && (
-                    <div className="mb-1 flex items-center gap-1.5 text-blue-700">
-                      <span className="inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-                      <span className="truncate font-medium">
-                        {lane.queued[0]?.label ?? "working…"}
-                      </span>
+                    <div className="mb-1 space-y-0.5">
+                      {(lane.active_labels?.length > 0 ? lane.active_labels : ["working…"]).map((lbl, i) => (
+                        <div key={i} className="flex items-center gap-1.5 text-blue-700">
+                          <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-blue-500 animate-pulse" />
+                          <span className="truncate font-medium">{lbl}</span>
+                        </div>
+                      ))}
                     </div>
                   )}
                   {lane.queued.length > 0 && (
