@@ -44,6 +44,9 @@ from routes_azure_security_copilot import router as azure_security_copilot_route
 from routes_tools import router as tools_router
 from routes_user_admin import router as user_admin_router
 from routes_user_exit import router as user_exit_router
+from routes_ad import router as ad_router
+from routes_deactivation_schedule import router as deactivation_schedule_router
+from deactivation_schedule import deactivation_schedule as _deactivation_schedule_store
 from ai_work_scheduler import AIWorkScheduler
 from azure_alert_engine import start_azure_alert_loop, stop_azure_alert_loop
 from azure_cost_exports import azure_cost_export_service
@@ -123,6 +126,12 @@ async def _start_deferred_services(app: FastAPI) -> None:
         ("Azure alert loop", start_azure_alert_loop),
     )
 
+    # Start deactivation schedule background runner (uses asyncio task internally)
+    try:
+        _deactivation_schedule_store.start_background_runner()
+    except Exception:
+        logger.exception("Failed to start deactivation schedule runner")
+
     for label, starter in starters:
         try:
             await starter()
@@ -166,6 +175,7 @@ async def _stop_leader_services(app: FastAPI) -> None:
     await azure_cost_export_service.stop()
     await azure_cache.stop_background_refresh()
     await cache.stop_background_refresh()
+    _deactivation_schedule_store.stop_background_runner()
     app.state.leader_services_running = False
 
 
@@ -429,6 +439,8 @@ app.include_router(azure_security_copilot_router)
 app.include_router(tools_router)
 app.include_router(user_admin_router)
 app.include_router(user_exit_router)
+app.include_router(ad_router)
+app.include_router(deactivation_schedule_router)
 
 # ---------------------------------------------------------------------------
 # Routes

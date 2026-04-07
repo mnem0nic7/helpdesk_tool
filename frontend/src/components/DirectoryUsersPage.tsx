@@ -895,10 +895,12 @@ function PrimaryUserDrawerContent({
   user,
   capabilities,
   onQueueAction,
+  onDeactivate,
 }: {
   user: AzureDirectoryObject;
   capabilities: UserAdminCapabilities | undefined;
   onQueueAction: (action: PendingAction) => void;
+  onDeactivate: (entraUserId: string, displayName: string, adSam: string) => void;
 }) {
   const [selectedTab, setSelectedTab] = useState<UserDrawerTab>("overview");
   const [profileDraft, setProfileDraft] = useState({
@@ -1144,6 +1146,13 @@ function PrimaryUserDrawerContent({
           <QueryState isLoading={detailQuery.isLoading} isError={detailQuery.isError} error={detailQuery.error} />
           <SectionCard title="Access Controls">
             <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={buttonClass("danger")}
+                onClick={() => onDeactivate(user.id, detail.display_name || user.display_name, detail.on_prem_sam_account_name)}
+              >
+                Deactivate
+              </button>
               <button
                 type="button"
                 className={buttonClass(detail.enabled === false ? "secondary" : "danger")}
@@ -1520,12 +1529,14 @@ function UserDetailDrawer({
   capabilities,
   onClose,
   onQueueAction,
+  onDeactivate,
 }: {
   mode: DirectoryUsersPageMode;
   user: AzureDirectoryObject;
   capabilities?: UserAdminCapabilities;
   onClose: () => void;
   onQueueAction: (action: PendingAction) => void;
+  onDeactivate: (entraUserId: string, displayName: string, adSam: string) => void;
 }) {
   const [drawerWidth, setDrawerWidth] = useState(() => clampDrawerWidth(DEFAULT_DRAWER_WIDTH));
   const [isResizing, setIsResizing] = useState(false);
@@ -1656,7 +1667,7 @@ function UserDetailDrawer({
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {mode === "primary" ? (
-            <PrimaryUserDrawerContent user={user} capabilities={capabilities} onQueueAction={onQueueAction} />
+            <PrimaryUserDrawerContent user={user} capabilities={capabilities} onQueueAction={onQueueAction} onDeactivate={onDeactivate} />
           ) : (
             <AzureUserDrawerContent user={user} />
           )}
@@ -1684,6 +1695,8 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
   const [bulkLicenseId, setBulkLicenseId] = useState("");
   const [bulkRoleId, setBulkRoleId] = useState("");
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [pendingDeactivate, setPendingDeactivate] = useState<{ entraUserId: string; displayName: string; adSam: string } | null>(null);
+  const [deactivateResult, setDeactivateResult] = useState<{ entra: string; ad: string } | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeJobResults, setActiveJobResults] = useState<UserAdminJobResult[] | null>(null);
   const [lastHandledJobId, setLastHandledJobId] = useState<string | null>(null);
@@ -1722,6 +1735,31 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
     enabled: mode === "primary",
     refetchInterval: () =>
       resolvePollingIntervalMs(activeJobId ? 15_000 : 60_000),
+  });
+
+  const deactivateMutation = useMutation({
+    mutationFn: async ({ entraUserId, adSam }: { entraUserId: string; adSam: string }) => {
+      const entraPromise = api.createUserAdminJob({
+        action_type: "disable_sign_in",
+        target_user_ids: [entraUserId],
+        params: {},
+      });
+      const adPromise = adSam
+        ? api.disableADUser(adSam).then(() => "Disabled in AD").catch((e: Error) => `AD error: ${e.message}`)
+        : Promise.resolve("No AD account linked");
+      const [entraJob, adResult] = await Promise.all([entraPromise, adPromise]);
+      return { entraJob, adResult };
+    },
+    onSuccess: ({ entraJob, adResult }) => {
+      setActiveJobId(entraJob.job_id);
+      setActiveJobResults(null);
+      setLastHandledJobId(null);
+      setDeactivateResult({ entra: `Entra job queued (${entraJob.job_id})`, ad: adResult });
+      setPendingDeactivate(null);
+    },
+    onError: () => {
+      setPendingDeactivate(null);
+    },
   });
 
   const createJobMutation = useMutation({
@@ -2431,6 +2469,10 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
             updateRouteParams({ userId: null });
           }}
           onQueueAction={(action) => setPendingAction(action)}
+          onDeactivate={(entraUserId, displayName, adSam) => {
+            setDeactivateResult(null);
+            setPendingDeactivate({ entraUserId, displayName, adSam });
+          }}
         />
       ) : null}
 
@@ -2442,6 +2484,95 @@ export default function DirectoryUsersPage({ mode }: { mode: DirectoryUsersPageM
           isSubmitting={createJobMutation.isPending}
         />
       ) : null}
+
+      {pendingDeactivate ? (
+        <DeactivateConfirmModal
+          target={pendingDeactivate}
+          isSubmitting={deactivateMutation.isPending}
+          onCancel={() => setPendingDeactivate(null)}
+          onConfirm={() => deactivateMutation.mutate({ entraUserId: pendingDeactivate.entraUserId, adSam: pendingDeactivate.adSam })}
+        />
+      ) : null}
+
+      {deactivateResult ? (
+        <div className="fixed bottom-6 right-6 z-50 w-80 rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-sm font-semibold text-slate-800">Deactivate complete</span>
+            <button onClick={() => setDeactivateResult(null)} className="text-slate-400 hover:text-slate-600">✕</button>
+          </div>
+          <div className="space-y-1 text-xs text-slate-600">
+            <div><span className="font-medium">Entra:</span> {deactivateResult.entra}</div>
+            <div><span className="font-medium">AD:</span> {deactivateResult.ad}</div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DeactivateConfirmModal({
+  target,
+  isSubmitting,
+  onCancel,
+  onConfirm,
+}: {
+  target: { entraUserId: string; displayName: string; adSam: string };
+  isSubmitting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4" onClick={onCancel}>
+      <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-xl font-bold text-slate-900">Deactivate User</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          This will disable <strong>{target.displayName}</strong> across all connected directories simultaneously.
+        </p>
+
+        <div className="mt-4 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-blue-500" />
+            <span><strong>Entra ID:</strong> Disable sign-in (blocks cloud auth immediately)</span>
+          </div>
+          {target.adSam ? (
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-orange-500" />
+              <span><strong>Active Directory:</strong> Disable account <code className="font-mono text-xs">{target.adSam}</code></span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-slate-400">
+              <span className="h-2 w-2 rounded-full bg-slate-300" />
+              <span>No on-prem AD account linked — Entra only</span>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          This action will immediately block access. Type <strong>CONFIRM</strong> to proceed.
+        </div>
+
+        <div className="mt-4">
+          <input
+            autoFocus
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500"
+            placeholder="CONFIRM"
+          />
+        </div>
+
+        <div className="mt-5 flex justify-end gap-3">
+          <button onClick={onCancel} className={buttonClass("secondary")}>Cancel</button>
+          <button
+            onClick={onConfirm}
+            disabled={typed !== "CONFIRM" || isSubmitting}
+            className={buttonClass("danger", typed !== "CONFIRM" || isSubmitting)}
+          >
+            {isSubmitting ? "Deactivating…" : "Deactivate"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

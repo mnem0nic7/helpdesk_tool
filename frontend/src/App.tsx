@@ -42,6 +42,7 @@ const AzureSecurityCopilotPage = lazy(() => import("./pages/AzureSecurityCopilot
 const AzureAlertsPage = lazy(() => import("./pages/AzureAlertsPage"));
 const AzureAccountHealthPage = lazy(() => import("./pages/AzureAccountHealthPage"));
 const AzureVirtualDesktopsPage = lazy(() => import("./pages/AzureVirtualDesktopsPage"));
+const ADManagementPage = lazy(() => import("./pages/ADManagementPage"));
 
 function PageFallback() {
   return (
@@ -110,6 +111,7 @@ export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
                 {branding.scope === "primary" ? <Route path="tools" element={<ToolsPage />} /> : null}
                 <Route path="knowledge-base" element={<KnowledgeBasePage />} />
                 {branding.scope === "primary" ? <Route path="users" element={<UsersPage />} /> : null}
+                {branding.scope === "primary" ? <Route path="active-directory" element={<ADManagementPage />} /> : null}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </>
             )}

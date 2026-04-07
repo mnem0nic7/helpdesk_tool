@@ -4299,6 +4299,316 @@ export const api = {
   getAlertTriggerTypes(): Promise<AlertTriggerType[]> {
     return fetchJSON<AlertTriggerType[]>("/api/alerts/trigger-types");
   },
+
+  // ---------------------------------------------------------------------------
+  // Active Directory
+  // ---------------------------------------------------------------------------
+
+  getADStatus(): Promise<ADStatus> {
+    return fetchJSON<ADStatus>("/api/ad/status");
+  },
+
+  searchAD(q: string): Promise<ADSearchResult[]> {
+    return fetchJSON<ADSearchResult[]>(`/api/ad/search?q=${encodeURIComponent(q)}`);
+  },
+
+  listADUsers(params?: { q?: string; ou?: string; page?: number; limit?: number }): Promise<ADUserPage> {
+    const p = new URLSearchParams();
+    if (params?.q) p.set("q", params.q);
+    if (params?.ou) p.set("ou", params.ou);
+    if (params?.page) p.set("page", String(params.page));
+    if (params?.limit) p.set("limit", String(params.limit));
+    const qs = p.toString();
+    return fetchJSON<ADUserPage>(`/api/ad/users${qs ? `?${qs}` : ""}`);
+  },
+
+  getADUser(sam: string): Promise<ADUser> {
+    return fetchJSON<ADUser>(`/api/ad/users/${encodeURIComponent(sam)}`);
+  },
+
+  createADUser(body: CreateADUserRequest): Promise<ADUser> {
+    return postJSON<ADUser>("/api/ad/users", body);
+  },
+
+  updateADUser(sam: string, attributes: Record<string, string>): Promise<ADUser> {
+    return postJSON<ADUser>(`/api/ad/users/${encodeURIComponent(sam)}/update`, { attributes });
+  },
+
+  enableADUser(sam: string): Promise<ADUser> {
+    return postJSON<ADUser>(`/api/ad/users/${encodeURIComponent(sam)}/enable`, {});
+  },
+
+  disableADUser(sam: string): Promise<ADUser> {
+    return postJSON<ADUser>(`/api/ad/users/${encodeURIComponent(sam)}/disable`, {});
+  },
+
+  unlockADUser(sam: string): Promise<ADUser> {
+    return postJSON<ADUser>(`/api/ad/users/${encodeURIComponent(sam)}/unlock`, {});
+  },
+
+  resetADPassword(sam: string, new_password: string, must_change: boolean): Promise<{ ok: boolean }> {
+    return postJSON<{ ok: boolean }>(`/api/ad/users/${encodeURIComponent(sam)}/reset-password`, {
+      new_password,
+      must_change,
+    });
+  },
+
+  moveADUser(sam: string, new_ou_dn: string): Promise<ADUser> {
+    return postJSON<ADUser>(`/api/ad/users/${encodeURIComponent(sam)}/move`, { new_ou_dn });
+  },
+
+  deleteADUser(sam: string): Promise<{ deleted: boolean; dn: string }> {
+    return deleteJSON(`/api/ad/users/${encodeURIComponent(sam)}`).then(() => ({ deleted: true, dn: "" }));
+  },
+
+  listADGroups(params?: { q?: string; page?: number; limit?: number }): Promise<ADGroupPage> {
+    const p = new URLSearchParams();
+    if (params?.q) p.set("q", params.q);
+    if (params?.page) p.set("page", String(params.page));
+    if (params?.limit) p.set("limit", String(params.limit));
+    const qs = p.toString();
+    return fetchJSON<ADGroupPage>(`/api/ad/groups${qs ? `?${qs}` : ""}`);
+  },
+
+  getADGroup(sam: string): Promise<ADGroup> {
+    return fetchJSON<ADGroup>(`/api/ad/groups/${encodeURIComponent(sam)}`);
+  },
+
+  createADGroup(body: CreateADGroupRequest): Promise<ADGroup> {
+    return postJSON<ADGroup>("/api/ad/groups", body);
+  },
+
+  deleteADGroup(sam: string): Promise<{ deleted: boolean }> {
+    return deleteJSON(`/api/ad/groups/${encodeURIComponent(sam)}`).then(() => ({ deleted: true }));
+  },
+
+  addADGroupMember(groupSam: string, member_dn: string): Promise<ADGroup> {
+    return postJSON<ADGroup>(`/api/ad/groups/${encodeURIComponent(groupSam)}/members`, { member_dn });
+  },
+
+  removeADGroupMember(groupSam: string, member_dn: string): Promise<ADGroup> {
+    const p = new URLSearchParams({ member_dn });
+    return deleteJSON(`/api/ad/groups/${encodeURIComponent(groupSam)}/members?${p.toString()}`).then(
+      () => api.getADGroup(groupSam),
+    );
+  },
+
+  listADComputers(params?: { q?: string; page?: number; limit?: number }): Promise<ADComputerPage> {
+    const p = new URLSearchParams();
+    if (params?.q) p.set("q", params.q);
+    if (params?.page) p.set("page", String(params.page));
+    if (params?.limit) p.set("limit", String(params.limit));
+    const qs = p.toString();
+    return fetchJSON<ADComputerPage>(`/api/ad/computers${qs ? `?${qs}` : ""}`);
+  },
+
+  getADComputer(cn: string): Promise<ADComputer> {
+    return fetchJSON<ADComputer>(`/api/ad/computers/${encodeURIComponent(cn)}`);
+  },
+
+  listADOUs(base_dn?: string): Promise<ADOU[]> {
+    const p = base_dn ? `?base_dn=${encodeURIComponent(base_dn)}` : "";
+    return fetchJSON<ADOU[]>(`/api/ad/ous${p}`);
+  },
+
+  createADOU(name: string, parent_dn: string, description?: string): Promise<ADOU> {
+    return postJSON<ADOU>("/api/ad/ous", { name, parent_dn, description: description ?? "" });
+  },
+
+  deleteADOU(dn: string): Promise<{ deleted: boolean }> {
+    return deleteJSON(`/api/ad/ous?dn=${encodeURIComponent(dn)}`).then(() => ({ deleted: true }));
+  },
+
+  // Deactivation scheduling
+  createDeactivationJob(req: CreateDeactivationJobRequest): Promise<DeactivationJob> {
+    return postJSON<DeactivationJob>("/api/deactivation-schedule", req);
+  },
+
+  listDeactivationJobsForTicket(ticketKey: string): Promise<DeactivationJob[]> {
+    return fetchJSON<DeactivationJob[]>(`/api/deactivation-schedule/${encodeURIComponent(ticketKey)}`);
+  },
+
+  async cancelDeactivationJob(jobId: string): Promise<DeactivationJob> {
+    const res = await fetch(`/api/deactivation-schedule/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+    if (res.status === 401) { window.location.href = "/api/auth/login"; throw new Error("Not authenticated"); }
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<DeactivationJob>;
+  },
+
+  listAllDeactivationJobs(limit = 100): Promise<DeactivationJob[]> {
+    return fetchJSON<DeactivationJob[]>(`/api/deactivation-schedule?limit=${limit}`);
+  },
 };
 
 export default api;
+
+// ---------------------------------------------------------------------------
+// Active Directory types
+// ---------------------------------------------------------------------------
+
+export interface ADStatus {
+  configured: boolean;
+  connected: boolean;
+  server: string;
+  base_dn: string;
+  ssl?: boolean;
+  port?: number;
+  error?: string;
+}
+
+export interface ADUserFlags {
+  enabled: boolean;
+  locked: boolean;
+  password_never_expires: boolean;
+  password_not_required: boolean;
+}
+
+export interface ADUser {
+  dn: string;
+  sam_account_name: string;
+  upn: string;
+  display_name: string;
+  given_name: string;
+  surname: string;
+  email: string;
+  phone: string;
+  mobile: string;
+  department: string;
+  title: string;
+  manager_dn: string;
+  description: string;
+  street: string;
+  city: string;
+  state: string;
+  postal_code: string;
+  country: string;
+  company: string;
+  employee_id: string;
+  user_account_control: number;
+  flags: ADUserFlags;
+  last_logon: string | null;
+  pwd_last_set: string | null;
+  account_expires: string | null;
+  lockout_time: string | null;
+  bad_pwd_count: number;
+  when_created: string | null;
+  when_changed: string | null;
+  member_of: string[];
+}
+
+export interface ADUserPage {
+  total: number;
+  page: number;
+  limit: number;
+  items: ADUser[];
+}
+
+export interface CreateADUserRequest {
+  sam: string;
+  upn: string;
+  display_name: string;
+  given_name: string;
+  surname: string;
+  ou_dn: string;
+  password?: string;
+  email?: string;
+  title?: string;
+  department?: string;
+  description?: string;
+}
+
+export interface ADGroup {
+  dn: string;
+  sam_account_name: string;
+  cn: string;
+  description: string;
+  email: string;
+  group_type_raw: number;
+  group_type_label: string;
+  member_of: string[];
+  members?: string[];
+  when_created: string | null;
+  when_changed: string | null;
+}
+
+export interface ADGroupPage {
+  total: number;
+  page: number;
+  limit: number;
+  items: ADGroup[];
+}
+
+export interface CreateADGroupRequest {
+  name: string;
+  sam: string;
+  ou_dn: string;
+  group_type?: number;
+  description?: string;
+  email?: string;
+}
+
+export interface ADComputer {
+  dn: string;
+  cn: string;
+  dns_hostname: string;
+  os: string;
+  os_version: string;
+  description: string;
+  managed_by: string;
+  enabled: boolean;
+  last_logon: string | null;
+  when_created: string | null;
+}
+
+export interface ADComputerPage {
+  total: number;
+  page: number;
+  limit: number;
+  items: ADComputer[];
+}
+
+export interface ADOU {
+  dn: string;
+  ou: string;
+  description: string;
+  when_created: string | null;
+}
+
+export interface ADSearchResult {
+  kind: "user" | "group" | "computer" | "ou";
+  label: string;
+  sam: string;
+  dn: string;
+  email: string;
+}
+
+// ---------------------------------------------------------------------------
+// Deactivation scheduling types
+// ---------------------------------------------------------------------------
+
+export interface DeactivationJob {
+  job_id: string;
+  ticket_key: string;
+  display_name: string;
+  entra_user_id: string;
+  ad_sam: string;
+  run_at: string;
+  timezone_label: string;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  result: {
+    entra?: string;
+    ad?: string;
+  };
+  created_at: string;
+  created_by: string;
+}
+
+export interface CreateDeactivationJobRequest {
+  ticket_key: string;
+  display_name: string;
+  entra_user_id: string;
+  ad_sam?: string;
+  run_at: string;
+  timezone_label: string;
+}
+

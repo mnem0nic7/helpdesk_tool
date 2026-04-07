@@ -43,7 +43,7 @@ def test_build_security_application_hygiene_flags_expired_credentials_and_missin
                 "credential_count": 2,
                 "password_credential_count": 1,
                 "key_credential_count": 1,
-                "next_credential_expiry": "2026-04-05T00:00:00Z",
+                "next_credential_expiry": "2026-07-05T00:00:00Z",
                 "credentials": [
                     {
                         "credential_type": "secret",
@@ -57,7 +57,7 @@ def test_build_security_application_hygiene_flags_expired_credentials_and_missin
                         "display_name": "Prod cert",
                         "key_id": "cert-1",
                         "start_date_time": "2025-01-01T00:00:00Z",
-                        "end_date_time": "2026-04-05T00:00:00Z",
+                        "end_date_time": "2026-07-05T00:00:00Z",
                     },
                 ],
             },

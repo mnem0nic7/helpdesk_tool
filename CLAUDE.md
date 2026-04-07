@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file captures working memory for agents editing this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -24,6 +24,7 @@ The shipped app title is still `OIT Helpdesk Dashboard API`, but the product sur
 - `e2e/`: Playwright test project.
 - `private/`: private assets such as KB seed archives; assume contents are sensitive.
 - `data/`: local runtime databases and caches used by the main app.
+- `frontend copy/`: legacy artifact — ignore this directory; `frontend/` is canonical.
 
 ## Commands
 
@@ -35,6 +36,7 @@ Run from `backend/` unless noted otherwise:
 python main.py
 pytest tests/
 pytest tests/test_routes_azure.py
+pytest tests/test_routes_azure.py::test_specific_function  # run a single test
 ```
 
 ### Frontend
@@ -45,6 +47,8 @@ Run from `frontend/`:
 npm run dev
 npm run build
 npm run test:run
+npm test                          # watch mode
+npm run test:run -- SomeComponent # run a single test file
 npm run lint
 ```
 
@@ -75,7 +79,7 @@ Run from `azure_ingestion_platform/`:
 
 ```bash
 docker compose up --build
-cd /workspace/altlassian
+cd /workspace/atlassian
 DATABASE_URL=sqlite+pysqlite:///./azure_ingestion_platform_test.db ./.venv/bin/pytest -q azure_ingestion_platform/tests
 ```
 

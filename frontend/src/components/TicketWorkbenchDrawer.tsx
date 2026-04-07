@@ -5,6 +5,9 @@ import { getSiteBranding } from "../lib/siteContext.ts";
 import JiraWriteIdentityNotice from "./JiraWriteIdentityNotice.tsx";
 import type {
   Assignee,
+  AzureDirectoryObject,
+  CreateDeactivationJobRequest,
+  DeactivationJob,
   PriorityOption,
   RequestorIdentity,
   TicketComment,
@@ -218,6 +221,7 @@ export default function TicketWorkbenchDrawer({
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [showDeactivateModal, setShowDeactivateModal] = useState(false);
   const summaryInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const { data: detail, isLoading } = useQuery({
@@ -1120,11 +1124,27 @@ export default function TicketWorkbenchDrawer({
                   >
                     {saveMutation.isPending ? "Saving..." : "Save Ticket Details"}
                   </button>
+                  {effectiveRequestTypeName.toLowerCase().includes("deactivat") && (
+                    <button
+                      type="button"
+                      onClick={() => setShowDeactivateModal(true)}
+                      className="rounded-md border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+                    >
+                      Deactivate User
+                    </button>
+                  )}
                   <span className="text-xs text-slate-500">
                     Summary, description, reporter, assignee, priority, and request type save here. Status updates separately.
                   </span>
                 </div>
               </section>
+
+              {showDeactivateModal && ticketKey && (
+                <DeactivateTicketModal
+                  ticketKey={ticketKey}
+                  onClose={() => setShowDeactivateModal(false)}
+                />
+              )}
 
               <section className="grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
                 <div className="space-y-4">
@@ -1669,6 +1689,402 @@ export default function TicketWorkbenchDrawer({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DeactivateTicketModal
+// ---------------------------------------------------------------------------
+
+const COMMON_TIMEZONES = [
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "America/Phoenix",
+  "America/Anchorage",
+  "Pacific/Honolulu",
+  "UTC",
+];
+
+function buildTimezoneOptions(): string[] {
+  try {
+    const all: string[] = (Intl as unknown as { supportedValuesOf: (k: string) => string[] }).supportedValuesOf("timeZone");
+    return all;
+  } catch {
+    return COMMON_TIMEZONES;
+  }
+}
+
+const ALL_TIMEZONES = buildTimezoneOptions();
+
+function localNowIsoForTimezone(tz: string): string {
+  // Return a datetime-local compatible string (no Z, no offset) representing now in the given tz
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
+function localToUtcIso(localDatetime: string, tz: string): string {
+  // Convert a datetime-local string (no tz) to UTC ISO given an IANA tz
+  // We do this by figuring out the UTC offset at that moment using Intl
+  const [datePart, timePart] = localDatetime.split("T");
+  const [year, month, day] = datePart.split("-").map(Number);
+  const [hour, minute] = (timePart ?? "00:00").split(":").map(Number);
+  // Create a Date assuming UTC, then apply offset correction
+  const probeUtc = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  // Format the probe time in the target tz and compare to get offset
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const localInTz = formatter.format(probeUtc);
+  // localInTz looks like "2025-01-15, 14:30" — parse it
+  const cleaned = localInTz.replace(",", "");
+  const parts = cleaned.trim().split(/\s+/);
+  const tzDate = parts[0].split("-").map(Number);
+  const tzTime = (parts[1] ?? "00:00").split(":").map(Number);
+  const tzMs = Date.UTC(tzDate[0], tzDate[1] - 1, tzDate[2], tzTime[0], tzTime[1]);
+  const inputMs = Date.UTC(year, month - 1, day, hour, minute);
+  const offsetMs = tzMs - inputMs;
+  const utcMs = inputMs - offsetMs;
+  return new Date(utcMs).toISOString();
+}
+
+interface DeactivateTicketModalProps {
+  ticketKey: string;
+  onClose: () => void;
+}
+
+function DeactivateTicketModal({ ticketKey, onClose }: DeactivateTicketModalProps) {
+  const [userSearch, setUserSearch] = useState("");
+  const [deferredSearch, setDeferredSearch] = useState("");
+  const [selectedUser, setSelectedUser] = useState<AzureDirectoryObject | null>(null);
+  const [timing, setTiming] = useState<"immediate" | "scheduled">("immediate");
+  const [scheduledDatetime, setScheduledDatetime] = useState("");
+  const [timezone, setTimezone] = useState(() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return "America/New_York"; }
+  });
+  const [scheduledJobs, setScheduledJobs] = useState<DeactivationJob[]>([]);
+  const [jobFeedback, setJobFeedback] = useState<string | null>(null);
+  const [jobError, setJobError] = useState<string | null>(null);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounce user search
+  const handleSearchChange = (val: string) => {
+    setUserSearch(val);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => setDeferredSearch(val.trim()), 300);
+  };
+
+  const { data: userResults = [], isFetching: isSearching } = useQuery({
+    queryKey: ["azure-users-deactivate", deferredSearch],
+    queryFn: () => api.getAzureUsers(deferredSearch),
+    enabled: deferredSearch.length >= 2,
+    staleTime: 30_000,
+  });
+
+  // Load existing jobs for this ticket
+  const { data: existingJobs = [], refetch: refetchJobs } = useQuery({
+    queryKey: ["deactivation-jobs", ticketKey],
+    queryFn: () => api.listDeactivationJobsForTicket(ticketKey),
+    staleTime: 10_000,
+  });
+
+  // Update local state when jobs load
+  useEffect(() => {
+    setScheduledJobs(existingJobs);
+  }, [existingJobs]);
+
+  // Set default scheduled time when user switches to scheduled
+  useEffect(() => {
+    if (timing === "scheduled" && !scheduledDatetime) {
+      setScheduledDatetime(localNowIsoForTimezone(timezone));
+    }
+  }, [timing, scheduledDatetime, timezone]);
+
+  const submitMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedUser) throw new Error("No user selected");
+      let runAtUtc: string;
+      if (timing === "immediate") {
+        runAtUtc = new Date().toISOString();
+      } else {
+        if (!scheduledDatetime) throw new Error("Please select a date and time");
+        runAtUtc = localToUtcIso(scheduledDatetime, timezone);
+      }
+      const req: CreateDeactivationJobRequest = {
+        ticket_key: ticketKey,
+        display_name: selectedUser.display_name,
+        entra_user_id: selectedUser.id,
+        ad_sam: selectedUser.extra?.on_prem_sam_account_name ?? "",
+        run_at: runAtUtc,
+        timezone_label: timing === "scheduled" ? timezone : "UTC",
+      };
+      return api.createDeactivationJob(req);
+    },
+    onSuccess: (job) => {
+      const when = timing === "immediate" ? "immediately" : `at ${scheduledDatetime} ${timezone}`;
+      setJobFeedback(`Deactivation scheduled ${when} for ${selectedUser?.display_name}.`);
+      setJobError(null);
+      setSelectedUser(null);
+      setUserSearch("");
+      setDeferredSearch("");
+      setScheduledDatetime("");
+      setTiming("immediate");
+      void refetchJobs();
+    },
+    onError: (err: Error) => {
+      setJobError(err.message || "Failed to schedule deactivation.");
+    },
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: (jobId: string) => api.cancelDeactivationJob(jobId),
+    onSuccess: () => void refetchJobs(),
+  });
+
+  const filteredUsers = deferredSearch.length >= 2
+    ? userResults.filter((u) => u.object_type === "user")
+    : [];
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-lg rounded-xl bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Deactivate User</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Ticket {ticketKey} — disables Entra ID sign-in and on-prem AD account</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="space-y-4 px-5 py-4">
+          {/* User search */}
+          <div>
+            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+              Search User to Deactivate
+            </label>
+            <input
+              type="text"
+              value={userSearch}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              placeholder="Name or email…"
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            {isSearching && (
+              <p className="mt-1 text-xs text-slate-400">Searching…</p>
+            )}
+            {filteredUsers.length > 0 && !selectedUser && (
+              <ul className="mt-1 max-h-48 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-sm">
+                {filteredUsers.map((u) => (
+                  <li key={u.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedUser(u);
+                        setUserSearch(u.display_name);
+                        setDeferredSearch("");
+                      }}
+                      className="w-full px-3 py-2 text-left text-sm hover:bg-slate-50"
+                    >
+                      <span className="font-medium text-slate-800">{u.display_name}</span>
+                      {u.mail && (
+                        <span className="ml-2 text-xs text-slate-500">{u.mail}</span>
+                      )}
+                      {!u.enabled && (
+                        <span className="ml-2 rounded bg-amber-100 px-1 text-xs text-amber-700">disabled</span>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {selectedUser && (
+              <div className="mt-2 flex items-center justify-between rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
+                <div>
+                  <span className="font-medium text-blue-800">{selectedUser.display_name}</span>
+                  {selectedUser.mail && (
+                    <span className="ml-2 text-xs text-blue-600">{selectedUser.mail}</span>
+                  )}
+                  {selectedUser.extra?.on_prem_sam_account_name && (
+                    <span className="ml-2 text-xs text-slate-500">AD: {selectedUser.extra.on_prem_sam_account_name}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setSelectedUser(null); setUserSearch(""); }}
+                  className="ml-2 text-xs text-blue-500 hover:text-blue-700"
+                >
+                  Change
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Timing */}
+          <div>
+            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+              When
+            </label>
+            <div className="mt-2 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setTiming("immediate")}
+                className={[
+                  "rounded-md border px-4 py-2 text-sm font-medium transition-colors",
+                  timing === "immediate"
+                    ? "border-slate-900 bg-slate-900 text-white"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+                ].join(" ")}
+              >
+                Immediate
+              </button>
+              <button
+                type="button"
+                onClick={() => setTiming("scheduled")}
+                className={[
+                  "rounded-md border px-4 py-2 text-sm font-medium transition-colors",
+                  timing === "scheduled"
+                    ? "border-blue-600 bg-blue-600 text-white"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+                ].join(" ")}
+              >
+                Schedule
+              </button>
+            </div>
+
+            {timing === "scheduled" && (
+              <div className="mt-3 space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-500">Date &amp; Time</label>
+                  <input
+                    type="datetime-local"
+                    value={scheduledDatetime}
+                    onChange={(e) => setScheduledDatetime(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-500">Timezone</label>
+                  <select
+                    value={timezone}
+                    onChange={(e) => setTimezone(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    {ALL_TIMEZONES.map((tz) => (
+                      <option key={tz} value={tz}>{tz}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Feedback */}
+          {jobFeedback && (
+            <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+              {jobFeedback}
+            </div>
+          )}
+          {jobError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {jobError}
+            </div>
+          )}
+
+          {/* Submit */}
+          <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!selectedUser || submitMutation.isPending}
+              onClick={() => submitMutation.mutate()}
+              className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {submitMutation.isPending
+                ? "Scheduling…"
+                : timing === "immediate"
+                ? "Deactivate Now"
+                : "Schedule Deactivation"}
+            </button>
+          </div>
+
+          {/* Existing jobs for this ticket */}
+          {scheduledJobs.length > 0 && (
+            <div className="border-t border-slate-100 pt-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Deactivation Jobs for {ticketKey}
+              </h3>
+              <ul className="mt-2 space-y-2">
+                {scheduledJobs.map((job) => (
+                  <li
+                    key={job.job_id}
+                    className="flex items-start justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs"
+                  >
+                    <div className="min-w-0 space-y-0.5">
+                      <p className="font-medium text-slate-800">{job.display_name}</p>
+                      <p className="text-slate-500">
+                        {job.status === "pending"
+                          ? `Scheduled: ${new Date(job.run_at).toLocaleString()} ${job.timezone_label}`
+                          : `Status: ${job.status}`}
+                      </p>
+                      {(job.result.entra || job.result.ad) && (
+                        <p className="text-slate-400">
+                          {[job.result.entra, job.result.ad].filter(Boolean).join(" | ")}
+                        </p>
+                      )}
+                    </div>
+                    {job.status === "pending" && (
+                      <button
+                        type="button"
+                        disabled={cancelMutation.isPending}
+                        onClick={() => cancelMutation.mutate(job.job_id)}
+                        className="ml-3 shrink-0 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-600 hover:bg-red-100 disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

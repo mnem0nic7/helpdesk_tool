@@ -302,7 +302,7 @@ class TestAutoTriageRoutes:
         assert resp.json()["started"] is True
         assert resp.json()["total_tickets"] == 1
         auto_triage.assert_awaited_once()
-        assert auto_triage.await_args.kwargs["model_id"] == "qwen3.5:4b"
+        assert auto_triage.await_args.kwargs["model_id"] == "nemotron-3-nano:4b"
 
         store.clear_auto_triaged()
 

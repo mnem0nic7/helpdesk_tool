@@ -28,6 +28,7 @@ const helpdeskNavItems: NavItem[] = [
   { to: "/alerts", label: "Alerts", icon: "\u25B3" },
   { to: "/tools", label: "Tools", icon: "\u2692", primaryOnly: true },
   { to: "/users", label: "Users", icon: "\u25C7", primaryOnly: true },
+  { to: "/active-directory", label: "Active Directory", icon: "\u25A6", primaryOnly: true },
   { to: "/knowledge-base", label: "Knowledge Base", icon: "\u25A9", primaryOnly: true },
 ];
 

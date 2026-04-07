@@ -380,3 +380,12 @@ AZURE_REPORTING_COST_ANALYSIS_LABEL: str = os.getenv(
 ).strip()
 USER_EXIT_AGENT_SHARED_SECRET: str = os.getenv("USER_EXIT_AGENT_SHARED_SECRET", "")
 USER_EXIT_AGENT_STEP_LEASE_SECONDS: int = int(os.getenv("USER_EXIT_AGENT_STEP_LEASE_SECONDS", "120"))
+
+
+# On-premises Active Directory (LDAP)
+AD_SERVER: str = os.getenv("AD_SERVER", "").strip()          # e.g. ldap://dc1.corp.local or ldaps://dc1.corp.local
+AD_PORT: int = int(os.getenv("AD_PORT", "0"))                # 0 = auto (389 plain, 636 SSL)
+AD_USE_SSL: bool = os.getenv("AD_USE_SSL", "").strip().lower() in {"1", "true", "yes"}
+AD_BASE_DN: str = os.getenv("AD_BASE_DN", "").strip()        # e.g. DC=corp,DC=local
+AD_BIND_DN: str = os.getenv("AD_BIND_DN", "").strip()        # e.g. CN=svc_account,OU=Service Accounts,DC=corp,DC=local
+AD_BIND_PASSWORD: str = os.getenv("AD_BIND_PASSWORD", "").strip()
