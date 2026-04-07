@@ -433,21 +433,44 @@ async def get_priorities() -> list[dict[str, str]]:
 
 @router.get("/request-types")
 async def get_request_types() -> list[dict[str, str]]:
-    """Return request types that appear in the current scope's cached tickets.
+    """Return the full list of Jira service desk request types.
+
+    Fetches directly from the Jira service desk API so all request types are
+    available, not just those that already appear on cached tickets.
+    Falls back to deriving types from cached issues if the API call fails.
 
     The `id` field is the numeric Jira request type ID required by
     customfield_11102 when writing; `name` is the human-readable label.
     """
-    issues = get_scoped_issues()
     seen: dict[str, dict[str, str]] = {}
-    for iss in issues:
-        fields = iss.get("fields", {})
-        # customfield_10010 carries the full requestType object including the numeric id.
-        rt = (fields.get("customfield_10010") or {}).get("requestType") or {}
-        name = rt.get("name", "").strip()
-        rt_id = str(rt.get("id", "")).strip()
-        if name and rt_id and name not in seen:
-            seen[name] = {"id": rt_id, "name": name, "description": rt.get("description", "")}
+
+    # Primary: fetch from the Jira service desk API
+    try:
+        desk_id = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _client.get_service_desk_id_for_project(JIRA_PROJECT)
+        )
+        if desk_id:
+            api_types = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _client.get_request_types(desk_id)
+            )
+            for rt in api_types:
+                name = (rt.get("name") or "").strip()
+                rt_id = str(rt.get("id") or "").strip()
+                if name and rt_id and name not in seen:
+                    seen[name] = {"id": rt_id, "name": name, "description": rt.get("description", "")}
+    except Exception:
+        logger.warning("Could not fetch request types from service desk API, falling back to cache")
+
+    # Fallback / supplement: derive from cached issues
+    if not seen:
+        for iss in get_scoped_issues():
+            fields = iss.get("fields", {})
+            rt = (fields.get("customfield_10010") or {}).get("requestType") or {}
+            name = (rt.get("name") or "").strip()
+            rt_id = str(rt.get("id") or "").strip()
+            if name and rt_id and name not in seen:
+                seen[name] = {"id": rt_id, "name": name, "description": rt.get("description", "")}
+
     return sorted(seen.values(), key=lambda x: x["name"])
 
 
