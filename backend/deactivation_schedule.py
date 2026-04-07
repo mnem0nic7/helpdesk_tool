@@ -201,6 +201,8 @@ class DeactivationScheduleStore:
                 logger.error("Deactivation schedule runner error: %s", exc)
 
     async def _execute(self, job: dict[str, Any]) -> None:
+        import secrets
+        import string
         from user_admin_jobs import user_admin_jobs
         import ad_client as ad
 
@@ -208,41 +210,75 @@ class DeactivationScheduleStore:
         entra_user_id = job.get("entra_user_id", "")
         ad_sam = job.get("ad_sam", "")
         result: dict[str, Any] = {}
+        loop = asyncio.get_event_loop()
 
-        # Entra
-        try:
-            entra_job = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: user_admin_jobs.create_job(
-                    action_type="disable_sign_in",
-                    target_user_ids=[entra_user_id],
-                    params={},
-                    requested_by_email="deactivation-scheduler@system",
-                    requested_by_name="Deactivation Scheduler",
-                ),
+        def _queue_entra(action_type: str, params: dict[str, Any] | None = None) -> str:
+            j = user_admin_jobs.create_job(
+                action_type=action_type,
+                target_user_ids=[entra_user_id],
+                params=params or {},
+                requested_by_email="deactivation-scheduler@system",
+                requested_by_name="Deactivation Scheduler",
             )
-            result["entra"] = f"Job queued: {entra_job['job_id']}"
-        except Exception as exc:
-            result["entra"] = f"Error: {exc}"
-            logger.error("Deactivation Entra step failed for %s: %s", job_id, exc)
+            return j["job_id"]
 
-        # AD
+        # 1. Disable Entra sign-in
+        try:
+            jid = await loop.run_in_executor(None, lambda: _queue_entra("disable_sign_in"))
+            result["entra_disable"] = f"Job queued: {jid}"
+        except Exception as exc:
+            result["entra_disable"] = f"Error: {exc}"
+            logger.error("Deactivation: disable_sign_in failed for %s: %s", job_id, exc)
+
+        # 2. Revoke active Entra sessions
+        try:
+            jid = await loop.run_in_executor(None, lambda: _queue_entra("revoke_sessions"))
+            result["entra_revoke"] = f"Job queued: {jid}"
+        except Exception as exc:
+            result["entra_revoke"] = f"Error: {exc}"
+            logger.error("Deactivation: revoke_sessions failed for %s: %s", job_id, exc)
+
+        # 3. Reset Entra password to random value
+        try:
+            jid = await loop.run_in_executor(None, lambda: _queue_entra("reset_password"))
+            result["entra_reset_pw"] = f"Job queued: {jid}"
+        except Exception as exc:
+            result["entra_reset_pw"] = f"Error: {exc}"
+            logger.error("Deactivation: reset_password (Entra) failed for %s: %s", job_id, exc)
+
+        # 4. On-prem AD: disable + random password reset
         if ad_sam:
             try:
-                await asyncio.get_event_loop().run_in_executor(None, lambda: ad.disable_user(ad_sam))
-                result["ad"] = f"Disabled AD account: {ad_sam}"
+                await loop.run_in_executor(None, lambda: ad.disable_user(ad_sam))
+                result["ad_disable"] = f"Disabled AD account: {ad_sam}"
             except Exception as exc:
-                result["ad"] = f"Error: {exc}"
-                logger.error("Deactivation AD step failed for %s: %s", job_id, exc)
-        else:
-            result["ad"] = "No AD account linked"
+                result["ad_disable"] = f"Error: {exc}"
+                logger.error("Deactivation: AD disable failed for %s: %s", job_id, exc)
 
-        overall = "completed" if "Error" not in result.get("entra", "") else "failed"
+            try:
+                alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+                random_pw = "".join(secrets.choice(alphabet) for _ in range(20))
+                # Ensure complexity: uppercase, lowercase, digit, special
+                random_pw = (
+                    secrets.choice(string.ascii_uppercase)
+                    + secrets.choice(string.ascii_lowercase)
+                    + secrets.choice(string.digits)
+                    + secrets.choice("!@#$%^&*")
+                    + random_pw[4:]
+                )
+                await loop.run_in_executor(None, lambda: ad.reset_password(ad_sam, random_pw, must_change=False))
+                result["ad_reset_pw"] = f"AD password reset for: {ad_sam}"
+            except Exception as exc:
+                result["ad_reset_pw"] = f"Error: {exc}"
+                logger.error("Deactivation: AD password reset failed for %s: %s", job_id, exc)
+        else:
+            result["ad_disable"] = "No AD account linked"
+            result["ad_reset_pw"] = "No AD account linked"
+
+        errors = [v for v in result.values() if isinstance(v, str) and v.startswith("Error")]
+        overall = "failed" if errors and result.get("entra_disable", "").startswith("Error") else "completed"
         self._finish(job_id, overall, result)
-        logger.info(
-            "Deactivation job %s finished: entra=%s ad=%s",
-            job_id, result.get("entra"), result.get("ad"),
-        )
+        logger.info("Deactivation job %s finished with %d step(s), %d error(s)", job_id, len(result), len(errors))
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
