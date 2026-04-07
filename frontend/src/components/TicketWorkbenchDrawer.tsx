@@ -1124,7 +1124,7 @@ export default function TicketWorkbenchDrawer({
                   >
                     {saveMutation.isPending ? "Saving..." : "Save Ticket Details"}
                   </button>
-                  {effectiveRequestTypeName.toLowerCase().includes("deactivat") && (
+                  {(["deactivat", "offboard", "off-board", "off board", "termination", "separation"].some(kw => effectiveRequestTypeName.toLowerCase().includes(kw))) && (
                     <button
                       type="button"
                       onClick={() => setShowDeactivateModal(true)}
