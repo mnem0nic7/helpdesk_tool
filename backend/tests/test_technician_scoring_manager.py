@@ -167,7 +167,7 @@ async def test_run_scope_once_pauses_when_auto_triage_becomes_priority(monkeypat
     monkeypatch.setattr(
         manager_module,
         "score_closed_ticket",
-        lambda issue, request_comments, model_id: TechnicianScore(
+        lambda issue, request_comments, model_id, **kwargs: TechnicianScore(
             key=issue.get("key", ""),
             communication_score=4,
             communication_notes="Clear",
@@ -178,6 +178,10 @@ async def test_run_scope_once_pauses_when_auto_triage_becomes_priority(monkeypat
             created_at="2026-03-23T00:00:00+00:00",
         ),
     )
+
+    # Force concurrency=1 so tickets are processed one at a time and the
+    # priority gate is checked between OIT-300 and OIT-400.
+    monkeypatch.setattr("config.OLLAMA_SECONDARY_ENABLED", False)
 
     states = iter(
         [

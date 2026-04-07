@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -251,17 +252,47 @@ class TechnicianScoringManager:
                 trigger=trigger,
             )
 
+            from ai_client import _check_secondary_healthy
+            from config import OLLAMA_SECONDARY_ENABLED
+            concurrency = 2 if (OLLAMA_SECONDARY_ENABLED and _check_secondary_healthy()) else 1
+
             loop = asyncio.get_running_loop()
             completed_count = 0
+            keys_to_process = preview["keys_to_process"]
+
+            async def _score_one(key: str) -> tuple[str, Any]:
+                """Run QA scoring for a single ticket; return (key, score_or_exception)."""
+                issue = preview["issues_by_key"].get(key)
+                if not issue or _is_open(issue):
+                    return key, None
+                try:
+                    request_comments = await loop.run_in_executor(
+                        None, self._client.get_request_comments, key
+                    )
+                except Exception:
+                    logger.exception("Failed to load request comments for %s during technician scoring", key)
+                    request_comments = []
+                try:
+                    score = await loop.run_in_executor(
+                        None,
+                        functools.partial(
+                            score_closed_ticket,
+                            issue,
+                            request_comments,
+                            preview["model_id"],
+                            queue_label=f"qa:{key}",
+                        ),
+                    )
+                    return key, score
+                except Exception as exc:
+                    return key, exc
 
             try:
-                for key in preview["keys_to_process"]:
+                for batch_start in range(0, len(keys_to_process), concurrency):
                     if progress.get("cancel"):
                         logger.info(
                             "Technician scoring cancelled for %s after %d/%d",
-                            scope,
-                            completed_count,
-                            len(preview["keys_to_process"]),
+                            scope, completed_count, len(keys_to_process),
                         )
                         break
 
@@ -270,47 +301,29 @@ class TechnicianScoringManager:
                         progress["last_error"] = str(priority_gate["message"])
                         logger.info(
                             "Pausing technician scoring for %s after %d/%d: %s",
-                            scope,
-                            completed_count,
-                            len(preview["keys_to_process"]),
-                            priority_gate["message"],
+                            scope, completed_count, len(keys_to_process), priority_gate["message"],
                         )
                         break
 
-                    progress.update(processed=completed_count, current_key=key)
-                    issue = preview["issues_by_key"].get(key)
-                    if not issue or _is_open(issue):
+                    batch = keys_to_process[batch_start : batch_start + concurrency]
+                    progress.update(processed=completed_count, current_key=batch[0])
+
+                    results = await asyncio.gather(*[_score_one(key) for key in batch], return_exceptions=False)
+
+                    for key, score_or_exc in results:
+                        try:
+                            if score_or_exc is None:
+                                pass  # skipped (open ticket or not found)
+                            elif isinstance(score_or_exc, Exception):
+                                logger.exception("Failed to score closed ticket %s", key)
+                            else:
+                                await loop.run_in_executor(
+                                    None, self._store.save_technician_score, score_or_exc
+                                )
+                        except Exception:
+                            logger.exception("Failed to save technician score for %s", key)
                         completed_count += 1
                         progress["processed"] = completed_count
-                        continue
-
-                    try:
-                        request_comments = await loop.run_in_executor(None, self._client.get_request_comments, key)
-                    except Exception:
-                        logger.exception("Failed to load request comments for %s during technician scoring", key)
-                        request_comments = []
-
-                    try:
-                        async def _run_ai_scoring() -> TechnicianScore:
-                            return await loop.run_in_executor(
-                                None,
-                                score_closed_ticket,
-                                issue,
-                                request_comments,
-                                preview["model_id"],
-                            )
-
-                        score = await background_ai_worker.run_item(
-                            lane="technician_scoring",
-                            key=key,
-                            work=_run_ai_scoring,
-                        )
-                        await loop.run_in_executor(None, self._store.save_technician_score, score)
-                    except Exception:
-                        logger.exception("Failed to score closed ticket %s", key)
-
-                    completed_count += 1
-                    progress["processed"] = completed_count
             except Exception as exc:
                 logger.exception("Closed-ticket technician scoring failed for %s", scope)
                 progress["last_error"] = str(exc)

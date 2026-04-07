@@ -212,7 +212,7 @@ async def test_auto_triage_records_changed_activity_and_change_log(tmp_path, mon
     monkeypatch.setattr(
         ai_client,
         "analyze_ticket",
-        lambda issue, model_id: TriageResult(
+        lambda issue, model_id, **kwargs: TriageResult(
             key=issue["key"],
             suggestions=[
                 TriageSuggestion(
@@ -313,7 +313,7 @@ async def test_auto_triage_records_no_change_activity_without_change_log(tmp_pat
     monkeypatch.setattr(
         ai_client,
         "analyze_ticket",
-        lambda issue, model_id: TriageResult(
+        lambda issue, model_id, **kwargs: TriageResult(
             key=issue["key"],
             suggestions=[
                 TriageSuggestion(
@@ -387,7 +387,7 @@ async def test_auto_triage_records_failed_activity_without_marking_ticket_done(t
     monkeypatch.setattr(
         ai_client,
         "analyze_ticket",
-        lambda issue, model_id: (_ for _ in ()).throw(RuntimeError("ollama offline")),
+        lambda issue, model_id, **kwargs: (_ for _ in ()).throw(RuntimeError("ollama offline")),
     )
     monkeypatch.setattr(jira_client, "JiraClient", lambda: SimpleNamespace())
     monkeypatch.setattr(

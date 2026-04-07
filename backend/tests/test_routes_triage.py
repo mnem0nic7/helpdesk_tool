@@ -401,7 +401,7 @@ class TestTechnicianScoringRoutes:
         monkeypatch.setattr(
             scoring_manager_module,
             "score_closed_ticket",
-            lambda issue, request_comments, model_id: TechnicianScore(
+            lambda issue, request_comments, model_id, **kwargs: TechnicianScore(
                 key=issue.get("key", ""),
                 communication_score=4,
                 communication_notes="Clear reply to the user.",

@@ -1447,6 +1447,7 @@ def invoke_model_text(
     metadata: dict[str, Any] | None = None,
     ollama_priority: int | None = None,
     ollama_runtime: str | None = None,
+    queue_label: str = "",
 ) -> str:
     resolved_ollama_runtime = _normalize_ollama_runtime(
         ollama_runtime
@@ -1491,7 +1492,7 @@ def invoke_model_text(
                     feature_surface=feature_surface,
                     explicit_priority=ollama_priority,
                 ),
-                queue_label=feature_surface or app_surface or model_id,
+                queue_label=queue_label or feature_surface or app_surface or model_id,
                 runtime=resolved_ollama_runtime,
                 feature_surface=feature_surface,
             )
@@ -1779,7 +1780,7 @@ def _enforce_non_new_priority(issue: dict[str, Any], suggestions: list[TriageSug
 # ---------------------------------------------------------------------------
 
 
-def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
+def analyze_ticket(issue: dict[str, Any], model_id: str, *, queue_label: str = "") -> TriageResult:
     """Analyze a single ticket and return triage suggestions."""
     provider = _get_model_provider(model_id)
     if not provider:
@@ -1803,6 +1804,7 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
     user_msg = _build_ticket_context(issue, kb_matches=kb_matches)
 
     logger.info("Analyzing %s with %s (%s)", issue.get("key"), model_id, provider)
+    ticket_key = issue.get("key", "")
     raw = invoke_model_text(
         model_id,
         system,
@@ -1813,7 +1815,8 @@ def analyze_ticket(issue: dict[str, Any], model_id: str) -> TriageResult:
         actor_id="auto-triage",
         max_output_tokens=_AUTO_TRIAGE_MAX_OUTPUT_TOKENS,
         json_output=True,
-        metadata={"ticket_key": issue.get("key", "")},
+        metadata={"ticket_key": ticket_key},
+        queue_label=queue_label or (f"triage:{ticket_key}" if ticket_key else "triage"),
     )
 
     suggestions = _enforce_reporter_hint(
@@ -1993,14 +1996,18 @@ def score_closed_ticket(
     issue: dict[str, Any],
     request_comments: list[dict[str, Any]],
     model_id: str,
+    *,
+    queue_label: str = "",
 ) -> TechnicianScore:
     """Score technician communication/documentation for a closed ticket."""
     provider = _get_model_provider(model_id)
     if not provider:
         raise ValueError(f"Unknown model: {model_id}")
 
+    ticket_key = issue.get("key", "")
+    _ql = queue_label or (f"qa:{ticket_key}" if ticket_key else "qa")
     user_msg = _build_technician_score_context(issue, request_comments)
-    logger.info("Scoring technician QA for %s with %s (%s)", issue.get("key"), model_id, provider)
+    logger.info("Scoring technician QA for %s with %s (%s)", ticket_key, model_id, provider)
     raw = invoke_model_text(
         model_id,
         TECHNICIAN_SCORE_PROMPT,
@@ -2011,12 +2018,13 @@ def score_closed_ticket(
         actor_id="technician-qa",
         max_output_tokens=_TECHNICIAN_QA_MAX_OUTPUT_TOKENS,
         json_output=True,
-        metadata={"ticket_key": issue.get("key", "")},
+        metadata={"ticket_key": ticket_key},
+        queue_label=_ql,
     )
     try:
-        return _parse_technician_score(raw, issue.get("key", ""), model_id)
+        return _parse_technician_score(raw, ticket_key, model_id)
     except ValueError as exc:
-        logger.warning("Retrying technician QA scoring for %s after invalid JSON output", issue.get("key"))
+        logger.warning("Retrying technician QA scoring for %s after invalid JSON output", ticket_key)
         retry_raw = invoke_model_text(
             model_id,
             TECHNICIAN_SCORE_RETRY_PROMPT,
@@ -2028,7 +2036,8 @@ def score_closed_ticket(
             temperature=0.0,
             max_output_tokens=_TECHNICIAN_QA_MAX_OUTPUT_TOKENS,
             json_output=True,
-            metadata={"ticket_key": issue.get("key", ""), "retry": "json_format"},
+            metadata={"ticket_key": ticket_key, "retry": "json_format"},
+            queue_label=_ql,
         )
         try:
             return _parse_technician_score(retry_raw, issue.get("key", ""), model_id)
