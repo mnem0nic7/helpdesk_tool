@@ -1838,7 +1838,7 @@ function DeactivateTicketModal({ ticketKey, onClose }: DeactivateTicketModalProp
       };
       return api.createDeactivationJob(req);
     },
-    onSuccess: (job) => {
+    onSuccess: (_job) => {
       const when = timing === "immediate" ? "immediately" : `at ${scheduledDatetime} ${timezone}`;
       setJobFeedback(`Deactivation scheduled ${when} for ${selectedUser?.display_name}.`);
       setJobError(null);
