@@ -898,11 +898,18 @@ async def update_ticket(
                 session=_admin,
                 shared_client=_client,
             )
+
+        issue = _client.get_issue(key)
+        request_type = extract_request_type_name_from_fields(issue.get("fields", {}))
+        if request_type:
+            cache.update_cached_field(key, "request_type", request_type)
+        return _load_ticket_detail(key, issue=issue)
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("Failed to update ticket %s", key)
-        if "You do not have permission to create new components" in str(exc):
+        exc_str = str(exc)
+        if "You do not have permission to create new components" in exc_str:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -910,13 +917,12 @@ async def update_ticket(
                     "Choose an existing component or retry with a Jira project-admin identity."
                 ),
             ) from exc
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    issue = _client.get_issue(key)
-    request_type = extract_request_type_name_from_fields(issue.get("fields", {}))
-    if request_type:
-        cache.update_cached_field(key, "request_type", request_type)
-    return _load_ticket_detail(key, issue=issue)
+        if "ReadTimeout" in type(exc).__name__ or "Timeout" in type(exc).__name__ or "timed out" in exc_str.lower():
+            raise HTTPException(
+                status_code=503,
+                detail="Jira did not respond in time. The change may still have been saved — refresh the ticket to check.",
+            ) from exc
+        raise HTTPException(status_code=400, detail=exc_str) from exc
 
 
 @router.post("/tickets/{key}/transition")

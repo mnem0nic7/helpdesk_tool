@@ -959,7 +959,7 @@ def _build_ticket_context(
     comment_texts: list[str] = []
     for c in comments:
         author = (c.get("author") or {}).get("displayName", "Unknown")
-        date = (c.get("created") or "")[:19].replace("T", " ")
+        date = str(c.get("created") or "")[:19].replace("T", " ")
         body = _truncate_text(extract_adf_text(c.get("body")), _TICKET_COMMENT_CHAR_LIMIT)
         if body:
             comment_texts.append(f"  [{author} | {date}]: {body}")
