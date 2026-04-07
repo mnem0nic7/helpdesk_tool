@@ -31,7 +31,7 @@ class CreateDeactivationJobRequest(BaseModel):
 # Routes
 # ---------------------------------------------------------------------------
 
-@router.post("", dependencies=[Depends(require_authenticated_user)])
+@router.post("")
 async def create_job(
     body: CreateDeactivationJobRequest,
     user: dict[str, Any] = Depends(require_authenticated_user),

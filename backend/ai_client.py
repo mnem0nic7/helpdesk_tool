@@ -1359,7 +1359,7 @@ def _invoke_ollama(
         raise RuntimeError(f"Ollama model '{model_id}' returned no text output")
 
     return _get_ollama_request_coordinator(base_url).run(
-        priority=_resolve_ollama_request_priority(explicit_priority=priority),
+        priority=_resolve_ollama_request_priority(feature_surface=feature_surface, explicit_priority=priority),
         label=queue_label or model_id,
         work=_run_request,
     )

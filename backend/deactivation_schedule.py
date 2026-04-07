@@ -276,7 +276,7 @@ class DeactivationScheduleStore:
             result["ad_reset_pw"] = "No AD account linked"
 
         errors = [v for v in result.values() if isinstance(v, str) and v.startswith("Error")]
-        overall = "failed" if errors and result.get("entra_disable", "").startswith("Error") else "completed"
+        overall = "failed" if errors else "completed"
         self._finish(job_id, overall, result)
         logger.info("Deactivation job %s finished with %d step(s), %d error(s)", job_id, len(result), len(errors))
 
