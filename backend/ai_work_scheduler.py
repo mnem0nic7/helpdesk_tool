@@ -159,7 +159,7 @@ class AIWorkScheduler:
                 return {
                     "action": "process",
                     "scope": scope,
-                    "keys": [str(k) for k in pending_keys[:2]],
+                    "keys": [str(k) for k in pending_keys],
                 }
 
         return {"action": "none"}
