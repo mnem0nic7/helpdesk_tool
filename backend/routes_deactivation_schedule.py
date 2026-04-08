@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from auth import require_authenticated_user, require_admin
+from auth import require_authenticated_user, require_can_manage_users
 from deactivation_schedule import deactivation_schedule
 
 router = APIRouter(prefix="/api/deactivation-schedule", tags=["deactivation-schedule"])
@@ -34,7 +34,7 @@ class CreateDeactivationJobRequest(BaseModel):
 @router.post("")
 async def create_job(
     body: CreateDeactivationJobRequest,
-    user: dict[str, Any] = Depends(require_authenticated_user),
+    user: dict[str, Any] = Depends(require_can_manage_users),
 ) -> dict[str, Any]:
     """Schedule a new deactivation job."""
     try:
@@ -70,7 +70,7 @@ async def list_jobs_for_ticket(ticket_key: str) -> list[dict[str, Any]]:
     return deactivation_schedule.list_for_ticket(ticket_key)
 
 
-@router.delete("/{job_id}", dependencies=[Depends(require_authenticated_user)])
+@router.delete("/{job_id}", dependencies=[Depends(require_can_manage_users)])
 async def cancel_job(job_id: str) -> dict[str, Any]:
     """Cancel a pending deactivation job."""
     cancelled = deactivation_schedule.cancel(job_id)
