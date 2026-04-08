@@ -346,9 +346,11 @@ def _pick_ollama_base_url_for_feature(feature_surface: str, runtime: str = "defa
         return _get_ollama_runtime_settings(runtime).base_url
     if not _check_secondary_healthy():
         return OLLAMA_BASE_URL
-    # Thread-safe round-robin (GIL makes integer increment atomic in CPython)
-    counter = _SECONDARY_ROUND_ROBIN_COUNTER
-    _SECONDARY_ROUND_ROBIN_COUNTER = counter + 1
+    # Hold the lock for the read-modify-write so two concurrent threads always
+    # get different counter values and are dispatched to different URLs.
+    with _OLLAMA_RUNTIME_STATE_LOCK:
+        counter = _SECONDARY_ROUND_ROBIN_COUNTER
+        _SECONDARY_ROUND_ROBIN_COUNTER = counter + 1
     return OLLAMA_SECONDARY_BASE_URL if counter % 2 == 0 else OLLAMA_BASE_URL
 
 
