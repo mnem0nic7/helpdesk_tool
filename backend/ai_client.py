@@ -160,6 +160,8 @@ def _normalize_ollama_runtime(runtime: str | None = None) -> str:
         return "security"
     if r == "secondary":
         return "secondary"
+    if r == "primary":
+        return "primary"
     return "default"
 
 
@@ -177,6 +179,13 @@ def _get_ollama_runtime_settings(runtime: str | None = None) -> OllamaRuntimeSet
             name="secondary",
             enabled=OLLAMA_SECONDARY_ENABLED,
             base_url=OLLAMA_SECONDARY_BASE_URL,
+            preferred_model_id=OLLAMA_MODEL,
+        )
+    if normalized == "primary":
+        return OllamaRuntimeSettings(
+            name="primary",
+            enabled=OLLAMA_ENABLED,
+            base_url=OLLAMA_BASE_URL,
             preferred_model_id=OLLAMA_MODEL,
         )
     return OllamaRuntimeSettings(

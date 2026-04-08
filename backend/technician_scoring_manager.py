@@ -255,7 +255,7 @@ class TechnicianScoringManager:
             from ai_client import _check_secondary_healthy
             from config import OLLAMA_SECONDARY_ENABLED
 
-            qa_lane_runtimes: list[str] = ["default"]
+            qa_lane_runtimes: list[str] = ["primary"]
             if OLLAMA_SECONDARY_ENABLED and _check_secondary_healthy():
                 qa_lane_runtimes.append("secondary")
 

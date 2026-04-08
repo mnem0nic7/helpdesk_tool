@@ -1194,7 +1194,7 @@ class IssueCache:
         from ai_client import _check_secondary_healthy
         from config import OLLAMA_SECONDARY_ENABLED
 
-        lane_runtimes: list[str] = ["default"]
+        lane_runtimes: list[str] = ["primary"]
         if OLLAMA_SECONDARY_ENABLED and _check_secondary_healthy():
             lane_runtimes.append("secondary")
 
