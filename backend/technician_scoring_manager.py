@@ -254,17 +254,27 @@ class TechnicianScoringManager:
 
             from ai_client import _check_secondary_healthy
             from config import OLLAMA_SECONDARY_ENABLED
-            concurrency = 2 if (OLLAMA_SECONDARY_ENABLED and _check_secondary_healthy()) else 1
+
+            qa_lane_runtimes: list[str] = ["default"]
+            if OLLAMA_SECONDARY_ENABLED and _check_secondary_healthy():
+                qa_lane_runtimes.append("secondary")
 
             loop = asyncio.get_running_loop()
             completed_count = 0
             keys_to_process = preview["keys_to_process"]
 
-            async def _score_one(key: str) -> tuple[str, Any]:
-                """Run QA scoring for a single ticket; return (key, score_or_exception)."""
+            _qa_queue: asyncio.Queue[str] = asyncio.Queue()
+            for _qk in keys_to_process:
+                _qa_queue.put_nowait(_qk)
+
+            async def _score_one_on_lane(key: str, *, ollama_runtime: str = "default") -> None:
+                """Run the full QA scoring pipeline for one ticket on the given lane."""
+                nonlocal completed_count
                 issue = preview["issues_by_key"].get(key)
                 if not issue or _is_open(issue):
-                    return key, None
+                    completed_count += 1
+                    progress["processed"] = completed_count
+                    return
                 try:
                     request_comments = await loop.run_in_executor(
                         None, self._client.get_request_comments, key
@@ -281,21 +291,28 @@ class TechnicianScoringManager:
                             request_comments,
                             preview["model_id"],
                             queue_label=f"qa:{key}",
+                            ollama_runtime=ollama_runtime,
                         ),
                     )
-                    return key, score
-                except Exception as exc:
-                    return key, exc
+                    try:
+                        await loop.run_in_executor(None, self._store.save_technician_score, score)
+                    except Exception:
+                        logger.exception("Failed to save technician score for %s", key)
+                except Exception:
+                    logger.exception("Failed to score closed ticket %s", key)
+                completed_count += 1
+                progress["processed"] = completed_count
+                progress.update(processed=completed_count, current_key=key)
 
-            try:
-                for batch_start in range(0, len(keys_to_process), concurrency):
+            async def _qa_lane_worker(ollama_runtime: str) -> None:
+                """Drain the QA work queue on the given Ollama lane independently."""
+                while True:
                     if progress.get("cancel"):
                         logger.info(
-                            "Technician scoring cancelled for %s after %d/%d",
-                            scope, completed_count, len(keys_to_process),
+                            "Technician scoring lane %s cancelled for %s after %d/%d",
+                            ollama_runtime, scope, completed_count, len(keys_to_process),
                         )
                         break
-
                     priority_gate = self.get_priority_gate(scope)
                     if priority_gate["blocked"]:
                         progress["last_error"] = str(priority_gate["message"])
@@ -304,26 +321,14 @@ class TechnicianScoringManager:
                             scope, completed_count, len(keys_to_process), priority_gate["message"],
                         )
                         break
+                    try:
+                        key = _qa_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    await _score_one_on_lane(key, ollama_runtime=ollama_runtime)
 
-                    batch = keys_to_process[batch_start : batch_start + concurrency]
-                    progress.update(processed=completed_count, current_key=batch[0])
-
-                    results = await asyncio.gather(*[_score_one(key) for key in batch], return_exceptions=False)
-
-                    for key, score_or_exc in results:
-                        try:
-                            if score_or_exc is None:
-                                pass  # skipped (open ticket or not found)
-                            elif isinstance(score_or_exc, Exception):
-                                logger.exception("Failed to score closed ticket %s", key)
-                            else:
-                                await loop.run_in_executor(
-                                    None, self._store.save_technician_score, score_or_exc
-                                )
-                        except Exception:
-                            logger.exception("Failed to save technician score for %s", key)
-                        completed_count += 1
-                        progress["processed"] = completed_count
+            try:
+                await asyncio.gather(*[_qa_lane_worker(rt) for rt in qa_lane_runtimes])
             except Exception as exc:
                 logger.exception("Closed-ticket technician scoring failed for %s", scope)
                 progress["last_error"] = str(exc)

@@ -1193,9 +1193,15 @@ class IssueCache:
 
         from ai_client import _check_secondary_healthy
         from config import OLLAMA_SECONDARY_ENABLED
-        concurrency = 2 if (OLLAMA_SECONDARY_ENABLED and _check_secondary_healthy()) else 1
 
-        logger.info("Auto-triage: processing %d new tickets (concurrency=%d)", len(keys_to_process), concurrency)
+        lane_runtimes: list[str] = ["default"]
+        if OLLAMA_SECONDARY_ENABLED and _check_secondary_healthy():
+            lane_runtimes.append("secondary")
+
+        logger.info(
+            "Auto-triage: processing %d new tickets across %d lane(s)",
+            len(keys_to_process), len(lane_runtimes),
+        )
         client = JiraClient()
         with self._lock:
             self._auto_triage_running = True
@@ -1204,9 +1210,11 @@ class IssueCache:
 
         processed_so_far = 0
 
-        _sem = asyncio.Semaphore(concurrency)
+        _work_queue: asyncio.Queue[str] = asyncio.Queue()
+        for _k in keys_to_process:
+            _work_queue.put_nowait(_k)
 
-        async def _process_one_ticket(key: str) -> None:
+        async def _process_one_ticket(key: str, *, ollama_runtime: str = "default") -> None:
             """Run the full triage pipeline for one ticket: priority rules → AI → Jira writes."""
             nonlocal processed_so_far
 
@@ -1230,7 +1238,10 @@ class IssueCache:
             try:
                 ai_result: Any = await loop.run_in_executor(
                     None,
-                    functools.partial(analyze_ticket, issue, resolved_model_id, queue_label=f"triage:{key}"),
+                    functools.partial(
+                        analyze_ticket, issue, resolved_model_id,
+                        queue_label=f"triage:{key}", ollama_runtime=ollama_runtime,
+                    ),
                 )
             except Exception as exc:
                 ai_result = exc
@@ -1364,20 +1375,23 @@ class IssueCache:
             finally:
                 processed_so_far += 1
 
-        async def _guarded_triage(key: str) -> None:
-            if progress is not None and progress.get("cancel"):
-                return
-            async with _sem:
+        async def _lane_worker(ollama_runtime: str) -> None:
+            """Drain the work queue on the given Ollama lane independently."""
+            while True:
                 if progress is not None and progress.get("cancel"):
                     logger.info(
-                        "Auto-triage: cancelled by user after %d/%d",
-                        processed_so_far, len(keys_to_process),
+                        "Auto-triage: lane %s cancelled after %d/%d",
+                        ollama_runtime, processed_so_far, len(keys_to_process),
                     )
-                    return
-                await _process_one_ticket(key)
+                    break
+                try:
+                    key = _work_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                await _process_one_ticket(key, ollama_runtime=ollama_runtime)
 
         try:
-            await asyncio.gather(*[_guarded_triage(key) for key in keys_to_process])
+            await asyncio.gather(*[_lane_worker(rt) for rt in lane_runtimes])
             if progress is not None:
                 progress.update(processed=len(keys_to_process))
         finally:

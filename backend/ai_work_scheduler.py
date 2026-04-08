@@ -156,13 +156,10 @@ class AIWorkScheduler:
 
             pending_keys = scoped_status.get("pending_keys") or []
             if pending_keys:
-                from ai_client import _check_secondary_healthy
-                from config import OLLAMA_SECONDARY_ENABLED
-                batch_size = 2 if (OLLAMA_SECONDARY_ENABLED and _check_secondary_healthy()) else 1
                 return {
                     "action": "process",
                     "scope": scope,
-                    "keys": [str(k) for k in pending_keys[:batch_size]],
+                    "keys": [str(k) for k in pending_keys[:2]],
                 }
 
         return {"action": "none"}

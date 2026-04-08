@@ -155,7 +155,12 @@ class OllamaRuntimeSettings:
 
 
 def _normalize_ollama_runtime(runtime: str | None = None) -> str:
-    return "security" if str(runtime or "").strip().lower() == "security" else "default"
+    r = str(runtime or "").strip().lower()
+    if r == "security":
+        return "security"
+    if r == "secondary":
+        return "secondary"
+    return "default"
 
 
 def _get_ollama_runtime_settings(runtime: str | None = None) -> OllamaRuntimeSettings:
@@ -166,6 +171,13 @@ def _get_ollama_runtime_settings(runtime: str | None = None) -> OllamaRuntimeSet
             enabled=OLLAMA_SECURITY_ENABLED,
             base_url=OLLAMA_SECURITY_BASE_URL,
             preferred_model_id=OLLAMA_SECURITY_MODEL,
+        )
+    if normalized == "secondary":
+        return OllamaRuntimeSettings(
+            name="secondary",
+            enabled=OLLAMA_SECONDARY_ENABLED,
+            base_url=OLLAMA_SECONDARY_BASE_URL,
+            preferred_model_id=OLLAMA_MODEL,
         )
     return OllamaRuntimeSettings(
         name="default",
@@ -1790,7 +1802,13 @@ def _enforce_non_new_priority(issue: dict[str, Any], suggestions: list[TriageSug
 # ---------------------------------------------------------------------------
 
 
-def analyze_ticket(issue: dict[str, Any], model_id: str, *, queue_label: str = "") -> TriageResult:
+def analyze_ticket(
+    issue: dict[str, Any],
+    model_id: str,
+    *,
+    queue_label: str = "",
+    ollama_runtime: str | None = None,
+) -> TriageResult:
     """Analyze a single ticket and return triage suggestions."""
     provider = _get_model_provider(model_id)
     if not provider:
@@ -1827,6 +1845,7 @@ def analyze_ticket(issue: dict[str, Any], model_id: str, *, queue_label: str = "
         json_output=True,
         metadata={"ticket_key": ticket_key},
         queue_label=queue_label or (f"triage:{ticket_key}" if ticket_key else "triage"),
+        ollama_runtime=ollama_runtime,
     )
 
     suggestions = _enforce_reporter_hint(
@@ -2008,6 +2027,7 @@ def score_closed_ticket(
     model_id: str,
     *,
     queue_label: str = "",
+    ollama_runtime: str | None = None,
 ) -> TechnicianScore:
     """Score technician communication/documentation for a closed ticket."""
     provider = _get_model_provider(model_id)
@@ -2030,6 +2050,7 @@ def score_closed_ticket(
         json_output=True,
         metadata={"ticket_key": ticket_key},
         queue_label=_ql,
+        ollama_runtime=ollama_runtime,
     )
     try:
         return _parse_technician_score(raw, ticket_key, model_id)
@@ -2048,6 +2069,7 @@ def score_closed_ticket(
             json_output=True,
             metadata={"ticket_key": ticket_key, "retry": "json_format"},
             queue_label=_ql,
+            ollama_runtime=ollama_runtime,
         )
         try:
             return _parse_technician_score(retry_raw, issue.get("key", ""), model_id)
