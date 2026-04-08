@@ -123,10 +123,10 @@ class AIWorkScheduler:
         if triage_plan["action"] == "deferred":
             return "deferred"
         if triage_plan["action"] == "process":
-            key = str(triage_plan["key"])
+            keys = [str(k) for k in triage_plan["keys"]]
             scope = str(triage_plan["scope"])
-            logger.info("AI scheduler: processing auto-triage for %s (%s)", key, scope)
-            await self._cache._auto_triage_new_tickets([key])
+            logger.info("AI scheduler: processing auto-triage for %s (%s)", ", ".join(keys), scope)
+            await self._cache._auto_triage_new_tickets(keys)
             return "processed"
 
         if not self._qa_sweep_due():
@@ -156,10 +156,13 @@ class AIWorkScheduler:
 
             pending_keys = scoped_status.get("pending_keys") or []
             if pending_keys:
+                from ai_client import _check_secondary_healthy
+                from config import OLLAMA_SECONDARY_ENABLED
+                batch_size = 2 if (OLLAMA_SECONDARY_ENABLED and _check_secondary_healthy()) else 1
                 return {
                     "action": "process",
                     "scope": scope,
-                    "key": str(pending_keys[0]),
+                    "keys": [str(k) for k in pending_keys[:batch_size]],
                 }
 
         return {"action": "none"}
