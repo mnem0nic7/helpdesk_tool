@@ -170,6 +170,7 @@ function buildPickerOptions(query: string, options: OneDriveCopyUserOption[] | u
       mail: "",
       enabled: true,
       source: "manual",
+      on_prem_sam: "",
       canonical_upn: trimmedQuery,
       synthetic: true,
     });
