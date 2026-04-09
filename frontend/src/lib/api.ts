@@ -1395,6 +1395,7 @@ export interface OneDriveCopyUserOption {
   mail: string;
   enabled: boolean | null;
   source: "entra" | "saved";
+  on_prem_sam: string;
 }
 
 export interface OneDriveCopyJobRequest {

@@ -1051,7 +1051,6 @@ export default function ToolsPage() {
   const [emailgisticsHelperResult, setEmailgisticsHelperResult] = useState<EmailgisticsHelperStatus | undefined>(undefined);
   const [deactivateUserInput, setDeactivateUserInput] = useState("");
   const [selectedDeactivateUser, setSelectedDeactivateUser] = useState<ToolUserPickerOption | null>(null);
-  const [deactivateAdSam, setDeactivateAdSam] = useState("");
   const [deactivateResult, setDeactivateResult] = useState<DeactivateUserToolResult | null>(null);
   const [deactivateFormError, setDeactivateFormError] = useState("");
   const deferredDeactivateSearch = useDeferredValue(deactivateUserInput);
@@ -1338,7 +1337,7 @@ export default function ToolsPage() {
     mutationFn: () =>
       api.deactivateUser({
         entra_user_id: selectedDeactivateUser?.id.trim() || "",
-        ad_sam: deactivateAdSam.trim(),
+        ad_sam: selectedDeactivateUser?.on_prem_sam?.trim() || "",
         display_name: selectedDeactivateUser?.display_name || deactivateUserInput.trim(),
       }),
     onMutate: () => {
@@ -1819,30 +1818,27 @@ export default function ToolsPage() {
                 </span>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <DirectoryComboboxField
-                  label="Entra user"
-                  value={deactivateUserInput}
-                  onInputChange={(v) => { setDeactivateUserInput(v); setSelectedDeactivateUser(null); setDeactivateResult(null); }}
-                  onSelect={(opt) => { setSelectedDeactivateUser(opt); setDeactivateUserInput(opt.display_name || opt.canonical_upn); setDeactivateResult(null); }}
-                  selected={selectedDeactivateUser}
-                  loading={deactivateUserSearchQuery.isLoading}
-                  options={deactivateUserOptions}
-                  placeholder="Search by name or email..."
-                  emptyMessage="No Entra matches found. Leave blank to skip Entra disable."
-                />
-                <div className="flex flex-col gap-1">
-                  <label className="text-sm font-medium text-slate-700">AD SAM account name <span className="font-normal text-slate-400">(optional)</span></label>
-                  <input
-                    type="text"
-                    value={deactivateAdSam}
-                    onChange={(e) => { setDeactivateAdSam(e.target.value); setDeactivateResult(null); }}
-                    placeholder="jsmith"
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder-slate-400 shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
-                  />
-                  <p className="text-xs text-slate-400">On-prem AD account to disable. Leave blank to skip AD.</p>
+              <DirectoryComboboxField
+                label="User to deactivate"
+                value={deactivateUserInput}
+                onInputChange={(v) => { setDeactivateUserInput(v); setSelectedDeactivateUser(null); setDeactivateResult(null); }}
+                onSelect={(opt) => { setSelectedDeactivateUser(opt); setDeactivateUserInput(opt.display_name || opt.canonical_upn); setDeactivateResult(null); }}
+                selected={selectedDeactivateUser}
+                loading={deactivateUserSearchQuery.isLoading}
+                options={deactivateUserOptions}
+                placeholder="Search by name or email..."
+                emptyMessage="No Entra directory matches found."
+              />
+              {selectedDeactivateUser ? (
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full bg-sky-50 px-2.5 py-1 font-medium text-sky-700">Entra: sign-in will be disabled</span>
+                  {selectedDeactivateUser.on_prem_sam ? (
+                    <span className="rounded-full bg-violet-50 px-2.5 py-1 font-medium text-violet-700">AD: {selectedDeactivateUser.on_prem_sam}</span>
+                  ) : (
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-500">AD: no on-prem account linked</span>
+                  )}
                 </div>
-              </div>
+              ) : null}
 
               {deactivateFormError ? (
                 <p className="rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700">{deactivateFormError}</p>
@@ -1851,28 +1847,19 @@ export default function ToolsPage() {
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  disabled={(!selectedDeactivateUser && !deactivateAdSam.trim()) || deactivateUserMutation.isPending}
+                  disabled={!selectedDeactivateUser || deactivateUserMutation.isPending}
                   onClick={() => {
-                    if (!selectedDeactivateUser && !deactivateAdSam.trim()) {
-                      setDeactivateFormError("Select an Entra user or enter an AD SAM account name.");
+                    if (!selectedDeactivateUser) {
+                      setDeactivateFormError("Select a user from the directory first.");
                       return;
                     }
                     setDeactivateFormError("");
                     deactivateUserMutation.mutate();
                   }}
-                  className={buttonClass("primary", (!selectedDeactivateUser && !deactivateAdSam.trim()) || deactivateUserMutation.isPending)}
+                  className={buttonClass("primary", !selectedDeactivateUser || deactivateUserMutation.isPending)}
                 >
                   {deactivateUserMutation.isPending ? "Deactivating..." : "Deactivate user"}
                 </button>
-                {(selectedDeactivateUser || deactivateAdSam.trim()) && !deactivateUserMutation.isPending && !deactivateResult ? (
-                  <span className="text-xs text-slate-500">
-                    Will disable:{" "}
-                    {[
-                      selectedDeactivateUser ? "Entra sign-in" : null,
-                      deactivateAdSam.trim() ? `AD account '${deactivateAdSam.trim()}'` : null,
-                    ].filter(Boolean).join(" + ")}
-                  </span>
-                ) : null}
               </div>
 
               {deactivateResult ? (

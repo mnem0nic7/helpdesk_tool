@@ -735,6 +735,7 @@ class OneDriveCopyUserOptionResponse(BaseModel):
     mail: str = ""
     enabled: Optional[bool] = None
     source: Literal["entra", "saved"] = "entra"
+    on_prem_sam: str = ""
 
 
 class OneDriveCopyJobCreateRequest(BaseModel):

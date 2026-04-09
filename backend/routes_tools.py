@@ -108,6 +108,7 @@ def _normalize_user_option(row: dict[str, Any], *, source: str) -> dict[str, Any
         "mail": mail,
         "enabled": row.get("enabled"),
         "source": "entra" if source == "entra" else "saved",
+        "on_prem_sam": str(row.get("on_prem_sam_account_name") or "").strip(),
     }
 
 
