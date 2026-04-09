@@ -1548,6 +1548,23 @@ export interface EmailgisticsHelperStatus {
   steps: EmailgisticsHelperStep[];
 }
 
+export interface DeactivateUserToolRequest {
+  entra_user_id?: string;
+  ad_sam?: string;
+  display_name?: string;
+}
+
+export interface DeactivateUserToolStepResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface DeactivateUserToolResult {
+  display_name: string;
+  entra: DeactivateUserToolStepResult | null;
+  ad: DeactivateUserToolStepResult | null;
+}
+
 export interface OneDriveCopyJobStatus {
   job_id: string;
   site_scope: string;
@@ -3631,6 +3648,10 @@ export const api = {
 
   runEmailgisticsHelper(body: EmailgisticsHelperRequest): Promise<EmailgisticsHelperStatus> {
     return postJSON<EmailgisticsHelperStatus>("/api/tools/emailgistics-helper", body);
+  },
+
+  deactivateUser(body: DeactivateUserToolRequest): Promise<DeactivateUserToolResult> {
+    return postJSON<DeactivateUserToolResult>("/api/tools/deactivate-user", body);
   },
 
   getDelegateMailboxJob(job_id: string): Promise<DelegateMailboxJobStatus> {

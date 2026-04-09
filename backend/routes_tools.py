@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
+import ad_client as ad
 from auth import list_login_audit, require_tools_access, session_is_admin
 from emailgistics_helper_service import emailgistics_helper_service
 from azure_cache import azure_cache
@@ -350,4 +352,55 @@ def run_emailgistics_helper(
             user_mailbox=body.user_mailbox,
             shared_mailbox=body.shared_mailbox,
         )
+    )
+
+
+class DeactivateUserToolRequest(BaseModel):
+    entra_user_id: str = ""
+    ad_sam: str = ""
+    display_name: str = ""
+
+
+class DeactivateUserToolStepResult(BaseModel):
+    ok: bool
+    message: str
+
+
+class DeactivateUserToolResponse(BaseModel):
+    display_name: str = ""
+    entra: DeactivateUserToolStepResult | None = None
+    ad: DeactivateUserToolStepResult | None = None
+
+
+@router.post("/deactivate-user", response_model=DeactivateUserToolResponse)
+def deactivate_user_tool(
+    body: DeactivateUserToolRequest,
+    _session: dict[str, Any] = Depends(_require_admin_tools_session),
+) -> DeactivateUserToolResponse:
+    """Disable a user in Entra (sign-in disabled) and/or on-prem AD."""
+    entra_result: DeactivateUserToolStepResult | None = None
+    ad_result: DeactivateUserToolStepResult | None = None
+
+    if body.entra_user_id.strip():
+        try:
+            user_admin_providers.execute("disable_sign_in", body.entra_user_id.strip(), {})
+            entra_result = DeactivateUserToolStepResult(ok=True, message="Sign-in disabled")
+        except UserAdminProviderError as exc:
+            entra_result = DeactivateUserToolStepResult(ok=False, message=str(exc))
+        except Exception as exc:
+            entra_result = DeactivateUserToolStepResult(ok=False, message=str(exc))
+
+    if body.ad_sam.strip():
+        try:
+            ad.disable_user(body.ad_sam.strip())
+            ad_result = DeactivateUserToolStepResult(ok=True, message=f"AD account disabled")
+        except ad.ADError as exc:
+            ad_result = DeactivateUserToolStepResult(ok=False, message=str(exc))
+        except Exception as exc:
+            ad_result = DeactivateUserToolStepResult(ok=False, message=str(exc))
+
+    return DeactivateUserToolResponse(
+        display_name=body.display_name,
+        entra=entra_result,
+        ad=ad_result,
     )
