@@ -113,10 +113,14 @@ class TicketRow(BaseModel):
     sla_first_response_status: str = ""
     sla_first_response_breach_time: str = ""
     sla_first_response_remaining_millis: Optional[int] = None
+    sla_first_response_elapsed_millis: Optional[int] = None
+    sla_first_response_goal_millis: Optional[int] = None
     # SLA resolution
     sla_resolution_status: str = ""
     sla_resolution_breach_time: str = ""
     sla_resolution_remaining_millis: Optional[int] = None
+    sla_resolution_elapsed_millis: Optional[int] = None
+    sla_resolution_goal_millis: Optional[int] = None
     # Response/follow-up compliance proxy
     response_followup_status: str = ""
     first_response_2h_status: str = ""
@@ -2374,3 +2378,31 @@ class UserExitAgentCompleteRequest(BaseModel):
     error: str = ""
     before_summary: dict[str, Any] = Field(default_factory=dict)
     after_summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutoReplyStatus(BaseModel):
+    """Current automatic-reply / out-of-office state for a mailbox."""
+
+    mailbox: str
+    display_name: str = ""
+    principal_name: str = ""
+    status: str = ""  # "disabled" | "alwaysEnabled" | "scheduled"
+    internal_message: str = ""
+    external_message: str = ""
+    scheduled_start: str = ""  # ISO-8601 or ""
+    scheduled_end: str = ""    # ISO-8601 or ""
+    external_audience: str = ""  # "none" | "known" | "all"
+    provider_enabled: bool = False
+    note: str = ""
+
+
+class SetAutoReplyRequest(BaseModel):
+    """Request body for setting a mailbox automatic reply."""
+
+    mailbox: str = Field(min_length=3, max_length=320)
+    status: Literal["disabled", "alwaysEnabled", "scheduled"] = "alwaysEnabled"
+    internal_message: str = Field(default="", max_length=10000)
+    external_message: str = Field(default="", max_length=10000)
+    scheduled_start: str = ""   # ISO-8601 datetime or "" (required when status=scheduled)
+    scheduled_end: str = ""     # ISO-8601 datetime or "" (required when status=scheduled)
+    external_audience: Literal["none", "known", "all"] = "known"

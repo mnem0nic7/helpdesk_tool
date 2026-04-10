@@ -73,7 +73,8 @@ async def delete_sla_target(target_id: int) -> dict[str, Any]:
 async def update_sla_settings(body: dict[str, str]) -> dict[str, str]:
     """Update business hours settings."""
     allowed_keys = {"business_hours_start", "business_hours_end",
-                    "business_timezone", "business_days", "integration_reporters"}
+                    "business_timezone", "business_days", "integration_reporters",
+                    "paused_status_names"}
     filtered = {k: v for k, v in body.items() if k in allowed_keys}
     if not filtered:
         raise HTTPException(400, "No valid settings provided")

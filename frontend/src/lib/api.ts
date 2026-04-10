@@ -276,10 +276,14 @@ export interface TicketRow {
   sla_first_response_status: string;
   sla_first_response_breach_time: string;
   sla_first_response_remaining_millis: number | null;
+  sla_first_response_elapsed_millis: number | null;
+  sla_first_response_goal_millis: number | null;
   // SLA resolution
   sla_resolution_status: string;
   sla_resolution_breach_time: string;
   sla_resolution_remaining_millis: number | null;
+  sla_resolution_elapsed_millis: number | null;
+  sla_resolution_goal_millis: number | null;
   // Response/follow-up compliance proxy
   response_followup_status: string;
   first_response_2h_status: string;
@@ -813,9 +817,12 @@ export interface AIModel {
 
 /** A single SLA computation result per ticket per timer. */
 export interface SLATicketTimer {
-  status: "met" | "breached" | "running";
+  status: "met" | "breached" | "running" | "paused";
   elapsed_minutes: number;
   target_minutes: number;
+  remaining_minutes: number | null;
+  pct_of_target: number;
+  risk_level: "ok" | "warning" | "at_risk" | "critical" | "paused" | "met" | "breached";
 }
 
 /** Per-ticket row with SLA data from GET /api/sla/metrics. */
@@ -836,6 +843,11 @@ export interface SLATimerStats {
   met: number;
   breached: number;
   running: number;
+  paused: number;
+  risk_ok: number;
+  risk_warning: number;
+  risk_at_risk: number;
+  risk_critical: number;
   compliance_pct: number;
   avg_elapsed_minutes: number;
   p95_elapsed_minutes: number;
@@ -869,6 +881,7 @@ export interface SLASettings {
   business_timezone: string;
   business_days: string;
   integration_reporters: string;
+  paused_status_names?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1446,6 +1459,30 @@ export interface MailboxRulesStatus {
   note: string;
   rule_count: number;
   rules: MailboxRule[];
+}
+
+export interface AutoReplyStatus {
+  mailbox: string;
+  display_name: string;
+  principal_name: string;
+  status: string;  // "disabled" | "alwaysEnabled" | "scheduled"
+  internal_message: string;
+  external_message: string;
+  scheduled_start: string;
+  scheduled_end: string;
+  external_audience: string;
+  provider_enabled: boolean;
+  note: string;
+}
+
+export interface SetAutoReplyRequest {
+  mailbox: string;
+  status: "disabled" | "alwaysEnabled" | "scheduled";
+  internal_message: string;
+  external_message: string;
+  scheduled_start: string;
+  scheduled_end: string;
+  external_audience: "none" | "known" | "all";
 }
 
 export interface MailboxDelegateEntry {
@@ -3625,6 +3662,18 @@ export const api = {
 
   listMailboxRules(mailbox: string): Promise<MailboxRulesStatus> {
     return fetchJSON<MailboxRulesStatus>(`/api/tools/mailbox-rules${buildQuery({ mailbox })}`);
+  },
+
+  getAutoReply(mailbox: string): Promise<AutoReplyStatus> {
+    return fetchJSON<AutoReplyStatus>(`/api/tools/auto-reply${buildQuery({ mailbox })}`);
+  },
+
+  setAutoReply(body: SetAutoReplyRequest): Promise<AutoReplyStatus> {
+    return fetchJSON<AutoReplyStatus>("/api/tools/auto-reply", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
   },
 
   listMailboxDelegates(mailbox: string): Promise<MailboxDelegatesStatus> {

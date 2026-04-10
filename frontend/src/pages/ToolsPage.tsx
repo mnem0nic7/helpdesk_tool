@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type AppLoginAuditEvent,
+  type AutoReplyStatus,
   type DeactivateUserToolResult,
   type DelegateMailboxJobStatus,
   type EmailgisticsHelperStatus,
@@ -10,6 +11,7 @@ import {
   type MailboxRulesStatus,
   type OneDriveCopyJobStatus,
   type OneDriveCopyUserOption,
+  type SetAutoReplyRequest,
 } from "../lib/api.ts";
 import {
   getPollingQueryOptions,
@@ -1027,6 +1029,16 @@ export default function ToolsPage() {
   const [delegateMailboxInput, setDelegateMailboxInput] = useState("");
   const [mailboxInput, setMailboxInput] = useState("");
   const [delegateUserInput, setDelegateUserInput] = useState("");
+  const [oofMailboxInput, setOofMailboxInput] = useState("");
+  const [selectedOofMailbox, setSelectedOofMailbox] = useState<ToolUserPickerOption | null>(null);
+  const [oofStatus, setOofStatus] = useState<"alwaysEnabled" | "scheduled" | "disabled">("alwaysEnabled");
+  const [oofInternalMsg, setOofInternalMsg] = useState("");
+  const [oofExternalMsg, setOofExternalMsg] = useState("");
+  const [oofStart, setOofStart] = useState("");
+  const [oofEnd, setOofEnd] = useState("");
+  const [oofAudience, setOofAudience] = useState<"none" | "known" | "all">("known");
+  const [oofFormError, setOofFormError] = useState("");
+  const [oofResult, setOofResult] = useState<AutoReplyStatus | null>(null);
   const [emailgisticsUserInput, setEmailgisticsUserInput] = useState("");
   const [emailgisticsSharedMailboxInput, setEmailgisticsSharedMailboxInput] = useState("");
   const [selectedSource, setSelectedSource] = useState<ToolUserPickerOption | null>(null);
@@ -1060,6 +1072,7 @@ export default function ToolsPage() {
   const deferredDelegateMailboxSearch = useDeferredValue(delegateMailboxInput);
   const deferredMailboxSearch = useDeferredValue(mailboxInput);
   const deferredDelegateUserSearch = useDeferredValue(delegateUserInput);
+  const deferredOofMailboxSearch = useDeferredValue(oofMailboxInput);
   const deferredEmailgisticsUserSearch = useDeferredValue(emailgisticsUserInput);
   const deferredEmailgisticsSharedMailboxSearch = useDeferredValue(emailgisticsSharedMailboxInput);
 
@@ -1089,6 +1102,24 @@ export default function ToolsPage() {
     queryFn: () => api.searchOneDriveCopyUsers(deferredMailboxSearch.trim(), 8),
     enabled: hasSignedInUser,
     staleTime: 30_000,
+  });
+
+  const oofMailboxSearchQuery = useQuery({
+    queryKey: ["auto-reply", "users", deferredOofMailboxSearch],
+    queryFn: () => api.searchOneDriveCopyUsers(deferredOofMailboxSearch.trim(), 8),
+    enabled: hasSignedInUser,
+    staleTime: 30_000,
+  });
+
+  const setAutoReplyMutation = useMutation({
+    mutationFn: (req: SetAutoReplyRequest) => api.setAutoReply(req),
+    onSuccess: (data) => {
+      setOofResult(data);
+      setOofFormError("");
+    },
+    onError: (err) => {
+      setOofFormError(err instanceof Error ? err.message : "Failed to update automatic reply settings.");
+    },
   });
 
   const delegateMailboxSearchQuery = useQuery({
@@ -1127,6 +1158,7 @@ export default function ToolsPage() {
   const destinationOptions = buildPickerOptions(destinationUpnInput, destinationSearchQuery.data);
   const delegateMailboxOptions = buildPickerOptions(delegateMailboxInput, delegateMailboxSearchQuery.data);
   const mailboxOptions = buildPickerOptions(mailboxInput, mailboxSearchQuery.data);
+  const oofMailboxOptions = buildPickerOptions(oofMailboxInput, oofMailboxSearchQuery.data);
   const delegateUserOptions = buildPickerOptions(delegateUserInput, delegateUserSearchQuery.data);
   const emailgisticsUserOptions = buildPickerOptions(emailgisticsUserInput, emailgisticsUserSearchQuery.data);
   const emailgisticsSharedMailboxOptions = buildPickerOptions(emailgisticsSharedMailboxInput, emailgisticsSharedMailboxSearchQuery.data);
@@ -1489,6 +1521,28 @@ export default function ToolsPage() {
       return;
     }
     setActiveMailboxLookup(mailbox);
+  }
+
+  function submitSetAutoReply() {
+    const mailbox = selectedOofMailbox?.canonical_upn.trim() || oofMailboxInput.trim();
+    if (!mailbox || !looksLikeUpn(mailbox)) {
+      setOofFormError("Select a mailbox from the dropdown or enter a valid UPN/email.");
+      return;
+    }
+    if (oofStatus === "scheduled" && (!oofStart || !oofEnd)) {
+      setOofFormError("Start date/time and end date/time are required for scheduled mode.");
+      return;
+    }
+    setOofFormError("");
+    setAutoReplyMutation.mutate({
+      mailbox,
+      status: oofStatus,
+      internal_message: oofInternalMsg,
+      external_message: oofExternalMsg,
+      scheduled_start: oofStart,
+      scheduled_end: oofEnd,
+      external_audience: oofAudience,
+    });
   }
 
   function submitDelegateMailboxLookup() {
@@ -2102,6 +2156,143 @@ export default function ToolsPage() {
             }}
             isClearing={clearFinishedDelegateMailboxJobsMutation.isPending}
           />
+
+          <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Out of Office</div>
+                <h2 className="mt-1 text-2xl font-semibold text-slate-900">Set automatic reply for a mailbox</h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Configure the automatic reply (out-of-office) message and duration for any mailbox via the shared Graph connection.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <DirectoryComboboxField
+                label="Mailbox UPN or email"
+                value={oofMailboxInput}
+                onInputChange={(v) => { setOofMailboxInput(v); setSelectedOofMailbox(null); setOofResult(null); }}
+                onSelect={(opt) => { setSelectedOofMailbox(opt); setOofMailboxInput(opt.canonical_upn); setOofResult(null); }}
+                selected={selectedOofMailbox}
+                loading={oofMailboxSearchQuery.isLoading}
+                options={oofMailboxOptions}
+                placeholder="user@example.com"
+                emptyMessage="No saved or Entra matches found yet. Enter a valid UPN/email to use it directly."
+              />
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Mode</label>
+                <div className="flex gap-3 flex-wrap">
+                  {(["alwaysEnabled", "scheduled", "disabled"] as const).map((s) => (
+                    <label key={s} className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="oof-status"
+                        value={s}
+                        checked={oofStatus === s}
+                        onChange={() => setOofStatus(s)}
+                        className="accent-indigo-600"
+                      />
+                      <span className="text-sm text-slate-700 capitalize">
+                        {s === "alwaysEnabled" ? "Always on" : s === "scheduled" ? "Scheduled" : "Disabled (off)"}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {oofStatus === "scheduled" && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Start (UTC)</label>
+                    <input
+                      type="datetime-local"
+                      value={oofStart}
+                      onChange={(e) => setOofStart(e.target.value)}
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">End (UTC)</label>
+                    <input
+                      type="datetime-local"
+                      value={oofEnd}
+                      onChange={(e) => setOofEnd(e.target.value)}
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {oofStatus !== "disabled" && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Internal message</label>
+                    <textarea
+                      rows={3}
+                      value={oofInternalMsg}
+                      onChange={(e) => setOofInternalMsg(e.target.value)}
+                      placeholder="I am out of the office and will respond when I return."
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">External message</label>
+                    <textarea
+                      rows={3}
+                      value={oofExternalMsg}
+                      onChange={(e) => setOofExternalMsg(e.target.value)}
+                      placeholder="Thank you for your email. I am currently out of the office."
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Reply to external senders</label>
+                    <select
+                      value={oofAudience}
+                      onChange={(e) => setOofAudience(e.target.value as "none" | "known" | "all")}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    >
+                      <option value="none">None (internal only)</option>
+                      <option value="known">Known contacts only</option>
+                      <option value="all">All external senders</option>
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {oofFormError && (
+                <p className="rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700">{oofFormError}</p>
+              )}
+
+              <button
+                type="button"
+                onClick={submitSetAutoReply}
+                disabled={setAutoReplyMutation.isPending}
+                className={buttonClass("primary", setAutoReplyMutation.isPending)}
+              >
+                {setAutoReplyMutation.isPending ? "Saving..." : oofStatus === "disabled" ? "Turn off automatic reply" : "Set automatic reply"}
+              </button>
+
+              {oofResult && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm space-y-1">
+                  <div className="font-medium text-slate-800">{oofResult.display_name || oofResult.principal_name}</div>
+                  <div className="text-slate-600">
+                    Status: <span className={`font-medium ${oofResult.status === "disabled" ? "text-slate-500" : "text-green-700"}`}>
+                      {oofResult.status === "alwaysEnabled" ? "Always on" : oofResult.status === "scheduled" ? "Scheduled" : "Off"}
+                    </span>
+                  </div>
+                  {oofResult.scheduled_start && oofResult.scheduled_end && (
+                    <div className="text-slate-500">
+                      {new Date(oofResult.scheduled_start).toLocaleString()} &rarr; {new Date(oofResult.scheduled_end).toLocaleString()}
+                    </div>
+                  )}
+                  {oofResult.note && <div className="text-amber-700">{oofResult.note}</div>}
+                </div>
+              )}
+            </div>
+          </section>
 
           <LoginAuditPanel events={loginAuditQuery.data ?? []} />
         </div>

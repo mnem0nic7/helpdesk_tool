@@ -95,6 +95,7 @@ def test_search_onedrive_copy_users_returns_recent_saved_matches_for_empty_searc
             "mail": "",
             "enabled": None,
             "source": "saved",
+            "on_prem_sam": "",
         }
     ]
     mock_cache.list_directory_objects.assert_not_called()

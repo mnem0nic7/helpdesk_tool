@@ -33,8 +33,30 @@ function slaStatusBadge(status: string): { bg: string; label: string } {
     case "met": return { bg: "bg-green-100 text-green-800", label: "Met" };
     case "breached": return { bg: "bg-red-100 text-red-800", label: "Breached" };
     case "running": return { bg: "bg-blue-100 text-blue-800", label: "Running" };
-    default: return { bg: "bg-gray-100 text-gray-700", label: status };
+    case "paused": return { bg: "bg-purple-100 text-purple-800", label: "Paused" };
+    default: return { bg: "bg-gray-100 text-gray-700", label: status || "—" };
   }
+}
+
+function riskBadge(risk: string | undefined): { bg: string; label: string } {
+  switch (risk) {
+    case "ok": return { bg: "bg-green-100 text-green-700", label: "OK" };
+    case "warning": return { bg: "bg-yellow-100 text-yellow-800", label: "Warning" };
+    case "at_risk": return { bg: "bg-orange-100 text-orange-800", label: "At Risk" };
+    case "critical": return { bg: "bg-red-100 text-red-800", label: "Critical" };
+    case "paused": return { bg: "bg-purple-100 text-purple-700", label: "Paused" };
+    case "met": return { bg: "bg-green-50 text-green-600", label: "Met" };
+    case "breached": return { bg: "bg-red-100 text-red-700", label: "Breached" };
+    default: return { bg: "bg-gray-100 text-gray-500", label: "—" };
+  }
+}
+
+function rowRiskBg(fr: { risk_level?: string } | null, res: { risk_level?: string } | null): string {
+  const risks = [fr?.risk_level, res?.risk_level];
+  if (risks.includes("critical")) return "bg-red-50";
+  if (risks.includes("at_risk")) return "bg-orange-50";
+  if (risks.includes("warning")) return "bg-yellow-50/60";
+  return "";
 }
 
 function formatMinutes(m: number): string {
@@ -47,7 +69,49 @@ function formatMinutes(m: number): string {
   return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
 }
 
-type SortField = "key" | "summary" | "status" | "priority" | "assignee" | "fr_status" | "fr_elapsed" | "res_status" | "res_elapsed";
+function fmtMillisRemaining(ms: number | null | undefined): string {
+  if (ms == null) return "—";
+  const absMs = Math.abs(ms);
+  const totalMin = Math.round(absMs / 60000);
+  if (totalMin < 60) return ms >= 0 ? `${totalMin}m left` : `${totalMin}m ago`;
+  const h = Math.floor(totalMin / 60);
+  const rm = totalMin % 60;
+  const str = h < 24
+    ? (rm > 0 ? `${h}h ${rm}m` : `${h}h`)
+    : (() => { const d = Math.floor(h / 24); const rh = h % 24; return rh > 0 ? `${d}d ${rh}h` : `${d}d`; })();
+  return ms >= 0 ? `${str} left` : `${str} ago`;
+}
+
+function fmtBreachTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const dt = new Date(iso);
+  if (isNaN(dt.getTime())) return "";
+  const now = new Date();
+  const diffMs = dt.getTime() - now.getTime();
+  const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999);
+  const weekAhead = new Date(now); weekAhead.setDate(weekAhead.getDate() + 7);
+  const timeStr = dt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (Math.abs(diffMs) < 86400000 * 7) {
+    if (dt <= todayEnd && dt >= new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
+      return `by ${timeStr}`;
+    }
+    const day = dt.toLocaleDateString([], { weekday: "short" });
+    return `by ${day} ${timeStr}`;
+  }
+  return `by ${dt.toLocaleDateString([], { month: "short", day: "numeric" })} ${timeStr}`;
+}
+
+function jsmRiskColor(ms: number | null | undefined, goalMs: number | null | undefined): string {
+  if (ms == null || goalMs == null || goalMs <= 0) return "text-gray-500";
+  if (ms < 0) return "text-red-600 font-medium";
+  const pct = 1 - ms / goalMs;
+  if (pct >= 0.9) return "text-red-600 font-medium";
+  if (pct >= 0.75) return "text-orange-500 font-medium";
+  if (pct >= 0.5) return "text-yellow-600";
+  return "text-green-600";
+}
+
+type SortField = "key" | "summary" | "status" | "priority" | "assignee" | "fr_status" | "fr_elapsed" | "fr_remaining" | "res_status" | "res_elapsed" | "res_remaining";
 type SortDir = "asc" | "desc";
 type SLATimerType = "first_response" | "resolution";
 type SLABucketFilter = { timer: SLATimerType; label: string } | null;
@@ -76,7 +140,7 @@ const SLA_BUCKET_RANGES: Record<SLATimerType, Array<[string, number, number]>> =
   ],
 };
 
-function getSLAFilterValue(timer: SLATimerType, status: "met" | "breached" | "running" | "total"): string {
+function getSLAFilterValue(timer: SLATimerType, status: "met" | "breached" | "running" | "paused" | "total"): string {
   if (timer === "first_response") return `fr_${status}`;
   return `res_${status}`;
 }
@@ -101,10 +165,14 @@ function compareTickets(a: SLATicketRow, b: SLATicketRow, field: SortField, dir:
     cmp = (a.sla_first_response?.status ?? "").localeCompare(b.sla_first_response?.status ?? "");
   } else if (field === "fr_elapsed") {
     cmp = (a.sla_first_response?.elapsed_minutes ?? 0) - (b.sla_first_response?.elapsed_minutes ?? 0);
+  } else if (field === "fr_remaining") {
+    cmp = (a.sla_first_response?.remaining_minutes ?? Infinity) - (b.sla_first_response?.remaining_minutes ?? Infinity);
   } else if (field === "res_status") {
     cmp = (a.sla_resolution?.status ?? "").localeCompare(b.sla_resolution?.status ?? "");
   } else if (field === "res_elapsed") {
     cmp = (a.sla_resolution?.elapsed_minutes ?? 0) - (b.sla_resolution?.elapsed_minutes ?? 0);
+  } else if (field === "res_remaining") {
+    cmp = (a.sla_resolution?.remaining_minutes ?? Infinity) - (b.sla_resolution?.remaining_minutes ?? Infinity);
   } else {
     const va = (a[field as keyof SLATicketRow] ?? "") as string;
     const vb = (b[field as keyof SLATicketRow] ?? "") as string;
@@ -134,6 +202,7 @@ function SLASummaryCard({
   const metPct = completed > 0 ? (stats.met / completed) * 100 : 0;
   const breachedPct = completed > 0 ? (stats.breached / completed) * 100 : 0;
   const runningPct = stats.total > 0 ? (stats.running / stats.total) * 100 : 0;
+  const pausedPct = stats.total > 0 ? ((stats.paused ?? 0) / stats.total) * 100 : 0;
   const totalFilterValue = getSLAFilterValue(timer, "total");
   const isTotalActive = activeFilter === totalFilterValue;
   const filters = [
@@ -161,8 +230,16 @@ function SLASummaryCard({
       color: "bg-blue-500",
       chipClass: "border-blue-200 bg-blue-50 text-blue-700",
     },
+    {
+      key: "paused",
+      label: "Paused",
+      count: stats.paused ?? 0,
+      pct: pausedPct,
+      color: "bg-purple-400",
+      chipClass: "border-purple-200 bg-purple-50 text-purple-700",
+    },
   ] satisfies Array<{
-    key: "met" | "breached" | "running";
+    key: "met" | "breached" | "running" | "paused";
     label: string;
     count: number;
     pct: number;
@@ -255,6 +332,21 @@ function SLASummaryCard({
           Total: {stats.total}
         </button>
       </div>
+      {/* Risk breakdown for running tickets */}
+      {stats.running > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+          {[
+            { key: "risk_ok", label: "OK", cls: "bg-green-50 text-green-600 border-green-200" },
+            { key: "risk_warning", label: "Warning", cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
+            { key: "risk_at_risk", label: "At Risk", cls: "bg-orange-50 text-orange-700 border-orange-200" },
+            { key: "risk_critical", label: "Critical", cls: "bg-red-50 text-red-700 border-red-200" },
+          ].filter((r) => (stats[r.key as keyof SLATimerStats] as number) > 0).map((r) => (
+            <span key={r.key} className={`inline-flex items-center rounded-full border px-2 py-0.5 font-medium ${r.cls}`}>
+              {r.label}: {stats[r.key as keyof SLATimerStats] as number}
+            </span>
+          ))}
+        </div>
+      )}
       <p className="mt-3 text-xs text-slate-500">Click a metric, segment, or status pill to filter the ticket list.</p>
     </div>
   );
@@ -409,6 +501,14 @@ function SLASettingsModal({ settings, targets, onClose }: {
                 placeholder="e.g. OSIJIRAOCC"
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
             </label>
+            <label className="mt-3 block">
+              <span className="text-xs text-gray-500">Paused Statuses (comma-separated — tickets in these statuses pause the SLA clock)</span>
+              <textarea value={localSettings.paused_status_names ?? ""}
+                onChange={(e) => setLocalSettings({ ...localSettings, paused_status_names: e.target.value })}
+                rows={3}
+                placeholder="e.g. waiting for customer, pending, on hold"
+                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm font-mono" />
+            </label>
             <button onClick={saveSettings} disabled={saving}
               className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
               {saving ? "Saving..." : "Save Settings"}
@@ -519,9 +619,11 @@ export default function SLAPage() {
   const [filterStatus, setFilterStatus] = useState("");
   const [filterAssignee, setFilterAssignee] = useState("");
   const [filterSLA, setFilterSLA] = useState("");
+  const [filterRisk, setFilterRisk] = useState("");
   const [bucketFilter, setBucketFilter] = useState<SLABucketFilter>(null);
   const [openOnly, setOpenOnly] = useState(false);
   const [staleOnly, setStaleOnly] = useState(false);
+  const [showJSM, setShowJSM] = useState(false);
   const [sortField, setSortField] = useState<SortField>("key");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
@@ -550,6 +652,11 @@ export default function SLAPage() {
     if (filterSLA === "res_met") list = list.filter((t) => t.sla_resolution?.status === "met");
     if (filterSLA === "res_running") list = list.filter((t) => t.sla_resolution?.status === "running");
     if (filterSLA === "any_breached") list = list.filter((t) => t.sla_first_response?.status === "breached" || t.sla_resolution?.status === "breached");
+    if (filterSLA === "fr_paused") list = list.filter((t) => t.sla_first_response?.status === "paused");
+    if (filterSLA === "res_paused") list = list.filter((t) => t.sla_resolution?.status === "paused");
+    if (filterRisk) list = list.filter((t) =>
+      t.sla_first_response?.risk_level === filterRisk || t.sla_resolution?.risk_level === filterRisk,
+    );
     if (bucketFilter?.timer === "first_response") {
       list = list.filter((t) => matchesBucket("first_response", bucketFilter.label, t.sla_first_response?.elapsed_minutes));
     }
@@ -559,7 +666,7 @@ export default function SLAPage() {
     if (openOnly) list = list.filter((t) => t.status_category !== "Done");
     if (staleOnly) list = list.filter((t) => t.status_category !== "Done" && (t.days_since_update ?? 0) >= 1);
     return [...list].sort((a, b) => compareTickets(a, b, sortField, sortDir));
-  }, [tickets, filterPriority, filterStatus, filterAssignee, filterSLA, bucketFilter, openOnly, staleOnly, sortField, sortDir]);
+  }, [tickets, filterPriority, filterStatus, filterAssignee, filterSLA, filterRisk, bucketFilter, openOnly, staleOnly, sortField, sortDir]);
 
   // Infinite scroll
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -584,7 +691,7 @@ export default function SLAPage() {
 
   const visible = processed.slice(0, visibleCount);
   const hasMore = visibleCount < processed.length;
-  const hasFilters = !!(search || filterPriority || filterStatus || filterAssignee || filterSLA || bucketFilter || openOnly || staleOnly);
+  const hasFilters = !!(search || filterPriority || filterStatus || filterAssignee || filterSLA || filterRisk || bucketFilter || openOnly || staleOnly);
   const activeBucketLabel = bucketFilter
     ? `${bucketFilter.timer === "first_response" ? "First response" : "Resolution"}: ${bucketFilter.label}`
     : null;
@@ -775,10 +882,21 @@ export default function SLAPage() {
             <option value="fr_breached">FR Breached</option>
             <option value="fr_met">FR Met</option>
             <option value="fr_running">FR Running</option>
+            <option value="fr_paused">FR Paused</option>
             <option value="res_total">Res Total</option>
             <option value="res_breached">Res Breached</option>
             <option value="res_met">Res Met</option>
             <option value="res_running">Res Running</option>
+            <option value="res_paused">Res Paused</option>
+          </select>
+          <select value={filterRisk} onChange={(e) => setFilterRisk(e.target.value)}
+            className="rounded-md border border-gray-300 px-2 py-1.5 text-sm">
+            <option value="">All Risk Levels</option>
+            <option value="critical">Critical</option>
+            <option value="at_risk">At Risk</option>
+            <option value="warning">Warning</option>
+            <option value="ok">OK</option>
+            <option value="paused">Paused</option>
           </select>
           <button onClick={() => setOpenOnly((v) => !v)}
             className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
@@ -788,6 +906,10 @@ export default function SLAPage() {
             className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
               staleOnly ? "border-amber-500 bg-amber-50 text-amber-700" : "border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
             }`}>Stale (1d+)</button>
+          <button onClick={() => setShowJSM((v) => !v)}
+            className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+              showJSM ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+            }`} title="Show Jira JSM timer columns side-by-side for comparison">JSM</button>
           {activeBucketLabel && (
             <button
               type="button"
@@ -798,7 +920,7 @@ export default function SLAPage() {
             </button>
           )}
           {hasFilters && (
-            <button onClick={() => { setSearch(""); setFilterPriority(""); setFilterStatus(""); setFilterAssignee(""); setFilterSLA(""); setBucketFilter(null); setOpenOnly(false); setStaleOnly(false); }}
+            <button onClick={() => { setSearch(""); setFilterPriority(""); setFilterStatus(""); setFilterAssignee(""); setFilterSLA(""); setFilterRisk(""); setBucketFilter(null); setOpenOnly(false); setStaleOnly(false); }}
               className="text-xs text-gray-500 hover:text-gray-700 underline">Clear filters</button>
           )}
         </div>
@@ -820,8 +942,12 @@ export default function SLAPage() {
                   <SortHeader label="Assignee" field="assignee" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
                   <SortHeader label="FR Status" field="fr_status" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
                   <SortHeader label="FR Time" field="fr_elapsed" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
+                  <SortHeader label="FR Left" field="fr_remaining" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
                   <SortHeader label="Res Status" field="res_status" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
                   <SortHeader label="Res Time" field="res_elapsed" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
+                  <SortHeader label="Res Left" field="res_remaining" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
+                  {showJSM && <th className="px-4 py-3 text-left text-xs font-semibold tracking-wider text-indigo-600 uppercase">JSM FR</th>}
+                  {showJSM && <th className="px-4 py-3 text-left text-xs font-semibold tracking-wider text-indigo-600 uppercase">JSM Res</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
@@ -830,14 +956,24 @@ export default function SLAPage() {
                   const res = t.sla_resolution;
                   const frBadge = fr ? slaStatusBadge(fr.status) : null;
                   const resBadge = res ? slaStatusBadge(res.status) : null;
+                  const frRisk = fr ? riskBadge(fr.risk_level) : null;
+                  const resRisk = res ? riskBadge(res.risk_level) : null;
+                  const riskBg = rowRiskBg(fr, res);
+                  // JSM mismatch: custom says breached but JSM doesn't (or vice-versa)
+                  const jsmFR = t.sla_first_response_status;
+                  const jsmRes = t.sla_resolution_status;
+                  const frMismatch = showJSM && fr && (
+                    (fr.status === "breached") !== (jsmFR?.toUpperCase() === "BREACHED")
+                  );
+                  const resMismatch = showJSM && res && (
+                    (res.status === "breached") !== (jsmRes?.toUpperCase() === "BREACHED")
+                  );
                   return (
-                    <tr key={t.key} className="hover:bg-gray-50">
+                    <tr key={t.key} className={`${riskBg} hover:brightness-95`}>
                       <td className="whitespace-nowrap px-4 py-3 font-medium">
                         <Link
                           to={buildTicketHref(t.key)}
-                          onClick={() => {
-                            setOpenTicket(t);
-                          }}
+                          onClick={() => { setOpenTicket(t); }}
                           className="text-blue-600 hover:underline"
                         >
                           {t.key}
@@ -855,12 +991,62 @@ export default function SLAPage() {
                       <td className="whitespace-nowrap px-4 py-3 text-xs text-gray-600">
                         {fr ? <span title={`Target: ${formatMinutes(fr.target_minutes)}`}>{formatMinutes(fr.elapsed_minutes)}</span> : "\u2014"}
                       </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-xs">
+                        {fr && fr.remaining_minutes != null ? (
+                          <span className={frRisk ? `font-medium ${frRisk.bg.split(" ")[0]} rounded px-1.5` : ""}>
+                            {formatMinutes(fr.remaining_minutes)}
+                          </span>
+                        ) : "\u2014"}
+                      </td>
                       <td className="whitespace-nowrap px-4 py-3">
                         {resBadge ? <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${resBadge.bg}`}>{resBadge.label}</span> : <span className="text-gray-300">N/A</span>}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-xs text-gray-600">
                         {res ? <span title={`Target: ${formatMinutes(res.target_minutes)}`}>{formatMinutes(res.elapsed_minutes)}</span> : "\u2014"}
                       </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-xs">
+                        {res && res.remaining_minutes != null ? (
+                          <span className={resRisk ? `font-medium ${resRisk.bg.split(" ")[0]} rounded px-1.5` : ""}>
+                            {formatMinutes(res.remaining_minutes)}
+                          </span>
+                        ) : "\u2014"}
+                      </td>
+                      {showJSM && (
+                        <td className="px-4 py-3 text-xs">
+                          {jsmFR ? (
+                            <div className="flex flex-col gap-0.5">
+                              <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium w-fit ${slaStatusBadge(jsmFR.toLowerCase()).bg}`}>
+                                {frMismatch && <span title="Mismatch with custom engine">⚠</span>}
+                                {jsmFR}
+                              </span>
+                              <span className={jsmRiskColor(t.sla_first_response_remaining_millis, t.sla_first_response_goal_millis)}>
+                                {fmtMillisRemaining(t.sla_first_response_remaining_millis)}
+                              </span>
+                              {(jsmFR === "Running" || jsmFR === "Paused") && t.sla_first_response_breach_time && (
+                                <span className="text-gray-400">{fmtBreachTime(t.sla_first_response_breach_time)}</span>
+                              )}
+                            </div>
+                          ) : <span className="text-gray-300">—</span>}
+                        </td>
+                      )}
+                      {showJSM && (
+                        <td className="px-4 py-3 text-xs">
+                          {jsmRes ? (
+                            <div className="flex flex-col gap-0.5">
+                              <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium w-fit ${slaStatusBadge(jsmRes.toLowerCase()).bg}`}>
+                                {resMismatch && <span title="Mismatch with custom engine">⚠</span>}
+                                {jsmRes}
+                              </span>
+                              <span className={jsmRiskColor(t.sla_resolution_remaining_millis, t.sla_resolution_goal_millis)}>
+                                {fmtMillisRemaining(t.sla_resolution_remaining_millis)}
+                              </span>
+                              {(jsmRes === "Running" || jsmRes === "Paused") && t.sla_resolution_breach_time && (
+                                <span className="text-gray-400">{fmtBreachTime(t.sla_resolution_breach_time)}</span>
+                              )}
+                            </div>
+                          ) : <span className="text-gray-300">—</span>}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

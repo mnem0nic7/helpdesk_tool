@@ -14,7 +14,7 @@ from alert_store import alert_store
 from email_service import send_email
 from metrics import _is_open
 from request_type import extract_request_type_name_from_fields
-from sla_engine import sla_config, business_minutes_between, _parse_dt
+from sla_engine import sla_config, business_minutes_between, _parse_dt, _DEFAULT_PAUSED_STATUS_NAMES
 from site_context import get_site_origin, get_site_profile
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,14 @@ def _get_assignee(issue: dict) -> str:
 
 def _get_request_type(issue: dict) -> str:
     return extract_request_type_name_from_fields(issue.get("fields", {}))
+
+
+def _is_paused_status(issue: dict, settings: dict) -> bool:
+    """Return True if the ticket's current status is in the configured paused-status list."""
+    raw_paused = settings.get("paused_status_names", ",".join(_DEFAULT_PAUSED_STATUS_NAMES))
+    paused_names = frozenset(s.strip().lower() for s in raw_paused.split(",") if s.strip())
+    current = ((issue.get("fields", {}).get("status") or {}).get("name") or "").lower().strip()
+    return current in paused_names
 
 
 def _updated_minutes_ago(issue: dict, now: datetime) -> float:
@@ -159,6 +167,8 @@ def evaluate_fr_breach(issues: list[dict], config: dict) -> list[dict]:
         if first_response_time:
             elapsed = business_minutes_between(created, first_response_time, settings)
         elif _is_open(iss):
+            if _is_paused_status(iss, settings):
+                continue
             elapsed = business_minutes_between(created, now, settings)
         else:
             end_time = _parse_dt(fields.get("resolutiondate")) or now
@@ -188,6 +198,8 @@ def evaluate_res_breach(issues: list[dict], config: dict) -> list[dict]:
         if resolution_time:
             elapsed = business_minutes_between(created, resolution_time, settings)
         else:
+            if _is_paused_status(iss, settings):
+                continue
             elapsed = business_minutes_between(created, now, settings)
 
         if elapsed > target:
@@ -235,6 +247,8 @@ def evaluate_fr_approaching(issues: list[dict], config: dict) -> list[dict]:
 
         if has_response:
             continue
+        if _is_paused_status(iss, settings):
+            continue
 
         elapsed = business_minutes_between(created, now, settings)
         if target * threshold_pct <= elapsed <= target:
@@ -259,6 +273,9 @@ def evaluate_res_approaching(issues: list[dict], config: dict) -> list[dict]:
         priority = _get_priority(iss)
         request_type = _get_request_type(iss)
         target = sla_config.get_target_for_ticket("resolution", priority, request_type)
+
+        if _is_paused_status(iss, settings):
+            continue
 
         elapsed = business_minutes_between(created, now, settings)
         if target * threshold_pct <= elapsed <= target:

@@ -20,6 +20,42 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Risk level constants
+# ---------------------------------------------------------------------------
+
+_RISK_OK_PCT = 50.0        # < 50% elapsed → ok
+_RISK_WARNING_PCT = 75.0   # 50–74% elapsed → warning
+_RISK_AT_RISK_PCT = 90.0   # 75–89% elapsed → at_risk
+                            # ≥ 90% elapsed → critical
+
+_DEFAULT_PAUSED_STATUS_NAMES = [
+    "waiting for customer",
+    "waiting for support",
+    "pending",
+    "pending customer",
+    "pending vendor",
+    "scheduled",
+    "on hold",
+    "awaiting approval",
+    "waiting for approval",
+]
+
+
+def _compute_risk_level(status: str, pct_of_target: float) -> str:
+    """Return a risk label for an SLA timer."""
+    if status in ("met", "breached", "paused"):
+        return status
+    # running
+    if pct_of_target < _RISK_OK_PCT:
+        return "ok"
+    if pct_of_target < _RISK_WARNING_PCT:
+        return "warning"
+    if pct_of_target < _RISK_AT_RISK_PCT:
+        return "at_risk"
+    return "critical"
+
+
+# ---------------------------------------------------------------------------
 # SLA Configuration Store
 # ---------------------------------------------------------------------------
 
@@ -430,9 +466,19 @@ def compute_sla_for_issues(
         if n.strip()
     }
 
+    # Paused status names (lowercased for fast lookup)
+    raw_paused = settings.get(
+        "paused_status_names",
+        ",".join(_DEFAULT_PAUSED_STATUS_NAMES),
+    )
+    paused_status_names: frozenset[str] = frozenset(
+        s.strip().lower() for s in raw_paused.split(",") if s.strip()
+    )
+
     # Compute per-ticket SLA
-    fr_stats = {"met": 0, "breached": 0, "running": 0, "total": 0, "elapsed_sum": 0.0}
-    res_stats = {"met": 0, "breached": 0, "running": 0, "total": 0, "elapsed_sum": 0.0}
+    _empty_risk = {"risk_ok": 0, "risk_warning": 0, "risk_at_risk": 0, "risk_critical": 0}
+    fr_stats: dict[str, Any] = {"met": 0, "breached": 0, "running": 0, "paused": 0, "total": 0, "elapsed_sum": 0.0, **_empty_risk}
+    res_stats: dict[str, Any] = {"met": 0, "breached": 0, "running": 0, "paused": 0, "total": 0, "elapsed_sum": 0.0, **_empty_risk}
     fr_elapsed_list: list[float] = []
     res_elapsed_list: list[float] = []
     ticket_rows: list[dict[str, Any]] = []
@@ -459,8 +505,11 @@ def compute_sla_for_issues(
         request_type = extract_request_type_name_from_fields(fields)
 
         # Status
-        status_cat = ((fields.get("status") or {}).get("statusCategory") or {}).get("name", "")
+        status_obj = fields.get("status") or {}
+        status_cat = ((status_obj.get("statusCategory") or {}).get("name", ""))
         is_open = status_cat != "Done"
+        current_status_name = (status_obj.get("name") or "").lower().strip()
+        is_paused_status = is_open and current_status_name in paused_status_names
 
         # Reporter
         reporter_obj = fields.get("reporter") or {}
@@ -492,25 +541,40 @@ def compute_sla_for_issues(
             priority,
             request_type,
         )
+        fr_remaining: float | None
         if first_response_time:
             elapsed = _business_minutes_between_compiled(created, first_response_time, business_hours)
             fr_status = "breached" if elapsed > fr_target else "met"
+            fr_remaining = None
+        elif is_paused_status:
+            elapsed = _business_minutes_between_compiled(created, now, business_hours)
+            fr_status = "paused"
+            fr_remaining = round(fr_target - elapsed, 1)
         elif is_open:
             elapsed = _business_minutes_between_compiled(created, now, business_hours)
             fr_status = "breached" if elapsed > fr_target else "running"
+            fr_remaining = round(fr_target - elapsed, 1) if fr_status == "running" else None
         else:
             # Resolved without any agent response — breached
             end_time = _parse_dt(fields.get("resolutiondate")) or now
             elapsed = _business_minutes_between_compiled(created, end_time, business_hours)
             fr_status = "breached"
+            fr_remaining = None
+        fr_pct = round(elapsed / fr_target * 100.0, 1) if fr_target else 0.0
+        fr_risk = _compute_risk_level(fr_status, fr_pct)
         fr_result = {
             "status": fr_status,
             "elapsed_minutes": round(elapsed, 1),
             "target_minutes": fr_target,
+            "remaining_minutes": fr_remaining,
+            "pct_of_target": fr_pct,
+            "risk_level": fr_risk,
         }
         fr_stats["total"] += 1
         fr_stats[fr_status] += 1
         fr_stats["elapsed_sum"] += elapsed
+        if fr_status == "running":
+            fr_stats[f"risk_{fr_risk}"] += 1
         fr_elapsed_list.append(elapsed)
 
         # --- Resolution ---
@@ -521,21 +585,35 @@ def compute_sla_for_issues(
             priority,
             request_type,
         )
+        res_remaining: float | None
         if resolution_time:
             elapsed = _business_minutes_between_compiled(created, resolution_time, business_hours)
             res_status = "breached" if elapsed > res_target else "met"
+            res_remaining = None
+        elif is_paused_status:
+            elapsed = _business_minutes_between_compiled(created, now, business_hours)
+            res_status = "paused"
+            res_remaining = round(res_target - elapsed, 1)
         else:
             # Open ticket — still running
             elapsed = _business_minutes_between_compiled(created, now, business_hours)
             res_status = "breached" if elapsed > res_target else "running"
+            res_remaining = round(res_target - elapsed, 1) if res_status == "running" else None
+        res_pct = round(elapsed / res_target * 100.0, 1) if res_target else 0.0
+        res_risk = _compute_risk_level(res_status, res_pct)
         res_result = {
             "status": res_status,
             "elapsed_minutes": round(elapsed, 1),
             "target_minutes": res_target,
+            "remaining_minutes": res_remaining,
+            "pct_of_target": res_pct,
+            "risk_level": res_risk,
         }
         res_stats["total"] += 1
         res_stats[res_status] += 1
         res_stats["elapsed_sum"] += elapsed
+        if res_status == "running":
+            res_stats[f"risk_{res_risk}"] += 1
         res_elapsed_list.append(elapsed)
 
         row["sla_first_response"] = fr_result
@@ -577,6 +655,11 @@ def compute_sla_for_issues(
             "met": stats["met"],
             "breached": stats["breached"],
             "running": stats["running"],
+            "paused": stats["paused"],
+            "risk_ok": stats["risk_ok"],
+            "risk_warning": stats["risk_warning"],
+            "risk_at_risk": stats["risk_at_risk"],
+            "risk_critical": stats["risk_critical"],
             "compliance_pct": round(stats["met"] / completed * 100, 1) if completed else 0.0,
             "avg_elapsed_minutes": round(stats["elapsed_sum"] / total, 1) if total else 0.0,
             "p95_elapsed_minutes": _percentile(elapsed_list, 95),

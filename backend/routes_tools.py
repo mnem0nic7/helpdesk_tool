@@ -13,6 +13,7 @@ from emailgistics_helper_service import emailgistics_helper_service
 from azure_cache import azure_cache
 from models import (
     AppLoginAuditEventResponse,
+    AutoReplyStatus,
     DelegateMailboxJobCreateRequest,
     DelegateMailboxJobResponse,
     DelegateMailboxesResponse,
@@ -23,6 +24,7 @@ from models import (
     OneDriveCopyJobCreateRequest,
     OneDriveCopyJobResponse,
     OneDriveCopyUserOptionResponse,
+    SetAutoReplyRequest,
 )
 from mailbox_delegate_scan_jobs import mailbox_delegate_scan_jobs
 from onedrive_copy_jobs import onedrive_copy_jobs
@@ -245,6 +247,29 @@ def list_mailbox_rules(
         return MailboxRulesResponse.model_validate(user_admin_providers.list_mailbox_rules(mailbox))
     except UserAdminProviderError as exc:
         raise HTTPException(status_code=502, detail=_friendly_mailbox_rules_error(str(exc))) from exc
+
+
+@router.get("/auto-reply", response_model=AutoReplyStatus)
+def get_auto_reply(
+    mailbox: str = Query(..., min_length=3, max_length=320),
+    _session: dict[str, Any] = Depends(_require_tools_session),
+) -> AutoReplyStatus:
+    try:
+        return AutoReplyStatus.model_validate(user_admin_providers.get_auto_reply(mailbox))
+    except UserAdminProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.put("/auto-reply", response_model=AutoReplyStatus)
+def set_auto_reply(
+    body: SetAutoReplyRequest,
+    _session: dict[str, Any] = Depends(_require_tools_session),
+) -> AutoReplyStatus:
+    try:
+        result = user_admin_providers.set_auto_reply(body.mailbox, body.model_dump())
+        return AutoReplyStatus.model_validate(result)
+    except UserAdminProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/mailbox-delegates", response_model=MailboxDelegatesResponse)

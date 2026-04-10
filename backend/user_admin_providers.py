@@ -1170,6 +1170,88 @@ class MailboxAdminProvider:
             "rules": rules,
         }
 
+    def get_auto_reply(self, mailbox_identifier: str) -> dict[str, Any]:
+        mailbox = str(mailbox_identifier or "").strip()
+        if not mailbox:
+            raise UserAdminProviderError("mailbox is required")
+        if not self.enabled:
+            return {
+                "mailbox": mailbox,
+                "display_name": "",
+                "principal_name": mailbox,
+                "status": "",
+                "internal_message": "",
+                "external_message": "",
+                "scheduled_start": "",
+                "scheduled_end": "",
+                "external_audience": "",
+                "provider_enabled": False,
+                "note": "Auto-reply lookup requires a configured Microsoft Graph connection.",
+            }
+        user = _safe_graph_call(
+            self.client.graph_request,
+            "GET",
+            f"users/{mailbox}",
+            params={"$select": "id,displayName,mail,userPrincipalName"},
+        )
+        user_id = str(user.get("id") or mailbox).strip()
+        settings = _safe_graph_call(
+            self.client.graph_request,
+            "GET",
+            f"users/{user_id}/mailboxSettings",
+            params={"$select": "automaticRepliesSetting"},
+        )
+        ar = (settings.get("automaticRepliesSetting") or {})
+        sched_start = ((ar.get("scheduledStartDateTime") or {}).get("dateTime") or "")
+        sched_end = ((ar.get("scheduledEndDateTime") or {}).get("dateTime") or "")
+        return {
+            "mailbox": mailbox,
+            "display_name": str(user.get("displayName") or ""),
+            "principal_name": str(user.get("userPrincipalName") or mailbox),
+            "status": str(ar.get("status") or ""),
+            "internal_message": str(ar.get("internalReplyMessage") or ""),
+            "external_message": str(ar.get("externalReplyMessage") or ""),
+            "scheduled_start": sched_start,
+            "scheduled_end": sched_end,
+            "external_audience": str(ar.get("externalAudience") or ""),
+            "provider_enabled": True,
+            "note": "",
+        }
+
+    def set_auto_reply(self, mailbox_identifier: str, payload: dict[str, Any]) -> dict[str, Any]:
+        mailbox = str(mailbox_identifier or "").strip()
+        if not mailbox:
+            raise UserAdminProviderError("mailbox is required")
+        if not self.enabled:
+            raise UserAdminProviderError("Auto-reply management requires a configured Microsoft Graph connection.")
+        user = _safe_graph_call(
+            self.client.graph_request,
+            "GET",
+            f"users/{mailbox}",
+            params={"$select": "id,displayName,mail,userPrincipalName"},
+        )
+        user_id = str(user.get("id") or mailbox).strip()
+        ar: dict[str, Any] = {
+            "status": payload.get("status", "alwaysEnabled"),
+            "externalAudience": payload.get("external_audience", "known"),
+            "internalReplyMessage": str(payload.get("internal_message") or ""),
+            "externalReplyMessage": str(payload.get("external_message") or ""),
+        }
+        if payload.get("status") == "scheduled":
+            start = str(payload.get("scheduled_start") or "").strip()
+            end = str(payload.get("scheduled_end") or "").strip()
+            if not start or not end:
+                raise UserAdminProviderError("scheduled_start and scheduled_end are required when status is 'scheduled'")
+            ar["scheduledStartDateTime"] = {"dateTime": start, "timeZone": "UTC"}
+            ar["scheduledEndDateTime"] = {"dateTime": end, "timeZone": "UTC"}
+        _safe_graph_call(
+            self.client.graph_request,
+            "PATCH",
+            f"users/{user_id}/mailboxSettings",
+            json_body={"automaticRepliesSetting": ar},
+        )
+        return self.get_auto_reply(mailbox_identifier)
+
     def _exchange_delegate_permissions_for_mailbox(
         self,
         mailbox_identifier: str,
@@ -1703,6 +1785,12 @@ class UserAdminProviderRegistry:
 
     def list_mailbox_rules(self, mailbox_identifier: str) -> dict[str, Any]:
         return self.mailbox.list_mailbox_rules(mailbox_identifier)
+
+    def get_auto_reply(self, mailbox_identifier: str) -> dict[str, Any]:
+        return self.mailbox.get_auto_reply(mailbox_identifier)
+
+    def set_auto_reply(self, mailbox_identifier: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.mailbox.set_auto_reply(mailbox_identifier, payload)
 
     def list_mailbox_delegates(self, mailbox_identifier: str) -> dict[str, Any]:
         return self.mailbox.list_mailbox_delegates(mailbox_identifier)

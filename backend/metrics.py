@@ -259,6 +259,7 @@ def extract_sla_info(sla_field: Any) -> dict[str, Any]:
       - ``breach_time``: ISO-8601 string of when the SLA breaches/breached, or ""
       - ``remaining_millis``: milliseconds remaining (negative if breached), or None
       - ``elapsed_millis``: milliseconds elapsed on the timer, or None
+      - ``goal_millis``: SLA target duration in milliseconds, or None
       - ``completed_at``: ISO-8601 string of when the SLA cycle completed, or ""
     """
     empty: dict[str, Any] = {
@@ -266,6 +267,7 @@ def extract_sla_info(sla_field: Any) -> dict[str, Any]:
         "breach_time": "",
         "remaining_millis": None,
         "elapsed_millis": None,
+        "goal_millis": None,
         "completed_at": "",
     }
     if not sla_field or not isinstance(sla_field, dict):
@@ -279,12 +281,14 @@ def extract_sla_info(sla_field: Any) -> dict[str, Any]:
         breach_time = _iso_to_utc_seconds(last.get("breachTime"))
         elapsed = last.get("elapsedTime", {}).get("millis")
         remaining = last.get("remainingTime", {}).get("millis")
+        goal = (last.get("goalDuration") or {}).get("millis")
         completed_at = _iso_to_utc_seconds(last.get("stopTime") or last.get("completedTime"))
         return {
             "status": status,
             "breach_time": breach_time,
             "remaining_millis": remaining,
             "elapsed_millis": elapsed,
+            "goal_millis": goal,
             "completed_at": completed_at,
         }
 
@@ -300,11 +304,13 @@ def extract_sla_info(sla_field: Any) -> dict[str, Any]:
         breach_time = _iso_to_utc_seconds(ongoing.get("breachTime"))
         elapsed = (ongoing.get("elapsedTime") or {}).get("millis")
         remaining = (ongoing.get("remainingTime") or {}).get("millis")
+        goal = (ongoing.get("goalDuration") or {}).get("millis")
         return {
             "status": status,
             "breach_time": breach_time,
             "remaining_millis": remaining,
             "elapsed_millis": elapsed,
+            "goal_millis": goal,
             "completed_at": "",
         }
 
@@ -1028,10 +1034,14 @@ def issue_to_row(
         "sla_first_response_status": sla_fr["status"],
         "sla_first_response_breach_time": sla_fr["breach_time"],
         "sla_first_response_remaining_millis": sla_fr["remaining_millis"],
+        "sla_first_response_elapsed_millis": sla_fr["elapsed_millis"],
+        "sla_first_response_goal_millis": sla_fr["goal_millis"],
         # SLA resolution
         "sla_resolution_status": sla_res["status"],
         "sla_resolution_breach_time": sla_res["breach_time"],
         "sla_resolution_remaining_millis": sla_res["remaining_millis"],
+        "sla_resolution_elapsed_millis": sla_res["elapsed_millis"],
+        "sla_resolution_goal_millis": sla_res["goal_millis"],
         # Additional fields
         "labels": labels,
         "components": components,
