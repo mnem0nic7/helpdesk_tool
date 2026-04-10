@@ -692,6 +692,43 @@ export default function SLAPage() {
   const visible = processed.slice(0, visibleCount);
   const hasMore = visibleCount < processed.length;
   const hasFilters = !!(search || filterPriority || filterStatus || filterAssignee || filterSLA || filterRisk || bucketFilter || openOnly || staleOnly);
+
+  function exportCSV() {
+    const esc = (v: string | number | null | undefined) => {
+      const s = v == null ? "" : String(v);
+      return s.includes(",") || s.includes('"') || s.includes("\n")
+        ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const headers = [
+      "Key", "Summary", "Priority", "Status", "Assignee",
+      "FR Status", "FR Risk", "FR Elapsed", "FR Remaining", "FR Target",
+      "Res Status", "Res Risk", "Res Elapsed", "Res Remaining", "Res Target",
+    ];
+    const rows = processed.map((t) => {
+      const fr = t.sla_first_response;
+      const res = t.sla_resolution;
+      return [
+        t.key, t.summary, t.priority, t.status, t.assignee || "Unassigned",
+        fr?.status ?? "", fr?.risk_level ?? "",
+        fr ? formatMinutes(fr.elapsed_minutes) : "",
+        fr?.remaining_minutes != null ? formatMinutes(fr.remaining_minutes) : "",
+        fr ? formatMinutes(fr.target_minutes) : "",
+        res?.status ?? "", res?.risk_level ?? "",
+        res ? formatMinutes(res.elapsed_minutes) : "",
+        res?.remaining_minutes != null ? formatMinutes(res.remaining_minutes) : "",
+        res ? formatMinutes(res.target_minutes) : "",
+      ].map(esc).join(",");
+    });
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    a.download = `sla-tickets-${dateStr}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
   const activeBucketLabel = bucketFilter
     ? `${bucketFilter.timer === "first_response" ? "First response" : "Resolution"}: ${bucketFilter.label}`
     : null;
@@ -852,6 +889,16 @@ export default function SLAPage() {
               ? `${processed.length.toLocaleString()} of ${tickets.length.toLocaleString()}`
               : processed.length.toLocaleString()}
           </span>
+          <div className="ml-auto">
+            <button
+              onClick={exportCSV}
+              disabled={processed.length === 0}
+              className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 shadow-sm"
+              title={`Export ${processed.length} rows to CSV`}
+            >
+              Export CSV
+            </button>
+          </div>
         </div>
 
         {/* Filter bar */}
