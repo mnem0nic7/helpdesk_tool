@@ -3669,11 +3669,7 @@ export const api = {
   },
 
   setAutoReply(body: SetAutoReplyRequest): Promise<AutoReplyStatus> {
-    return fetchJSON<AutoReplyStatus>("/api/tools/auto-reply", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    return putJSON<AutoReplyStatus>("/api/tools/auto-reply", body);
   },
 
   listMailboxDelegates(mailbox: string): Promise<MailboxDelegatesStatus> {
