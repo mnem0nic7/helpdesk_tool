@@ -1023,7 +1023,7 @@ export default function AzureSecurityPage() {
           </div>
           <div className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700">{filteredLanes.length.toLocaleString()} lane match{filteredLanes.length === 1 ? "" : "es"}</div>
         </div>
-        <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto] lg:items-start">
+        <div className="mt-5 space-y-4">
           <div>
             <label className="block">
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Search lanes</span>
@@ -1059,6 +1059,7 @@ export default function AzureSecurityPage() {
               ))}
             </div>
           </div>
+          <div className="flex flex-wrap gap-x-8 gap-y-4">
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Group filter</div>
             <div className="mt-2 flex max-w-xl flex-wrap gap-2">
@@ -1100,6 +1101,7 @@ export default function AzureSecurityPage() {
                 </button>
               ))}
             </div>
+          </div>
           </div>
         </div>
 
