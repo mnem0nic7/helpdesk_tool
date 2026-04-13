@@ -23,10 +23,10 @@ from config import ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_TENANT_ID
 _DEFENDER_ATP_SP_ID = "4ab205bd-e547-43ee-b69b-0572f8fcdb29"
 
 _TARGET_ROLES = {
-    "Machine.StopAndQuarantine",  # stop_and_quarantine_file
-    "Ti.ReadWrite.All",           # create/list/delete indicators
-    # NOTE: StartInvestigation requires Machine.ReadWrite.All — grant separately if desired
-    # Machine.ReadWrite.All is a superset; grant it consciously from the Entra portal.
+    # Machine.ReadWrite.All is the superset — covers both StopAndQuarantineFile and StartInvestigation.
+    # Do NOT also grant Machine.StopAndQuarantine alongside it; Graph returns 400 for the redundant sub-perm.
+    "Machine.ReadWrite.All",  # stop_and_quarantine_file + start_investigation
+    "Ti.ReadWrite.All",       # create/list/delete indicators
 }
 
 
