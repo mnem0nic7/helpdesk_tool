@@ -1532,6 +1532,7 @@ export interface DefenderAgentDecision {
   human_approved: boolean;
   approved_at: string | null;
   approved_by: string;
+  alert_raw?: Record<string, unknown>;
 }
 
 export interface DefenderAgentDecisionsResponse {
@@ -3751,6 +3752,9 @@ export const api = {
     return fetchJSON<DefenderAgentDecisionsResponse>(
       `/api/azure/security/defender-agent/decisions${buildQuery({ limit: params?.limit ?? 100, offset: params?.offset ?? 0 })}`
     );
+  },
+  getDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
+    return fetchJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}`);
   },
   getDefenderAgentSummary(): Promise<DefenderAgentSummary> {
     return fetchJSON<DefenderAgentSummary>("/api/azure/security/defender-agent/summary");

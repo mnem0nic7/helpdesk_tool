@@ -234,6 +234,7 @@ def _run_agent_cycle() -> None:
                 job_ids=[],
                 reason=reason,
                 not_before_at=not_before_at,
+                alert_raw=alert,
             )
             decisions_made += 1
 

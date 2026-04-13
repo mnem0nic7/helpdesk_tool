@@ -96,7 +96,8 @@ class DefenderAgentStore:
                     cancelled_by        TEXT NOT NULL DEFAULT '',
                     human_approved      INTEGER NOT NULL DEFAULT 0,
                     approved_at         TEXT,
-                    approved_by         TEXT NOT NULL DEFAULT ''
+                    approved_by         TEXT NOT NULL DEFAULT '',
+                    alert_raw_json      TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS idx_defender_decisions_alert_id
                     ON defender_agent_decisions (alert_id);
@@ -233,6 +234,7 @@ class DefenderAgentStore:
         job_ids: list[str],
         reason: str,
         not_before_at: str | None = None,
+        alert_raw: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         p = self._placeholder()
         now = _now()
@@ -243,14 +245,15 @@ class DefenderAgentStore:
                     decision_id, run_id, alert_id, alert_title, alert_severity,
                     alert_category, alert_created_at, service_source, entities_json,
                     tier, decision, action_type, job_ids_json, reason,
-                    executed_at, not_before_at
-                ) VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+                    executed_at, not_before_at, alert_raw_json
+                ) VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
                 """,
                 (
                     decision_id, run_id, alert_id, alert_title, alert_severity,
                     alert_category, alert_created_at, service_source,
                     json.dumps(entities), tier, decision, action_type,
                     json.dumps(job_ids), reason, now, not_before_at,
+                    json.dumps(alert_raw) if alert_raw else "",
                 ),
             )
             conn.commit()
@@ -302,7 +305,7 @@ class DefenderAgentStore:
             ).fetchone()
         if row is None:
             return None
-        return self._row_to_decision(dict(row))
+        return self._row_to_decision(dict(row), include_raw=True)
 
     def list_decisions(self, limit: int = 100, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
         p = self._placeholder()
@@ -317,7 +320,7 @@ class DefenderAgentStore:
                 """,
                 (limit, offset),
             ).fetchall()
-        return [self._row_to_decision(dict(r)) for r in rows], total
+        return [self._row_to_decision(dict(r), include_raw=False) for r in rows], total
 
     def get_seen_alert_ids(self, since_hours: int = 168) -> set[str]:
         """Return all alert IDs seen in the last N hours (default 7 days)."""
@@ -390,15 +393,18 @@ class DefenderAgentStore:
             "total_actions_today": int((actions_today or {}).get("c", 0)),
             "pending_approvals": int((pending_approvals or {}).get("c", 0)),
             "pending_tier2": int((pending_tier2 or {}).get("c", 0)),
-            "recent_decisions": [self._row_to_decision(dict(r)) for r in recent],
+            "recent_decisions": [self._row_to_decision(dict(r), include_raw=False) for r in recent],
         }
 
     @staticmethod
-    def _row_to_decision(d: dict[str, Any]) -> dict[str, Any]:
+    def _row_to_decision(d: dict[str, Any], *, include_raw: bool = False) -> dict[str, Any]:
         d["entities"] = json.loads(d.pop("entities_json", "[]") or "[]")
         d["job_ids"] = json.loads(d.pop("job_ids_json", "[]") or "[]")
         d["cancelled"] = bool(d.get("cancelled", 0))
         d["human_approved"] = bool(d.get("human_approved", 0))
+        raw_str = d.pop("alert_raw_json", "") or ""
+        if include_raw:
+            d["alert_raw"] = json.loads(raw_str) if raw_str else {}
         return d
 
 

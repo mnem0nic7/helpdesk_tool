@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type { DefenderAgentConfig, DefenderAgentDecision } from "../lib/api.ts";
@@ -138,6 +138,266 @@ function ConfigDrawer({
 }
 
 // ---------------------------------------------------------------------------
+// Entity chips
+// ---------------------------------------------------------------------------
+
+function EntityChips({ entities }: { entities: DefenderAgentDecision["entities"] }) {
+  if (!entities.length) return null;
+  const shown = entities.slice(0, 2);
+  const overflow = entities.length - shown.length;
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {shown.map((e, i) => (
+        <span
+          key={i}
+          className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600"
+          title={`${e.type}: ${e.id}`}
+        >
+          {e.type === "user" ? (
+            <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm4.5 4c0-2.485-2.015-4.5-4.5-4.5S3.5 9.515 3.5 12H12.5Z"/>
+            </svg>
+          ) : (
+            <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M2 3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9v1h1.5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1H7v-1H3a1 1 0 0 1-1-1V3Z"/>
+            </svg>
+          )}
+          <span className="max-w-[140px] truncate">{e.name || e.id}</span>
+        </span>
+      ))}
+      {overflow > 0 && (
+        <span className="inline-flex items-center rounded-full bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
+          +{overflow} more
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Detail drawer
+// ---------------------------------------------------------------------------
+
+function AlertDetailDrawer({
+  decisionId,
+  onClose,
+  isAdmin,
+  onCancel,
+  onApprove,
+}: {
+  decisionId: string;
+  onClose: () => void;
+  isAdmin: boolean;
+  onCancel: (id: string) => void;
+  onApprove: (id: string) => void;
+}) {
+  const { data: d, isLoading } = useQuery({
+    queryKey: ["defender-agent-decision", decisionId],
+    queryFn: () => api.getDefenderAgentDecision(decisionId),
+    staleTime: 10_000,
+  });
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const raw = d?.alert_raw ?? {};
+  const tier = d ? tierLabel(d) : null;
+  const status = d ? decisionStatus(d) : null;
+  const canCancel = d && d.decision === "queue" && !d.cancelled && !d.job_ids.length;
+  const canApprove = d && d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
+
+  function Section({ title, children }: { title: string; children: React.ReactNode }) {
+    return (
+      <div>
+        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">{title}</h4>
+        {children}
+      </div>
+    );
+  }
+
+  function Row({ label, value }: { label: string; value: React.ReactNode }) {
+    if (!value) return null;
+    return (
+      <div className="flex gap-2 py-0.5">
+        <span className="w-36 shrink-0 text-xs text-gray-400">{label}</span>
+        <span className="text-xs text-gray-800 break-all">{value}</span>
+      </div>
+    );
+  }
+
+  const description = (raw.description as string) || "";
+  const recommendedActions = (raw.recommendedActions as string) || "";
+  const detectionSource = (raw.detectionSource as string) || "";
+  const productName = (raw.productName as string) || "";
+  const incidentId = (raw.incidentId as string | number | undefined);
+  const lastUpdate = (raw.lastUpdateDateTime as string) || "";
+  const evidence = Array.isArray(raw.evidence) ? raw.evidence as Record<string, unknown>[] : [];
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 z-40 bg-black/20"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+
+      {/* Slide-over panel */}
+      <div className="fixed right-0 top-0 z-50 flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl">
+        {/* Header */}
+        <div className="flex items-start justify-between border-b border-gray-200 px-6 py-4">
+          <div className="flex-1 min-w-0 pr-4">
+            <h2 className="text-base font-semibold text-gray-900 leading-snug truncate">
+              {d?.alert_title || "Alert Detail"}
+            </h2>
+            {d && (
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${severityColor(d.alert_severity)}`}>
+                  {d.alert_severity}
+                </span>
+                {tier && (
+                  <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${tier.color}`}>
+                    {tier.label}
+                  </span>
+                )}
+                {status && (
+                  <span className={`text-xs ${status.color}`}>{status.label}</span>
+                )}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="shrink-0 rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            aria-label="Close"
+          >
+            <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/>
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+          {isLoading && (
+            <div className="flex items-center justify-center py-12">
+              <div className="h-6 w-6 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+            </div>
+          )}
+
+          {d && (
+            <>
+              {/* Alert details */}
+              <Section title="Alert details">
+                <div className="space-y-0.5">
+                  <Row label="Service source" value={d.service_source} />
+                  <Row label="Detection source" value={detectionSource} />
+                  <Row label="Product" value={productName} />
+                  <Row label="Category" value={d.alert_category} />
+                  <Row label="Incident ID" value={incidentId?.toString()} />
+                  <Row label="Alert ID" value={d.alert_id} />
+                  <Row label="Created" value={fmtTime(d.alert_created_at)} />
+                  <Row label="Last updated" value={fmtTime(lastUpdate)} />
+                </div>
+              </Section>
+
+              {description && (
+                <Section title="Description">
+                  <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">{description}</p>
+                </Section>
+              )}
+
+              {/* Affected entities */}
+              {(d.entities.length > 0 || evidence.length > 0) && (
+                <Section title="Affected entities">
+                  <div className="space-y-2">
+                    {d.entities.map((e, i) => (
+                      <div key={i} className="flex items-start gap-2 rounded-lg bg-gray-50 px-3 py-2">
+                        <span className="mt-0.5 shrink-0 text-gray-400">
+                          {e.type === "user" ? (
+                            <svg className="h-4 w-4" viewBox="0 0 16 16" fill="currentColor">
+                              <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm4.5 4c0-2.485-2.015-4.5-4.5-4.5S3.5 9.515 3.5 12H12.5Z"/>
+                            </svg>
+                          ) : (
+                            <svg className="h-4 w-4" viewBox="0 0 16 16" fill="currentColor">
+                              <path d="M2 3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9v1h1.5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1H7v-1H3a1 1 0 0 1-1-1V3Z"/>
+                            </svg>
+                          )}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-gray-800 break-all">{e.name || e.id}</p>
+                          <p className="text-xs text-gray-400 break-all">{e.id}</p>
+                          <p className="text-xs text-gray-400 capitalize">{e.type}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+              )}
+
+              {recommendedActions && (
+                <Section title="Microsoft recommended actions">
+                  <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">{recommendedActions}</p>
+                </Section>
+              )}
+
+              {/* Decision trace */}
+              <Section title="Decision trace">
+                <div className="space-y-0.5">
+                  <Row label="Tier / action" value={d.tier ? `T${d.tier} — ${fmtAction(d)}` : `Skip — ${d.reason}`} />
+                  <Row label="Reason" value={d.reason} />
+                  <Row label="Logged at" value={fmtTime(d.executed_at)} />
+                  {d.not_before_at && <Row label="Execute after" value={fmtTime(d.not_before_at)} />}
+                  {d.job_ids.length > 0 && <Row label="Job IDs" value={d.job_ids.join(", ")} />}
+                  {d.cancelled && (
+                    <>
+                      <Row label="Cancelled at" value={fmtTime(d.cancelled_at)} />
+                      <Row label="Cancelled by" value={d.cancelled_by} />
+                    </>
+                  )}
+                  {d.human_approved && (
+                    <>
+                      <Row label="Approved at" value={fmtTime(d.approved_at)} />
+                      <Row label="Approved by" value={d.approved_by} />
+                    </>
+                  )}
+                </div>
+              </Section>
+            </>
+          )}
+        </div>
+
+        {/* Footer actions */}
+        {d && (canCancel || canApprove) && (
+          <div className="border-t border-gray-200 px-6 py-4 flex justify-end gap-3">
+            {canCancel && (
+              <button
+                onClick={() => { onCancel(d.decision_id); onClose(); }}
+                className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-700 hover:bg-amber-100"
+              >
+                Cancel action
+              </button>
+            )}
+            {canApprove && (
+              <button
+                onClick={() => { onApprove(d.decision_id); onClose(); }}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                Approve & execute
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Decision feed row
 // ---------------------------------------------------------------------------
 
@@ -148,6 +408,7 @@ function DecisionRow({
   onApprove,
   cancelling,
   approving,
+  onOpenDetail,
 }: {
   d: DefenderAgentDecision;
   isAdmin: boolean;
@@ -155,6 +416,7 @@ function DecisionRow({
   onApprove: (id: string) => void;
   cancelling: boolean;
   approving: boolean;
+  onOpenDetail: (id: string) => void;
 }) {
   const tier = tierLabel(d);
   const status = decisionStatus(d);
@@ -162,13 +424,17 @@ function DecisionRow({
   const canApprove = d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
 
   return (
-    <tr className="hover:bg-gray-50">
+    <tr
+      className="hover:bg-gray-50 cursor-pointer"
+      onClick={() => onOpenDetail(d.decision_id)}
+    >
       <td className="whitespace-nowrap px-3 py-2 text-xs text-gray-500">{fmtTime(d.executed_at)}</td>
       <td className="px-3 py-2 max-w-xs">
         <div className="text-sm font-medium text-gray-800 truncate" title={d.alert_title}>
           {d.alert_title || d.alert_id}
         </div>
         {d.reason && <div className="text-xs text-gray-400 truncate" title={d.reason}>{d.reason}</div>}
+        <EntityChips entities={d.entities} />
       </td>
       <td className="whitespace-nowrap px-3 py-2">
         <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${severityColor(d.alert_severity)}`}>
@@ -187,7 +453,10 @@ function DecisionRow({
           <div className="text-gray-400 text-xs">executes {fmtTime(d.not_before_at)}</div>
         )}
       </td>
-      <td className="whitespace-nowrap px-3 py-2 text-right">
+      <td
+        className="whitespace-nowrap px-3 py-2 text-right"
+        onClick={(e) => e.stopPropagation()}
+      >
         {canCancel && (
           <button
             onClick={() => onCancel(d.decision_id)}
@@ -221,6 +490,7 @@ export default function AzureSecurityAgentPage() {
   const [savingConfig, setSavingConfig] = useState(false);
   const [decisionFilter, setDecisionFilter] = useState<string>("");
   const [runningNow, setRunningNow] = useState(false);
+  const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
 
   const configQuery = useQuery({
     queryKey: ["defender-agent-config"],
@@ -263,10 +533,7 @@ export default function AzureSecurityAgentPage() {
   const decisions = decisionsQuery.data?.decisions ?? [];
   const runs = runsQuery.data ?? [];
 
-  // Determine admin status from session (assume session includes is_admin via cookie-based auth)
-  // We'll surface the approve button based on whether the endpoint returns 200 or 403 on attempt
-  // For display purposes, show the button to all logged-in users; the backend enforces admin-only
-  const isAdmin = true; // Backend enforces; UI just shows the button
+  const isAdmin = true; // Backend enforces; UI shows buttons optimistically
 
   async function handleSaveConfig(partial: Partial<DefenderAgentConfig>) {
     if (!config) return;
@@ -280,6 +547,7 @@ export default function AzureSecurityAgentPage() {
       });
       queryClient.invalidateQueries({ queryKey: ["defender-agent-config"] });
       queryClient.invalidateQueries({ queryKey: ["defender-agent-summary"] });
+      setShowConfig(false);
     } finally {
       setSavingConfig(false);
     }
@@ -420,6 +688,7 @@ export default function AzureSecurityAgentPage() {
                     onApprove={(id) => approveMutation.mutate(id)}
                     cancelling={cancelMutation.isPending}
                     approving={approveMutation.isPending}
+                    onOpenDetail={setSelectedDecisionId}
                   />
                 ))}
               </tbody>
@@ -464,6 +733,17 @@ export default function AzureSecurityAgentPage() {
           </div>
         )}
       </div>
+
+      {/* Detail drawer */}
+      {selectedDecisionId && (
+        <AlertDetailDrawer
+          decisionId={selectedDecisionId}
+          onClose={() => setSelectedDecisionId(null)}
+          isAdmin={isAdmin}
+          onCancel={(id) => { cancelMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
+          onApprove={(id) => { approveMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
+        />
+      )}
     </div>
   );
 }
