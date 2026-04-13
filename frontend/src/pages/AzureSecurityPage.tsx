@@ -73,13 +73,6 @@ const STATE_OPTIONS: Array<{ value: LaneStateFilter; label: string }> = [
   { value: "limited-access", label: "Limited access" },
 ];
 
-const SUGGESTED_SEARCHES: Array<{ label: string; value: string }> = [
-  { label: "Guests", value: "guest" },
-  { label: "Privileged access", value: "privileged" },
-  { label: "Break-glass", value: "break-glass" },
-  { label: "Devices", value: "device" },
-];
-
 const LANE_CATALOG: LaneCatalogItem[] = [
   {
     key: "defender-agent",
@@ -710,19 +703,6 @@ export default function AzureSecurityPage() {
     setCollapsedGroups(defaults.collapsedGroups);
   };
 
-  const applyWorkspaceFocus = ({
-    nextGroupFilter = "all",
-    nextStateFilter = "all",
-    nextSearch = "",
-  }: {
-    nextGroupFilter?: GroupFilter;
-    nextStateFilter?: LaneStateFilter;
-    nextSearch?: string;
-  }) => {
-    setSearch(nextSearch);
-    setGroupFilter(nextGroupFilter);
-    setStateFilter(nextStateFilter);
-  };
 
   const toggleGroupCollapsed = (group: LaneGroup) => {
     setCollapsedGroups((current) => ({
