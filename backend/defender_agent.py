@@ -24,7 +24,13 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from config import AZURE_DEFENDER_AGENT_POLL_SECONDS
+from config import (
+    AZURE_DEFENDER_AGENT_POLL_SECONDS,
+    DEFENDER_AGENT_MAX_JOBS_PER_CYCLE,
+    DEFENDER_AGENT_TEAMS_NOTIFY_T1,
+    DEFENDER_AGENT_TEAMS_NOTIFY_T2,
+    DEFENDER_AGENT_TEAMS_WEBHOOK_URL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +99,51 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "disable_sign_in",
         "reason": "Critical credential harvesting alert; sign-in disable queued with cancellation window.",
     },
+    # T2 — lateral movement
+    {
+        "title_keywords": ("lateral movement", "pass the hash", "pass the ticket", "overpass the hash"),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "disable_sign_in",
+        "reason": "Lateral movement technique detected; sign-in disable queued with cancellation window.",
+    },
+    # T2 — phishing / malicious link
+    {
+        "title_keywords": ("phishing", "suspicious email", "suspicious link click", "malicious url"),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "disable_sign_in",
+        "reason": "Phishing or malicious link activity detected; sign-in disable queued with cancellation window.",
+    },
+    # T2 — MFA fatigue
+    {
+        "title_keywords": ("mfa fatigue", "mfa spam", "suspicious mfa", "push notification flooding"),
+        "min_severity": "medium",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "disable_sign_in",
+        "reason": "MFA fatigue attack pattern detected; sign-in disable queued with cancellation window.",
+    },
+    # T2 — suspicious OAuth / app consent
+    {
+        "title_keywords": ("suspicious oauth", "risky oauth", "oauth application", "app granted permissions"),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "disable_sign_in",
+        "reason": "Suspicious OAuth app consent detected; sign-in disable queued with cancellation window.",
+    },
+    # T1 — cryptominer (non-destructive policy sync sufficient)
+    {
+        "title_keywords": ("bitcoin miner", "cryptominer", "coinminer", "crypto miner"),
+        "min_severity": "medium",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "device_sync",
+        "reason": "Cryptominer detected on device; sync to force AV/policy update.",
+    },
     # T3 — recommend only (irreversible)
     {
         "title_keywords": ("ransomware",),
@@ -109,6 +160,33 @@ _RULES: list[dict[str, Any]] = [
         "decision": "recommend",
         "action_type": "device_retire",
         "reason": "Malicious endpoint activity detected; device retire recommended — requires human approval.",
+    },
+    # T3 — data exfiltration
+    {
+        "title_keywords": ("data exfiltration", "unusual data transfer", "mass download", "sensitive file"),
+        "min_severity": "high",
+        "tier": 3,
+        "decision": "recommend",
+        "action_type": "device_retire",
+        "reason": "Data exfiltration pattern detected; device retire recommended — requires human approval.",
+    },
+    # T3 — persistence mechanisms
+    {
+        "title_keywords": ("persistence", "scheduled task", "startup folder", "registry run key"),
+        "min_severity": "high",
+        "tier": 3,
+        "decision": "recommend",
+        "action_type": "device_retire",
+        "reason": "Persistence mechanism detected on device; retire recommended — requires human approval.",
+    },
+    # T3 — C2 communication
+    {
+        "title_keywords": ("command and control", "c2 communication", "beaconing"),
+        "min_severity": "high",
+        "tier": 3,
+        "decision": "recommend",
+        "action_type": "device_retire",
+        "reason": "C2 communication detected; device retire recommended — requires human approval.",
     },
 ]
 
@@ -164,6 +242,95 @@ def _extract_entities(alert: dict[str, Any]) -> list[dict[str, Any]]:
     return entities
 
 
+# ---------------------------------------------------------------------------
+# Teams notification helper (sync — runs in executor thread)
+# ---------------------------------------------------------------------------
+
+_SEV_EMOJI: dict[str, str] = {
+    "critical": "🔴",
+    "high": "🟠",
+    "medium": "🟡",
+    "low": "🔵",
+    "informational": "⚪",
+}
+
+_TIER_LABEL: dict[int, str] = {1: "T1 Immediate", 2: "T2 Queued", 3: "T3 Approval Required"}
+
+
+def _notify_teams(
+    *,
+    title: str,
+    severity: str,
+    tier: int | None,
+    action_type: str,
+    service_source: str,
+    entities: list[dict],
+    reason: str,
+    is_approval: bool = False,
+    console_url: str = "https://azure.movedocs.com/security/agent",
+) -> None:
+    """Post an Adaptive Card to the configured Teams webhook. Best-effort — never raises."""
+    webhook_url = DEFENDER_AGENT_TEAMS_WEBHOOK_URL
+    if not webhook_url:
+        return
+    try:
+        import httpx
+
+        sev_emoji = _SEV_EMOJI.get(severity.lower(), "⚠️")
+        tier_label = _TIER_LABEL.get(tier or 0, "Agent Action")
+        entity_names = [e.get("name") or e.get("id") for e in entities[:3] if e.get("name") or e.get("id")]
+        entity_str = ", ".join(str(n) for n in entity_names) if entity_names else "—"
+        if is_approval:
+            header = f"✅ T3 Approved — {title}"
+            body_text = f"Action **{action_type.replace('_', ' ')}** dispatched by operator."
+        elif tier == 3:
+            header = f"⚠️ Approval Required — {title}"
+            body_text = f"**T3 action needs human approval** before executing `{action_type.replace('_', ' ')}`."
+        else:
+            header = f"{sev_emoji} Defender Agent — {title}"
+            body_text = reason
+
+        card: dict = {
+            "type": "message",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {"type": "TextBlock", "text": header, "weight": "Bolder", "size": "Medium", "wrap": True},
+                        {
+                            "type": "FactSet",
+                            "facts": [
+                                {"title": "Severity", "value": severity.capitalize()},
+                                {"title": "Tier", "value": tier_label},
+                                {"title": "Action", "value": action_type.replace("_", " ").title()},
+                                {"title": "Source", "value": service_source or "—"},
+                                {"title": "Entities", "value": entity_str},
+                            ],
+                        },
+                        {"type": "TextBlock", "text": body_text, "wrap": True, "spacing": "Small"},
+                    ],
+                    "actions": [
+                        {"type": "Action.OpenUrl", "title": "Open Agent Console", "url": console_url},
+                    ],
+                },
+            }],
+        }
+        with httpx.Client(timeout=15) as client:
+            resp = client.post(webhook_url, json=card)
+            if not resp.is_success:
+                logger.warning("Teams webhook returned %s: %s", resp.status_code, resp.text[:200])
+    except Exception as exc:
+        logger.warning("_notify_teams failed (non-fatal): %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Agent cycle
+# ---------------------------------------------------------------------------
+
+
 def _run_agent_cycle() -> None:
     """Synchronous cycle called from an executor thread."""
     from defender_agent_store import defender_agent_store
@@ -205,9 +372,13 @@ def _run_agent_cycle() -> None:
         min_severity = str(config.get("min_severity") or "high").lower()
         dry_run = bool(config.get("dry_run", False))
         tier2_delay = int(config.get("tier2_delay_minutes") or 15)
+        jobs_dispatched = 0
 
         for alert in new_alerts:
             alert_id = alert.get("id", uuid.uuid4().hex)
+            alert_title = str(alert.get("title") or "")
+            alert_severity = str(alert.get("severity") or "")
+            alert_service_source = str(alert.get("serviceSource") or "")
             tier, decision_type, action_type, reason = _classify_alert(alert, min_severity)
             entities = _extract_entities(alert)
             decision_id = uuid.uuid4().hex
@@ -222,11 +393,11 @@ def _run_agent_cycle() -> None:
                 decision_id=decision_id,
                 run_id=run_id,
                 alert_id=alert_id,
-                alert_title=str(alert.get("title") or ""),
-                alert_severity=str(alert.get("severity") or ""),
+                alert_title=alert_title,
+                alert_severity=alert_severity,
                 alert_category=str(alert.get("category") or ""),
                 alert_created_at=str(alert.get("createdDateTime") or ""),
-                service_source=str(alert.get("serviceSource") or ""),
+                service_source=alert_service_source,
                 entities=entities,
                 tier=tier,
                 decision=decision_type,
@@ -238,24 +409,65 @@ def _run_agent_cycle() -> None:
             )
             decisions_made += 1
 
-            # T1 — execute immediately
+            # Mark alert inProgress in Defender (best-effort, skip-tier excluded)
+            if decision_type != "skip":
+                try:
+                    written_back = client.update_security_alert(alert_id)
+                    if written_back:
+                        defender_agent_store.update_decision_writeback(decision_id)
+                except Exception:
+                    pass
+
+            # T1 — execute immediately (subject to per-cycle cap)
             if decision_type == "execute" and not dry_run:
-                job_ids = _dispatch_action(
-                    action_type=action_type,
-                    entities=entities,
-                    alert=alert,
-                    user_admin_jobs=user_admin_jobs,
-                    security_device_jobs=security_device_jobs,
+                if jobs_dispatched < DEFENDER_AGENT_MAX_JOBS_PER_CYCLE:
+                    job_ids = _dispatch_action(
+                        action_type=action_type,
+                        entities=entities,
+                        alert=alert,
+                        user_admin_jobs=user_admin_jobs,
+                        security_device_jobs=security_device_jobs,
+                    )
+                    if job_ids:
+                        defender_agent_store.update_decision_jobs(decision_id, job_ids)
+                        actions_queued += len(job_ids)
+                        jobs_dispatched += len(job_ids)
+                    if DEFENDER_AGENT_TEAMS_NOTIFY_T1:
+                        _notify_teams(
+                            title=alert_title, severity=alert_severity, tier=tier,
+                            action_type=action_type, service_source=alert_service_source,
+                            entities=entities, reason=reason,
+                        )
+                else:
+                    logger.warning(
+                        "Defender agent: per-cycle job cap (%d) reached; T1 action for alert %s deferred",
+                        DEFENDER_AGENT_MAX_JOBS_PER_CYCLE, alert_id,
+                    )
+
+            # T2 — notify operator of queued action
+            elif decision_type == "queue" and not dry_run and DEFENDER_AGENT_TEAMS_NOTIFY_T2:
+                _notify_teams(
+                    title=alert_title, severity=alert_severity, tier=tier,
+                    action_type=action_type, service_source=alert_service_source,
+                    entities=entities, reason=reason,
                 )
-                if job_ids:
-                    defender_agent_store.update_decision_jobs(decision_id, job_ids)
-                    actions_queued += len(job_ids)
+
+            # T3 — always notify (human approval required)
+            elif decision_type == "recommend":
+                _notify_teams(
+                    title=alert_title, severity=alert_severity, tier=tier,
+                    action_type=action_type, service_source=alert_service_source,
+                    entities=entities, reason=reason,
+                )
 
         # Dispatch T2 rows whose delay window has now passed
         pending_t2 = defender_agent_store.list_pending_tier2()
         for row in pending_t2:
             if dry_run:
                 continue
+            if jobs_dispatched >= DEFENDER_AGENT_MAX_JOBS_PER_CYCLE:
+                logger.warning("Defender agent: per-cycle job cap reached during T2 flush; deferring remaining T2 rows")
+                break
             stored_entities: list[dict[str, Any]] = row.get("entities") or []
             job_ids = _dispatch_action(
                 action_type=str(row.get("action_type") or ""),
@@ -267,6 +479,7 @@ def _run_agent_cycle() -> None:
             if job_ids:
                 defender_agent_store.update_decision_jobs(str(row["decision_id"]), job_ids)
                 actions_queued += len(job_ids)
+                jobs_dispatched += len(job_ids)
 
         defender_agent_store.complete_run(
             run_id,

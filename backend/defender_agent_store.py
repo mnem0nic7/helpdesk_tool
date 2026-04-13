@@ -97,7 +97,8 @@ class DefenderAgentStore:
                     human_approved      INTEGER NOT NULL DEFAULT 0,
                     approved_at         TEXT,
                     approved_by         TEXT NOT NULL DEFAULT '',
-                    alert_raw_json      TEXT NOT NULL DEFAULT ''
+                    alert_raw_json      TEXT NOT NULL DEFAULT '',
+                    alert_written_back  INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS idx_defender_decisions_alert_id
                     ON defender_agent_decisions (alert_id);
@@ -268,6 +269,15 @@ class DefenderAgentStore:
             )
             conn.commit()
 
+    def update_decision_writeback(self, decision_id: str) -> None:
+        p = self._placeholder()
+        with self._conn() as conn:
+            conn.execute(
+                f"UPDATE defender_agent_decisions SET alert_written_back = {p} WHERE decision_id = {p}",
+                (1, decision_id),
+            )
+            conn.commit()
+
     def cancel_decision(self, decision_id: str, cancelled_by: str = "") -> dict[str, Any] | None:
         p = self._placeholder()
         with self._conn() as conn:
@@ -405,6 +415,7 @@ class DefenderAgentStore:
         raw_str = d.pop("alert_raw_json", "") or ""
         if include_raw:
             d["alert_raw"] = json.loads(raw_str) if raw_str else {}
+        d["alert_written_back"] = bool(d.get("alert_written_back", 0))
         return d
 
 

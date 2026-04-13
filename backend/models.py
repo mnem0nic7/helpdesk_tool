@@ -2463,6 +2463,7 @@ class DefenderAgentDecisionItem(BaseModel):
     approved_at: Optional[str] = None
     approved_by: str = ""
     alert_raw: dict[str, Any] = Field(default_factory=dict)
+    alert_written_back: bool = False
 
 
 class DefenderAgentDecisionsResponse(BaseModel):

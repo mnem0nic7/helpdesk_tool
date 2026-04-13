@@ -139,12 +139,29 @@ def approve_decision(
 
     # Dispatch the T3 action immediately
     try:
-        from defender_agent import dispatch_approved_t3
+        from defender_agent import dispatch_approved_t3, _notify_teams
         dispatch_approved_t3(decision_id)
     except Exception as exc:
         # Don't roll back the approval — the operator knows it was approved even if dispatch fails
         import logging
         logging.getLogger(__name__).warning("T3 dispatch failed after approval: %s", exc)
+
+    # Notify Teams that the T3 was approved and dispatched
+    try:
+        from defender_agent import _notify_teams
+        decision_data = updated or row
+        _notify_teams(
+            title=str(decision_data.get("alert_title") or ""),
+            severity=str(decision_data.get("alert_severity") or ""),
+            tier=decision_data.get("tier"),
+            action_type=str(decision_data.get("action_type") or ""),
+            service_source=str(decision_data.get("service_source") or ""),
+            entities=decision_data.get("entities") or [],
+            reason=str(decision_data.get("reason") or ""),
+            is_approval=True,
+        )
+    except Exception:
+        pass
 
     return updated or row
 

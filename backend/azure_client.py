@@ -1683,6 +1683,24 @@ Resources
             logger.warning("list_security_alerts failed: %s", exc)
             return []
 
+    def update_security_alert(self, alert_id: str, *, status: str = "inProgress") -> bool:
+        """PATCH /security/alerts_v2/{id} — mark alert as inProgress after processing.
+
+        Requires SecurityAlert.ReadWrite.All application permission.
+        Returns True on success, False on any error (best-effort).
+        """
+        try:
+            self.graph_request(
+                "PATCH",
+                f"security/alerts_v2/{alert_id}",
+                json={"status": status},
+                scope=_GRAPH_SCOPE,
+            )
+            return True
+        except AzureApiError as exc:
+            logger.warning("update_security_alert failed for %s: %s", alert_id, exc)
+            return False
+
     @staticmethod
     def _cost_range(days: int | None = None) -> tuple[str, str]:
         lookback_days = days or AZURE_COST_LOOKBACK_DAYS

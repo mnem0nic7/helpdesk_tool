@@ -528,12 +528,18 @@ export default function AzureSecurityAgentPage() {
     },
   });
 
+  const { data: me } = useQuery({
+    queryKey: ["auth", "me"],
+    queryFn: () => api.getMe(),
+    staleTime: 5 * 60 * 1000,
+  });
+
   const config = configQuery.data;
   const summary = summaryQuery.data;
   const decisions = decisionsQuery.data?.decisions ?? [];
   const runs = runsQuery.data ?? [];
 
-  const isAdmin = true; // Backend enforces; UI shows buttons optimistically
+  const isAdmin = me?.is_admin ?? false;
 
   async function handleSaveConfig(partial: Partial<DefenderAgentConfig>) {
     if (!config) return;
