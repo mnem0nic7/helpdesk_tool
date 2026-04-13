@@ -1551,6 +1551,18 @@ export interface DefenderAgentSummary {
   recent_decisions: DefenderAgentDecision[];
 }
 
+export interface DefenderIndicator {
+  id: string;
+  indicatorValue: string;
+  indicatorType: string;
+  action: string;
+  title: string;
+  severity: string;
+  createdBy?: string;
+  creationTimeDateTimeUtc?: string;
+  description?: string;
+}
+
 export interface MailboxDelegateEntry {
   identity: string;
   display_name: string;
@@ -3767,6 +3779,22 @@ export const api = {
   },
   unisolateDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
     return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/unisolate`, {});
+  },
+  unrestrictDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/unrestrict`, {});
+  },
+  listDefenderIndicators(): Promise<{ indicators: DefenderIndicator[]; total: number }> {
+    return fetchJSON<{ indicators: DefenderIndicator[]; total: number }>(
+      "/api/azure/security/defender-agent/indicators"
+    );
+  },
+  deleteDefenderIndicator(indicatorId: string): Promise<{ deleted: boolean; indicator_id: string }> {
+    const url = `/api/azure/security/defender-agent/indicators/${encodeURIComponent(indicatorId)}`;
+    return fetch(url, { method: "DELETE" }).then(async res => {
+      if (res.status === 401) { window.location.href = "/api/auth/login"; throw new Error("Not authenticated"); }
+      if (!res.ok) throw new Error(`DELETE ${url} failed: ${res.status}`);
+      return res.json() as Promise<{ deleted: boolean; indicator_id: string }>;
+    });
   },
   runDefenderAgentNow(): Promise<{ run_id: string; started: boolean }> {
     return postJSON<{ run_id: string; started: boolean }>("/api/azure/security/defender-agent/run-now", {});

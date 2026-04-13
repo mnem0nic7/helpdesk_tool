@@ -246,6 +246,68 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "collect_investigation_package",
         "reason": "Complex attack pattern detected; collecting forensic investigation package.",
     },
+    # --- Red Canary parity rules ---
+    # T1 — active malicious file execution → stop process and quarantine file immediately
+    {
+        "title_keywords": (
+            "malicious file", "file quarantine", "malware executed",
+            "ransomware executed", "trojan executed", "malicious executable",
+        ),
+        "min_severity": "high",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "stop_and_quarantine_file",
+        "reason": "Active malicious file execution detected; stopping process and quarantining file.",
+    },
+    # T1 — fileless / multi-stage / supply-chain → trigger MDE automated investigation
+    {
+        "title_keywords": (
+            "living off the land", "lolbas", "fileless malware",
+            "multi-stage attack", "advanced persistent threat", "apt activity",
+        ),
+        "min_severity": "high",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "start_investigation",
+        "reason": "Complex/fileless attack pattern; triggering automated MDE investigation.",
+    },
+    # T1 — supply chain attack → trigger investigation
+    {
+        "title_keywords": (
+            "supply chain", "dependency confusion", "package tampering",
+            "software supply chain",
+        ),
+        "min_severity": "high",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "start_investigation",
+        "reason": "Supply chain attack pattern detected; triggering MDE automated investigation.",
+    },
+    # T2 — known malicious IOC (IP/domain/C2 infrastructure) → block indicator tenant-wide
+    {
+        "title_keywords": (
+            "known malicious ip", "blocked ip communication",
+            "malicious domain", "known c2 infrastructure",
+            "threat intelligence match", "known bad indicator",
+        ),
+        "min_severity": "medium",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "create_block_indicator",
+        "reason": "Confirmed malicious IOC detected; blocking indicator tenant-wide.",
+    },
+    # T2 — known malware file hash → block indicator tenant-wide
+    {
+        "title_keywords": (
+            "known malware hash", "blocked file hash",
+            "file reputation", "known malicious file",
+        ),
+        "min_severity": "medium",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "create_block_indicator",
+        "reason": "Known malicious file hash detected; creating tenant-wide block indicator.",
+    },
 ]
 
 
@@ -467,10 +529,19 @@ def _run_agent_cycle() -> None:
             )
             decisions_made += 1
 
-            # Mark alert inProgress in Defender (best-effort, skip-tier excluded)
+            # Mark alert inProgress in Defender; set TruePositive verdict for actioned alerts
             if decision_type != "skip":
                 try:
-                    written_back = client.update_security_alert(alert_id)
+                    classification = None
+                    determination = None
+                    if decision_type in ("execute", "queue"):
+                        classification = "truePositive"
+                        determination = "malware"
+                    written_back = client.update_security_alert(
+                        alert_id,
+                        classification=classification,
+                        determination=determination,
+                    )
                     if written_back:
                         defender_agent_store.update_decision_writeback(decision_id)
                 except Exception:
@@ -485,6 +556,8 @@ def _run_agent_cycle() -> None:
                         alert=alert,
                         user_admin_jobs=user_admin_jobs,
                         security_device_jobs=security_device_jobs,
+                        reason=reason,
+                        alert_severity=alert_severity,
                     )
                     if job_ids:
                         defender_agent_store.update_decision_jobs(decision_id, job_ids)
@@ -533,6 +606,8 @@ def _run_agent_cycle() -> None:
                 alert={},
                 user_admin_jobs=user_admin_jobs,
                 security_device_jobs=security_device_jobs,
+                reason=str(row.get("reason") or ""),
+                alert_severity=str(row.get("alert_severity") or ""),
             )
             if job_ids:
                 defender_agent_store.update_decision_jobs(str(row["decision_id"]), job_ids)
@@ -566,6 +641,8 @@ def _dispatch_action(
     alert: dict[str, Any],
     user_admin_jobs: Any,
     security_device_jobs: Any,
+    reason: str = "",
+    alert_severity: str = "",
 ) -> list[str]:
     """Dispatch a single action to the appropriate job runner.  Returns job IDs created."""
     job_ids: list[str] = []
@@ -656,9 +733,12 @@ def _dispatch_action(
         except Exception as exc:
             logger.warning("Defender agent: %s dispatch failed: %s", action_type, exc)
 
-    elif action_type in ("isolate_device", "unisolate_device", "run_av_scan",
-                         "collect_investigation_package", "restrict_app_execution"):
-        # MDE (Microsoft Defender for Endpoint) actions — use mdeDeviceId, not Intune deviceId
+    elif action_type in (
+        "isolate_device", "unisolate_device", "run_av_scan",
+        "collect_investigation_package", "restrict_app_execution",
+        "start_investigation", "unrestrict_app_execution",
+    ):
+        # MDE (Microsoft Defender for Endpoint) machine actions — use mdeDeviceId, not Intune deviceId
         device_entities = [e for e in entities if e.get("type") == "device" and e.get("id")]
         if not device_entities:
             logger.info("Defender agent: %s — no device IDs in entities, skipping", action_type)
@@ -684,6 +764,107 @@ def _dispatch_action(
         except Exception as exc:
             logger.warning("Defender agent: %s dispatch failed: %s", action_type, exc)
 
+    elif action_type == "stop_and_quarantine_file":
+        # Requires Machine.StopAndQuarantine — stops the running process and quarantines the file
+        device_entities = [e for e in entities if e.get("type") == "device" and e.get("id")]
+        file_entities = [
+            e for e in entities
+            if e.get("type") in ("file", "process") and (e.get("sha1") or e.get("sha256"))
+        ]
+        if not device_entities or not file_entities:
+            logger.info(
+                "Defender agent: stop_and_quarantine_file — missing device or file entities, skipping"
+            )
+            return []
+        for file_ent in file_entities:
+            sha1 = str(file_ent.get("sha1") or "")
+            file_name = str(file_ent.get("fileName") or "")
+            for dev in device_entities:
+                try:
+                    job = security_device_jobs.create_job(
+                        action_type="stop_and_quarantine_file",  # type: ignore[arg-type]
+                        device_ids=[dev["id"]],
+                        reason=reason,
+                        params={
+                            "sha1": sha1,
+                            "file_name": file_name,
+                            "device_names": [dev.get("name") or dev["id"]],
+                            "reason": reason,
+                        },
+                        confirm_device_count=None,
+                        confirm_device_names=None,
+                        requested_by_email=_AGENT_EMAIL,
+                        requested_by_name=_AGENT_NAME,
+                    )
+                    job_ids.append(str(job.get("job_id") or ""))
+                    logger.info(
+                        "Defender agent: queued stop_and_quarantine_file for device %s file %s (job %s)",
+                        dev["id"], sha1 or file_name, job_ids[-1],
+                    )
+                except Exception as exc:
+                    logger.warning("Defender agent: stop_and_quarantine_file dispatch failed: %s", exc)
+
+    elif action_type == "create_block_indicator":
+        # Requires Ti.ReadWrite.All — tenant-wide block for file hashes, IPs, domains
+        ioc_entities: list[dict[str, Any]] = []
+        for e in entities:
+            etype = str(e.get("type") or "")
+            if etype == "file":
+                for htype, itype in (
+                    ("sha256", "FileSha256"), ("sha1", "FileSha1"), ("md5", "FileMd5")
+                ):
+                    if e.get(htype):
+                        ioc_entities.append({
+                            "value": e[htype],
+                            "indicator_type": itype,
+                            "name": str(e.get("fileName") or e[htype]),
+                        })
+                        break
+            elif etype == "ip" and e.get("address"):
+                ioc_entities.append({
+                    "value": str(e["address"]),
+                    "indicator_type": "IpAddress",
+                    "name": str(e["address"]),
+                })
+            elif etype in ("url", "domain"):
+                val = str(e.get("url") or e.get("domainName") or "")
+                if val:
+                    ioc_entities.append({
+                        "value": val,
+                        "indicator_type": "Url" if etype == "url" else "DomainName",
+                        "name": val,
+                    })
+        if not ioc_entities:
+            logger.info("Defender agent: create_block_indicator — no IOC entities found, skipping")
+            return []
+        sev = alert_severity.capitalize() if alert_severity else "High"
+        for ioc in ioc_entities:
+            try:
+                job = security_device_jobs.create_job(
+                    action_type="create_block_indicator",  # type: ignore[arg-type]
+                    device_ids=[ioc["value"]],
+                    reason=reason,
+                    params={
+                        "indicator_value": ioc["value"],
+                        "indicator_type": ioc["indicator_type"],
+                        "device_names": [ioc["name"]],
+                        "reason": reason,
+                        "title": f"Blocked by Defender agent: {reason[:80]}",
+                        "severity": sev,
+                    },
+                    confirm_device_count=None,
+                    confirm_device_names=None,
+                    requested_by_email=_AGENT_EMAIL,
+                    requested_by_name=_AGENT_NAME,
+                )
+                job_ids.append(str(job.get("job_id") or ""))
+                logger.info(
+                    "Defender agent: queued create_block_indicator for %s %s (job %s)",
+                    ioc["indicator_type"], ioc["value"], job_ids[-1],
+                )
+            except Exception as exc:
+                logger.warning("Defender agent: create_block_indicator dispatch failed: %s", exc)
+
     return [j for j in job_ids if j]
 
 
@@ -702,6 +883,8 @@ def dispatch_approved_t3(decision_id: str) -> list[str]:
         alert={},
         user_admin_jobs=user_admin_jobs,
         security_device_jobs=security_device_jobs,
+        reason=str(row.get("reason") or ""),
+        alert_severity=str(row.get("alert_severity") or ""),
     )
     if job_ids:
         defender_agent_store.update_decision_jobs(decision_id, job_ids)

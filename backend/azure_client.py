@@ -1685,17 +1685,29 @@ Resources
             logger.warning("list_security_alerts failed: %s", exc)
             return []
 
-    def update_security_alert(self, alert_id: str, *, status: str = "inProgress") -> bool:
-        """PATCH /security/alerts_v2/{id} — mark alert as inProgress after processing.
+    def update_security_alert(
+        self,
+        alert_id: str,
+        *,
+        status: str = "inProgress",
+        classification: str | None = None,
+        determination: str | None = None,
+    ) -> bool:
+        """PATCH /security/alerts_v2/{id} — update alert status and optionally set verdict.
 
         Requires SecurityAlert.ReadWrite.All application permission.
         Returns True on success, False on any error (best-effort).
         """
+        body: dict[str, Any] = {"status": status}
+        if classification:
+            body["classification"] = classification
+        if determination:
+            body["determination"] = determination
         try:
             self.graph_request(
                 "PATCH",
                 f"security/alerts_v2/{alert_id}",
-                json_body={"status": status},
+                json_body=body,
             )
             return True
         except AzureApiError as exc:
@@ -1782,6 +1794,109 @@ Resources
             return True
         except AzureApiError as exc:
             logger.warning("restrict_app_execution_machine failed for %s: %s", machine_id, exc)
+            return False
+
+    def unrestrict_app_execution_machine(
+        self, machine_id: str, comment: str = "App restriction removed by Defender agent"
+    ) -> bool:
+        """POST /api/machines/{id}/UnrestrictCodeExecution — remove app execution restriction."""
+        try:
+            self.mde_request(
+                "POST", f"api/machines/{machine_id}/UnrestrictCodeExecution",
+                json_body={"Comment": comment},
+            )
+            return True
+        except AzureApiError as exc:
+            logger.warning("unrestrict_app_execution_machine failed for %s: %s", machine_id, exc)
+            return False
+
+    def stop_and_quarantine_file(
+        self, machine_id: str, sha1: str, comment: str = "File quarantined by Defender agent"
+    ) -> bool:
+        """POST /api/machines/{id}/StopAndQuarantineFile — stop running process and quarantine.
+
+        Requires Machine.StopAndQuarantine application permission.
+        """
+        try:
+            self.mde_request(
+                "POST", f"api/machines/{machine_id}/StopAndQuarantineFile",
+                json_body={"Comment": comment, "Sha1": sha1},
+            )
+            return True
+        except AzureApiError as exc:
+            logger.warning(
+                "stop_and_quarantine_file failed for %s sha1=%s: %s", machine_id, sha1, exc
+            )
+            return False
+
+    def start_investigation_machine(
+        self, machine_id: str, comment: str = "Investigation triggered by Defender agent"
+    ) -> bool:
+        """POST /api/machines/{id}/StartInvestigation — trigger MDE automated investigation.
+
+        Requires Machine.Investigate application permission.
+        """
+        try:
+            self.mde_request(
+                "POST", f"api/machines/{machine_id}/StartInvestigation",
+                json_body={"Comment": comment},
+            )
+            return True
+        except AzureApiError as exc:
+            logger.warning("start_investigation_machine failed for %s: %s", machine_id, exc)
+            return False
+
+    def create_indicator(
+        self,
+        indicator_value: str,
+        indicator_type: str,
+        action: str = "BlockAndRemediate",
+        title: str = "",
+        description: str = "",
+        severity: str = "High",
+    ) -> bool:
+        """POST /api/indicators — create a tenant-wide block indicator.
+
+        Requires Ti.ReadWrite.All application permission.
+        Returns True if created or already exists (409 Conflict treated as success).
+        """
+        try:
+            self.mde_request(
+                "POST", "api/indicators",
+                json_body={
+                    "indicatorValue": indicator_value,
+                    "indicatorType": indicator_type,
+                    "action": action,
+                    "title": title or "Blocked by Defender agent",
+                    "description": description,
+                    "severity": severity,
+                    "recommendedActions": "Review alert and confirm indicator block.",
+                },
+            )
+            return True
+        except AzureApiError as exc:
+            exc_str = str(exc).lower()
+            if "already exists" in exc_str or "conflict" in exc_str or "409" in exc_str:
+                return True  # indicator already blocked — desired state
+            logger.warning("create_indicator failed for %s: %s", indicator_value, exc)
+            return False
+
+    def list_indicators(self) -> list[dict[str, Any]]:
+        """GET /api/indicators — list all tenant indicators (requires Ti.ReadWrite.All)."""
+        try:
+            resp = self.mde_request("GET", "api/indicators")
+            return resp.get("value", [])
+        except AzureApiError as exc:
+            logger.warning("list_indicators failed: %s", exc)
+            return []
+
+    def delete_indicator(self, indicator_id: str) -> bool:
+        """DELETE /api/indicators/{id} — remove a block indicator (requires Ti.ReadWrite.All)."""
+        try:
+            self.mde_request("DELETE", f"api/indicators/{indicator_id}")
+            return True
+        except AzureApiError as exc:
+            logger.warning("delete_indicator failed for %s: %s", indicator_id, exc)
             return False
 
     @staticmethod

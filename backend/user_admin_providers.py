@@ -79,6 +79,11 @@ _MDE_ACTIONS: list[str] = [
     "run_av_scan",
     "collect_investigation_package",
     "restrict_app_execution",
+    # Red Canary parity additions
+    "stop_and_quarantine_file",
+    "start_investigation",
+    "create_block_indicator",
+    "unrestrict_app_execution",
 ]
 _MAILBOX_DELEGATE_PERMISSION_TYPES = ["send_on_behalf", "send_as", "full_access"]
 
@@ -1759,6 +1764,23 @@ class MDEActionsProvider:
             "run_av_scan": lambda m: self.client.run_av_scan_machine(m, comment=comment),
             "collect_investigation_package": lambda m: self.client.collect_investigation_package(m, comment),
             "restrict_app_execution": lambda m: self.client.restrict_app_execution_machine(m, comment),
+            "unrestrict_app_execution": lambda m: self.client.unrestrict_app_execution_machine(m, comment),
+            "stop_and_quarantine_file": lambda m: self.client.stop_and_quarantine_file(
+                m, sha1=params.get("sha1", ""), comment=comment
+            ),
+            "start_investigation": lambda m: self.client.start_investigation_machine(m, comment),
+            "create_block_indicator": lambda m: self.client.create_indicator(
+                indicator_value=params.get("indicator_value", m),
+                indicator_type=params.get("indicator_type", "FileSha256"),
+                action=(
+                    "Block"
+                    if params.get("indicator_type", "") in ("IpAddress", "DomainName", "Url")
+                    else "BlockAndRemediate"
+                ),
+                title=params.get("title", ""),
+                description=comment,
+                severity=params.get("severity", "High"),
+            ),
         }
         fn = _dispatch.get(action_type)
         if fn is None:

@@ -1581,6 +1581,11 @@ SecurityDeviceActionType = Literal[
     "run_av_scan",
     "collect_investigation_package",
     "restrict_app_execution",
+    # Red Canary parity — MDE advanced response
+    "stop_and_quarantine_file",
+    "start_investigation",
+    "create_block_indicator",
+    "unrestrict_app_execution",
 ]
 
 SecurityDeviceActionJobStatus = Literal["queued", "running", "completed", "failed"]

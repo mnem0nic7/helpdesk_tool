@@ -60,6 +60,11 @@ const ACTION_LABELS: Record<string, string> = {
   device_sync:                   "Device Sync",
   device_retire:                 "Device Retire",
   device_wipe:                   "Device Wipe",
+  // Red Canary parity
+  stop_and_quarantine_file:      "Stop & Quarantine File",
+  start_investigation:           "Start Investigation",
+  create_block_indicator:        "Block IOC",
+  unrestrict_app_execution:      "Remove App Restriction",
 };
 
 const ACTION_COLORS: Record<string, string> = {
@@ -70,6 +75,11 @@ const ACTION_COLORS: Record<string, string> = {
   restrict_app_execution:        "bg-rose-100 text-rose-800",
   device_wipe:                   "bg-red-100 text-red-800",
   device_retire:                 "bg-red-100 text-red-800",
+  // Red Canary parity
+  stop_and_quarantine_file:      "bg-red-100 text-red-800",
+  start_investigation:           "bg-violet-100 text-violet-800",
+  create_block_indicator:        "bg-amber-100 text-amber-800",
+  unrestrict_app_execution:      "bg-emerald-100 text-emerald-800",
 };
 
 function fmtAction(d: DefenderAgentDecision): string {
@@ -212,6 +222,7 @@ function AlertDetailDrawer({
   onCancel,
   onApprove,
   onUnisolate,
+  onUnrestrict,
 }: {
   decisionId: string;
   onClose: () => void;
@@ -219,6 +230,7 @@ function AlertDetailDrawer({
   onCancel: (id: string) => void;
   onApprove: (id: string) => void;
   onUnisolate: (id: string) => void;
+  onUnrestrict: (id: string) => void;
 }) {
   const { data: d, isLoading } = useQuery({
     queryKey: ["defender-agent-decision", decisionId],
@@ -239,6 +251,7 @@ function AlertDetailDrawer({
   const canCancel = d && d.decision === "queue" && !d.cancelled && !d.job_ids.length;
   const canApprove = d && d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
   const canUnisolate = d && d.action_type === "isolate_device" && d.job_ids.length > 0 && !d.cancelled && isAdmin;
+  const canUnrestrict = d && d.action_type === "restrict_app_execution" && d.job_ids.length > 0 && !d.cancelled && isAdmin;
 
   function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
@@ -402,7 +415,7 @@ function AlertDetailDrawer({
         </div>
 
         {/* Footer actions */}
-        {d && (canCancel || canApprove || canUnisolate) && (
+        {d && (canCancel || canApprove || canUnisolate || canUnrestrict) && (
           <div className="border-t border-gray-200 px-6 py-4 flex justify-end gap-3">
             {canCancel && (
               <button
@@ -423,6 +436,19 @@ function AlertDetailDrawer({
                 className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 hover:bg-emerald-100"
               >
                 Release Isolation
+              </button>
+            )}
+            {canUnrestrict && (
+              <button
+                onClick={() => {
+                  if (confirm("Remove the app execution restriction from this device? The device will be able to run all applications again.")) {
+                    onUnrestrict(d.decision_id);
+                    onClose();
+                  }
+                }}
+                className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 hover:bg-emerald-100"
+              >
+                Remove App Restriction
               </button>
             )}
             {canApprove && (
@@ -582,6 +608,22 @@ export default function AzureSecurityAgentPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }),
   });
 
+  const unrestrictMutation = useMutation({
+    mutationFn: (id: string) => api.unrestrictDefenderAgentDecision(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }),
+  });
+
+  const indicatorsQuery = useQuery({
+    queryKey: ["defender-agent-indicators"],
+    queryFn: () => api.listDefenderIndicators(),
+    staleTime: 60_000,
+  });
+
+  const deleteIndicatorMutation = useMutation({
+    mutationFn: (id: string) => api.deleteDefenderIndicator(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-indicators"] }),
+  });
+
   const { data: me } = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => api.getMe(),
@@ -592,6 +634,7 @@ export default function AzureSecurityAgentPage() {
   const summary = summaryQuery.data;
   const decisions = decisionsQuery.data?.decisions ?? [];
   const runs = runsQuery.data ?? [];
+  const indicators = indicatorsQuery.data?.indicators ?? [];
 
   const isAdmin = me?.is_admin ?? false;
 
@@ -794,6 +837,66 @@ export default function AzureSecurityAgentPage() {
         )}
       </div>
 
+      {/* Tenant-wide block indicators panel */}
+      {indicators.length > 0 && (
+        <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50/60">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-amber-200">
+            <h3 className="text-sm font-semibold text-amber-900">
+              Tenant-wide Block Indicators ({indicators.length})
+            </h3>
+            <span className="text-xs text-amber-700">Ti.ReadWrite.All required to manage</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-xs">
+              <thead>
+                <tr className="bg-amber-100/50">
+                  <th className="px-4 py-2 text-left font-medium text-amber-800">Value</th>
+                  <th className="px-4 py-2 text-left font-medium text-amber-800">Type</th>
+                  <th className="px-4 py-2 text-left font-medium text-amber-800">Action</th>
+                  <th className="px-4 py-2 text-left font-medium text-amber-800">Severity</th>
+                  <th className="px-4 py-2 text-left font-medium text-amber-800">Title</th>
+                  <th className="px-4 py-2 text-left font-medium text-amber-800">Created</th>
+                  {isAdmin && <th className="px-4 py-2 text-right font-medium text-amber-800"></th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-amber-100">
+                {indicators.map((ind) => (
+                  <tr key={ind.id} className="hover:bg-amber-50">
+                    <td className="px-4 py-2 font-mono text-gray-700 break-all max-w-xs" title={ind.indicatorValue}>
+                      {ind.indicatorValue.length > 40 ? ind.indicatorValue.slice(0, 38) + "…" : ind.indicatorValue}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2 text-gray-600">{ind.indicatorType}</td>
+                    <td className="whitespace-nowrap px-4 py-2">
+                      <span className="rounded-full bg-red-100 px-2 py-0.5 text-red-800">{ind.action}</span>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2 text-gray-600">{ind.severity}</td>
+                    <td className="px-4 py-2 text-gray-600 max-w-xs truncate" title={ind.title}>{ind.title}</td>
+                    <td className="whitespace-nowrap px-4 py-2 text-gray-400">
+                      {ind.creationTimeDateTimeUtc ? fmtTime(ind.creationTimeDateTimeUtc) : "—"}
+                    </td>
+                    {isAdmin && (
+                      <td className="whitespace-nowrap px-4 py-2 text-right">
+                        <button
+                          onClick={() => {
+                            if (confirm(`Remove block indicator for "${ind.indicatorValue}"? This will allow this ${ind.indicatorType} on all devices.`)) {
+                              deleteIndicatorMutation.mutate(ind.id);
+                            }
+                          }}
+                          disabled={deleteIndicatorMutation.isPending}
+                          className="text-red-500 hover:text-red-700 disabled:opacity-50 text-xs"
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Detail drawer */}
       {selectedDecisionId && (
         <AlertDetailDrawer
@@ -803,6 +906,7 @@ export default function AzureSecurityAgentPage() {
           onCancel={(id) => { cancelMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onApprove={(id) => { approveMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onUnisolate={(id) => { unisolateMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
+          onUnrestrict={(id) => { unrestrictMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
         />
       )}
     </div>

@@ -166,6 +166,50 @@ def approve_decision(
     return updated or row
 
 
+@router.post("/decisions/{decision_id}/unrestrict", response_model=DefenderAgentDecisionItem)
+def unrestrict_decision_device(
+    decision_id: str,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    """Remove app execution restriction from a previously restricted device (admin only)."""
+    _ensure_azure_site()
+    row = defender_agent_store.get_decision(decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    if row.get("action_type") != "restrict_app_execution":
+        raise HTTPException(status_code=400, detail="Only app-restriction decisions can be unrestricted")
+    if not row.get("job_ids"):
+        raise HTTPException(status_code=400, detail="App restriction was never applied (no jobs dispatched)")
+
+    from security_device_jobs import security_device_jobs as sdj
+
+    device_ids = [
+        e["id"] for e in (row.get("entities") or [])
+        if e.get("type") == "device" and e.get("id")
+    ]
+    if not device_ids:
+        raise HTTPException(status_code=400, detail="No device IDs found in decision entities")
+
+    try:
+        sdj.create_job(
+            action_type="unrestrict_app_execution",  # type: ignore[arg-type]
+            device_ids=device_ids,
+            reason=f"Manual unrestrict by {_session.get('email')}",
+            params={
+                "device_names": device_ids,
+                "reason": f"App restriction removed by {_session.get('email')}",
+            },
+            confirm_device_count=None,
+            confirm_device_names=None,
+            requested_by_email=str(_session.get("email") or ""),
+            requested_by_name=str(_session.get("name") or ""),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return row
+
+
 @router.post("/decisions/{decision_id}/unisolate", response_model=DefenderAgentDecisionItem)
 def unisolate_decision_device(
     decision_id: str,
@@ -243,3 +287,30 @@ def run_now(_session: dict = Depends(require_admin)) -> dict:
         started = False
 
     return {"run_id": run_id, "started": started}
+
+
+# ---------------------------------------------------------------------------
+# Indicator management (tenant-wide IOC blocks)
+# ---------------------------------------------------------------------------
+
+@router.get("/indicators")
+def list_indicators(_session: dict = Depends(require_authenticated_user)) -> dict:
+    """List all tenant-wide block indicators (requires Ti.ReadWrite.All on the app registration)."""
+    _ensure_azure_site()
+    from azure_client import azure_client
+    items = azure_client.list_indicators()
+    return {"indicators": items, "total": len(items)}
+
+
+@router.delete("/indicators/{indicator_id}")
+def delete_indicator(
+    indicator_id: str,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    """Remove a tenant-wide block indicator (admin only)."""
+    _ensure_azure_site()
+    from azure_client import azure_client
+    ok = azure_client.delete_indicator(indicator_id)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to delete indicator from MDE")
+    return {"deleted": True, "indicator_id": indicator_id}
