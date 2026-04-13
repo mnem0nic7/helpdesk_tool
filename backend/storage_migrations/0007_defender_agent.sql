@@ -1,9 +1,9 @@
 CREATE TABLE IF NOT EXISTS defender_agent_config (
     id                    INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    enabled               BOOLEAN NOT NULL DEFAULT FALSE,
-    min_severity          TEXT    NOT NULL DEFAULT 'high',
-    tier2_delay_minutes   INTEGER NOT NULL DEFAULT 15,
-    dry_run               BOOLEAN NOT NULL DEFAULT FALSE,
+    enabled               SMALLINT NOT NULL DEFAULT 0,
+    min_severity          TEXT     NOT NULL DEFAULT 'high',
+    tier2_delay_minutes   INTEGER  NOT NULL DEFAULT 15,
+    dry_run               SMALLINT NOT NULL DEFAULT 0,
     updated_at            TEXT    NOT NULL DEFAULT '',
     updated_by            TEXT    NOT NULL DEFAULT ''
 );
@@ -38,10 +38,10 @@ CREATE TABLE IF NOT EXISTS defender_agent_decisions (
     reason              TEXT NOT NULL DEFAULT '',
     executed_at         TEXT NOT NULL,
     not_before_at       TEXT,
-    cancelled           BOOLEAN NOT NULL DEFAULT FALSE,
+    cancelled           SMALLINT NOT NULL DEFAULT 0,
     cancelled_at        TEXT,
-    cancelled_by        TEXT NOT NULL DEFAULT '',
-    human_approved      BOOLEAN NOT NULL DEFAULT FALSE,
+    cancelled_by        TEXT     NOT NULL DEFAULT '',
+    human_approved      SMALLINT NOT NULL DEFAULT 0,
     approved_at         TEXT,
     approved_by         TEXT NOT NULL DEFAULT ''
 );

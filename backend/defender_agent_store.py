@@ -271,10 +271,10 @@ class DefenderAgentStore:
             conn.execute(
                 f"""
                 UPDATE defender_agent_decisions
-                   SET cancelled = 1, cancelled_at = {p}, cancelled_by = {p}
-                 WHERE decision_id = {p} AND cancelled = 0
+                   SET cancelled = {p}, cancelled_at = {p}, cancelled_by = {p}
+                 WHERE decision_id = {p} AND cancelled = {p}
                 """,
-                (_now(), cancelled_by, decision_id),
+                (1, _now(), cancelled_by, decision_id, 0),
             )
             conn.commit()
         return self.get_decision(decision_id)
@@ -285,10 +285,10 @@ class DefenderAgentStore:
             conn.execute(
                 f"""
                 UPDATE defender_agent_decisions
-                   SET human_approved = 1, approved_at = {p}, approved_by = {p}
-                 WHERE decision_id = {p} AND human_approved = 0
+                   SET human_approved = {p}, approved_at = {p}, approved_by = {p}
+                 WHERE decision_id = {p} AND human_approved = {p}
                 """,
-                (_now(), approved_by, decision_id),
+                (1, _now(), approved_by, decision_id, 0),
             )
             conn.commit()
         return self.get_decision(decision_id)
@@ -339,14 +339,14 @@ class DefenderAgentStore:
                 f"""
                 SELECT * FROM defender_agent_decisions
                  WHERE decision = 'queue'
-                   AND cancelled = 0
-                   AND human_approved = 0
+                   AND cancelled = {p}
+                   AND human_approved = {p}
                    AND job_ids_json = '[]'
                    AND not_before_at IS NOT NULL
                    AND not_before_at <= {p}
                  ORDER BY not_before_at ASC
                 """,
-                (now,),
+                (0, 0, now),
             ).fetchall()
         return [self._row_to_decision(dict(r)) for r in rows]
 
@@ -364,12 +364,14 @@ class DefenderAgentStore:
                 " ORDER BY started_at DESC LIMIT 1"
             ).fetchone()
             pending_approvals = conn.execute(
-                "SELECT COUNT(*) AS c FROM defender_agent_decisions"
-                " WHERE decision = 'recommend' AND human_approved = 0 AND cancelled = 0"
+                f"SELECT COUNT(*) AS c FROM defender_agent_decisions"
+                f" WHERE decision = 'recommend' AND human_approved = {p} AND cancelled = {p}",
+                (0, 0),
             ).fetchone()
             pending_tier2 = conn.execute(
-                "SELECT COUNT(*) AS c FROM defender_agent_decisions"
-                " WHERE decision = 'queue' AND cancelled = 0 AND job_ids_json = '[]'"
+                f"SELECT COUNT(*) AS c FROM defender_agent_decisions"
+                f" WHERE decision = 'queue' AND cancelled = {p} AND job_ids_json = '[]'",
+                (0,),
             ).fetchone()
             actions_today = conn.execute(
                 f"SELECT COUNT(*) AS c FROM defender_agent_decisions"
