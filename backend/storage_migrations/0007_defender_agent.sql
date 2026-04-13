@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS defender_agent_config (
     id                    INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    enabled               SMALLINT NOT NULL DEFAULT 0,
+    enabled               SMALLINT NOT NULL DEFAULT 1,
     min_severity          TEXT     NOT NULL DEFAULT 'high',
     tier2_delay_minutes   INTEGER  NOT NULL DEFAULT 15,
     dry_run               SMALLINT NOT NULL DEFAULT 0,

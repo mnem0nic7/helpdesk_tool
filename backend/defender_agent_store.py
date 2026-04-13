@@ -53,7 +53,7 @@ class DefenderAgentStore:
                 """
                 CREATE TABLE IF NOT EXISTS defender_agent_config (
                     id                    INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-                    enabled               INTEGER NOT NULL DEFAULT 0,
+                    enabled               INTEGER NOT NULL DEFAULT 1,
                     min_severity          TEXT    NOT NULL DEFAULT 'high',
                     tier2_delay_minutes   INTEGER NOT NULL DEFAULT 15,
                     dry_run               INTEGER NOT NULL DEFAULT 0,
@@ -115,7 +115,7 @@ class DefenderAgentStore:
 
     _DEFAULT_CONFIG: dict[str, Any] = {
         "id": 1,
-        "enabled": False,
+        "enabled": True,
         "min_severity": "high",
         "tier2_delay_minutes": 15,
         "dry_run": False,
