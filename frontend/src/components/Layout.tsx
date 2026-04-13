@@ -40,6 +40,7 @@ const azureNavItems: NavItem[] = [
   { to: "/resources", label: "Resources", icon: "resources" },
   { to: "/storage", label: "Storage", icon: "storage" },
   { to: "/security", label: "Security", icon: "security" },
+  { to: "/security/agent", label: "Defender", icon: "defender" },
   { to: "/tools", label: "Tools", icon: "tools" },
   { to: "/cost", label: "Cost", icon: "cost" },
   { to: "/allocations", label: "Allocation", icon: "allocation" },
@@ -116,6 +117,8 @@ function AzureSidebarIcon({ icon }: { icon: string }) {
       return <svg aria-hidden="true" {...common}><path d="M10 4h4l6 13H4L10 4Z" /><path d="M12 9v3" /><path d="M12 15h.01" /></svg>;
     case "account-health":
       return <svg aria-hidden="true" {...common}><path d="M12 20s-6.5-3.8-6.5-9.2V5.8L12 3l6.5 2.8v5c0 5.4-6.5 9.2-6.5 9.2Z" /><path d="m9.5 11.5 1.7 1.7 3.6-3.6" /></svg>;
+    case "defender":
+      return <svg aria-hidden="true" {...common}><path d="M12 3 5.5 5.8v5c0 5.4 6.5 9.2 6.5 9.2s6.5-3.8 6.5-9.2v-5L12 3Z" /><path d="M9 12l2 2 4-4" /></svg>;
     default:
       return <span className="text-base leading-none">{icon}</span>;
   }

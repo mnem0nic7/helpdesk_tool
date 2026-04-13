@@ -34,11 +34,6 @@ type SupportCardDefinition = {
   actions: AzureSecurityLaneAction[];
 };
 
-type RoadmapItem = {
-  title: string;
-  description: string;
-};
-
 type PersistedWorkspaceView = {
   search: string;
   groupFilter: GroupFilter;
@@ -305,21 +300,6 @@ const SUPPORT_TOOLS: SupportCardDefinition[] = [
   },
 ];
 
-const ROADMAP: RoadmapItem[] = [
-  {
-    title: "Emergency-account MFA posture validation",
-    description: "Add MFA registration and method-strength signals so the break-glass lane can verify emergency-access readiness end to end.",
-  },
-  {
-    title: "Enterprise app permission review",
-    description: "Layer delegated consent, app permissions, and service principal grant review on top of the shipped application hygiene lane.",
-  },
-  {
-    title: "Guest access entitlement history",
-    description: "Add durable change history and review notes so external access decisions can be tracked over time.",
-  },
-];
-
 function buildDefaultWorkspaceView(): PersistedWorkspaceView {
   return {
     search: "",
@@ -452,46 +432,6 @@ function countAttentionItems(items: Array<{ summary: SecurityWorkspaceLaneSummar
 
 function LaneStatusPill({ summary }: { summary: SecurityWorkspaceLaneSummary }) {
   return <span className={`rounded-full px-3 py-1 text-xs font-semibold ${azureSecurityToneClasses(toneForStatus(summary.status))}`}>{statusLabel(summary.status)}</span>;
-}
-
-function TenantChip({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-full border border-slate-200 bg-white/80 px-3 py-2 text-xs shadow-sm">
-      <span className="font-semibold text-slate-900">{value}</span>
-      <span className="ml-2 text-slate-500">{label}</span>
-    </div>
-  );
-}
-
-function SectionJumpButton({ href, label }: { href: string; label: string }) {
-  return (
-    <a href={href} className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50">
-      {label}
-    </a>
-  );
-}
-
-function WorkspaceSnapshotCard({
-  label,
-  value,
-  detail,
-  tone,
-}: {
-  label: string;
-  value: number;
-  detail: string;
-  tone: AzureSecurityLaneTone;
-}) {
-  return (
-    <section className="rounded-2xl border border-white/70 bg-white/85 p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${azureSecurityToneClasses(tone)}`}>{label}</span>
-      </div>
-      <div className="mt-3 text-3xl font-semibold text-slate-900">{value.toLocaleString()}</div>
-      <p className="mt-2 text-sm leading-6 text-slate-600">{detail}</p>
-    </section>
-  );
 }
 
 function LaneCard({
@@ -690,34 +630,6 @@ export default function AzureSecurityPage() {
     [filteredLanes],
   );
 
-  const needsAttentionLaneCount = useMemo(
-    () => mergedLanes.filter(({ summary }) => summary.status === "critical" || summary.status === "warning").length,
-    [mergedLanes],
-  );
-
-  const limitedAccessLaneCount = useMemo(
-    () => mergedLanes.filter(({ summary }) => summary.status === "unavailable").length,
-    [mergedLanes],
-  );
-
-  const healthyOrReadyLaneCount = useMemo(
-    () => mergedLanes.filter(({ summary }) => summary.status === "healthy" || summary.status === "info").length,
-    [mergedLanes],
-  );
-
-  const visibleAttentionLaneCount = useMemo(() => countAttentionItems(filteredLanes), [filteredLanes]);
-
-  const visibleLimitedAccessLaneCount = useMemo(
-    () => filteredLanes.filter(({ summary }) => summary.status === "unavailable").length,
-    [filteredLanes],
-  );
-
-  const recommendedVisibleLane = useMemo(
-    () =>
-      [...filteredLanes].sort((left, right) => right.summary.attention_score - left.summary.attention_score || left.staticOrder - right.staticOrder)[0] ?? null,
-    [filteredLanes],
-  );
-
   const groupOptionCounts = useMemo(() => {
     const counts: Record<GroupFilter, number> = {
       all: 0,
@@ -758,21 +670,7 @@ export default function AzureSecurityPage() {
   }, [groupFilter, mergedLanes, normalizedDeferredSearch]);
 
   const hasActiveFilters = normalizedSearch.length > 0 || groupFilter !== "all" || stateFilter !== "all";
-  const hasCustomizedLayout = roadmapOpen || Object.values(collapsedGroups).some(Boolean);
-  const hasNonDefaultView = hasActiveFilters || hasCustomizedLayout;
-
-  const activeFilterChips = useMemo(() => {
-    const chips: string[] = [];
-    if (normalizedSearch) chips.push(`Search: "${normalizedSearch}"`);
-    if (groupFilter !== "all") chips.push(`Group: ${GROUP_LABELS[groupFilter]}`);
-    if (stateFilter !== "all") chips.push(`State: ${STATE_OPTIONS.find((option) => option.value === stateFilter)?.label ?? stateFilter}`);
-    return chips;
-  }, [groupFilter, normalizedSearch, stateFilter]);
-
-  const visibleCollapsedGroupCount = useMemo(
-    () => groupedLanes.filter((group) => collapsedGroups[group.key]).length,
-    [collapsedGroups, groupedLanes],
-  );
+  const hasNonDefaultView = hasActiveFilters || roadmapOpen || Object.values(collapsedGroups).some(Boolean);
 
   useEffect(() => {
     persistWorkspaceView({
@@ -844,498 +742,182 @@ export default function AzureSecurityPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <section className="rounded-[2rem] border border-slate-200 bg-gradient-to-br from-white via-sky-50 to-slate-50 p-6 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-5">
-          <div className="max-w-4xl">
-            <div className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">Azure Security</div>
-            <h1 className="mt-3 text-3xl font-bold text-slate-900">Azure Security</h1>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
-              Triage-first workspace for Azure review lanes, incident response, and tenant hygiene. Start with the lanes that need attention now, then
-              use the explorer below to pivot into the full security catalog without bouncing across unrelated Azure tabs.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <AzureSecurityLaneActionButton action={{ label: "Open Security Copilot", to: "/security/copilot" }} />
-            <AzureSecurityLaneActionButton action={{ label: "Open Azure Alerts", to: "/alerts", tone: "secondary" }} />
-          </div>
-        </div>
-
-        <div className="mt-5 flex flex-wrap gap-2">
-          <AzureSourceBadge
-            label="Cached Azure identity and inventory context"
-            description="This workspace reuses the same Azure snapshots that power the identity, account health, and review lanes."
-          />
-          <AzureSourceBadge
-            label={status?.refreshing ? "Azure refresh in progress" : "Azure cache ready"}
-            description={`Latest Azure refresh: ${formatTimestamp(sharedRefresh)}`}
-            tone={status?.refreshing ? "amber" : "emerald"}
-          />
-          <AzureSourceBadge
-            label={datasetLabel}
-            description="Configured dataset health for the Azure security workspace."
-            tone={datasetTone}
-          />
-          <AzureSourceBadge
-            label={summaryQuery.isError ? "Workspace summary unavailable" : "Workspace summary ready"}
-            description={
-              summaryQuery.isError
-                ? summaryQuery.error instanceof Error
-                  ? summaryQuery.error.message
-                  : "The static lane catalog is still available."
-                : `Latest workspace summary: ${formatTimestamp(summaryQuery.data?.generated_at ?? summaryRefresh)}`
-            }
-            tone={summaryQuery.isError ? "amber" : "sky"}
-          />
-        </div>
-
-        <div className="mt-5 flex flex-wrap gap-2">
-          <TenantChip label="users" value={overview.users.toLocaleString()} />
-          <TenantChip label="enterprise apps" value={overview.enterprise_apps.toLocaleString()} />
-          <TenantChip label="app registrations" value={overview.app_registrations.toLocaleString()} />
-          <TenantChip label="role assignments" value={overview.role_assignments.toLocaleString()} />
-        </div>
-
-        <div className="mt-5 flex flex-wrap gap-2">
-          <SectionJumpButton href="#needs-attention" label={`Review top priorities (${priorityLanes.length})`} />
-          <SectionJumpButton href="#lane-explorer" label="Jump to lane explorer" />
-          <SectionJumpButton href="#grouped-lane-catalog" label="Browse grouped catalog" />
-          <SectionJumpButton href="#support-tools" label="Open support tools" />
-        </div>
-
-        <div className="mt-5 rounded-2xl border border-white/70 bg-white/80 px-4 py-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Quick focus</div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              aria-pressed={groupFilter === "all" && stateFilter === "needs-attention" && !normalizedSearch}
-              onClick={() => applyWorkspaceFocus({ nextStateFilter: "needs-attention" })}
-              className={`rounded-full px-3 py-2 text-xs font-semibold transition ${groupFilter === "all" && stateFilter === "needs-attention" && !normalizedSearch ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
-            >
-              Urgent review
-            </button>
-            <button
-              type="button"
-              aria-pressed={groupFilter === "identity-app-control" && stateFilter === "all" && !normalizedSearch}
-              onClick={() => applyWorkspaceFocus({ nextGroupFilter: "identity-app-control" })}
-              className={`rounded-full px-3 py-2 text-xs font-semibold transition ${groupFilter === "identity-app-control" && stateFilter === "all" && !normalizedSearch ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
-            >
-              Identity & apps
-            </button>
-            <button
-              type="button"
-              aria-pressed={groupFilter === "accounts-external-access" && stateFilter === "all" && !normalizedSearch}
-              onClick={() => applyWorkspaceFocus({ nextGroupFilter: "accounts-external-access" })}
-              className={`rounded-full px-3 py-2 text-xs font-semibold transition ${groupFilter === "accounts-external-access" && stateFilter === "all" && !normalizedSearch ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
-            >
-              External access
-            </button>
-            <button
-              type="button"
-              aria-pressed={groupFilter === "all" && stateFilter === "limited-access" && !normalizedSearch}
-              onClick={() => applyWorkspaceFocus({ nextStateFilter: "limited-access" })}
-              className={`rounded-full px-3 py-2 text-xs font-semibold transition ${groupFilter === "all" && stateFilter === "limited-access" && !normalizedSearch ? "bg-amber-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
-            >
-              Limited access
-            </button>
-            {hasActiveFilters ? (
-              <button
-                type="button"
-                onClick={clearAllFilters}
-                className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Reset workspace focus
-              </button>
-            ) : null}
-          </div>
-          <p className="mt-3 text-sm text-slate-500">
-            Use presets to jump straight into the operating area you care about, then refine further in the explorer below.
+    <div className="space-y-5">
+      {/* Page header */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Azure Security</h1>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
+            Triage-first workspace for Azure review lanes, incident response, and tenant hygiene.
           </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <AzureSourceBadge
+              label={status?.refreshing ? "Azure refresh in progress" : "Azure cache ready"}
+              description={`Latest Azure refresh: ${formatTimestamp(sharedRefresh)}`}
+              tone={status?.refreshing ? "amber" : "emerald"}
+            />
+            <AzureSourceBadge
+              label={datasetLabel}
+              description="Configured dataset health for the Azure security workspace."
+              tone={datasetTone}
+            />
+          </div>
         </div>
-
-        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <WorkspaceSnapshotCard
-            label="Needs attention"
-            value={needsAttentionLaneCount}
-            detail="Lanes currently marked critical or warning in the cached workspace summary."
-            tone="amber"
-          />
-          <WorkspaceSnapshotCard
-            label="Limited access"
-            value={limitedAccessLaneCount}
-            detail="Lanes that are present in the workspace but blocked by access or scope constraints."
-            tone="amber"
-          />
-          <WorkspaceSnapshotCard
-            label="Healthy or ready"
-            value={healthyOrReadyLaneCount}
-            detail="Lanes that are healthy, available, or intentionally manual-entry investigation flows."
-            tone="emerald"
-          />
-          <WorkspaceSnapshotCard
-            label="Catalog lanes"
-            value={mergedLanes.length}
-            detail="Total review and investigation lanes currently available from the security workspace."
-            tone="sky"
-          />
+        <div className="flex flex-wrap gap-2">
+          <AzureSecurityLaneActionButton action={{ label: "Security Copilot", to: "/security/copilot" }} />
+          <AzureSecurityLaneActionButton action={{ label: "Azure Alerts", to: "/alerts", tone: "secondary" }} />
         </div>
-      </section>
+      </div>
 
       {summaryQuery.isError ? (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Live lane summaries are temporarily unavailable, so this page is showing the static workspace catalog. Navigation is still fully available.
+          Live lane summaries are temporarily unavailable — showing the static workspace catalog.
         </div>
       ) : null}
 
-      <section id="needs-attention" className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Needs Attention Now</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-500">
-              Highest-signal security lanes based on the current workspace summary. Manual investigation lanes stay in the catalog unless access is limited.
-            </p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            <div className="font-semibold text-slate-900">Workspace refresh</div>
-            <div className="mt-1">{formatTimestamp(summaryRefresh)}</div>
-          </div>
-        </div>
-        {priorityLanes.length === 0 ? (
-          <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-            No lanes currently rise above healthy or ready status in the cached workspace summary.
-          </div>
-        ) : (
-          <div className="mt-5 grid gap-4 xl:grid-cols-2">
+      {/* Needs Attention */}
+      {priorityLanes.length > 0 ? (
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-base font-semibold text-slate-900">Needs Attention Now</h2>
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
             {priorityLanes.map(({ item, summary }) => (
               <PriorityLaneCard key={`priority-${item.key}`} item={item} summary={summary} />
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      ) : null}
 
-      <section id="lane-explorer" className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Lane Explorer</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-500">
-              Search across lane intent and use local filters to narrow the catalog by operating area or summary state.
-            </p>
+      {/* Filter bar + catalog */}
+      <section className="space-y-3">
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search lanes — incidents, privileged access, guests, devices, apps..."
+              className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-sky-500"
+            />
+            {hasActiveFilters ? (
+              <button type="button" onClick={clearAllFilters} className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100">
+                Clear
+              </button>
+            ) : null}
+            {hasNonDefaultView ? (
+              <button type="button" onClick={restoreDefaultView} className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100">
+                Reset view
+              </button>
+            ) : null}
           </div>
-          <div className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700">{filteredLanes.length.toLocaleString()} lane match{filteredLanes.length === 1 ? "" : "es"}</div>
-        </div>
-        <div className="mt-5 space-y-4">
-          <div>
-            <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Search lanes</span>
-              <input
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search incidents, privileged access, guests, devices, apps..."
-                className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 text-sm outline-none transition focus:border-sky-500"
-              />
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                <span>Matches lane title, description, group name, and workspace keywords.</span>
-                {normalizedSearch ? (
-                  <button type="button" onClick={() => setSearch("")} className="font-semibold text-sky-700 transition hover:text-sky-800">
-                    Clear search
-                  </button>
-                ) : null}
-              </div>
-            </label>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Suggested searches</span>
-              {SUGGESTED_SEARCHES.map((suggestion) => (
-                <button
-                  key={suggestion.value}
-                  type="button"
-                  onClick={() => setSearch(suggestion.value)}
-                  className={`rounded-full px-3 py-2 text-xs font-semibold transition ${
-                    normalizedSearch.toLowerCase() === suggestion.value ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                  }`}
-                >
-                  {suggestion.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-x-8 gap-y-4">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Group filter</div>
-            <div className="mt-2 flex max-w-xl flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-x-6 gap-y-2">
+            <div className="flex flex-wrap gap-1.5">
               {GROUP_OPTIONS.map((option) => (
                 <button
                   key={option.value}
                   type="button"
                   onClick={() => setGroupFilter(option.value)}
                   aria-pressed={groupFilter === option.value}
-                  className={`rounded-full px-3 py-2 text-xs font-semibold transition ${
-                    groupFilter === option.value ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                  }`}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${groupFilter === option.value ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
                 >
-                  <span>{option.label}</span>
-                  <span className={`ml-2 rounded-full px-2 py-0.5 ${groupFilter === option.value ? "bg-white/20 text-white" : "bg-white text-slate-500"}`}>
-                    {groupOptionCounts[option.value].toLocaleString()}
+                  {option.label}
+                  <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] ${groupFilter === option.value ? "bg-white/20 text-white" : "bg-white text-slate-500"}`}>
+                    {groupOptionCounts[option.value]}
                   </span>
                 </button>
               ))}
             </div>
-          </div>
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">State filter</div>
-            <div className="mt-2 flex max-w-xl flex-wrap gap-2">
+            <div className="flex flex-wrap gap-1.5">
               {STATE_OPTIONS.map((option) => (
                 <button
                   key={option.value}
                   type="button"
                   onClick={() => setStateFilter(option.value)}
                   aria-pressed={stateFilter === option.value}
-                  className={`rounded-full px-3 py-2 text-xs font-semibold transition ${
-                    stateFilter === option.value ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                  }`}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${stateFilter === option.value ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
                 >
-                  <span>{option.label}</span>
-                  <span className={`ml-2 rounded-full px-2 py-0.5 ${stateFilter === option.value ? "bg-white/15 text-white" : "bg-white text-slate-500"}`}>
-                    {stateOptionCounts[option.value].toLocaleString()}
+                  {option.label}
+                  <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] ${stateFilter === option.value ? "bg-white/15 text-white" : "bg-white text-slate-500"}`}>
+                    {stateOptionCounts[option.value]}
                   </span>
                 </button>
               ))}
             </div>
           </div>
-          </div>
         </div>
 
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Active view</div>
-              <div className="mt-1 text-sm text-slate-600">
-                Showing <span className="font-semibold text-slate-900">{filteredLanes.length.toLocaleString()}</span> of{" "}
-                <span className="font-semibold text-slate-900">{mergedLanes.length.toLocaleString()}</span> workspace lanes.
-              </div>
+        {/* Grouped catalog */}
+        <div className="flex items-center justify-between gap-3 px-1">
+          <span className="text-xs text-slate-500">{filteredLanes.length.toLocaleString()} of {mergedLanes.length.toLocaleString()} lanes</span>
+          {groupedLanes.length > 0 ? (
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setAllVisibleGroupsCollapsed(false)} className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Expand all</button>
+              <button type="button" onClick={() => setAllVisibleGroupsCollapsed(true)} className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Collapse all</button>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {hasActiveFilters ? (
-                <button
-                  type="button"
-                  onClick={clearAllFilters}
-                  className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
-                >
-                  Clear all filters
-                </button>
-              ) : (
-                <span className="rounded-full bg-white px-3 py-2 text-xs font-semibold text-slate-600">All lanes visible</span>
-              )}
-              {hasNonDefaultView ? (
-                <button
-                  type="button"
-                  onClick={restoreDefaultView}
-                  className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
-                >
-                  Restore default view
-                </button>
-              ) : null}
-            </div>
-          </div>
-          {activeFilterChips.length > 0 ? (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {activeFilterChips.map((chip) => (
-                <span key={chip} className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm">
-                  {chip}
-                </span>
-              ))}
-            </div>
-          ) : (
-            <p className="mt-3 text-sm text-slate-500">Use the explorer to narrow by operating area, state, or lane intent without losing your place in the workspace.</p>
-          )}
-          <p className="mt-3 text-xs text-slate-500">This workspace remembers your current search, filters, collapsed groups, and roadmap state on this browser.</p>
+          ) : null}
         </div>
-      </section>
 
-      <section id="grouped-lane-catalog" className="scroll-mt-24 space-y-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Grouped Lane Catalog</h2>
-            <div className="mt-1 max-w-3xl text-sm text-slate-500">
-              Full security workspace grouped by operator intent, with cards sorted by live attention score and then stable workspace order.
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {groupedLanes.length > 0 ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setAllVisibleGroupsCollapsed(false)}
-                  className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Expand all groups
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAllVisibleGroupsCollapsed(true)}
-                  className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Collapse all groups
-                </button>
-              </>
-            ) : null}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Catalog guidance</div>
-              <div className="mt-1 text-sm text-slate-600">
-                {recommendedVisibleLane ? (
-                  <>
-                    Start with <span className="font-semibold text-slate-900">{recommendedVisibleLane.item.title}</span>, then work down the remaining{" "}
-                    <span className="font-semibold text-slate-900">{Math.max(filteredLanes.length - 1, 0).toLocaleString()}</span> visible lane
-                    {filteredLanes.length - 1 === 1 ? "" : "s"}.
-                  </>
-                ) : (
-                  "No lane is currently visible in the catalog."
-                )}
-              </div>
-              {recommendedVisibleLane ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <AzureSecurityLaneActionButton action={recommendedVisibleLane.item.actions[0]} />
-                </div>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full bg-amber-50 px-3 py-2 font-semibold text-amber-700">
-                {visibleAttentionLaneCount.toLocaleString()} visible lane{visibleAttentionLaneCount === 1 ? "" : "s"} need attention
-              </span>
-              <span className="rounded-full bg-slate-100 px-3 py-2 font-semibold text-slate-700">
-                {visibleCollapsedGroupCount.toLocaleString()} collapsed group{visibleCollapsedGroupCount === 1 ? "" : "s"}
-              </span>
-              {visibleLimitedAccessLaneCount > 0 ? (
-                <span className="rounded-full bg-amber-50 px-3 py-2 font-semibold text-amber-700">
-                  {visibleLimitedAccessLaneCount.toLocaleString()} limited-access lane{visibleLimitedAccessLaneCount === 1 ? "" : "s"}
-                </span>
-              ) : null}
-            </div>
-          </div>
-        </div>
         {groupedLanes.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">
-            <div>No security lanes matched the current search and filter combination.</div>
-            <div className="mt-4 flex flex-wrap justify-center gap-2">
-              {hasActiveFilters ? (
-                <button
-                  type="button"
-                  onClick={clearAllFilters}
-                  className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Clear filters and show the full catalog
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => applyWorkspaceFocus({ nextStateFilter: "needs-attention" })}
-                className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Show urgent review
-              </button>
-              {limitedAccessLaneCount > 0 ? (
-                <button
-                  type="button"
-                  onClick={() => applyWorkspaceFocus({ nextStateFilter: "limited-access" })}
-                  className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Review limited-access lanes
-                </button>
-              ) : null}
-            </div>
+            No lanes matched the current search and filter combination.
+            {hasActiveFilters ? (
+              <div className="mt-4">
+                <button type="button" onClick={clearAllFilters} className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Clear filters</button>
+              </div>
+            ) : null}
           </div>
         ) : (
-          groupedLanes.map((group) => (
-            <section key={group.key} className="space-y-4">
-              {(() => {
-                const attentionCount = countAttentionItems(group.items);
-                const collapsed = collapsedGroups[group.key];
-                return (
-                  <>
-                    <button
-                      type="button"
-                      aria-expanded={!collapsed}
-                      aria-controls={`security-group-${group.key}`}
-                      onClick={() => toggleGroupCollapsed(group.key)}
-                      className="flex w-full flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-4 text-left shadow-sm transition hover:border-slate-300"
-                    >
-                      <div>
-                        <h3 className="text-base font-semibold text-slate-900">{group.label}</h3>
-                        <div className="mt-1 text-sm text-slate-500">
-                          {group.items.length.toLocaleString()} lane{group.items.length === 1 ? "" : "s"} in view
-                          {collapsed && group.items[0] ? `, top lane ${group.items[0].item.title}` : ""}
+          <div className="space-y-3">
+            {groupedLanes.map((group) => (
+              <section key={group.key} className="space-y-3">
+                {(() => {
+                  const attentionCount = countAttentionItems(group.items);
+                  const collapsed = collapsedGroups[group.key];
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        aria-expanded={!collapsed}
+                        aria-controls={`security-group-${group.key}`}
+                        onClick={() => toggleGroupCollapsed(group.key)}
+                        className="flex w-full flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-slate-300"
+                      >
+                        <div className="flex items-center gap-3">
+                          <h3 className="text-sm font-semibold text-slate-900">{group.label}</h3>
+                          <span className="text-xs text-slate-400">{group.items.length} lane{group.items.length === 1 ? "" : "s"}</span>
                         </div>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${attentionCount > 0 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>
-                          {attentionCount > 0
-                            ? `${attentionCount.toLocaleString()} lane${attentionCount === 1 ? "" : "s"} need${attentionCount === 1 ? "s" : ""} attention`
-                            : "All clear"}
-                        </span>
-                        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{collapsed ? "Collapsed" : "Expanded"}</span>
-                      </div>
-                    </button>
-                    {collapsed ? (
-                      <div id={`security-group-${group.key}`} className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-4 text-sm text-slate-500">
-                        This group is collapsed. Expand it to review the {group.items.length.toLocaleString()} visible lane{group.items.length === 1 ? "" : "s"}.
-                      </div>
-                    ) : (
-                      <div id={`security-group-${group.key}`} className="grid gap-4 xl:grid-cols-2">
-                        {group.items.map(({ item, summary }) => (
-                          <LaneCard key={item.key} item={item} summary={summary} />
-                        ))}
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-            </section>
-          ))
+                        <div className="flex items-center gap-2">
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${attentionCount > 0 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>
+                            {attentionCount > 0 ? `${attentionCount} need${attentionCount === 1 ? "s" : ""} attention` : "All clear"}
+                          </span>
+                          <span className="text-xs text-slate-400">{collapsed ? "▶" : "▼"}</span>
+                        </div>
+                      </button>
+                      {collapsed ? null : (
+                        <div id={`security-group-${group.key}`} className="grid gap-4 xl:grid-cols-2">
+                          {group.items.map(({ item, summary }) => (
+                            <LaneCard key={item.key} item={item} summary={summary} />
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </section>
+            ))}
+          </div>
         )}
       </section>
 
-      <section id="support-tools" className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Support Tools</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-500">
-              External consoles and adjacent operator surfaces that still matter once a review lane turns into live investigation or remediation.
-            </p>
-          </div>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">Keep moving</span>
-        </div>
-        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+      {/* Support tools */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-base font-semibold text-slate-900">Support Tools</h2>
+        <div className="mt-4 grid gap-4 xl:grid-cols-2">
           {SUPPORT_TOOLS.map((card) => (
             <SupportCard key={card.title} card={card} />
           ))}
         </div>
       </section>
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <button type="button" onClick={() => setRoadmapOpen((value) => !value)} className="flex w-full items-center justify-between gap-4 text-left">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Roadmap</h2>
-            <p className="mt-1 text-sm text-slate-500">Next security workflows queued behind the current first-class review lanes.</p>
-          </div>
-          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${roadmapOpen ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
-            {roadmapOpen ? "Expanded" : "Collapsed"}
-          </span>
-        </button>
-        {roadmapOpen ? (
-          <div className="mt-5 grid gap-3 lg:grid-cols-2">
-            {ROADMAP.map((item) => (
-              <div key={item.title} className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-                <div className="text-sm font-semibold text-slate-900">{item.title}</div>
-                <div className="mt-2 text-sm leading-6 text-slate-600">{item.description}</div>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </section>
     </div>
   );
 }
+
