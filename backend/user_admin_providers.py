@@ -73,6 +73,13 @@ _DEVICE_ACTIONS: list[UserAdminActionType] = [
     "device_remote_lock",
     "device_reassign_primary_user",
 ]
+_MDE_ACTIONS: list[str] = [
+    "isolate_device",
+    "unisolate_device",
+    "run_av_scan",
+    "collect_investigation_package",
+    "restrict_app_execution",
+]
 _MAILBOX_DELEGATE_PERMISSION_TYPES = ["send_on_behalf", "send_as", "full_access"]
 
 
@@ -1721,12 +1728,66 @@ class DeviceManagementProvider:
         raise UserAdminProviderError(f"Unsupported device action: {action_type}")
 
 
+class MDEActionsProvider:
+    """Executes MDE (Microsoft Defender for Endpoint) machine actions.
+
+    Uses api.securitycenter.microsoft.com with Machine.* application permissions.
+    Device IDs are mdeDeviceId values from alert evidence, NOT Intune deviceIds.
+    """
+
+    def __init__(self, client: AzureClient) -> None:
+        self.client = client
+
+    @property
+    def enabled(self) -> bool:
+        return self.client.configured
+
+    @property
+    def supported_actions(self) -> list[str]:
+        return list(_MDE_ACTIONS)
+
+    def execute(self, action_type: str, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
+        del user_id  # MDE actions are device-scoped, not user-scoped
+        device_ids = [str(i).strip() for i in params.get("device_ids") or [] if str(i).strip()]
+        if not device_ids:
+            raise UserAdminProviderError("device_ids required for MDE actions")
+        comment = str(params.get("reason") or "Defender agent action")
+
+        _dispatch: dict[str, Any] = {
+            "isolate_device": lambda m: self.client.isolate_machine(m, comment),
+            "unisolate_device": lambda m: self.client.unisolate_machine(m, comment),
+            "run_av_scan": lambda m: self.client.run_av_scan_machine(m, comment=comment),
+            "collect_investigation_package": lambda m: self.client.collect_investigation_package(m, comment),
+            "restrict_app_execution": lambda m: self.client.restrict_app_execution_machine(m, comment),
+        }
+        fn = _dispatch.get(action_type)
+        if fn is None:
+            raise UserAdminProviderError(f"Unsupported MDE action: {action_type}")
+
+        successes = 0
+        for mid in device_ids:
+            if fn(mid):
+                successes += 1
+
+        if successes == 0:
+            raise UserAdminProviderError(f"All MDE {action_type} calls failed for {device_ids}")
+
+        label = action_type.replace("_", " ")
+        return {
+            "provider": "mde",
+            "summary": f"MDE {label} queued for {len(device_ids)} machine(s) ({successes} succeeded)",
+            "before_summary": {"machine_ids": device_ids},
+            "after_summary": {"machine_ids": device_ids, "action": action_type},
+        }
+
+
 class UserAdminProviderRegistry:
     def __init__(self, client: AzureClient | None = None) -> None:
         self._client = client or azure_cache._client
         self.entra = EntraAdminProvider(self._client)
         self.mailbox = MailboxAdminProvider(self._client)
         self.device_management = DeviceManagementProvider(self._client)
+        self.mde_actions = MDEActionsProvider(self._client)
 
     @property
     def enabled(self) -> bool:
@@ -1739,10 +1800,17 @@ class UserAdminProviderRegistry:
             return self.mailbox, "mailbox"
         if action_type in _DEVICE_ACTIONS:
             return self.device_management, "device_management"
+        if action_type in _MDE_ACTIONS:
+            return self.mde_actions, "mde"
         raise UserAdminProviderError(f"Unsupported action type: {action_type}")
 
     def supported_actions(self) -> list[UserAdminActionType]:
-        actions = self.entra.supported_actions + self.mailbox.supported_actions + self.device_management.supported_actions
+        actions = (
+            self.entra.supported_actions
+            + self.mailbox.supported_actions
+            + self.device_management.supported_actions
+            + self.mde_actions.supported_actions  # type: ignore[operator]
+        )
         return list(dict.fromkeys(actions))
 
     def get_capabilities(self) -> dict[str, Any]:

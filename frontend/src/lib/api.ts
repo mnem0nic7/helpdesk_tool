@@ -3765,6 +3765,9 @@ export const api = {
   approveDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
     return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/approve`, {});
   },
+  unisolateDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/unisolate`, {});
+  },
   runDefenderAgentNow(): Promise<{ run_id: string; started: boolean }> {
     return postJSON<{ run_id: string; started: boolean }>("/api/azure/security/defender-agent/run-now", {});
   },

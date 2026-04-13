@@ -166,6 +166,50 @@ def approve_decision(
     return updated or row
 
 
+@router.post("/decisions/{decision_id}/unisolate", response_model=DefenderAgentDecisionItem)
+def unisolate_decision_device(
+    decision_id: str,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    """Release a previously isolated device from network isolation (admin only)."""
+    _ensure_azure_site()
+    row = defender_agent_store.get_decision(decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    if row.get("action_type") != "isolate_device":
+        raise HTTPException(status_code=400, detail="Only isolation decisions can be unisolated")
+    if not row.get("job_ids"):
+        raise HTTPException(status_code=400, detail="Device was never isolated (no jobs dispatched)")
+
+    from security_device_jobs import security_device_jobs as sdj
+
+    device_ids = [
+        e["id"] for e in (row.get("entities") or [])
+        if e.get("type") == "device" and e.get("id")
+    ]
+    if not device_ids:
+        raise HTTPException(status_code=400, detail="No device IDs found in decision entities")
+
+    try:
+        sdj.create_job(
+            action_type="unisolate_device",  # type: ignore[arg-type]
+            device_ids=device_ids,
+            reason=f"Manual unisolation by {_session.get('email')}",
+            params={
+                "device_names": device_ids,
+                "reason": f"Released from isolation by {_session.get('email')}",
+            },
+            confirm_device_count=None,
+            confirm_device_names=None,
+            requested_by_email=str(_session.get("email") or ""),
+            requested_by_name=str(_session.get("name") or ""),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return row
+
+
 # ---------------------------------------------------------------------------
 # Summary (for security workspace hub)
 # ---------------------------------------------------------------------------

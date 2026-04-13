@@ -22,7 +22,7 @@ from models import (
 )
 from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
-from user_admin_providers import UserAdminProviderError, user_admin_providers
+from user_admin_providers import UserAdminProviderError, _MDE_ACTIONS, user_admin_providers
 
 logger = logging.getLogger(__name__)
 
@@ -202,21 +202,30 @@ class SecurityDeviceJobManager:
 
         provider, provider_key = user_admin_providers.provider_for_action(action_type)  # type: ignore[arg-type]
         if not getattr(provider, "enabled", False):
-            raise SecurityDeviceJobError("Intune device-management provider is not configured.")
+            raise SecurityDeviceJobError("Device-management provider is not configured.")
         if action_type == "device_reassign_primary_user":
             primary_user_id = str((params or {}).get("primary_user_id") or "").strip()
             if not primary_user_id:
                 raise SecurityDeviceJobError("primary_user_id is required for primary user reassignment.")
 
-        device_lookup = self._device_lookup()
-        target_rows = [device_lookup.get(device_id) for device_id in cleaned_ids]
-        missing_ids = [device_id for device_id, row in zip(cleaned_ids, target_rows) if row is None]
-        if missing_ids:
-            raise SecurityDeviceJobError(
-                "The current device compliance cache does not contain all selected devices. Refresh the lane and try again."
+        # MDE actions use mdeDeviceId from alert evidence — not present in the Intune device cache.
+        # Skip Intune cache validation; use caller-supplied device_names from params if available.
+        _mde_types = frozenset(_MDE_ACTIONS)
+        if action_type in _mde_types:
+            device_names = sorted(
+                [str(n).strip() for n in ((params or {}).get("device_names") or cleaned_ids) if str(n).strip()],
+                key=str.lower,
             )
-        target_devices = [row for row in target_rows if isinstance(row, dict)]
-        device_names = self._sorted_names(target_devices)
+        else:
+            device_lookup = self._device_lookup()
+            target_rows = [device_lookup.get(device_id) for device_id in cleaned_ids]
+            missing_ids = [device_id for device_id, row in zip(cleaned_ids, target_rows) if row is None]
+            if missing_ids:
+                raise SecurityDeviceJobError(
+                    "The current device compliance cache does not contain all selected devices. Refresh the lane and try again."
+                )
+            target_devices = [row for row in target_rows if isinstance(row, dict)]
+            device_names = self._sorted_names(target_devices)
 
         if action_type in _DESTRUCTIVE_ACTIONS:
             if int(confirm_device_count or 0) != len(cleaned_ids):

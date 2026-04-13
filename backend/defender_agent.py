@@ -156,10 +156,10 @@ _RULES: list[dict[str, Any]] = [
     {
         "title_keywords": ("malicious activity", "active malware"),
         "min_severity": "high",
-        "tier": 3,
-        "decision": "recommend",
-        "action_type": "device_retire",
-        "reason": "Malicious endpoint activity detected; device retire recommended — requires human approval.",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "isolate_device",
+        "reason": "Active malware confirmed on device; isolating to prevent lateral spread (preserves for forensics).",
     },
     # T3 — data exfiltration
     {
@@ -179,14 +179,72 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "device_retire",
         "reason": "Persistence mechanism detected on device; retire recommended — requires human approval.",
     },
-    # T3 — C2 communication
+    # T2 — C2 communication → isolate (was T3 retire; isolation is better first response)
     {
         "title_keywords": ("command and control", "c2 communication", "beaconing"),
         "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "isolate_device",
+        "reason": "C2/beaconing detected; isolating device to cut attacker network access.",
+    },
+    # T2 — ransomware/wipers → isolate immediately to prevent spread
+    {
+        "title_keywords": ("ransomware", "locker", "cryptolocker", "ryuk", "lockbit",
+                           "wiper", "petya", "sodinokibi", "conti"),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "isolate_device",
+        "reason": "Ransomware/wiper detected; isolating device to prevent encryption spread.",
+    },
+    # T2 — backdoors and RATs → isolate to cut persistence channel
+    {
+        "title_keywords": ("backdoor", "rootkit", "remote access trojan", "rat implant"),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "isolate_device",
+        "reason": "Backdoor/RAT implant detected; isolating device to cut persistence channel.",
+    },
+    # T1 — malware signature detected → trigger AV scan (non-destructive first response)
+    {
+        "title_keywords": ("malware detected", "trojan detected", "virus detected",
+                           "spyware detected", "suspicious file detected"),
+        "min_severity": "medium",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "run_av_scan",
+        "reason": "Potential malware signature detected; triggering full AV scan.",
+    },
+    # T1 — suspicious process/exploit → AV scan to confirm threat
+    {
+        "title_keywords": ("suspicious process", "malicious process", "exploit attempt",
+                           "shellcode", "powershell obfusc"),
+        "min_severity": "high",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "run_av_scan",
+        "reason": "Suspicious process/exploit activity detected; triggering AV scan to confirm threat.",
+    },
+    # T3 — privilege escalation / credential dumping → restrict app execution
+    {
+        "title_keywords": ("privilege escalation", "token theft", "credential dumping",
+                           "mimikatz", "dcsync", "golden ticket", "silver ticket"),
+        "min_severity": "high",
         "tier": 3,
         "decision": "recommend",
-        "action_type": "device_retire",
-        "reason": "C2 communication detected; device retire recommended — requires human approval.",
+        "action_type": "restrict_app_execution",
+        "reason": "Active credential/privilege escalation attack detected; app execution restriction recommended.",
+    },
+    # T2 — forensic investigation requested → collect investigation package
+    {
+        "title_keywords": ("investigation package", "forensic collection"),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "collect_investigation_package",
+        "reason": "Complex attack pattern detected; collecting forensic investigation package.",
     },
 ]
 
@@ -595,6 +653,34 @@ def _dispatch_action(
                 requested_by_name=_AGENT_NAME,
             )
             job_ids.append(str(job.get("job_id") or ""))
+        except Exception as exc:
+            logger.warning("Defender agent: %s dispatch failed: %s", action_type, exc)
+
+    elif action_type in ("isolate_device", "unisolate_device", "run_av_scan",
+                         "collect_investigation_package", "restrict_app_execution"):
+        # MDE (Microsoft Defender for Endpoint) actions — use mdeDeviceId, not Intune deviceId
+        device_entities = [e for e in entities if e.get("type") == "device" and e.get("id")]
+        if not device_entities:
+            logger.info("Defender agent: %s — no device IDs in entities, skipping", action_type)
+            return []
+        mde_device_ids = [e["id"] for e in device_entities]
+        device_names = [e.get("name") or e["id"] for e in device_entities]
+        try:
+            job = security_device_jobs.create_job(
+                action_type=action_type,  # type: ignore[arg-type]
+                device_ids=mde_device_ids,
+                reason=reason,
+                params={"device_names": device_names, "reason": reason},
+                confirm_device_count=None,
+                confirm_device_names=None,
+                requested_by_email=_AGENT_EMAIL,
+                requested_by_name=_AGENT_NAME,
+            )
+            job_ids.append(str(job.get("job_id") or ""))
+            logger.info(
+                "Defender agent: queued %s for %d device(s) (job %s)",
+                action_type, len(mde_device_ids), job_ids[-1],
+            )
         except Exception as exc:
             logger.warning("Defender agent: %s dispatch failed: %s", action_type, exc)
 

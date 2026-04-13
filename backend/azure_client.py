@@ -33,6 +33,8 @@ _ARM_SCOPE = "https://management.azure.com/.default"
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 _LOG_ANALYTICS_SCOPE = "https://api.loganalytics.io/.default"
 _EXCHANGE_SCOPE = "https://outlook.office365.com/.default"
+_MDE_SCOPE = "https://api.securitycenter.microsoft.com/.default"
+_MDE_BASE = "https://api.securitycenter.microsoft.com"
 _TOKEN_SKEW_SECONDS = 60
 _GRAPH_ROOT = "https://graph.microsoft.com"
 _USER_BASE_SELECT = [
@@ -1693,12 +1695,93 @@ Resources
             self.graph_request(
                 "PATCH",
                 f"security/alerts_v2/{alert_id}",
-                json={"status": status},
-                scope=_GRAPH_SCOPE,
+                json_body={"status": status},
             )
             return True
         except AzureApiError as exc:
             logger.warning("update_security_alert failed for %s: %s", alert_id, exc)
+            return False
+
+    # ------------------------------------------------------------------
+    # MDE (Microsoft Defender for Endpoint) REST API
+    # ------------------------------------------------------------------
+
+    def mde_request(self, method: str, path: str, *, json_body: Any = None) -> dict[str, Any]:
+        """Call the MDE REST API (api.securitycenter.microsoft.com).
+
+        Requires Machine.* application permissions granted on the
+        WindowsDefenderATP service principal (fc780465-...).
+        """
+        return self._request(
+            method,
+            f"{_MDE_BASE}/{path.lstrip('/')}",
+            scope=_MDE_SCOPE,
+            json_body=json_body,
+        )
+
+    def isolate_machine(self, machine_id: str,
+                        comment: str = "Isolated by autonomous Defender agent") -> bool:
+        """POST /api/machines/{id}/isolate — full network isolation."""
+        try:
+            self.mde_request(
+                "POST", f"api/machines/{machine_id}/isolate",
+                json_body={"Comment": comment, "IsolationType": "Full"},
+            )
+            return True
+        except AzureApiError as exc:
+            logger.warning("isolate_machine failed for %s: %s", machine_id, exc)
+            return False
+
+    def unisolate_machine(self, machine_id: str,
+                          comment: str = "Released from isolation by Defender agent") -> bool:
+        """POST /api/machines/{id}/unisolate — release from network isolation."""
+        try:
+            self.mde_request(
+                "POST", f"api/machines/{machine_id}/unisolate",
+                json_body={"Comment": comment},
+            )
+            return True
+        except AzureApiError as exc:
+            logger.warning("unisolate_machine failed for %s: %s", machine_id, exc)
+            return False
+
+    def run_av_scan_machine(self, machine_id: str, scan_type: str = "Full",
+                            comment: str = "AV scan triggered by autonomous Defender agent") -> bool:
+        """POST /api/machines/{id}/runAntiVirusScan."""
+        try:
+            self.mde_request(
+                "POST", f"api/machines/{machine_id}/runAntiVirusScan",
+                json_body={"Comment": comment, "ScanType": scan_type},
+            )
+            return True
+        except AzureApiError as exc:
+            logger.warning("run_av_scan_machine failed for %s: %s", machine_id, exc)
+            return False
+
+    def collect_investigation_package(self, machine_id: str,
+                                      comment: str = "Package collected by Defender agent") -> bool:
+        """POST /api/machines/{id}/collectInvestigationPackage."""
+        try:
+            self.mde_request(
+                "POST", f"api/machines/{machine_id}/collectInvestigationPackage",
+                json_body={"Comment": comment},
+            )
+            return True
+        except AzureApiError as exc:
+            logger.warning("collect_investigation_package failed for %s: %s", machine_id, exc)
+            return False
+
+    def restrict_app_execution_machine(self, machine_id: str,
+                                       comment: str = "App restriction by Defender agent") -> bool:
+        """POST /api/machines/{id}/restrictCodeExecution."""
+        try:
+            self.mde_request(
+                "POST", f"api/machines/{machine_id}/restrictCodeExecution",
+                json_body={"Comment": comment},
+            )
+            return True
+        except AzureApiError as exc:
+            logger.warning("restrict_app_execution_machine failed for %s: %s", machine_id, exc)
             return False
 
     @staticmethod

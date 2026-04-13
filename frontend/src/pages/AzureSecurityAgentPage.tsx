@@ -49,9 +49,36 @@ function fmtTime(iso: string | null | undefined): string {
   }
 }
 
+const ACTION_LABELS: Record<string, string> = {
+  isolate_device:                "Isolate Device",
+  unisolate_device:              "Release Isolation",
+  run_av_scan:                   "Run AV Scan",
+  collect_investigation_package: "Collect Forensic Package",
+  restrict_app_execution:        "Restrict App Execution",
+  revoke_sessions:               "Revoke Sessions",
+  disable_sign_in:               "Disable Sign-In",
+  device_sync:                   "Device Sync",
+  device_retire:                 "Device Retire",
+  device_wipe:                   "Device Wipe",
+};
+
+const ACTION_COLORS: Record<string, string> = {
+  isolate_device:                "bg-orange-100 text-orange-800",
+  unisolate_device:              "bg-emerald-100 text-emerald-800",
+  run_av_scan:                   "bg-teal-100 text-teal-800",
+  collect_investigation_package: "bg-indigo-100 text-indigo-800",
+  restrict_app_execution:        "bg-rose-100 text-rose-800",
+  device_wipe:                   "bg-red-100 text-red-800",
+  device_retire:                 "bg-red-100 text-red-800",
+};
+
 function fmtAction(d: DefenderAgentDecision): string {
   if (!d.action_type) return "—";
-  return d.action_type.replace(/_/g, " ");
+  return ACTION_LABELS[d.action_type] ?? d.action_type.replace(/_/g, " ");
+}
+
+function actionBadgeColor(actionType: string): string {
+  return ACTION_COLORS[actionType] ?? "bg-gray-100 text-gray-600";
 }
 
 // ---------------------------------------------------------------------------
@@ -184,12 +211,14 @@ function AlertDetailDrawer({
   isAdmin,
   onCancel,
   onApprove,
+  onUnisolate,
 }: {
   decisionId: string;
   onClose: () => void;
   isAdmin: boolean;
   onCancel: (id: string) => void;
   onApprove: (id: string) => void;
+  onUnisolate: (id: string) => void;
 }) {
   const { data: d, isLoading } = useQuery({
     queryKey: ["defender-agent-decision", decisionId],
@@ -209,6 +238,7 @@ function AlertDetailDrawer({
   const status = d ? decisionStatus(d) : null;
   const canCancel = d && d.decision === "queue" && !d.cancelled && !d.job_ids.length;
   const canApprove = d && d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
+  const canUnisolate = d && d.action_type === "isolate_device" && d.job_ids.length > 0 && !d.cancelled && isAdmin;
 
   function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
@@ -372,7 +402,7 @@ function AlertDetailDrawer({
         </div>
 
         {/* Footer actions */}
-        {d && (canCancel || canApprove) && (
+        {d && (canCancel || canApprove || canUnisolate) && (
           <div className="border-t border-gray-200 px-6 py-4 flex justify-end gap-3">
             {canCancel && (
               <button
@@ -380,6 +410,19 @@ function AlertDetailDrawer({
                 className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-700 hover:bg-amber-100"
               >
                 Cancel action
+              </button>
+            )}
+            {canUnisolate && (
+              <button
+                onClick={() => {
+                  if (confirm("Release this device from network isolation? The device will regain full network access.")) {
+                    onUnisolate(d.decision_id);
+                    onClose();
+                  }
+                }}
+                className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 hover:bg-emerald-100"
+              >
+                Release Isolation
               </button>
             )}
             {canApprove && (
@@ -446,7 +489,13 @@ function DecisionRow({
           {tier.label}
         </span>
       </td>
-      <td className="whitespace-nowrap px-3 py-2 text-xs text-gray-600 capitalize">{fmtAction(d)}</td>
+      <td className="whitespace-nowrap px-3 py-2">
+        {d.action_type ? (
+          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${actionBadgeColor(d.action_type)}`}>
+            {fmtAction(d)}
+          </span>
+        ) : <span className="text-xs text-gray-400">—</span>}
+      </td>
       <td className="px-3 py-2 text-xs">
         <div className={status.color}>{status.label}</div>
         {d.not_before_at && !d.cancelled && !d.job_ids.length && (
@@ -526,6 +575,11 @@ export default function AzureSecurityAgentPage() {
       queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] });
       queryClient.invalidateQueries({ queryKey: ["defender-agent-summary"] });
     },
+  });
+
+  const unisolateMutation = useMutation({
+    mutationFn: (id: string) => api.unisolateDefenderAgentDecision(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }),
   });
 
   const { data: me } = useQuery({
@@ -748,6 +802,7 @@ export default function AzureSecurityAgentPage() {
           isAdmin={isAdmin}
           onCancel={(id) => { cancelMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onApprove={(id) => { approveMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
+          onUnisolate={(id) => { unisolateMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
         />
       )}
     </div>

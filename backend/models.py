@@ -1575,6 +1575,12 @@ SecurityDeviceActionType = Literal[
     "device_retire",
     "device_wipe",
     "device_reassign_primary_user",
+    # MDE (Microsoft Defender for Endpoint) actions — use mdeDeviceId, not Intune deviceId
+    "isolate_device",
+    "unisolate_device",
+    "run_av_scan",
+    "collect_investigation_package",
+    "restrict_app_execution",
 ]
 
 SecurityDeviceActionJobStatus = Literal["queued", "running", "completed", "failed"]
