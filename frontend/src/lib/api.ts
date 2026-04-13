@@ -1485,6 +1485,71 @@ export interface SetAutoReplyRequest {
   external_audience: "none" | "known" | "all";
 }
 
+// ---------------------------------------------------------------------------
+// Defender autonomous agent
+// ---------------------------------------------------------------------------
+
+export interface DefenderAgentConfig {
+  enabled: boolean;
+  min_severity: "informational" | "low" | "medium" | "high" | "critical";
+  tier2_delay_minutes: number;
+  dry_run: boolean;
+  updated_at: string | null;
+  updated_by: string;
+}
+
+export interface DefenderAgentRun {
+  run_id: string;
+  started_at: string;
+  completed_at: string | null;
+  alerts_fetched: number;
+  alerts_new: number;
+  decisions_made: number;
+  actions_queued: number;
+  error: string;
+}
+
+export interface DefenderAgentDecision {
+  decision_id: string;
+  run_id: string;
+  alert_id: string;
+  alert_title: string;
+  alert_severity: string;
+  alert_category: string;
+  alert_created_at: string;
+  service_source: string;
+  entities: Array<{ type: string; id: string; name: string }>;
+  tier: number | null;
+  decision: "execute" | "queue" | "recommend" | "skip";
+  action_type: string;
+  job_ids: string[];
+  reason: string;
+  executed_at: string;
+  not_before_at: string | null;
+  cancelled: boolean;
+  cancelled_at: string | null;
+  cancelled_by: string;
+  human_approved: boolean;
+  approved_at: string | null;
+  approved_by: string;
+}
+
+export interface DefenderAgentDecisionsResponse {
+  decisions: DefenderAgentDecision[];
+  total: number;
+}
+
+export interface DefenderAgentSummary {
+  enabled: boolean;
+  last_run_at: string | null;
+  last_run_error: string;
+  total_alerts_today: number;
+  total_actions_today: number;
+  pending_approvals: number;
+  pending_tier2: number;
+  recent_decisions: DefenderAgentDecision[];
+}
+
 export interface MailboxDelegateEntry {
   identity: string;
   display_name: string;
@@ -3670,6 +3735,34 @@ export const api = {
 
   setAutoReply(body: SetAutoReplyRequest): Promise<AutoReplyStatus> {
     return putJSON<AutoReplyStatus>("/api/tools/auto-reply", body);
+  },
+
+  // Defender autonomous agent
+  getDefenderAgentConfig(): Promise<DefenderAgentConfig> {
+    return fetchJSON<DefenderAgentConfig>("/api/azure/security/defender-agent/config");
+  },
+  updateDefenderAgentConfig(body: Partial<DefenderAgentConfig>): Promise<DefenderAgentConfig> {
+    return putJSON<DefenderAgentConfig>("/api/azure/security/defender-agent/config", body);
+  },
+  listDefenderAgentRuns(limit = 20): Promise<DefenderAgentRun[]> {
+    return fetchJSON<DefenderAgentRun[]>(`/api/azure/security/defender-agent/runs?limit=${limit}`);
+  },
+  listDefenderAgentDecisions(params?: { limit?: number; offset?: number }): Promise<DefenderAgentDecisionsResponse> {
+    return fetchJSON<DefenderAgentDecisionsResponse>(
+      `/api/azure/security/defender-agent/decisions${buildQuery({ limit: params?.limit ?? 100, offset: params?.offset ?? 0 })}`
+    );
+  },
+  getDefenderAgentSummary(): Promise<DefenderAgentSummary> {
+    return fetchJSON<DefenderAgentSummary>("/api/azure/security/defender-agent/summary");
+  },
+  cancelDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/cancel`, {});
+  },
+  approveDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/approve`, {});
+  },
+  runDefenderAgentNow(): Promise<{ run_id: string; started: boolean }> {
+    return postJSON<{ run_id: string; started: boolean }>("/api/azure/security/defender-agent/run-now", {});
   },
 
   listMailboxDelegates(mailbox: string): Promise<MailboxDelegatesStatus> {

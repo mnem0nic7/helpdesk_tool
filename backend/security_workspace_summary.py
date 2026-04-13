@@ -1059,9 +1059,59 @@ def _device_compliance_summary(status: dict[str, Any], session: dict[str, Any]) 
     )
 
 
+def _defender_agent_summary() -> SecurityWorkspaceLaneSummary:
+    try:
+        from defender_agent_store import defender_agent_store
+        summary = defender_agent_store.get_summary()
+        enabled = bool(summary.get("enabled"))
+        pending_approvals = int(summary.get("pending_approvals") or 0)
+        pending_tier2 = int(summary.get("pending_tier2") or 0)
+        attention_count = pending_approvals + pending_tier2
+        last_error = str(summary.get("last_run_error") or "")
+        lane_status = (
+            "critical" if pending_approvals
+            else "warning" if (pending_tier2 or last_error)
+            else "ok" if enabled
+            else "info"
+        )
+        attention_label = (
+            f"{pending_approvals} approval(s) needed" if pending_approvals
+            else f"{pending_tier2} action(s) queued" if pending_tier2
+            else "Agent enabled — monitoring" if enabled
+            else "Agent disabled"
+        )
+        secondary_label = (
+            last_error[:120] if last_error
+            else "Polls Defender alerts every 2 min; auto-remediates T1, queues T2, surfaces T3."
+        )
+        return _make_lane(
+            lane_key="defender-agent",
+            status=lane_status,
+            attention_count=attention_count,
+            attention_label=attention_label,
+            secondary_label=secondary_label,
+            refresh_at=str(summary.get("last_run_at") or ""),
+            warning_count=1 if last_error else 0,
+            summary_mode="count",
+            access_message="Open the Agent Console to configure autonomous Defender alert response.",
+        )
+    except Exception:
+        return _make_lane(
+            lane_key="defender-agent",
+            status="info",
+            attention_count=0,
+            attention_label="Agent not yet configured",
+            secondary_label="Enable the agent to start autonomous Defender alert response.",
+            refresh_at="",
+            warning_count=0,
+            summary_mode="count",
+        )
+
+
 def build_security_workspace_summary(session: dict[str, Any]) -> SecurityWorkspaceSummaryResponse:
     status = azure_cache.status()
     lanes = [
+        _defender_agent_summary(),
         _security_copilot_summary(status),
         _dlp_review_summary(status),
         _access_review_summary(status),

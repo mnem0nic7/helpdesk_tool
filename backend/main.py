@@ -41,6 +41,8 @@ from routes_azure import router as azure_router
 from routes_azure_alerts import router as azure_alerts_router
 from routes_azure_security import router as azure_security_router
 from routes_azure_security_copilot import router as azure_security_copilot_router
+from routes_defender_agent import router as defender_agent_router
+import defender_agent as _defender_agent
 from routes_tools import router as tools_router
 from routes_user_admin import router as user_admin_router
 from routes_user_exit import router as user_exit_router
@@ -124,6 +126,7 @@ async def _start_deferred_services(app: FastAPI) -> None:
         ("User admin worker", user_admin_jobs.start_worker),
         ("User exit workflow worker", user_exit_workflows.start_worker),
         ("Azure alert loop", start_azure_alert_loop),
+        ("Defender autonomous agent worker", _defender_agent.start_worker),
     )
 
     # Start deactivation schedule background runner (uses asyncio task internally)
@@ -176,6 +179,7 @@ async def _stop_leader_services(app: FastAPI) -> None:
     await azure_cache.stop_background_refresh()
     await cache.stop_background_refresh()
     _deactivation_schedule_store.stop_background_runner()
+    await _defender_agent.stop_worker()
     app.state.leader_services_running = False
 
 
@@ -436,6 +440,7 @@ app.include_router(azure_router)
 app.include_router(azure_alerts_router)
 app.include_router(azure_security_router)
 app.include_router(azure_security_copilot_router)
+app.include_router(defender_agent_router)
 app.include_router(tools_router)
 app.include_router(user_admin_router)
 app.include_router(user_exit_router)

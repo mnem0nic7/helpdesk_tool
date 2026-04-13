@@ -188,6 +188,7 @@ export default function Layout() {
     if (segment === "security" && subsegment === "user-review") detailLabel = "User Review";
     if (segment === "security" && subsegment === "copilot") detailLabel = "Security Copilot";
     if (segment === "security" && subsegment === "account-health") detailLabel = "Account Health";
+    if (segment === "security" && subsegment === "agent") detailLabel = "Defender Agent";
     if (segment === "vms" && params.get("vmId")) detailLabel = "VM Detail";
     if (segment === "virtual-desktops" && params.get("desktopId")) detailLabel = "Desktop Detail";
     if (segment === "resources" && params.get("resourceId")) detailLabel = "Resource Detail";

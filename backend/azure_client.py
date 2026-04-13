@@ -1648,6 +1648,41 @@ Resources
             )
         return devices
 
+    _SECURITY_ALERT_SELECT = [
+        "id", "title", "severity", "status", "category",
+        "createdDateTime", "lastUpdateDateTime",
+        "serviceSource", "detectionSource", "productName",
+        "description", "recommendedActions",
+        "evidence", "incidentId",
+    ]
+
+    def list_security_alerts(
+        self,
+        *,
+        severities: list[str] | None = None,
+        lookback_hours: int = 48,
+        top: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Poll Graph /security/alerts_v2 for recent Defender alerts."""
+        since = (
+            datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        filter_parts = [f"createdDateTime ge {since}"]
+        if severities:
+            quoted = ", ".join(f"'{s}'" for s in severities)
+            filter_parts.append(f"severity in ({quoted})")
+        params: dict[str, Any] = {
+            "$filter": " and ".join(filter_parts),
+            "$select": ",".join(self._SECURITY_ALERT_SELECT),
+            "$top": str(min(top, 999)),
+            "$orderby": "createdDateTime desc",
+        }
+        try:
+            return self.graph_paged_get("security/alerts_v2", params=params)
+        except AzureApiError as exc:
+            logger.warning("list_security_alerts failed: %s", exc)
+            return []
+
     @staticmethod
     def _cost_range(days: int | None = None) -> tuple[str, str]:
         lookback_days = days or AZURE_COST_LOOKBACK_DAYS

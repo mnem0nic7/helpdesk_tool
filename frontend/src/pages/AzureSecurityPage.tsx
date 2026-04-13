@@ -87,6 +87,20 @@ const SUGGESTED_SEARCHES: Array<{ label: string; value: string }> = [
 
 const LANE_CATALOG: LaneCatalogItem[] = [
   {
+    key: "defender-agent",
+    group: "respond-now",
+    title: "Autonomous Defender Agent",
+    description:
+      "Polls Microsoft Defender alerts every 2 minutes. Auto-revokes sessions and syncs devices for T1 detections. Queues sign-in disables with a cancellation window (T2). Surfaces device wipe and retire for human approval (T3).",
+    keywords: ["defender", "agent", "autonomous", "remediation", "alert", "session", "revoke", "disable", "wipe"],
+    actions: [
+      { label: "Open Agent Console", to: "/security/agent" },
+    ],
+    fallbackAttentionLabel: "Agent disabled — click to configure",
+    fallbackSecondaryLabel: "Enable the agent to start autonomous Defender alert response.",
+    summaryMode: "count",
+  },
+  {
     key: "security-copilot",
     group: "respond-now",
     title: "Security Incident Copilot",

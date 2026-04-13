@@ -20,6 +20,7 @@ from azure_client import AzureApiError, AzureClient
 from config import (
     AZURE_CONDITIONAL_ACCESS_LOOKBACK_DAYS,
     AZURE_CONDITIONAL_ACCESS_REFRESH_MINUTES,
+    AZURE_DEFENDER_ALERT_CACHE_MINUTES,
     AZURE_DEVICE_COMPLIANCE_REFRESH_MINUTES,
     AZURE_AVD_SESSION_HISTORY_LOOKBACK_DAYS,
     AZURE_COST_LOOKBACK_DAYS,
@@ -88,6 +89,11 @@ _DATASET_CONFIG: dict[str, dict[str, Any]] = {
             "savings_summary",
             "savings_opportunities",
         ],
+    },
+    "security_alerts": {
+        "label": "Security Alerts",
+        "interval_minutes": AZURE_DEFENDER_ALERT_CACHE_MINUTES,
+        "snapshots": ["security_alerts_recent"],
     },
 }
 
@@ -406,6 +412,8 @@ class AzureCache:
                 self._refresh_conditional_access()
             if "cost" in dataset_keys:
                 self._refresh_cost()
+            if "security_alerts" in dataset_keys:
+                self._refresh_security_alerts()
             with self._lock:
                 self._initialized = True
         finally:
@@ -1246,6 +1254,23 @@ class AzureCache:
             self._set_dataset_status(
                 "device_compliance",
                 updated_at=self._dataset_state["device_compliance"]["last_refresh"],
+                error=str(exc),
+            )
+
+    def _refresh_security_alerts(self) -> None:
+        try:
+            alerts = self._client.list_security_alerts(
+                severities=["high", "critical"],
+                lookback_hours=48,
+            )
+            self._update_snapshots({"security_alerts_recent": alerts})
+            updated_at = datetime.now(timezone.utc).isoformat()
+            self._set_dataset_status("security_alerts", updated_at=updated_at, error=None)
+        except AzureApiError as exc:
+            logger.warning("Azure security alerts refresh failed: %s", exc)
+            self._set_dataset_status(
+                "security_alerts",
+                updated_at=self._dataset_state["security_alerts"]["last_refresh"],
                 error=str(exc),
             )
 

@@ -39,6 +39,7 @@ const AzureSecurityAppHygienePage = lazy(() => import("./pages/AzureSecurityAppH
 const AzureSecurityDirectoryRoleReviewPage = lazy(() => import("./pages/AzureSecurityDirectoryRoleReviewPage"));
 const AzureSecurityUserReviewPage = lazy(() => import("./pages/AzureSecurityUserReviewPage"));
 const AzureSecurityCopilotPage = lazy(() => import("./pages/AzureSecurityCopilotPage"));
+const AzureSecurityAgentPage = lazy(() => import("./pages/AzureSecurityAgentPage"));
 const AzureAlertsPage = lazy(() => import("./pages/AzureAlertsPage"));
 const AzureAccountHealthPage = lazy(() => import("./pages/AzureAccountHealthPage"));
 const AzureVirtualDesktopsPage = lazy(() => import("./pages/AzureVirtualDesktopsPage"));
@@ -83,6 +84,7 @@ export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
                 <Route path="security/app-hygiene" element={<AzureSecurityAppHygienePage />} />
                 <Route path="security/user-review" element={<AzureSecurityUserReviewPage />} />
                 <Route path="security/copilot" element={<AzureSecurityCopilotPage />} />
+                <Route path="security/agent" element={<AzureSecurityAgentPage />} />
                 <Route path="security/account-health" element={<AzureAccountHealthPage />} />
                 <Route path="users" element={<AzureUsersPage />} />
                 <Route path="tools" element={<ToolsPage />} />

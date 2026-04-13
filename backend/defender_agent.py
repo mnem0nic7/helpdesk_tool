@@ -1,0 +1,447 @@
+"""Autonomous Microsoft Defender security agent.
+
+Polls Graph Security API for Defender alerts every N seconds (default 120).
+Classifies each new alert against a decision rule table and dispatches safe
+remediation actions through the existing user_admin_jobs and security_device_jobs
+queues.  Every decision — including skips — is logged durably in
+defender_agent_store for operator review.
+
+Safety tiers
+------------
+T1 (immediate)  — Revoke sessions, device sync.  Auto-executed on first cycle.
+T2 (delayed)    — Disable sign-in.  Queued with not_before_at = now +
+                  tier2_delay_minutes.  Operator can cancel before window passes.
+T3 (recommend)  — Device wipe / retire.  Logged only; requires human approval
+                  via the /api/azure/security/defender-agent/decisions/{id}/approve
+                  endpoint.
+Skip            — Alert below min_severity or category not in rule table.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from config import AZURE_DEFENDER_AGENT_POLL_SECONDS
+
+logger = logging.getLogger(__name__)
+
+_AGENT_EMAIL = "defender-agent@system.internal"
+_AGENT_NAME = "Defender Autonomous Agent"
+
+# ---------------------------------------------------------------------------
+# Severity ordering
+# ---------------------------------------------------------------------------
+
+_SEV_ORDER: dict[str, int] = {
+    "informational": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+    "unknown": 0,
+}
+
+# ---------------------------------------------------------------------------
+# Decision rule table
+# (evaluated top-to-bottom; first match wins)
+# ---------------------------------------------------------------------------
+
+_RULES: list[dict[str, Any]] = [
+    # T1 — device sync
+    {
+        "title_keywords": ("antivirus", "signature", "out of date", "not reporting"),
+        "service_source_contains": ("defender", "endpoint", "intune"),
+        "min_severity": "high",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "device_sync",
+        "reason": "Defender reported antivirus/signature issue on device; sync to force policy refresh.",
+    },
+    # T1 — revoke sessions (fast, reversible)
+    {
+        "title_keywords": (
+            "suspicious signin", "unfamiliar features", "impossible travel",
+            "anonymous ip", "malicious ip", "malware ip",
+            "atypical travel", "unfamiliar sign-in",
+        ),
+        "min_severity": "high",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "revoke_sessions",
+        "reason": "Defender detected suspicious identity activity; revoking active sessions.",
+    },
+    # T2 — disable sign-in (queued with delay)
+    {
+        "title_keywords": (
+            "password spray", "brute force", "unusual volume",
+            "suspicious api", "suspicious mailbox", "suspicious inbox",
+        ),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "disable_sign_in",
+        "reason": "Defender detected credential or mailbox attack pattern; sign-in disable queued with cancellation window.",
+    },
+    {
+        "title_keywords": ("credential harvesting", "credential access"),
+        "min_severity": "critical",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "disable_sign_in",
+        "reason": "Critical credential harvesting alert; sign-in disable queued with cancellation window.",
+    },
+    # T3 — recommend only (irreversible)
+    {
+        "title_keywords": ("ransomware",),
+        "min_severity": "critical",
+        "tier": 3,
+        "decision": "recommend",
+        "action_type": "device_wipe",
+        "reason": "Ransomware activity detected on device; wipe recommended — requires human approval.",
+    },
+    {
+        "title_keywords": ("malicious activity", "active malware"),
+        "min_severity": "high",
+        "tier": 3,
+        "decision": "recommend",
+        "action_type": "device_retire",
+        "reason": "Malicious endpoint activity detected; device retire recommended — requires human approval.",
+    },
+]
+
+
+def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | None, str, str, str]:
+    """Return (tier, decision_type, action_type, reason).
+
+    decision_type: "execute" | "queue" | "recommend" | "skip"
+    """
+    severity = (alert.get("severity") or "unknown").lower()
+    title = (alert.get("title") or "").lower()
+    service_source = (alert.get("serviceSource") or "").lower()
+
+    # Reject alerts below operator-configured floor
+    if _SEV_ORDER.get(severity, 0) < _SEV_ORDER.get(min_severity, 3):
+        return None, "skip", "", f"Severity '{severity}' is below configured minimum '{min_severity}'."
+
+    for rule in _RULES:
+        # Severity gate
+        rule_min = rule.get("min_severity", "high")
+        if _SEV_ORDER.get(severity, 0) < _SEV_ORDER.get(rule_min, 3):
+            continue
+        # Title keyword match
+        keywords = rule.get("title_keywords", ())
+        if not any(kw in title for kw in keywords):
+            continue
+        # Optional service source filter
+        svc_filter = rule.get("service_source_contains")
+        if svc_filter and not any(s in service_source for s in svc_filter):
+            continue
+        return rule["tier"], rule["decision"], rule["action_type"], rule["reason"]
+
+    return None, "skip", "", "Alert category/title did not match any decision rule."
+
+
+def _extract_entities(alert: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract user and device entities from Graph alert evidence."""
+    entities: list[dict[str, Any]] = []
+    for item in (alert.get("evidence") or []):
+        odata = (item.get("@odata.type") or "").lower()
+        if "userevidence" in odata:
+            acct = item.get("userAccount") or {}
+            upn = acct.get("userPrincipalName") or ""
+            uid = acct.get("azureAdUserId") or acct.get("accountObjectId") or ""
+            if upn or uid:
+                entities.append({"type": "user", "id": uid, "name": upn or uid})
+        elif "deviceevidence" in odata:
+            dev = item.get("device") or {}
+            did = dev.get("deviceId") or item.get("deviceId") or ""
+            dname = dev.get("deviceName") or item.get("deviceName") or did
+            if did or dname:
+                entities.append({"type": "device", "id": did, "name": dname})
+    return entities
+
+
+def _run_agent_cycle() -> None:
+    """Synchronous cycle called from an executor thread."""
+    from defender_agent_store import defender_agent_store
+    from user_admin_jobs import user_admin_jobs
+    from security_device_jobs import security_device_jobs
+
+    config = defender_agent_store.get_config()
+    if not config.get("enabled"):
+        return
+
+    # Lazy import to avoid circular imports at module load time
+    try:
+        from azure_client import AzureClient
+    except Exception as exc:
+        logger.warning("Defender agent: could not import AzureClient: %s", exc)
+        return
+
+    run_id = uuid.uuid4().hex
+    defender_agent_store.create_run(run_id)
+
+    alerts_fetched = 0
+    alerts_new = 0
+    decisions_made = 0
+    actions_queued = 0
+
+    try:
+        client = AzureClient()
+        alerts = client.list_security_alerts(
+            severities=["informational", "low", "medium", "high", "critical"],
+            lookback_hours=48,
+            top=200,
+        )
+        alerts_fetched = len(alerts)
+
+        seen_ids = defender_agent_store.get_seen_alert_ids(since_hours=168)
+        new_alerts = [a for a in alerts if a.get("id") and a["id"] not in seen_ids]
+        alerts_new = len(new_alerts)
+
+        min_severity = str(config.get("min_severity") or "high").lower()
+        dry_run = bool(config.get("dry_run", False))
+        tier2_delay = int(config.get("tier2_delay_minutes") or 15)
+
+        for alert in new_alerts:
+            alert_id = alert.get("id", uuid.uuid4().hex)
+            tier, decision_type, action_type, reason = _classify_alert(alert, min_severity)
+            entities = _extract_entities(alert)
+            decision_id = uuid.uuid4().hex
+            not_before_at: str | None = None
+
+            if decision_type == "queue":
+                not_before_at = (
+                    datetime.now(timezone.utc) + timedelta(minutes=tier2_delay)
+                ).isoformat()
+
+            defender_agent_store.create_decision(
+                decision_id=decision_id,
+                run_id=run_id,
+                alert_id=alert_id,
+                alert_title=str(alert.get("title") or ""),
+                alert_severity=str(alert.get("severity") or ""),
+                alert_category=str(alert.get("category") or ""),
+                alert_created_at=str(alert.get("createdDateTime") or ""),
+                service_source=str(alert.get("serviceSource") or ""),
+                entities=entities,
+                tier=tier,
+                decision=decision_type,
+                action_type=action_type,
+                job_ids=[],
+                reason=reason,
+                not_before_at=not_before_at,
+            )
+            decisions_made += 1
+
+            # T1 — execute immediately
+            if decision_type == "execute" and not dry_run:
+                job_ids = _dispatch_action(
+                    action_type=action_type,
+                    entities=entities,
+                    alert=alert,
+                    user_admin_jobs=user_admin_jobs,
+                    security_device_jobs=security_device_jobs,
+                )
+                if job_ids:
+                    defender_agent_store.update_decision_jobs(decision_id, job_ids)
+                    actions_queued += len(job_ids)
+
+        # Dispatch T2 rows whose delay window has now passed
+        pending_t2 = defender_agent_store.list_pending_tier2()
+        for row in pending_t2:
+            if dry_run:
+                continue
+            stored_entities: list[dict[str, Any]] = row.get("entities") or []
+            job_ids = _dispatch_action(
+                action_type=str(row.get("action_type") or ""),
+                entities=stored_entities,
+                alert={},
+                user_admin_jobs=user_admin_jobs,
+                security_device_jobs=security_device_jobs,
+            )
+            if job_ids:
+                defender_agent_store.update_decision_jobs(str(row["decision_id"]), job_ids)
+                actions_queued += len(job_ids)
+
+        defender_agent_store.complete_run(
+            run_id,
+            alerts_fetched=alerts_fetched,
+            alerts_new=alerts_new,
+            decisions_made=decisions_made,
+            actions_queued=actions_queued,
+        )
+
+    except Exception as exc:
+        logger.exception("Defender agent cycle error")
+        defender_agent_store.complete_run(
+            run_id,
+            alerts_fetched=alerts_fetched,
+            alerts_new=alerts_new,
+            decisions_made=decisions_made,
+            actions_queued=actions_queued,
+            error=str(exc),
+        )
+
+
+def _dispatch_action(
+    *,
+    action_type: str,
+    entities: list[dict[str, Any]],
+    alert: dict[str, Any],
+    user_admin_jobs: Any,
+    security_device_jobs: Any,
+) -> list[str]:
+    """Dispatch a single action to the appropriate job runner.  Returns job IDs created."""
+    job_ids: list[str] = []
+
+    if action_type == "revoke_sessions":
+        user_ids = [e["id"] for e in entities if e.get("type") == "user" and e.get("id")]
+        if not user_ids:
+            logger.info("Defender agent: revoke_sessions — no user IDs in entities, skipping")
+            return []
+        try:
+            job = user_admin_jobs.create_job(
+                action_type="revoke_sessions",
+                target_user_ids=user_ids,
+                params=None,
+                requested_by_email=_AGENT_EMAIL,
+                requested_by_name=_AGENT_NAME,
+            )
+            job_ids.append(str(job.get("job_id") or ""))
+            logger.info(
+                "Defender agent: queued revoke_sessions for %d user(s) (job %s)",
+                len(user_ids), job_ids[-1],
+            )
+        except Exception as exc:
+            logger.warning("Defender agent: revoke_sessions dispatch failed: %s", exc)
+
+    elif action_type == "disable_sign_in":
+        user_ids = [e["id"] for e in entities if e.get("type") == "user" and e.get("id")]
+        if not user_ids:
+            logger.info("Defender agent: disable_sign_in — no user IDs in entities, skipping")
+            return []
+        try:
+            job = user_admin_jobs.create_job(
+                action_type="disable_sign_in",
+                target_user_ids=user_ids,
+                params=None,
+                requested_by_email=_AGENT_EMAIL,
+                requested_by_name=_AGENT_NAME,
+            )
+            job_ids.append(str(job.get("job_id") or ""))
+            logger.info(
+                "Defender agent: queued disable_sign_in for %d user(s) (job %s)",
+                len(user_ids), job_ids[-1],
+            )
+        except Exception as exc:
+            logger.warning("Defender agent: disable_sign_in dispatch failed: %s", exc)
+
+    elif action_type == "device_sync":
+        device_ids = [e["id"] for e in entities if e.get("type") == "device" and e.get("id")]
+        if not device_ids:
+            logger.info("Defender agent: device_sync — no device IDs in entities, skipping")
+            return []
+        try:
+            job = security_device_jobs.create_job(
+                action_type="device_sync",
+                device_ids=device_ids,
+                reason="Autonomous agent: Defender antivirus/compliance alert",
+                params=None,
+                confirm_device_count=None,
+                confirm_device_names=None,
+                requested_by_email=_AGENT_EMAIL,
+                requested_by_name=_AGENT_NAME,
+            )
+            job_ids.append(str(job.get("job_id") or ""))
+            logger.info(
+                "Defender agent: queued device_sync for %d device(s) (job %s)",
+                len(device_ids), job_ids[-1],
+            )
+        except Exception as exc:
+            logger.warning("Defender agent: device_sync dispatch failed: %s", exc)
+
+    elif action_type in ("device_wipe", "device_retire"):
+        # T3 — should never reach _dispatch_action normally; only via approve endpoint
+        device_ids = [e["id"] for e in entities if e.get("type") == "device" and e.get("id")]
+        if not device_ids:
+            return []
+        try:
+            job = security_device_jobs.create_job(
+                action_type=action_type,
+                device_ids=device_ids,
+                reason="Defender agent: approved by operator",
+                params=None,
+                confirm_device_count=len(device_ids),
+                confirm_device_names=[e["name"] for e in entities if e.get("type") == "device"],
+                requested_by_email=_AGENT_EMAIL,
+                requested_by_name=_AGENT_NAME,
+            )
+            job_ids.append(str(job.get("job_id") or ""))
+        except Exception as exc:
+            logger.warning("Defender agent: %s dispatch failed: %s", action_type, exc)
+
+    return [j for j in job_ids if j]
+
+
+def dispatch_approved_t3(decision_id: str) -> list[str]:
+    """Called by the approve endpoint to execute a T3 decision immediately."""
+    from defender_agent_store import defender_agent_store
+    from user_admin_jobs import user_admin_jobs
+    from security_device_jobs import security_device_jobs
+
+    row = defender_agent_store.get_decision(decision_id)
+    if not row:
+        return []
+    job_ids = _dispatch_action(
+        action_type=str(row.get("action_type") or ""),
+        entities=row.get("entities") or [],
+        alert={},
+        user_admin_jobs=user_admin_jobs,
+        security_device_jobs=security_device_jobs,
+    )
+    if job_ids:
+        defender_agent_store.update_decision_jobs(decision_id, job_ids)
+    return job_ids
+
+
+# ---------------------------------------------------------------------------
+# Background worker lifecycle
+# ---------------------------------------------------------------------------
+
+_bg_task: asyncio.Task[None] | None = None
+
+
+async def _agent_loop() -> None:
+    while True:
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, _run_agent_cycle)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Defender agent loop iteration failed")
+        await asyncio.sleep(AZURE_DEFENDER_AGENT_POLL_SECONDS)
+
+
+async def start_worker() -> None:
+    global _bg_task
+    if _bg_task and not _bg_task.done():
+        return
+    _bg_task = asyncio.get_running_loop().create_task(_agent_loop())
+    logger.info("Defender autonomous agent worker started (poll interval %ds)", AZURE_DEFENDER_AGENT_POLL_SECONDS)
+
+
+async def stop_worker() -> None:
+    global _bg_task
+    if not _bg_task:
+        return
+    _bg_task.cancel()
+    try:
+        await _bg_task
+    except asyncio.CancelledError:
+        pass
+    _bg_task = None
+    logger.info("Defender autonomous agent worker stopped")

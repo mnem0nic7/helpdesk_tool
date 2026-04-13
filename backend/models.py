@@ -2406,3 +2406,75 @@ class SetAutoReplyRequest(BaseModel):
     scheduled_start: str = ""   # ISO-8601 datetime or "" (required when status=scheduled)
     scheduled_end: str = ""     # ISO-8601 datetime or "" (required when status=scheduled)
     external_audience: Literal["none", "known", "all"] = "known"
+
+
+# ---------------------------------------------------------------------------
+# Defender autonomous agent
+# ---------------------------------------------------------------------------
+
+class DefenderAgentConfigResponse(BaseModel):
+    enabled: bool = False
+    min_severity: Literal["informational", "low", "medium", "high", "critical"] = "high"
+    tier2_delay_minutes: int = 15
+    dry_run: bool = False
+    updated_at: Optional[str] = None
+    updated_by: str = ""
+
+
+class DefenderAgentConfigUpdate(BaseModel):
+    enabled: bool
+    min_severity: Literal["informational", "low", "medium", "high", "critical"] = "high"
+    tier2_delay_minutes: int = Field(default=15, ge=0, le=1440)
+    dry_run: bool = False
+
+
+class DefenderAgentRunResponse(BaseModel):
+    run_id: str
+    started_at: str
+    completed_at: Optional[str] = None
+    alerts_fetched: int = 0
+    alerts_new: int = 0
+    decisions_made: int = 0
+    actions_queued: int = 0
+    error: str = ""
+
+
+class DefenderAgentDecisionItem(BaseModel):
+    decision_id: str
+    run_id: str
+    alert_id: str
+    alert_title: str = ""
+    alert_severity: str = ""
+    alert_category: str = ""
+    alert_created_at: str = ""
+    service_source: str = ""
+    entities: list[dict[str, Any]] = Field(default_factory=list)
+    tier: Optional[int] = None
+    decision: str = "skip"
+    action_type: str = ""
+    job_ids: list[str] = Field(default_factory=list)
+    reason: str = ""
+    executed_at: str = ""
+    not_before_at: Optional[str] = None
+    cancelled: bool = False
+    cancelled_at: Optional[str] = None
+    cancelled_by: str = ""
+    human_approved: bool = False
+    approved_at: Optional[str] = None
+    approved_by: str = ""
+
+
+class DefenderAgentDecisionsResponse(BaseModel):
+    decisions: list[DefenderAgentDecisionItem]
+    total: int
+
+
+class DefenderAgentSummaryResponse(BaseModel):
+    enabled: bool = False
+    last_run_at: Optional[str] = None
+    last_run_error: str = ""
+    total_alerts_today: int = 0
+    total_actions_today: int = 0
+    pending_approvals: int = 0
+    pending_tier2: int = 0
+    recent_decisions: list[DefenderAgentDecisionItem] = Field(default_factory=list)
