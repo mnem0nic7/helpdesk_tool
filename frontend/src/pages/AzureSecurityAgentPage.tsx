@@ -566,6 +566,7 @@ export default function AzureSecurityAgentPage() {
   const [decisionFilter, setDecisionFilter] = useState<string>("");
   const [runningNow, setRunningNow] = useState(false);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
+  const [showFindingsOnly, setShowFindingsOnly] = useState(false);
 
   const configQuery = useQuery({
     queryKey: ["defender-agent-config"],
@@ -802,39 +803,58 @@ export default function AzureSecurityAgentPage() {
 
       {/* Run history */}
       <div className="rounded-lg bg-white shadow">
-        <div className="border-b border-gray-200 px-5 py-4">
+        <div className="border-b border-gray-200 px-5 py-4 flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-gray-900">Run History</h2>
+          <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showFindingsOnly}
+              onChange={(e) => setShowFindingsOnly(e.target.checked)}
+              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            Findings only
+          </label>
         </div>
-        {runs.length === 0 ? (
-          <p className="py-6 text-center text-sm text-gray-500">No runs yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-100 text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  {["Started", "Completed", "Fetched", "New", "Decisions", "Actions", "Error"].map((h) => (
-                    <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 bg-white">
-                {runs.map((r) => (
-                  <tr key={r.run_id} className={r.error ? "bg-red-50" : ""}>
-                    <td className="px-3 py-2 text-xs text-gray-700 whitespace-nowrap">{fmtTime(r.started_at)}</td>
-                    <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{fmtTime(r.completed_at)}</td>
-                    <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.alerts_fetched}</td>
-                    <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.alerts_new}</td>
-                    <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.decisions_made}</td>
-                    <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.actions_queued}</td>
-                    <td className="px-3 py-2 text-xs text-red-600 max-w-xs truncate" title={r.error}>{r.error || "—"}</td>
+        {(() => {
+          const visibleRuns = showFindingsOnly
+            ? runs.filter((r) => r.decisions_made > 0 || r.actions_queued > 0)
+            : runs;
+          if (visibleRuns.length === 0) {
+            return (
+              <p className="py-6 text-center text-sm text-gray-500">
+                {showFindingsOnly ? "No runs with findings." : "No runs yet."}
+              </p>
+            );
+          }
+          return (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-100 text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {["Started", "Completed", "Fetched", "New", "Decisions", "Actions", "Error"].map((h) => (
+                      <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {visibleRuns.map((r) => (
+                    <tr key={r.run_id} className={r.error ? "bg-red-50" : ""}>
+                      <td className="px-3 py-2 text-xs text-gray-700 whitespace-nowrap">{fmtTime(r.started_at)}</td>
+                      <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{fmtTime(r.completed_at)}</td>
+                      <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.alerts_fetched}</td>
+                      <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.alerts_new}</td>
+                      <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.decisions_made}</td>
+                      <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.actions_queued}</td>
+                      <td className="px-3 py-2 text-xs text-red-600 max-w-xs truncate" title={r.error}>{r.error || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Tenant-wide block indicators panel */}

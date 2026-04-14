@@ -117,7 +117,7 @@ class DefenderAgentStore:
     _DEFAULT_CONFIG: dict[str, Any] = {
         "id": 1,
         "enabled": True,
-        "min_severity": "high",
+        "min_severity": "medium",
         "tier2_delay_minutes": 15,
         "dry_run": False,
         "updated_at": "",

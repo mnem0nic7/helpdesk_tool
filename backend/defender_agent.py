@@ -126,6 +126,19 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "disable_sign_in",
         "reason": "MFA fatigue attack pattern detected; sign-in disable queued with cancellation window.",
     },
+    # T2 — AiTM / session hijacking → revoke sessions (identity threat, not device-level)
+    {
+        "title_keywords": (
+            "adversary-in-the-middle", "aitm", "phishing site",
+            "suspicious activity network", "session hijacking",
+            "token theft via aitm", "evilginx",
+        ),
+        "min_severity": "medium",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "revoke_sessions",
+        "reason": "AiTM phishing / session-hijacking detected; revoking active sessions pending investigation.",
+    },
     # T2 — suspicious OAuth / app consent
     {
         "title_keywords": ("suspicious oauth", "risky oauth", "oauth application", "app granted permissions"),
