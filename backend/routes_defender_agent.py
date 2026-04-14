@@ -115,6 +115,44 @@ def cancel_decision(
     return updated or row
 
 
+@router.post("/decisions/{decision_id}/execute-now", response_model=DefenderAgentDecisionItem)
+def execute_decision_now(
+    decision_id: str,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    """Force-execute a T2 queued decision before its scheduled delay (admin only)."""
+    _ensure_azure_site()
+    row = defender_agent_store.get_decision(decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    if row.get("decision") != "queue":
+        raise HTTPException(status_code=400, detail="Only T2 queued decisions can be force-executed")
+    if row.get("cancelled"):
+        raise HTTPException(status_code=400, detail="Decision has been cancelled")
+    if row.get("job_ids"):
+        raise HTTPException(status_code=400, detail="Decision has already been dispatched")
+
+    from defender_agent import _dispatch_action
+    from security_device_jobs import security_device_jobs as sdj
+    from user_admin_jobs import user_admin_jobs
+
+    entities = row.get("entities") or []
+    reason = f"{row.get('reason', '')} [Force-executed early by {_session.get('email')}]"
+    job_ids = _dispatch_action(
+        action_type=str(row.get("action_type") or ""),
+        entities=entities,
+        alert={},
+        user_admin_jobs=user_admin_jobs,
+        security_device_jobs=sdj,
+        reason=reason,
+        alert_severity=str(row.get("alert_severity") or ""),
+    )
+    if job_ids:
+        defender_agent_store.update_decision_jobs(decision_id, job_ids)
+
+    return defender_agent_store.get_decision(decision_id) or row
+
+
 @router.post("/decisions/{decision_id}/approve", response_model=DefenderAgentDecisionItem)
 def approve_decision(
     decision_id: str,

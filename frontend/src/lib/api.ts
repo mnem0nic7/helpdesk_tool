@@ -1534,6 +1534,7 @@ export interface DefenderAgentDecision {
   approved_at: string | null;
   approved_by: string;
   alert_raw?: Record<string, unknown>;
+  alert_written_back: boolean;
 }
 
 export interface DefenderAgentDecisionsResponse {
@@ -3786,6 +3787,9 @@ export const api = {
   },
   forceInvestigateDecision(decisionId: string): Promise<DefenderAgentDecision> {
     return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/force-investigate`, {});
+  },
+  executeDecisionNow(decisionId: string): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/execute-now`, {});
   },
   listDefenderIndicators(): Promise<{ indicators: DefenderIndicator[]; total: number }> {
     return fetchJSON<{ indicators: DefenderIndicator[]; total: number }>(

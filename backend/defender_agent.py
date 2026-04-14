@@ -1075,6 +1075,13 @@ def _dispatch_action(
             except Exception as exc:
                 logger.warning("Defender agent: create_block_indicator dispatch failed: %s", exc)
 
+    else:
+        if action_type:
+            logger.warning(
+                "Defender agent: no dispatch handler for action_type=%r; returning no jobs",
+                action_type,
+            )
+
     return [j for j in job_ids if j]
 
 

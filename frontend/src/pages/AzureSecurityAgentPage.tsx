@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type { DefenderAgentConfig, DefenderAgentDecision } from "../lib/api.ts";
@@ -74,6 +74,9 @@ const ACTION_COLORS: Record<string, string> = {
   run_av_scan:                   "bg-teal-100 text-teal-800",
   collect_investigation_package: "bg-indigo-100 text-indigo-800",
   restrict_app_execution:        "bg-rose-100 text-rose-800",
+  revoke_sessions:               "bg-orange-100 text-orange-800",
+  disable_sign_in:               "bg-red-100 text-red-800",
+  device_sync:                   "bg-sky-100 text-sky-800",
   device_wipe:                   "bg-red-100 text-red-800",
   device_retire:                 "bg-red-100 text-red-800",
   // Red Canary parity
@@ -83,6 +86,20 @@ const ACTION_COLORS: Record<string, string> = {
   unrestrict_app_execution:      "bg-emerald-100 text-emerald-800",
   reset_password:                "bg-rose-100 text-rose-800",
 };
+
+const SERVICE_SOURCE_MAP: Record<string, { label: string; color: string }> = {
+  microsoftDefenderForEndpoint:    { label: "MDE",  color: "bg-blue-100 text-blue-800" },
+  microsoftDefenderForOffice365:   { label: "MDO",  color: "bg-purple-100 text-purple-800" },
+  microsoftCloudAppSecurity:       { label: "MCAS", color: "bg-cyan-100 text-cyan-800" },
+  azureActiveDirectory:            { label: "AAD",  color: "bg-indigo-100 text-indigo-800" },
+  microsoftDefenderForIdentity:    { label: "MDI",  color: "bg-violet-100 text-violet-800" },
+};
+
+function sourceLabel(src: string): { label: string; color: string } {
+  if (!src) return { label: "—", color: "bg-gray-100 text-gray-500" };
+  if (SERVICE_SOURCE_MAP[src]) return SERVICE_SOURCE_MAP[src];
+  return { label: src.length > 8 ? src.slice(0, 7) + "…" : src, color: "bg-gray-100 text-gray-600" };
+}
 
 function fmtAction(d: DefenderAgentDecision): string {
   if (!d.action_type) return "—";
@@ -226,6 +243,7 @@ function AlertDetailDrawer({
   onUnisolate,
   onUnrestrict,
   onForceInvestigate,
+  onExecuteNow,
 }: {
   decisionId: string;
   onClose: () => void;
@@ -235,6 +253,7 @@ function AlertDetailDrawer({
   onUnisolate: (id: string) => void;
   onUnrestrict: (id: string) => void;
   onForceInvestigate: (id: string) => void;
+  onExecuteNow: (id: string) => void;
 }) {
   const { data: d, isLoading } = useQuery({
     queryKey: ["defender-agent-decision", decisionId],
@@ -257,6 +276,7 @@ function AlertDetailDrawer({
   const canUnisolate = d && d.action_type === "isolate_device" && d.job_ids.length > 0 && !d.cancelled && isAdmin;
   const canUnrestrict = d && d.action_type === "restrict_app_execution" && d.job_ids.length > 0 && !d.cancelled && isAdmin;
   const canForceInvestigate = d && d.decision === "skip" && d.entities.some(e => e.type === "device") && isAdmin;
+  const canExecuteNow = d && d.decision === "queue" && !d.cancelled && !d.job_ids.length && isAdmin;
 
   function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
@@ -399,6 +419,16 @@ function AlertDetailDrawer({
                   <Row label="Tier / action" value={d.tier ? `T${d.tier} — ${fmtAction(d)}` : `Skip — ${d.reason}`} />
                   <Row label="Reason" value={d.reason} />
                   <Row label="Logged at" value={fmtTime(d.executed_at)} />
+                  {d.decision !== "skip" && (
+                    <Row
+                      label="MDE write-back"
+                      value={
+                        d.alert_written_back
+                          ? <span className="text-green-600 font-medium">✓ written</span>
+                          : <span className="text-gray-400">—</span>
+                      }
+                    />
+                  )}
                   {d.not_before_at && <Row label="Execute after" value={fmtTime(d.not_before_at)} />}
                   {d.job_ids.length > 0 && <Row label="Job IDs" value={d.job_ids.join(", ")} />}
                   {d.cancelled && (
@@ -420,8 +450,21 @@ function AlertDetailDrawer({
         </div>
 
         {/* Footer actions */}
-        {d && (canCancel || canApprove || canUnisolate || canUnrestrict || canForceInvestigate) && (
+        {d && (canCancel || canApprove || canUnisolate || canUnrestrict || canForceInvestigate || canExecuteNow) && (
           <div className="border-t border-gray-200 px-6 py-4 flex justify-end gap-3">
+            {canExecuteNow && (
+              <button
+                onClick={() => {
+                  if (confirm("Execute this T2 action immediately, skipping the delay window?")) {
+                    onExecuteNow(d.decision_id);
+                    onClose();
+                  }
+                }}
+                className="rounded-lg border border-amber-400 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
+              >
+                Execute Now
+              </button>
+            )}
             {canCancel && (
               <button
                 onClick={() => { onCancel(d.decision_id); onClose(); }}
@@ -524,6 +567,13 @@ function DecisionRow({
         <EntityChips entities={d.entities} />
       </td>
       <td className="whitespace-nowrap px-3 py-2">
+        {(() => { const s = sourceLabel(d.service_source); return (
+          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${s.color}`} title={d.service_source}>
+            {s.label}
+          </span>
+        ); })()}
+      </td>
+      <td className="whitespace-nowrap px-3 py-2">
         <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${severityColor(d.alert_severity)}`}>
           {d.alert_severity || "—"}
         </span>
@@ -585,6 +635,9 @@ export default function AzureSecurityAgentPage() {
   const [runningNow, setRunningNow] = useState(false);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
   const [showFindingsOnly, setShowFindingsOnly] = useState(false);
+  const [expandedError, setExpandedError] = useState<string | null>(null);
+  const [decisionLimit, setDecisionLimit] = useState(100);
+  const decisionsHeadingRef = useRef<HTMLDivElement>(null);
 
   const configQuery = useQuery({
     queryKey: ["defender-agent-config"],
@@ -598,8 +651,8 @@ export default function AzureSecurityAgentPage() {
   });
 
   const decisionsQuery = useQuery({
-    queryKey: ["defender-agent-decisions"],
-    queryFn: () => api.listDefenderAgentDecisions({ limit: 200 }),
+    queryKey: ["defender-agent-decisions", decisionLimit],
+    queryFn: () => api.listDefenderAgentDecisions({ limit: decisionLimit }),
     ...getPollingQueryOptions("live_30s"),
   });
 
@@ -637,6 +690,14 @@ export default function AzureSecurityAgentPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }),
   });
 
+  const executeNowMutation = useMutation({
+    mutationFn: (id: string) => api.executeDecisionNow(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] });
+      queryClient.invalidateQueries({ queryKey: ["defender-agent-summary"] });
+    },
+  });
+
   const indicatorsQuery = useQuery({
     queryKey: ["defender-agent-indicators"],
     queryFn: () => api.listDefenderIndicators(),
@@ -657,6 +718,7 @@ export default function AzureSecurityAgentPage() {
   const config = configQuery.data;
   const summary = summaryQuery.data;
   const decisions = decisionsQuery.data?.decisions ?? [];
+  const decisionsTotal = decisionsQuery.data?.total ?? 0;
   const runs = runsQuery.data ?? [];
   const indicators = indicatorsQuery.data?.indicators ?? [];
 
@@ -698,6 +760,11 @@ export default function AzureSecurityAgentPage() {
     if (!decisionFilter) return decisions;
     return decisions.filter((d) => d.decision === decisionFilter);
   }, [decisions, decisionFilter]);
+
+  function filterAndScrollToDecisions(filter: string) {
+    setDecisionFilter(filter);
+    setTimeout(() => decisionsHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  }
 
   const enabled = config?.enabled ?? false;
   const dryRun = config?.dry_run ?? false;
@@ -744,17 +811,36 @@ export default function AzureSecurityAgentPage() {
       {/* Summary cards */}
       {summary && (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          {[
-            { label: "Actions Today", value: summary.total_actions_today, color: "text-blue-700" },
-            { label: "Pending T2", value: summary.pending_tier2, color: summary.pending_tier2 ? "text-amber-700" : "text-gray-500" },
-            { label: "Awaiting Approval", value: summary.pending_approvals, color: summary.pending_approvals ? "text-rose-700" : "text-gray-500" },
-            { label: "Last Run", value: summary.last_run_at ? fmtTime(summary.last_run_at) : "—", color: summary.last_run_error ? "text-red-600" : "text-gray-700" },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="rounded-lg bg-white shadow p-4">
-              <p className="text-xs text-gray-500">{label}</p>
-              <p className={`mt-1 text-lg font-semibold ${color}`}>{value}</p>
-            </div>
-          ))}
+          <div className="rounded-lg bg-white shadow p-4">
+            <p className="text-xs text-gray-500">Actions Today</p>
+            <p className="mt-1 text-lg font-semibold text-blue-700">{summary.total_actions_today}</p>
+          </div>
+          <div
+            className={`rounded-lg bg-white shadow p-4 transition ${summary.pending_tier2 ? "cursor-pointer hover:bg-amber-50" : ""}`}
+            onClick={summary.pending_tier2 ? () => filterAndScrollToDecisions("queue") : undefined}
+            title={summary.pending_tier2 ? "Click to filter decisions" : undefined}
+          >
+            <p className="text-xs text-gray-500">Pending T2</p>
+            <p className={`mt-1 text-lg font-semibold ${summary.pending_tier2 ? "text-amber-700" : "text-gray-500"}`}>
+              {summary.pending_tier2}
+            </p>
+          </div>
+          <div
+            className={`rounded-lg bg-white shadow p-4 transition ${summary.pending_approvals ? "cursor-pointer hover:bg-rose-50" : ""}`}
+            onClick={summary.pending_approvals ? () => filterAndScrollToDecisions("recommend") : undefined}
+            title={summary.pending_approvals ? "Click to filter decisions" : undefined}
+          >
+            <p className="text-xs text-gray-500">Awaiting Approval</p>
+            <p className={`mt-1 text-lg font-semibold ${summary.pending_approvals ? "text-rose-700" : "text-gray-500"}`}>
+              {summary.pending_approvals}
+            </p>
+          </div>
+          <div className="rounded-lg bg-white shadow p-4">
+            <p className="text-xs text-gray-500">Last Run</p>
+            <p className={`mt-1 text-lg font-semibold ${summary.last_run_error ? "text-red-600" : "text-gray-700"}`}>
+              {summary.last_run_at ? fmtTime(summary.last_run_at) : "—"}
+            </p>
+          </div>
         </div>
       )}
       {summary?.last_run_error && (
@@ -764,7 +850,7 @@ export default function AzureSecurityAgentPage() {
       )}
 
       {/* Decision feed */}
-      <div className="rounded-lg bg-white shadow">
+      <div className="rounded-lg bg-white shadow" ref={decisionsHeadingRef}>
         <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
           <h2 className="text-lg font-semibold text-gray-900">Decision Feed</h2>
           <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
@@ -794,33 +880,46 @@ export default function AzureSecurityAgentPage() {
             {enabled ? "No decisions yet — agent will log all alert classifications here." : "Enable the agent to start monitoring Defender alerts."}
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-100 text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  {["Time", "Alert", "Severity", "Tier", "Action", "Status", ""].map((h) => (
-                    <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                      {h}
-                    </th>
+          <>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-100 text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {["Time", "Alert", "Source", "Severity", "Tier", "Action", "Status", ""].map((h) => (
+                      <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {filteredDecisions.map((d) => (
+                    <DecisionRow
+                      key={d.decision_id}
+                      d={d}
+                      isAdmin={isAdmin}
+                      onCancel={(id) => cancelMutation.mutate(id)}
+                      onApprove={(id) => approveMutation.mutate(id)}
+                      cancelling={cancelMutation.isPending}
+                      approving={approveMutation.isPending}
+                      onOpenDetail={setSelectedDecisionId}
+                    />
                   ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 bg-white">
-                {filteredDecisions.map((d) => (
-                  <DecisionRow
-                    key={d.decision_id}
-                    d={d}
-                    isAdmin={isAdmin}
-                    onCancel={(id) => cancelMutation.mutate(id)}
-                    onApprove={(id) => approveMutation.mutate(id)}
-                    cancelling={cancelMutation.isPending}
-                    approving={approveMutation.isPending}
-                    onOpenDetail={setSelectedDecisionId}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </tbody>
+              </table>
+            </div>
+            {!decisionFilter && decisions.length < decisionsTotal && (
+              <div className="border-t border-gray-100 px-5 py-3 flex items-center justify-between text-xs text-gray-500">
+                <span>Showing {decisions.length} of {decisionsTotal}</span>
+                <button
+                  onClick={() => setDecisionLimit((l) => l + 100)}
+                  className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Load more ({decisionsTotal - decisions.length} remaining)
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -871,7 +970,17 @@ export default function AzureSecurityAgentPage() {
                       <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.decisions_made}</td>
                       <td className={`px-3 py-2 text-xs text-right ${(r.skips ?? 0) > 0 ? "text-amber-600 font-medium" : "text-gray-700"}`}>{r.skips ?? 0}</td>
                       <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.actions_queued}</td>
-                      <td className="px-3 py-2 text-xs text-red-600 max-w-xs truncate" title={r.error}>{r.error || "—"}</td>
+                      <td className="px-3 py-2 text-xs max-w-xs">
+                        {r.error ? (
+                          <button
+                            className="text-red-600 underline decoration-dotted text-left truncate block max-w-xs"
+                            title="Click to view full error"
+                            onClick={() => setExpandedError(r.error)}
+                          >
+                            {r.error}
+                          </button>
+                        ) : <span className="text-gray-400">—</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -941,6 +1050,28 @@ export default function AzureSecurityAgentPage() {
         </div>
       )}
 
+      {/* Error expand modal */}
+      {expandedError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setExpandedError(null)}>
+          <div className="w-full max-w-2xl rounded-xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3">
+              <h3 className="text-sm font-semibold text-red-700">Run Error</h3>
+              <button
+                onClick={() => setExpandedError(null)}
+                className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/>
+                </svg>
+              </button>
+            </div>
+            <pre className="max-h-96 overflow-y-auto px-5 py-4 text-xs text-red-800 whitespace-pre-wrap break-all font-mono bg-red-50 rounded-b-xl">
+              {expandedError}
+            </pre>
+          </div>
+        </div>
+      )}
+
       {/* Detail drawer */}
       {selectedDecisionId && (
         <AlertDetailDrawer
@@ -952,6 +1083,7 @@ export default function AzureSecurityAgentPage() {
           onUnisolate={(id) => { unisolateMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onUnrestrict={(id) => { unrestrictMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onForceInvestigate={(id) => { forceInvestigateMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
+          onExecuteNow={(id) => { executeNowMutation.mutate(id); }}
         />
       )}
     </div>
