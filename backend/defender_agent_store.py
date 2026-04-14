@@ -69,6 +69,7 @@ class DefenderAgentStore:
                     alerts_new      INTEGER NOT NULL DEFAULT 0,
                     decisions_made  INTEGER NOT NULL DEFAULT 0,
                     actions_queued  INTEGER NOT NULL DEFAULT 0,
+                    skips           INTEGER NOT NULL DEFAULT 0,
                     error           TEXT    NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS idx_defender_runs_started
@@ -109,6 +110,13 @@ class DefenderAgentStore:
                 """
             )
             conn.commit()
+
+        # Idempotent migrations for existing DBs
+        try:
+            conn.execute("ALTER TABLE defender_agent_runs ADD COLUMN skips INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+        except Exception:
+            pass  # column already exists
 
     # -------------------------------------------------------------------------
     # Config
@@ -185,6 +193,7 @@ class DefenderAgentStore:
         alerts_new: int,
         decisions_made: int,
         actions_queued: int,
+        skips: int = 0,
         error: str = "",
     ) -> None:
         p = self._placeholder()
@@ -197,10 +206,11 @@ class DefenderAgentStore:
                        alerts_new    = {p},
                        decisions_made = {p},
                        actions_queued = {p},
+                       skips         = {p},
                        error         = {p}
                  WHERE run_id = {p}
                 """,
-                (_now(), alerts_fetched, alerts_new, decisions_made, actions_queued, error, run_id),
+                (_now(), alerts_fetched, alerts_new, decisions_made, actions_queued, skips, error, run_id),
             )
             conn.commit()
 

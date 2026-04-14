@@ -185,7 +185,11 @@ _RULES: list[dict[str, Any]] = [
     },
     # T3 — persistence mechanisms
     {
-        "title_keywords": ("persistence", "scheduled task", "startup folder", "registry run key"),
+        "title_keywords": (
+            "persistence", "scheduled task", "startup folder", "registry run key",
+            "suspicious service", "autorun entry", "lsa notification", "boot execute",
+            "auto start extensibility", "winlogon helper", "image file execution options",
+        ),
         "min_severity": "high",
         "tier": 3,
         "decision": "recommend",
@@ -259,6 +263,156 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "collect_investigation_package",
         "reason": "Complex attack pattern detected; collecting forensic investigation package.",
     },
+    # --- Email / Collaboration threats ---
+    # T2 — inbox rule manipulation / email forwarding abuse
+    {
+        "title_keywords": (
+            "inbox rule", "mailbox forwarding", "email forwarding rule",
+            "suspicious forwarding", "auto-forward", "suspicious inbox manipulation",
+        ),
+        "min_severity": "medium",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "disable_sign_in",
+        "reason": "Attacker-created inbox rule or forwarding detected; disabling sign-in to cut persistent access.",
+    },
+    # T2 — BEC / email impersonation
+    {
+        "title_keywords": (
+            "business email compromise", "bec attack", "email impersonation",
+            "account impersonation", "lookalike domain",
+        ),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "disable_sign_in",
+        "reason": "Business email compromise / impersonation detected; disabling sign-in pending investigation.",
+    },
+    # T1 — email-delivered malware / phishing link clicked
+    {
+        "title_keywords": (
+            "email messages containing malicious", "malware campaign detected after delivery",
+            "phishing click", "user clicked phishing", "malicious attachment opened",
+        ),
+        "min_severity": "medium",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "revoke_sessions",
+        "reason": "Email-delivered malware or phishing link clicked; revoking sessions immediately.",
+    },
+    # --- Endpoint technique gaps ---
+    # T1 — process injection / code injection (title OR category match)
+    {
+        "title_keywords": (
+            "process injection", "code injection", "process hollowing",
+            "dll injection", "reflective dll", "memory injection",
+        ),
+        "category_keywords": ("Exploitation",),
+        "min_severity": "high",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "start_investigation",
+        "reason": "Process/code injection technique detected; triggering MDE automated investigation.",
+    },
+    # T2 — DLL hijacking / side-loading
+    {
+        "title_keywords": (
+            "dll hijacking", "dll side-loading", "dll planting",
+            "dll search order hijacking", "dll preloading",
+        ),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "start_investigation",
+        "reason": "DLL hijacking/side-loading technique detected; investigation queued.",
+    },
+    # T2 — WMI / DCOM / PSExec lateral movement
+    {
+        "title_keywords": (
+            "wmi lateral movement", "dcom lateral movement", "suspicious wmi",
+            "wmi persistence", "psexec", "remote execution via wmi",
+        ),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "isolate_device",
+        "reason": "WMI/DCOM/PSExec lateral movement detected; isolating device to contain spread.",
+    },
+    # T1 — malicious Office macro / script
+    {
+        "title_keywords": (
+            "malicious macro", "suspicious macro", "malicious office",
+            "vba macro", "office document malware", "malicious script in office",
+        ),
+        "min_severity": "medium",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "run_av_scan",
+        "reason": "Malicious Office macro/script detected; triggering full AV scan.",
+    },
+    # T1 — malicious browser extension / modifier
+    {
+        "title_keywords": (
+            "malicious browser extension", "browser modifier",
+            "browser plugin malware", "browser hijack", "adware detected",
+        ),
+        "min_severity": "medium",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "run_av_scan",
+        "reason": "Malicious browser extension/modifier detected; triggering full AV scan.",
+    },
+    # --- Reconnaissance / discovery ---
+    # T2 — network scan / port scan / recon
+    {
+        "title_keywords": (
+            "network scan", "port scan", "port scanning", "network reconnaissance",
+            "network enumeration", "host discovery",
+        ),
+        "min_severity": "medium",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "collect_investigation_package",
+        "reason": "Network reconnaissance/scanning detected; collecting forensic package for analysis.",
+    },
+    # T2 — LDAP / account enumeration / user discovery
+    {
+        "title_keywords": (
+            "ldap enumeration", "account enumeration", "directory enumeration",
+            "user discovery", "group enumeration", "active directory reconnaissance",
+        ),
+        "min_severity": "medium",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "collect_investigation_package",
+        "reason": "Directory/account enumeration detected; collecting investigation package.",
+    },
+    # --- High-impact CVE exploitation ---
+    # T2 — named critical exploits → isolate immediately
+    {
+        "title_keywords": (
+            "proxyshell", "proxylogon", "log4shell", "log4j",
+            "eternalblue", "printspooler", "follina", "zerologon",
+            "exchange exploitation", "rce via", "remote code execution via",
+        ),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "isolate_device",
+        "reason": "High-impact CVE exploitation detected; isolating device immediately.",
+    },
+    # T3 — confirmed account compromise → recommend password reset
+    {
+        "title_keywords": (
+            "account compromise", "credential compromised", "account takeover",
+            "stolen credentials used", "token replay", "session token abuse",
+        ),
+        "min_severity": "high",
+        "tier": 3,
+        "decision": "recommend",
+        "action_type": "reset_password",
+        "reason": "Confirmed account compromise; password reset recommended — requires human approval.",
+    },
     # --- Red Canary parity rules ---
     # T1 — active malicious file execution → stop process and quarantine file immediately
     {
@@ -321,6 +475,16 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "create_block_indicator",
         "reason": "Known malicious file hash detected; creating tenant-wide block indicator.",
     },
+    # --- Catch-all (MUST remain last) ---
+    # No title_keywords / category_keywords = universal match for any alert that
+    # didn't match a specific rule above. T3 recommend so a human reviews it.
+    {
+        "min_severity": "high",
+        "tier": 3,
+        "decision": "recommend",
+        "action_type": "start_investigation",
+        "reason": "Unclassified high/critical alert; manual review and MDE investigation recommended.",
+    },
 ]
 
 
@@ -342,10 +506,15 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
         rule_min = rule.get("min_severity", "high")
         if _SEV_ORDER.get(severity, 0) < _SEV_ORDER.get(rule_min, 3):
             continue
-        # Title keyword match
-        keywords = rule.get("title_keywords", ())
-        if not any(kw in title for kw in keywords):
-            continue
+        # Title / category keyword match (either can satisfy; empty both = catch-all)
+        title_kw = rule.get("title_keywords", ())
+        cat_kw = rule.get("category_keywords", ())
+        if title_kw or cat_kw:
+            category = (alert.get("category") or "").lower()
+            title_match = bool(title_kw) and any(kw in title for kw in title_kw)
+            cat_match = bool(cat_kw) and any(ck.lower() in category for ck in cat_kw)
+            if not title_match and not cat_match:
+                continue
         # Optional service source filter
         svc_filter = rule.get("service_source_contains")
         if svc_filter and not any(s in service_source for s in svc_filter):
@@ -488,6 +657,7 @@ def _run_agent_cycle() -> None:
     alerts_new = 0
     decisions_made = 0
     actions_queued = 0
+    skip_count = 0
 
     try:
         client = AzureClient()
@@ -541,6 +711,8 @@ def _run_agent_cycle() -> None:
                 alert_raw=alert,
             )
             decisions_made += 1
+            if decision_type == "skip":
+                skip_count += 1
 
             # Mark alert inProgress in Defender; set TruePositive verdict for actioned alerts
             if decision_type != "skip":
@@ -633,6 +805,7 @@ def _run_agent_cycle() -> None:
             alerts_new=alerts_new,
             decisions_made=decisions_made,
             actions_queued=actions_queued,
+            skips=skip_count,
         )
 
     except Exception as exc:
@@ -643,6 +816,7 @@ def _run_agent_cycle() -> None:
             alerts_new=alerts_new,
             decisions_made=decisions_made,
             actions_queued=actions_queued,
+            skips=skip_count,
             error=str(exc),
         )
 
@@ -701,6 +875,29 @@ def _dispatch_action(
             )
         except Exception as exc:
             logger.warning("Defender agent: disable_sign_in dispatch failed: %s", exc)
+
+    elif action_type == "reset_password":
+        user_ids = [e["id"] for e in entities if e.get("type") in ("user", "account") and e.get("id")]
+        if not user_ids:
+            logger.info("Defender agent: reset_password — no user IDs in entities, skipping")
+            return []
+        try:
+            user_names = [e.get("name") or e["id"] for e in entities
+                          if e.get("type") in ("user", "account") and e.get("id")]
+            job = user_admin_jobs.create_job(
+                action_type="reset_password",
+                target_user_ids=user_ids,
+                params={"user_names": user_names, "reason": reason, "force_change": True},
+                requested_by_email=_AGENT_EMAIL,
+                requested_by_name=_AGENT_NAME,
+            )
+            job_ids.append(str(job.get("job_id") or ""))
+            logger.info(
+                "Defender agent: queued reset_password for %d user(s) (job %s)",
+                len(user_ids), job_ids[-1],
+            )
+        except Exception as exc:
+            logger.warning("Defender agent: reset_password dispatch failed: %s", exc)
 
     elif action_type == "device_sync":
         device_ids = [e["id"] for e in entities if e.get("type") == "device" and e.get("id")]

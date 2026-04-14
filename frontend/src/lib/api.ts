@@ -1506,6 +1506,7 @@ export interface DefenderAgentRun {
   alerts_new: number;
   decisions_made: number;
   actions_queued: number;
+  skips: number;
   error: string;
 }
 
@@ -3782,6 +3783,9 @@ export const api = {
   },
   unrestrictDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
     return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/unrestrict`, {});
+  },
+  forceInvestigateDecision(decisionId: string): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/force-investigate`, {});
   },
   listDefenderIndicators(): Promise<{ indicators: DefenderIndicator[]; total: number }> {
     return fetchJSON<{ indicators: DefenderIndicator[]; total: number }>(

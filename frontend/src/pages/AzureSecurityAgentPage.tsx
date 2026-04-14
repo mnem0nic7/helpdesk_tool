@@ -65,6 +65,7 @@ const ACTION_LABELS: Record<string, string> = {
   start_investigation:           "Start Investigation",
   create_block_indicator:        "Block IOC",
   unrestrict_app_execution:      "Remove App Restriction",
+  reset_password:                "Reset Password",
 };
 
 const ACTION_COLORS: Record<string, string> = {
@@ -80,6 +81,7 @@ const ACTION_COLORS: Record<string, string> = {
   start_investigation:           "bg-violet-100 text-violet-800",
   create_block_indicator:        "bg-amber-100 text-amber-800",
   unrestrict_app_execution:      "bg-emerald-100 text-emerald-800",
+  reset_password:                "bg-rose-100 text-rose-800",
 };
 
 function fmtAction(d: DefenderAgentDecision): string {
@@ -223,6 +225,7 @@ function AlertDetailDrawer({
   onApprove,
   onUnisolate,
   onUnrestrict,
+  onForceInvestigate,
 }: {
   decisionId: string;
   onClose: () => void;
@@ -231,6 +234,7 @@ function AlertDetailDrawer({
   onApprove: (id: string) => void;
   onUnisolate: (id: string) => void;
   onUnrestrict: (id: string) => void;
+  onForceInvestigate: (id: string) => void;
 }) {
   const { data: d, isLoading } = useQuery({
     queryKey: ["defender-agent-decision", decisionId],
@@ -252,6 +256,7 @@ function AlertDetailDrawer({
   const canApprove = d && d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
   const canUnisolate = d && d.action_type === "isolate_device" && d.job_ids.length > 0 && !d.cancelled && isAdmin;
   const canUnrestrict = d && d.action_type === "restrict_app_execution" && d.job_ids.length > 0 && !d.cancelled && isAdmin;
+  const canForceInvestigate = d && d.decision === "skip" && d.entities.some(e => e.type === "device") && isAdmin;
 
   function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
@@ -415,7 +420,7 @@ function AlertDetailDrawer({
         </div>
 
         {/* Footer actions */}
-        {d && (canCancel || canApprove || canUnisolate || canUnrestrict) && (
+        {d && (canCancel || canApprove || canUnisolate || canUnrestrict || canForceInvestigate) && (
           <div className="border-t border-gray-200 px-6 py-4 flex justify-end gap-3">
             {canCancel && (
               <button
@@ -449,6 +454,19 @@ function AlertDetailDrawer({
                 className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 hover:bg-emerald-100"
               >
                 Remove App Restriction
+              </button>
+            )}
+            {canForceInvestigate && (
+              <button
+                onClick={() => {
+                  if (confirm("Trigger an MDE automated investigation on the device(s) in this alert? This will create a device job.")) {
+                    onForceInvestigate(d.decision_id);
+                    onClose();
+                  }
+                }}
+                className="rounded-lg border border-violet-300 bg-violet-50 px-4 py-2 text-sm text-violet-700 hover:bg-violet-100"
+              >
+                Force Investigate
               </button>
             )}
             {canApprove && (
@@ -611,6 +629,11 @@ export default function AzureSecurityAgentPage() {
 
   const unrestrictMutation = useMutation({
     mutationFn: (id: string) => api.unrestrictDefenderAgentDecision(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }),
+  });
+
+  const forceInvestigateMutation = useMutation({
+    mutationFn: (id: string) => api.forceInvestigateDecision(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }),
   });
 
@@ -831,7 +854,7 @@ export default function AzureSecurityAgentPage() {
               <table className="min-w-full divide-y divide-gray-100 text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    {["Started", "Completed", "Fetched", "New", "Decisions", "Actions", "Error"].map((h) => (
+                    {["Started", "Completed", "Fetched", "New", "Decisions", "Skipped", "Actions", "Error"].map((h) => (
                       <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
                         {h}
                       </th>
@@ -846,6 +869,7 @@ export default function AzureSecurityAgentPage() {
                       <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.alerts_fetched}</td>
                       <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.alerts_new}</td>
                       <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.decisions_made}</td>
+                      <td className={`px-3 py-2 text-xs text-right ${(r.skips ?? 0) > 0 ? "text-amber-600 font-medium" : "text-gray-700"}`}>{r.skips ?? 0}</td>
                       <td className="px-3 py-2 text-xs text-gray-700 text-right">{r.actions_queued}</td>
                       <td className="px-3 py-2 text-xs text-red-600 max-w-xs truncate" title={r.error}>{r.error || "—"}</td>
                     </tr>
@@ -927,6 +951,7 @@ export default function AzureSecurityAgentPage() {
           onApprove={(id) => { approveMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onUnisolate={(id) => { unisolateMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onUnrestrict={(id) => { unrestrictMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
+          onForceInvestigate={(id) => { forceInvestigateMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
         />
       )}
     </div>

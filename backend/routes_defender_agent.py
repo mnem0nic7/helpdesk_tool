@@ -254,6 +254,52 @@ def unisolate_decision_device(
     return row
 
 
+@router.post("/decisions/{decision_id}/force-investigate", response_model=DefenderAgentDecisionItem)
+def force_investigate_decision(
+    decision_id: str,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    """Manually trigger start_investigation on device(s) from a skipped decision (admin only)."""
+    _ensure_azure_site()
+    row = defender_agent_store.get_decision(decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    if row.get("decision") != "skip":
+        raise HTTPException(status_code=400, detail="Only skipped decisions can be force-investigated")
+
+    from security_device_jobs import security_device_jobs as sdj
+
+    device_ids = [
+        e["id"] for e in (row.get("entities") or [])
+        if e.get("type") == "device" and e.get("id")
+    ]
+    if not device_ids:
+        raise HTTPException(status_code=400, detail="No MDE device entities in this decision")
+
+    device_names = [
+        e.get("name") or e["id"] for e in (row.get("entities") or [])
+        if e.get("type") == "device" and e.get("id")
+    ]
+    try:
+        sdj.create_job(
+            action_type="start_investigation",
+            device_ids=device_ids,
+            reason=f"Force-investigated by {_session.get('email')} from skipped decision {decision_id}",
+            params={
+                "device_names": device_names,
+                "reason": f"Manual escalation of skipped alert: {row.get('alert_title', '')}",
+            },
+            confirm_device_count=None,
+            confirm_device_names=None,
+            requested_by_email=str(_session.get("email") or ""),
+            requested_by_name=str(_session.get("name") or ""),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return row
+
+
 # ---------------------------------------------------------------------------
 # Summary (for security workspace hub)
 # ---------------------------------------------------------------------------
