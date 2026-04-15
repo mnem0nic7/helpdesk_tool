@@ -721,19 +721,36 @@ def _get_model_provider(model_id: str, *, ollama_runtime: str = "default") -> st
 
 
 def extract_adf_text(adf: dict | None) -> str:
-    """Recursively walk Atlassian Document Format and extract plain text."""
+    """Recursively walk Atlassian Document Format and extract plain text.
+
+    Preserves line structure:
+      - hardBreak nodes become \\n (single newline within a paragraph)
+      - doc-level blocks (paragraphs, headings, etc.) are separated by \\n\\n
+    This round-trips cleanly with _plain_text_to_adf().
+    """
     if not adf or not isinstance(adf, dict):
         return ""
 
-    parts: list[str] = []
+    node_type = adf.get("type", "")
 
-    if adf.get("type") == "text":
-        parts.append(adf.get("text", ""))
+    if node_type == "hardBreak":
+        return "\n"
+    if node_type == "text":
+        return adf.get("text", "")
 
-    for child in adf.get("content", []):
-        parts.append(extract_adf_text(child))
+    children = adf.get("content") or []
 
-    return "".join(parts)
+    if node_type == "doc":
+        # Join top-level blocks with a blank line between them.
+        block_texts = []
+        for child in children:
+            bt = extract_adf_text(child)
+            if bt:
+                block_texts.append(bt)
+        return "\n\n".join(block_texts)
+
+    # paragraph, heading, listItem, codeBlock, blockquote, etc.
+    return "".join(extract_adf_text(child) for child in children)
 
 
 # ---------------------------------------------------------------------------
