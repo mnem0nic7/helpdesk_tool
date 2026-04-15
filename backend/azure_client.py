@@ -1665,21 +1665,32 @@ Resources
         lookback_hours: int = 48,
         top: int = 200,
     ) -> list[dict[str, Any]]:
-        """Poll Graph /security/alerts_v2 for recent Defender alerts."""
-        since = (
-            datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        filter_parts = [f"createdDateTime ge {since}"]
+        """Poll Graph /security/alerts_v2 for recent Defender alerts.
+
+        NOTE: alerts_v2 does not reliably support OData $filter on createdDateTime
+        (Graph returns 500 on this tenant). We fetch the most recent `top` alerts
+        and let callers filter by date/severity client-side.
+        """
+        filter_parts: list[str] = []
         if severities:
             quoted = ", ".join(f"'{s}'" for s in severities)
             filter_parts.append(f"severity in ({quoted})")
         params: dict[str, Any] = {
-            "$filter": " and ".join(filter_parts),
             "$select": ",".join(self._SECURITY_ALERT_SELECT),
             "$top": str(min(top, 999)),
         }
+        if filter_parts:
+            params["$filter"] = " and ".join(filter_parts)
         try:
-            return self.graph_paged_get("security/alerts_v2", params=params)
+            alerts = self.graph_paged_get("security/alerts_v2", params=params)
+            # Client-side recency filter as a fallback for the missing server-side one
+            if lookback_hours:
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+                alerts = [
+                    a for a in alerts
+                    if (self._parse_datetime(a.get("createdDateTime", "")) or datetime.min.replace(tzinfo=timezone.utc)) >= cutoff
+                ]
+            return alerts
         except AzureApiError as exc:
             logger.warning("list_security_alerts failed: %s", exc)
             return []
