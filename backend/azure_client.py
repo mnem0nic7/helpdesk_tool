@@ -1655,7 +1655,8 @@ Resources
         "createdDateTime", "lastUpdateDateTime",
         "serviceSource", "detectionSource", "productName",
         "description", "recommendedActions",
-        "evidence", "incidentId",
+        "incidentId",
+        # NOTE: "evidence" causes Graph alerts_v2 to return 500 on this tenant
     ]
 
     def list_security_alerts(
