@@ -662,7 +662,7 @@ def _run_agent_cycle() -> None:
     try:
         client = AzureClient()
         alerts = client.list_security_alerts(
-            severities=["informational", "low", "medium", "high", "critical"],
+            severities=["informational", "low", "medium", "high"],
             lookback_hours=48,
             top=200,
         )
