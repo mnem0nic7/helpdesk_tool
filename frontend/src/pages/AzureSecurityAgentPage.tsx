@@ -758,6 +758,8 @@ export default function AzureSecurityAgentPage() {
 
   const filteredDecisions = useMemo(() => {
     if (!decisionFilter) return decisions;
+    if (decisionFilter === "action_recommended")
+      return decisions.filter((d) => d.decision !== "skip");
     return decisions.filter((d) => d.decision === decisionFilter);
   }, [decisions, decisionFilter]);
 
@@ -863,6 +865,7 @@ export default function AzureSecurityAgentPage() {
               className="rounded-md border border-gray-300 px-2 py-1 text-xs"
             >
               <option value="">All decisions</option>
+              <option value="action_recommended">Action Recommended</option>
               <option value="execute">T1 Immediate</option>
               <option value="queue">T2 Queued</option>
               <option value="recommend">T3 Recommend</option>
