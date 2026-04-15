@@ -108,6 +108,20 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "disable_sign_in",
         "reason": "Lateral movement technique detected; sign-in disable queued with cancellation window.",
     },
+    # T1 — MDO confirmed malicious URL click (RC-6) — takes priority over generic phishing T2
+    {
+        "title_keywords": (
+            "malicious url click", "clicked malicious url", "url click blocked",
+            "user clicked on malicious", "confirmed malicious click",
+            "clicks on a malicious", "url detonation",
+        ),
+        "service_source_contains": ("office365", "mdo", "microsoftdefenderforoffice"),
+        "min_severity": "high",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "revoke_sessions",
+        "reason": "MDO confirmed malicious URL click (high severity); revoking sessions immediately.",
+    },
     # T2 — phishing / malicious link
     {
         "title_keywords": ("phishing", "suspicious email", "suspicious link click", "malicious url"),
@@ -139,6 +153,29 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "revoke_sessions",
         "reason": "AiTM phishing / session-hijacking detected; revoking active sessions pending investigation.",
     },
+    # T1/T2 — anomalous token activity (RC-7)
+    {
+        "title_keywords": (
+            "anomalous token", "token anomaly", "unusual token", "suspicious token",
+            "token issuer anomaly", "atypical token",
+        ),
+        "min_severity": "high",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "revoke_sessions",
+        "reason": "Anomalous token activity (high severity); revoking active sessions immediately.",
+    },
+    {
+        "title_keywords": (
+            "anomalous token", "token anomaly", "unusual token", "suspicious token",
+            "token issuer anomaly", "atypical token",
+        ),
+        "min_severity": "medium",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "disable_sign_in",
+        "reason": "Anomalous token activity (medium severity); sign-in disable queued with cancellation window.",
+    },
     # T2 — suspicious OAuth / app consent
     {
         "title_keywords": ("suspicious oauth", "risky oauth", "oauth application", "app granted permissions"),
@@ -147,6 +184,21 @@ _RULES: list[dict[str, Any]] = [
         "decision": "queue",
         "action_type": "disable_sign_in",
         "reason": "Suspicious OAuth app consent detected; sign-in disable queued with cancellation window.",
+    },
+    # T2 — MCAS / Defender for Cloud Apps behavioral anomaly → account lockout (RC-8)
+    {
+        "title_keywords": (
+            "suspicious cloud activity", "mass download", "unusual admin activity",
+            "cloud app anomaly", "suspicious app access", "activity from anonymous ip",
+            "activity from suspicious ip", "ransomware activity in cloud",
+            "cloud storage data exfiltration", "unusual file download",
+        ),
+        "service_source_contains": ("cloudappsecurity", "microsoftcloudappsecurity", "defenderforcloud"),
+        "min_severity": "medium",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "account_lockout",
+        "reason": "MCAS/Defender for Cloud Apps behavioral anomaly; account lockout (revoke + disable) queued.",
     },
     # T1 — cryptominer (non-destructive policy sync sufficient)
     {
@@ -264,7 +316,19 @@ _RULES: list[dict[str, Any]] = [
         "reason": "Complex attack pattern detected; collecting forensic investigation package.",
     },
     # --- Email / Collaboration threats ---
-    # T2 — inbox rule manipulation / email forwarding abuse
+    # T1 — HIGH-severity inbox manipulation → revoke sessions immediately (RC-20 upgrade)
+    {
+        "title_keywords": (
+            "inbox rule", "mailbox forwarding", "email forwarding rule",
+            "suspicious forwarding", "auto-forward", "suspicious inbox manipulation",
+        ),
+        "min_severity": "high",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "revoke_sessions",
+        "reason": "High-severity inbox manipulation detected; revoking sessions immediately to cut attacker access.",
+    },
+    # T2 — inbox rule manipulation / email forwarding abuse (medium severity)
     {
         "title_keywords": (
             "inbox rule", "mailbox forwarding", "email forwarding rule",
@@ -474,6 +538,19 @@ _RULES: list[dict[str, Any]] = [
         "decision": "queue",
         "action_type": "create_block_indicator",
         "reason": "Known malicious file hash detected; creating tenant-wide block indicator.",
+    },
+    # T2 — known threat actor families → isolate endpoint (RC-17)
+    {
+        "title_keywords": (
+            "qbot", "qakbot", "gamarue", "andromeda botnet",
+            "socgholish", "fakeupdates", "impacket",
+            "chromeloader", "raspberry robin", "charcoal stork", "smashjacker",
+        ),
+        "min_severity": "medium",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "isolate_device",
+        "reason": "Known threat actor family (RC-17) detected on endpoint; isolating device to contain spread.",
     },
     # --- Catch-all (MUST remain last) ---
     # No title_keywords / category_keywords = universal match for any alert that
@@ -874,6 +951,29 @@ def _dispatch_action(
             )
         except Exception as exc:
             logger.warning("Defender agent: disable_sign_in dispatch failed: %s", exc)
+
+    elif action_type == "account_lockout":
+        # Composite: revoke active sessions AND disable sign-in simultaneously
+        user_ids = [e["id"] for e in entities if e.get("type") == "user" and e.get("id")]
+        if not user_ids:
+            logger.info("Defender agent: account_lockout — no user IDs in entities, skipping")
+            return []
+        for at in ("revoke_sessions", "disable_sign_in"):
+            try:
+                job = user_admin_jobs.create_job(
+                    action_type=at,
+                    target_user_ids=user_ids,
+                    params=None,
+                    requested_by_email=_AGENT_EMAIL,
+                    requested_by_name=_AGENT_NAME,
+                )
+                job_ids.append(str(job.get("job_id") or ""))
+                logger.info(
+                    "Defender agent: account_lockout — queued %s for %d user(s) (job %s)",
+                    at, len(user_ids), job_ids[-1],
+                )
+            except Exception as exc:
+                logger.warning("Defender agent: account_lockout/%s dispatch failed: %s", at, exc)
 
     elif action_type == "reset_password":
         user_ids = [e["id"] for e in entities if e.get("type") in ("user", "account") and e.get("id")]
