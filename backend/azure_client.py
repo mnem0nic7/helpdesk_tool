@@ -1677,7 +1677,6 @@ Resources
             "$filter": " and ".join(filter_parts),
             "$select": ",".join(self._SECURITY_ALERT_SELECT),
             "$top": str(min(top, 999)),
-            "$orderby": "createdDateTime desc",
         }
         try:
             return self.graph_paged_get("security/alerts_v2", params=params)
