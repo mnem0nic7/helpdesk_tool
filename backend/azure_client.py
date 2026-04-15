@@ -1672,26 +1672,21 @@ Resources
         (Graph returns 500 on this tenant). We fetch the most recent `top` alerts
         and let callers filter by date/severity client-side.
         """
-        filter_parts: list[str] = []
+        since = (
+            datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        filter_parts = [f"createdDateTime ge {since}"]
         if severities:
             quoted = ", ".join(f"'{s}'" for s in severities)
             filter_parts.append(f"severity in ({quoted})")
         params: dict[str, Any] = {
+            "$filter": " and ".join(filter_parts),
             "$select": ",".join(self._SECURITY_ALERT_SELECT),
             "$top": str(min(top, 999)),
+            "$orderby": "createdDateTime desc",
         }
-        if filter_parts:
-            params["$filter"] = " and ".join(filter_parts)
         try:
-            alerts = self.graph_paged_get("security/alerts_v2", params=params)
-            # Client-side recency filter as a fallback for the missing server-side one
-            if lookback_hours:
-                cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-                alerts = [
-                    a for a in alerts
-                    if (self._parse_datetime(a.get("createdDateTime", "")) or datetime.min.replace(tzinfo=timezone.utc)) >= cutoff
-                ]
-            return alerts
+            return self.graph_paged_get("security/alerts_v2", params=params)
         except AzureApiError as exc:
             logger.warning("list_security_alerts failed: %s", exc)
             return []
