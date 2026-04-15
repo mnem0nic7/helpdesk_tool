@@ -1669,8 +1669,7 @@ Resources
         since = (
             datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        # Build OData filter — datetime must be quoted for Graph alerts_v2
-        filter_parts = [f"createdDateTime ge '{since}'"]
+        filter_parts = [f"createdDateTime ge {since}"]
         if severities:
             quoted = ", ".join(f"'{s}'" for s in severities)
             filter_parts.append(f"severity in ({quoted})")
