@@ -1260,7 +1260,7 @@ class AzureCache:
     def _refresh_security_alerts(self) -> None:
         try:
             alerts = self._client.list_security_alerts(
-                severities=["high", "critical"],
+                severities=["high"],
                 lookback_hours=48,
             )
             self._update_snapshots({"security_alerts_recent": alerts})
