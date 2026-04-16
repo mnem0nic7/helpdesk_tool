@@ -109,6 +109,7 @@ Run from repo root before committing or releasing:
 - Redis is used for shared runtime state and coordination.
 - SQLite files under `data/` still exist for local persistence and dual-write compatibility.
 - DuckDB is used for Azure FinOps reporting data. In blue/green Docker mode, default each runtime color to its own DuckDB file unless `AZURE_FINOPS_DUCKDB_PATH` is explicitly overridden on purpose.
+- **Postgres schema migrations**: every new table or column added to any store must have a matching numbered `.sql` file in `backend/storage_migrations/`. Files are auto-applied on startup via `ensure_postgres_schema()`. Use `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS` for idempotency. Use `SMALLINT` for boolean columns. Create migration files in the same commit as the SQLite schema change — not after. Missing migrations cause `relation "..." does not exist` errors in production.
 
 ## Site Scopes
 
