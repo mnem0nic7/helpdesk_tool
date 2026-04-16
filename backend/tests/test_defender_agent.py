@@ -1208,3 +1208,149 @@ def test_confidence_no_downgrade_when_min_confidence_zero():
     # Should remain unchanged (T1 execute)
     assert tier == 1
     assert decision_type == "execute"
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 — Entity enrichment
+# ---------------------------------------------------------------------------
+
+
+def _fake_user(
+    uid: str = "user-1",
+    upn: str = "ada@example.com",
+    enabled: bool = True,
+    job_title: str = "Engineer",
+    department: str = "IT",
+    priority_band: str = "P2",
+    last_interactive_utc: str = "2026-04-15T10:00:00Z",
+) -> dict:
+    return {
+        "id": uid,
+        "principal_name": upn,
+        "enabled": enabled,
+        "extra": {
+            "job_title": job_title,
+            "department": department,
+            "priority_band": priority_band,
+            "last_interactive_utc": last_interactive_utc,
+        },
+    }
+
+
+def _fake_device(
+    did: str = "dev-aad-1",
+    name: str = "Laptop-001",
+    compliance_state: str = "compliant",
+    os: str = "Windows",
+    last_sync: str = "2026-04-15T08:00:00Z",
+) -> dict:
+    return {
+        "azure_ad_device_id": did,
+        "device_name": name,
+        "compliance_state": compliance_state,
+        "operating_system": os,
+        "last_sync_date_time": last_sync,
+    }
+
+
+def _build_indexes(users: list, devices: list) -> tuple:
+    """Build user_index and device_index from fake records (mirrors _build_entity_indexes logic)."""
+    user_index: dict = {}
+    device_index: dict = {}
+    for u in users:
+        uid = str(u.get("id") or "").lower()
+        upn = str(u.get("principal_name") or "").lower()
+        if uid:
+            user_index[uid] = u
+        if upn:
+            user_index[upn] = u
+    for d in devices:
+        did = str(d.get("azure_ad_device_id") or d.get("id") or "").lower()
+        dname = str(d.get("device_name") or "").lower()
+        if did:
+            device_index[did] = d
+        if dname:
+            device_index[dname] = d
+    return user_index, device_index
+
+
+def test_enrich_user_entity_by_id():
+    """User entity enriched with profile data via user ID lookup."""
+    user = _fake_user(uid="user-1", upn="ada@example.com")
+    u_idx, d_idx = _build_indexes([user], [])
+    entities = [{"type": "user", "id": "user-1", "name": "ada@example.com"}]
+    result = defender_agent._enrich_entities(entities, u_idx, d_idx)
+    assert len(result) == 1
+    e = result[0]
+    assert e["enabled"] is True
+    assert e["job_title"] == "Engineer"
+    assert e["department"] == "IT"
+    assert e["priority_band"] == "P2"
+    assert "2026-04-15" in e["last_sign_in"]
+
+
+def test_enrich_user_entity_disabled_flag():
+    """Disabled user account is reflected in enriched entity."""
+    user = _fake_user(uid="user-dis", upn="bob@example.com", enabled=False)
+    u_idx, d_idx = _build_indexes([user], [])
+    entities = [{"type": "user", "id": "user-dis", "name": "bob@example.com"}]
+    result = defender_agent._enrich_entities(entities, u_idx, d_idx)
+    assert result[0]["enabled"] is False
+
+
+def test_enrich_device_entity():
+    """Device entity enriched with compliance state and OS."""
+    device = _fake_device(did="dev-aad-1", name="Laptop-001", compliance_state="noncompliant", os="Windows")
+    u_idx, d_idx = _build_indexes([], [device])
+    entities = [{"type": "device", "id": "dev-aad-1", "name": "Laptop-001"}]
+    result = defender_agent._enrich_entities(entities, u_idx, d_idx)
+    assert len(result) == 1
+    e = result[0]
+    assert e["compliance_state"] == "noncompliant"
+    assert e["os"] == "Windows"
+    assert "2026-04-15" in e["last_sync"]
+
+
+def test_enrich_entity_no_match_leaves_original():
+    """Entity with no cache match is returned unchanged (no extra keys added)."""
+    u_idx, d_idx = _build_indexes([], [])
+    entities = [{"type": "user", "id": "unknown-user", "name": "ghost@example.com"}]
+    result = defender_agent._enrich_entities(entities, u_idx, d_idx)
+    assert result[0] == {"type": "user", "id": "unknown-user", "name": "ghost@example.com"}
+
+
+def test_enrich_mixed_entities():
+    """Mixed user+device list is enriched correctly in one pass."""
+    user = _fake_user(uid="user-mix", upn="mix@example.com", priority_band="P0")
+    device = _fake_device(did="dev-mix", name="PC-mix", compliance_state="compliant")
+    u_idx, d_idx = _build_indexes([user], [device])
+    entities = [
+        {"type": "user", "id": "user-mix", "name": "mix@example.com"},
+        {"type": "device", "id": "dev-mix", "name": "PC-mix"},
+    ]
+    result = defender_agent._enrich_entities(entities, u_idx, d_idx)
+    assert result[0]["priority_band"] == "P0"
+    assert result[1]["compliance_state"] == "compliant"
+
+
+def test_enrich_entities_empty_list():
+    """Empty entity list returns empty list."""
+    u_idx, d_idx = _build_indexes([], [])
+    assert defender_agent._enrich_entities([], u_idx, d_idx) == []
+
+
+def test_build_entity_indexes_returns_empty_on_cache_miss(monkeypatch):
+    """_build_entity_indexes returns empty dicts if cache raises."""
+    import azure_cache as ac_module
+
+    class BrokenCache:
+        def list_directory_objects(self, *args, **kwargs):
+            raise RuntimeError("cache unavailable")
+
+    monkeypatch.setattr(ac_module, "azure_cache", BrokenCache())
+    import importlib
+    import defender_agent as da
+    monkeypatch.setattr(da, "azure_cache", BrokenCache())
+    u_idx, d_idx = da._build_entity_indexes()
+    assert u_idx == {}
+    assert d_idx == {}

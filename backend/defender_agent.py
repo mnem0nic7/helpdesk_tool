@@ -31,6 +31,7 @@ from config import (
     DEFENDER_AGENT_TEAMS_NOTIFY_T2,
     DEFENDER_AGENT_TEAMS_WEBHOOK_URL,
 )
+from azure_cache import azure_cache
 
 logger = logging.getLogger(__name__)
 
@@ -925,6 +926,94 @@ def _extract_entities(alert: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Entity enrichment
+# ---------------------------------------------------------------------------
+
+def _build_entity_indexes() -> tuple[dict[str, dict], dict[str, dict]]:
+    """Build in-memory lookup indexes from the Azure cache for the current cycle.
+
+    Returns (user_index, device_index) where:
+      user_index   maps lowercase user_id → user_record  AND  lowercase UPN → user_record
+      device_index maps lowercase device_id → device_record  AND  lowercase name → device_record
+
+    Built once per cycle and passed to _enrich_entities to avoid repeated cache reads.
+    """
+    user_index: dict[str, dict] = {}
+    device_index: dict[str, dict] = {}
+    try:
+        for u in (azure_cache.list_directory_objects("users") or []):
+            uid = str(u.get("id") or "").lower()
+            upn = str(u.get("principal_name") or "").lower()
+            if uid:
+                user_index[uid] = u
+            if upn:
+                user_index[upn] = u
+        for d in (azure_cache.list_directory_objects("managed_devices") or []):
+            did = str(d.get("azure_ad_device_id") or d.get("id") or "").lower()
+            dname = str(d.get("device_name") or "").lower()
+            if did:
+                device_index[did] = d
+            if dname:
+                device_index[dname] = d
+    except Exception:
+        pass
+    return user_index, device_index
+
+
+def _enrich_entities(
+    entities: list[dict[str, Any]],
+    user_index: dict[str, dict],
+    device_index: dict[str, dict],
+) -> list[dict[str, Any]]:
+    """Return entities with additional context fields from the Azure cache.
+
+    Fields added for user entities:
+      enabled       (bool)   — accountEnabled
+      job_title     (str)    — from extra.job_title
+      department    (str)    — from extra.department
+      priority_band (str)    — account risk tier (P0–P3 or unknown)
+      last_sign_in  (str)    — last_interactive_utc from signInActivity
+
+    Fields added for device entities:
+      compliance_state (str) — compliant / noncompliant / unknown / …
+      os               (str) — operating_system
+      last_sync        (str) — last_sync_date_time ISO string
+
+    Any lookup failure is silently swallowed — enrichment is best-effort.
+    """
+    enriched: list[dict[str, Any]] = []
+    for entity in entities:
+        e = dict(entity)
+        try:
+            if e.get("type") == "user":
+                key = (str(e.get("id") or "").lower() or
+                       str(e.get("name") or "").lower())
+                rec = user_index.get(key)
+                if rec:
+                    extra = rec.get("extra") or {}
+                    e["enabled"] = bool(rec.get("enabled", True))
+                    e["job_title"] = str(extra.get("job_title") or "")
+                    e["department"] = str(extra.get("department") or "")
+                    e["priority_band"] = str(extra.get("priority_band") or "")
+                    e["last_sign_in"] = str(
+                        extra.get("last_interactive_utc") or
+                        extra.get("last_successful_utc") or ""
+                    )
+            elif e.get("type") == "device":
+                key = (str(e.get("id") or "").lower() or
+                       str(e.get("name") or "").lower())
+                rec = device_index.get(key)
+                if rec:
+                    e["compliance_state"] = str(rec.get("compliance_state") or "")
+                    e["os"] = str(rec.get("operating_system") or "")
+                    e["last_sync"] = str(rec.get("last_sync_date_time") or "")
+        except Exception:
+            pass
+        enriched.append(e)
+    return enriched
+
+
+# ---------------------------------------------------------------------------
 # Teams notification helper (sync — runs in executor thread)
 # ---------------------------------------------------------------------------
 
@@ -1126,12 +1215,15 @@ def _run_agent_cycle() -> None:
             if dedup_minutes > 0 else []
         )
 
+        # Build entity enrichment indexes once per cycle (best-effort, never raises)
+        _user_index, _device_index = _build_entity_indexes()
+
         for alert in new_alerts:
             alert_id = alert.get("id", uuid.uuid4().hex)
             alert_title = str(alert.get("title") or "")
             alert_severity = str(alert.get("severity") or "")
             alert_service_source = str(alert.get("serviceSource") or "")
-            entities = _extract_entities(alert)
+            entities = _enrich_entities(_extract_entities(alert), _user_index, _device_index)
 
             mitre_techniques = _extract_mitre_techniques(alert)
 
