@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { DefenderAgentConfig, DefenderAgentDecision, DefenderAgentDispositionStats, DefenderAgentSuppression, DefenderSuppressionType } from "../lib/api.ts";
+import type { DefenderAgentConfig, DefenderAgentDecision, DefenderAgentDispositionStats, DefenderAgentEntityTimeline, DefenderAgentSuppression, DefenderSuppressionType } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 // ---------------------------------------------------------------------------
@@ -280,7 +280,13 @@ function priorityBandColor(band: string | undefined): string {
   }
 }
 
-function EntityChips({ entities }: { entities: DefenderAgentDecision["entities"] }) {
+function EntityChips({
+  entities,
+  onEntityClick,
+}: {
+  entities: DefenderAgentDecision["entities"];
+  onEntityClick?: (entityId: string, entityName: string) => void;
+}) {
   if (!entities.length) return null;
   const shown = entities.slice(0, 2);
   const overflow = entities.length - shown.length;
@@ -293,11 +299,13 @@ function EntityChips({ entities }: { entities: DefenderAgentDecision["entities"]
           e.compliance_state ? `Compliance: ${e.compliance_state}` : "",
           e.enabled === false ? "DISABLED" : "",
         ].filter(Boolean).join(" | ");
+        const entityLookupKey = e.id || e.name;
         return (
           <span
             key={i}
-            className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600"
-            title={tooltip || `${e.type}: ${e.id}`}
+            className={`inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600 ${onEntityClick ? "cursor-pointer hover:bg-gray-200" : ""}`}
+            title={onEntityClick ? `${tooltip} — click to view timeline` : tooltip || `${e.type}: ${e.id}`}
+            onClick={onEntityClick && entityLookupKey ? (ev) => { ev.stopPropagation(); onEntityClick(entityLookupKey, e.name || e.id); } : undefined}
           >
             {e.type === "user" ? (
               <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
@@ -335,6 +343,118 @@ function EntityChips({ entities }: { entities: DefenderAgentDecision["entities"]
 }
 
 // ---------------------------------------------------------------------------
+// Entity timeline drawer
+// ---------------------------------------------------------------------------
+
+function EntityTimelineDrawer({
+  entityId,
+  entityName,
+  onClose,
+  onOpenDecision,
+}: {
+  entityId: string;
+  entityName: string;
+  onClose: () => void;
+  onOpenDecision: (id: string) => void;
+}) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["defender-agent-entity-timeline", entityId],
+    queryFn: () => api.getEntityTimeline(entityId, 100),
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const decisions = data?.decisions ?? [];
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/20" onClick={onClose} aria-hidden="true" />
+      <div className="fixed right-0 top-0 z-50 flex h-full w-full max-w-xl flex-col bg-white shadow-2xl">
+        {/* Header */}
+        <div className="flex items-start justify-between border-b border-gray-200 px-6 py-4">
+          <div className="min-w-0 flex-1 pr-4">
+            <h2 className="text-base font-semibold text-gray-900">Entity Timeline</h2>
+            <p className="mt-0.5 text-xs text-gray-500 break-all">{entityName || entityId}</p>
+            {data && (
+              <p className="mt-0.5 text-xs text-gray-400">{data.total} decision{data.total !== 1 ? "s" : ""} on record</p>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="shrink-0 rounded-full p-1 text-gray-400 hover:bg-gray-100"
+            aria-label="Close"
+          >
+            <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/>
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto">
+          {isLoading && (
+            <div className="flex items-center justify-center py-16">
+              <div className="h-6 w-6 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+            </div>
+          )}
+          {!isLoading && decisions.length === 0 && (
+            <p className="py-12 text-center text-sm text-gray-400">No decisions found for this entity.</p>
+          )}
+          {decisions.length > 0 && (
+            <div className="divide-y divide-gray-100">
+              {decisions.map((d) => {
+                const tl = tierLabel(d);
+                const st = decisionStatus(d);
+                const disp = dispositionBadge(d.disposition);
+                return (
+                  <button
+                    key={d.decision_id}
+                    className="w-full text-left px-5 py-3 hover:bg-gray-50 transition-colors"
+                    onClick={() => { onClose(); onOpenDecision(d.decision_id); }}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-gray-800 truncate">{d.alert_title || d.alert_id}</p>
+                        <p className="mt-0.5 text-xs text-gray-400 truncate">{d.reason}</p>
+                        {(d.mitre_techniques ?? []).length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {(d.mitre_techniques ?? []).slice(0, 2).map((t) => (
+                              <span key={t} className="rounded bg-red-50 border border-red-200 px-1 py-0.5 text-[10px] font-mono text-red-700">{t}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="shrink-0 text-right space-y-1">
+                        <p className="text-xs text-gray-400 whitespace-nowrap">{fmtTime(d.executed_at)}</p>
+                        <span className={`inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium ${tl.color}`}>{tl.label}</span>
+                        {d.action_type && (
+                          <span className={`ml-1 inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium ${actionBadgeColor(d.action_type)}`}>
+                            {ACTION_LABELS[d.action_type] ?? d.action_type.replace(/_/g, " ")}
+                          </span>
+                        )}
+                        <p className={`text-[10px] ${st.color}`}>{st.label}</p>
+                        {disp && (
+                          <span className={`inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium ${disp.color}`}>{disp.label}</span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Detail drawer
 // ---------------------------------------------------------------------------
 
@@ -349,6 +469,7 @@ function AlertDetailDrawer({
   onForceInvestigate,
   onExecuteNow,
   onSuppressEntity,
+  onOpenEntityTimeline,
 }: {
   decisionId: string;
   onClose: () => void;
@@ -360,6 +481,7 @@ function AlertDetailDrawer({
   onForceInvestigate: (id: string) => void;
   onExecuteNow: (id: string) => void;
   onSuppressEntity: (type: DefenderSuppressionType, value: string) => void;
+  onOpenEntityTimeline: (entityId: string, entityName: string) => void;
 }) {
   const queryClient = useQueryClient();
   const { data: d, isLoading } = useQuery({
@@ -522,7 +644,15 @@ function AlertDetailDrawer({
                 <Section title="Affected entities">
                   <div className="space-y-2">
                     {d.entities.map((e, i) => (
-                      <div key={i} className="flex items-start gap-2 rounded-lg bg-gray-50 px-3 py-2">
+                      <div
+                        key={i}
+                        className="flex items-start gap-2 rounded-lg bg-gray-50 px-3 py-2 cursor-pointer hover:bg-gray-100 transition-colors"
+                        title="Click to view entity timeline"
+                        onClick={() => {
+                          const lookupKey = e.id || e.name;
+                          if (lookupKey) onOpenEntityTimeline(lookupKey, e.name || e.id);
+                        }}
+                      >
                         <span className="mt-0.5 shrink-0 text-gray-400">
                           {e.type === "user" ? (
                             <svg className="h-4 w-4" viewBox="0 0 16 16" fill="currentColor">
@@ -834,6 +964,7 @@ function DecisionRow({
   cancelling,
   approving,
   onOpenDetail,
+  onOpenEntityTimeline,
 }: {
   d: DefenderAgentDecision;
   isAdmin: boolean;
@@ -842,6 +973,7 @@ function DecisionRow({
   cancelling: boolean;
   approving: boolean;
   onOpenDetail: (id: string) => void;
+  onOpenEntityTimeline: (entityId: string, entityName: string) => void;
 }) {
   const tier = tierLabel(d);
   const status = decisionStatus(d);
@@ -859,7 +991,7 @@ function DecisionRow({
           {d.alert_title || d.alert_id}
         </div>
         {d.reason && <div className="text-xs text-gray-400 truncate" title={d.reason}>{d.reason}</div>}
-        <EntityChips entities={d.entities} />
+        <EntityChips entities={d.entities} onEntityClick={onOpenEntityTimeline} />
         {(d.mitre_techniques ?? []).length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {(d.mitre_techniques ?? []).slice(0, 3).map((t) => (
@@ -963,6 +1095,7 @@ export default function AzureSecurityAgentPage() {
   const [mitreFilter, setMitreFilter] = useState<string>("");
   const [runningNow, setRunningNow] = useState(false);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
+  const [selectedEntity, setSelectedEntity] = useState<{ id: string; name: string } | null>(null);
   const [showFindingsOnly, setShowFindingsOnly] = useState(false);
   const [expandedError, setExpandedError] = useState<string | null>(null);
   const [decisionLimit, setDecisionLimit] = useState(100);
@@ -1318,6 +1451,7 @@ export default function AzureSecurityAgentPage() {
                       cancelling={cancelMutation.isPending}
                       approving={approveMutation.isPending}
                       onOpenDetail={setSelectedDecisionId}
+                      onOpenEntityTimeline={(id, name) => setSelectedEntity({ id, name })}
                     />
                   ))}
                 </tbody>
@@ -1646,6 +1780,23 @@ export default function AzureSecurityAgentPage() {
           onSuppressEntity={(type, value) => {
             const reason = prompt(`Suppression reason for "${value}" (optional):`);
             createSuppressionMutation.mutate({ suppression_type: type, value, reason: reason ?? "" });
+          }}
+          onOpenEntityTimeline={(id, name) => {
+            setSelectedDecisionId(null);
+            setSelectedEntity({ id, name });
+          }}
+        />
+      )}
+
+      {/* Entity timeline drawer */}
+      {selectedEntity && (
+        <EntityTimelineDrawer
+          entityId={selectedEntity.id}
+          entityName={selectedEntity.name}
+          onClose={() => setSelectedEntity(null)}
+          onOpenDecision={(id) => {
+            setSelectedEntity(null);
+            setSelectedDecisionId(id);
           }}
         />
       )}

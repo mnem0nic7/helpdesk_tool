@@ -14,6 +14,7 @@ from models import (
     DefenderAgentDecisionsResponse,
     DefenderAgentDispositionStats,
     DefenderAgentDispositionUpdate,
+    DefenderAgentEntityTimelineResponse,
     DefenderAgentRunResponse,
     DefenderAgentSummaryResponse,
     DefenderAgentSuppressionCreate,
@@ -383,6 +384,21 @@ def run_now(_session: dict = Depends(require_admin)) -> dict:
         started = False
 
     return {"run_id": run_id, "started": started}
+
+
+# ---------------------------------------------------------------------------
+# Entity timeline
+# ---------------------------------------------------------------------------
+
+@router.get("/entities/{entity_id}/timeline", response_model=DefenderAgentEntityTimelineResponse)
+def get_entity_timeline(
+    entity_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    _ensure_azure_site()
+    decisions = defender_agent_store.get_entity_timeline(entity_id, limit=limit)
+    return {"entity_id": entity_id, "decisions": decisions, "total": len(decisions)}
 
 
 # ---------------------------------------------------------------------------

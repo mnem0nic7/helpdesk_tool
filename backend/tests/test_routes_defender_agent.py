@@ -625,3 +625,80 @@ def test_decision_includes_disposition_fields(defender_client, store):
     assert body["disposition"] is None
     assert "disposition_note" in body
     assert "disposition_at" in body
+
+
+# ---------------------------------------------------------------------------
+# Phase 13: Entity timeline route
+# ---------------------------------------------------------------------------
+
+def test_entity_timeline_empty(defender_client, store):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/entities/nobody%40example.com/timeline",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["entity_id"] == "nobody@example.com"
+    assert body["decisions"] == []
+    assert body["total"] == 0
+
+
+def test_entity_timeline_returns_matching_decisions(defender_client, store):
+    store.create_run("run-1")
+    store.create_decision(
+        decision_id="dec-tl-1",
+        run_id="run-1",
+        alert_id="a-tl-1",
+        alert_title="TL Test",
+        alert_severity="high",
+        alert_category="Suspicious",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="mde",
+        tier=1,
+        decision="execute",
+        action_type="revoke_sessions",
+        action_types=["revoke_sessions"],
+        job_ids=[],
+        reason="r",
+        entities=[{"type": "user", "id": "tl-user-1", "name": "tl@example.com"}],
+        not_before_at=None,
+    )
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/entities/tl-user-1/timeline",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["entity_id"] == "tl-user-1"
+    assert body["total"] == 1
+    assert body["decisions"][0]["decision_id"] == "dec-tl-1"
+
+
+def test_entity_timeline_limit_param(defender_client, store):
+    store.create_run("run-1")
+    for i in range(5):
+        store.create_decision(
+            decision_id=f"dec-tl-lim-{i}",
+            run_id="run-1",
+            alert_id=f"a-tl-lim-{i}",
+            alert_title=f"TL Limit {i}",
+            alert_severity="medium",
+            alert_category="Suspicious",
+            alert_created_at="2026-04-16T00:00:00Z",
+            service_source="mde",
+            tier=1,
+            decision="execute",
+            action_type="revoke_sessions",
+            action_types=["revoke_sessions"],
+            job_ids=[],
+            reason="r",
+            entities=[{"type": "user", "id": "lim-tl-user", "name": "lim-tl@example.com"}],
+            not_before_at=None,
+        )
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/entities/lim-tl-user/timeline?limit=3",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["decisions"]) == 3
