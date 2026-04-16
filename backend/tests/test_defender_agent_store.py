@@ -599,3 +599,78 @@ def test_get_recent_decisions_for_dedup_includes_entities(tmp_path):
     result = store.get_recent_decisions_for_dedup(since_minutes=30)
     assert len(result) == 1
     assert any(e.get("type") == "user" for e in result[0]["entities"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 — remediation confirmation
+# ---------------------------------------------------------------------------
+
+def test_get_unconfirmed_actioned_decisions_empty(tmp_path):
+    store = _store(tmp_path)
+    assert store.get_unconfirmed_actioned_decisions() == []
+
+
+def test_get_unconfirmed_actioned_decisions_no_jobs(tmp_path):
+    store = _store(tmp_path)
+    _make_decision(store, decision_id="dec-nj")
+    # No job_ids — should NOT appear
+    result = store.get_unconfirmed_actioned_decisions()
+    assert result == []
+
+
+def test_get_unconfirmed_actioned_decisions_with_jobs(tmp_path):
+    store = _store(tmp_path)
+    row = _make_decision(store, decision_id="dec-wj")
+    store.update_decision_jobs(row["decision_id"], ["job-001"])
+    result = store.get_unconfirmed_actioned_decisions()
+    assert len(result) == 1
+    assert result[0]["decision_id"] == "dec-wj"
+    assert "job-001" in result[0]["job_ids"]
+
+
+def test_get_unconfirmed_actioned_decisions_excludes_skip(tmp_path):
+    store = _store(tmp_path)
+    row = _make_decision(store, decision_id="dec-sk", decision="skip")
+    store.update_decision_jobs(row["decision_id"], ["job-sk1"])
+    result = store.get_unconfirmed_actioned_decisions()
+    assert result == []
+
+
+def test_update_decision_remediation_confirmed(tmp_path):
+    store = _store(tmp_path)
+    row = _make_decision(store, decision_id="dec-rc")
+    store.update_decision_jobs(row["decision_id"], ["job-x"])
+    store.update_decision_remediation(row["decision_id"], confirmed=True, failed=False)
+    fetched = store.get_decision(row["decision_id"])
+    assert fetched["remediation_confirmed"] is True
+    assert fetched["remediation_failed"] is False
+    assert fetched["confirmed_at"] is not None
+
+
+def test_update_decision_remediation_failed(tmp_path):
+    store = _store(tmp_path)
+    row = _make_decision(store, decision_id="dec-rf")
+    store.update_decision_jobs(row["decision_id"], ["job-y"])
+    store.update_decision_remediation(row["decision_id"], confirmed=False, failed=True)
+    fetched = store.get_decision(row["decision_id"])
+    assert fetched["remediation_confirmed"] is False
+    assert fetched["remediation_failed"] is True
+    assert fetched["confirmed_at"] is not None
+
+
+def test_get_unconfirmed_excludes_already_confirmed(tmp_path):
+    store = _store(tmp_path)
+    row = _make_decision(store, decision_id="dec-ac")
+    store.update_decision_jobs(row["decision_id"], ["job-z"])
+    store.update_decision_remediation(row["decision_id"], confirmed=True, failed=False)
+    result = store.get_unconfirmed_actioned_decisions()
+    assert all(r["decision_id"] != "dec-ac" for r in result)
+
+
+def test_decision_remediation_defaults_false(tmp_path):
+    store = _store(tmp_path)
+    row = _make_decision(store, decision_id="dec-def")
+    fetched = store.get_decision(row["decision_id"])
+    assert fetched["remediation_confirmed"] is False
+    assert fetched["remediation_failed"] is False
+    assert fetched.get("confirmed_at") is None

@@ -436,3 +436,37 @@ def test_update_config_alert_dedup_window_zero(defender_client):
     )
     assert resp.status_code == 200
     assert resp.json()["alert_dedup_window_minutes"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 — remediation fields in decision response
+# ---------------------------------------------------------------------------
+
+def test_decision_includes_remediation_fields(defender_client, store):
+    row = store.create_decision(
+        decision_id="dec-rem-route",
+        run_id="run-r",
+        alert_id="alert-r",
+        alert_title="Test",
+        alert_severity="high",
+        alert_category="Malware",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="mde",
+        tier=1,
+        decision="execute",
+        action_type="revoke_sessions",
+        action_types=["revoke_sessions"],
+        job_ids=[],
+        reason="test",
+        entities=[],
+    )
+    resp = defender_client.get(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "remediation_confirmed" in body
+    assert "remediation_failed" in body
+    assert body["remediation_confirmed"] is False
+    assert body["remediation_failed"] is False

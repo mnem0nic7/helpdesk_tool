@@ -1539,6 +1539,9 @@ export interface DefenderAgentDecision {
   alert_raw?: Record<string, unknown>;
   alert_written_back: boolean;
   mitre_techniques: string[];
+  remediation_confirmed: boolean;
+  remediation_failed: boolean;
+  confirmed_at: string | null;
 }
 
 export interface DefenderAgentDecisionsResponse {

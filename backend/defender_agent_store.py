@@ -143,6 +143,9 @@ class DefenderAgentStore:
             "ALTER TABLE defender_agent_decisions ADD COLUMN mitre_techniques_json TEXT NOT NULL DEFAULT '[]'",
             "ALTER TABLE defender_agent_config ADD COLUMN entity_cooldown_hours INTEGER NOT NULL DEFAULT 24",
             "ALTER TABLE defender_agent_config ADD COLUMN alert_dedup_window_minutes INTEGER NOT NULL DEFAULT 30",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN remediation_confirmed INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN remediation_failed INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN confirmed_at TEXT",
         ):
             try:
                 with self._conn() as _mc:
@@ -633,6 +636,67 @@ class DefenderAgentStore:
             })
         return result
 
+    # -------------------------------------------------------------------------
+    # Remediation confirmation
+    # -------------------------------------------------------------------------
+
+    def get_unconfirmed_actioned_decisions(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return dispatched decisions that have not yet been confirmed or marked failed.
+
+        Only decisions with actual job_ids are returned — T3 decisions awaiting
+        approval and T2 decisions still in the cancellation window have empty
+        job_ids and are excluded.  Skipped decisions are also excluded.
+        """
+        p = self._placeholder()
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT decision_id, job_ids_json, entities_json, action_type, action_types_json
+                  FROM defender_agent_decisions
+                 WHERE job_ids_json != {p}
+                   AND decision != {p}
+                   AND remediation_confirmed = {p}
+                   AND remediation_failed = {p}
+                 ORDER BY executed_at DESC
+                 LIMIT {p}
+                """,
+                ("[]", "skip", 0, 0, limit),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            ats = json.loads(row["action_types_json"] or "[]")
+            if not ats and row["action_type"]:
+                ats = [row["action_type"]]
+            result.append({
+                "decision_id": row["decision_id"],
+                "job_ids": json.loads(row["job_ids_json"] or "[]"),
+                "entities": json.loads(row["entities_json"] or "[]"),
+                "action_types": ats,
+            })
+        return result
+
+    def update_decision_remediation(
+        self,
+        decision_id: str,
+        *,
+        confirmed: bool,
+        failed: bool,
+    ) -> None:
+        p = self._placeholder()
+        now = _now()
+        with self._conn() as conn:
+            conn.execute(
+                f"""
+                UPDATE defender_agent_decisions
+                   SET remediation_confirmed = {p},
+                       remediation_failed    = {p},
+                       confirmed_at          = {p}
+                 WHERE decision_id = {p}
+                """,
+                (int(confirmed), int(failed), now, decision_id),
+            )
+            conn.commit()
+
     @staticmethod
     def _row_to_decision(d: dict[str, Any], *, include_raw: bool = False) -> dict[str, Any]:
         d["entities"] = json.loads(d.pop("entities_json", "[]") or "[]")
@@ -650,6 +714,8 @@ class DefenderAgentStore:
             d["alert_raw"] = json.loads(raw_str) if raw_str else {}
         d["alert_written_back"] = bool(d.get("alert_written_back", 0))
         d["mitre_techniques"] = json.loads(d.pop("mitre_techniques_json", "[]") or "[]")
+        d["remediation_confirmed"] = bool(d.get("remediation_confirmed", 0))
+        d["remediation_failed"] = bool(d.get("remediation_failed", 0))
         return d
 
 

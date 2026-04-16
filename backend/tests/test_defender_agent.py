@@ -1001,3 +1001,129 @@ def test_find_correlated_decision_different_action_no_match():
     dedup_index = {("u1", "disable_sign_in"): "dec-abc"}
     existing_id, reason = _find_correlated_decision(entities, ["revoke_sessions"], dedup_index)
     assert existing_id is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 — _check_remediation_outcomes
+# ---------------------------------------------------------------------------
+
+def test_check_remediation_outcomes_no_decisions(tmp_path, monkeypatch):
+    """No unconfirmed decisions — function should be a no-op."""
+    import defender_agent_store as das_module
+    import defender_agent
+
+    fake_store = type("S", (), {
+        "get_unconfirmed_actioned_decisions": lambda self, limit=50: [],
+        "update_decision_remediation": lambda self, *a, **kw: None,
+    })()
+    monkeypatch.setattr(das_module, "defender_agent_store", fake_store)
+    # Should not raise
+    defender_agent._check_remediation_outcomes()
+
+
+def test_check_remediation_outcomes_all_completed(tmp_path, monkeypatch):
+    """All jobs completed → decision marked confirmed."""
+    import defender_agent_store as das_module
+    import user_admin_jobs as uaj_module
+    import security_device_jobs as sdj_module
+    import defender_agent
+
+    confirmed_calls = []
+
+    class FakeStore:
+        def get_unconfirmed_actioned_decisions(self, limit=50):
+            return [{"decision_id": "dec-ok", "job_ids": ["job-1"], "entities": [], "action_types": ["revoke_sessions"]}]
+        def update_decision_remediation(self, decision_id, *, confirmed, failed):
+            confirmed_calls.append((decision_id, confirmed, failed))
+
+    class FakeJobs:
+        def get_job(self, jid):
+            return {"status": "completed"}
+
+    monkeypatch.setattr(das_module, "defender_agent_store", FakeStore())
+    monkeypatch.setattr(uaj_module, "user_admin_jobs", FakeJobs())
+    monkeypatch.setattr(sdj_module, "security_device_jobs", FakeJobs())
+    defender_agent._check_remediation_outcomes()
+    assert len(confirmed_calls) == 1
+    assert confirmed_calls[0] == ("dec-ok", True, False)
+
+
+def test_check_remediation_outcomes_any_failed(tmp_path, monkeypatch):
+    """Any failed job → decision marked failed."""
+    import defender_agent_store as das_module
+    import user_admin_jobs as uaj_module
+    import security_device_jobs as sdj_module
+    import defender_agent
+
+    confirmed_calls = []
+
+    class FakeStore:
+        def get_unconfirmed_actioned_decisions(self, limit=50):
+            return [{"decision_id": "dec-fail", "job_ids": ["job-1", "job-2"], "entities": [], "action_types": []}]
+        def update_decision_remediation(self, decision_id, *, confirmed, failed):
+            confirmed_calls.append((decision_id, confirmed, failed))
+
+    class FakeJobs:
+        def get_job(self, jid):
+            return {"status": "failed" if jid == "job-1" else "completed"}
+
+    monkeypatch.setattr(das_module, "defender_agent_store", FakeStore())
+    monkeypatch.setattr(uaj_module, "user_admin_jobs", FakeJobs())
+    monkeypatch.setattr(sdj_module, "security_device_jobs", FakeJobs())
+    defender_agent._check_remediation_outcomes()
+    assert len(confirmed_calls) == 1
+    assert confirmed_calls[0] == ("dec-fail", False, True)
+
+
+def test_check_remediation_outcomes_still_running(monkeypatch):
+    """Running job → no update (wait for next cycle)."""
+    import defender_agent_store as das_module
+    import user_admin_jobs as uaj_module
+    import security_device_jobs as sdj_module
+    import defender_agent
+
+    confirmed_calls = []
+
+    class FakeStore:
+        def get_unconfirmed_actioned_decisions(self, limit=50):
+            return [{"decision_id": "dec-run", "job_ids": ["job-r"], "entities": [], "action_types": []}]
+        def update_decision_remediation(self, decision_id, *, confirmed, failed):
+            confirmed_calls.append((decision_id, confirmed, failed))
+
+    class FakeJobs:
+        def get_job(self, jid):
+            return {"status": "running"}
+
+    monkeypatch.setattr(das_module, "defender_agent_store", FakeStore())
+    monkeypatch.setattr(uaj_module, "user_admin_jobs", FakeJobs())
+    monkeypatch.setattr(sdj_module, "security_device_jobs", FakeJobs())
+    defender_agent._check_remediation_outcomes()
+    assert confirmed_calls == []
+
+
+def test_check_remediation_outcomes_job_not_found(monkeypatch):
+    """Job not found in either store → treated as completed (cleaned up)."""
+    import defender_agent_store as das_module
+    import user_admin_jobs as uaj_module
+    import security_device_jobs as sdj_module
+    import defender_agent
+
+    confirmed_calls = []
+
+    class FakeStore:
+        def get_unconfirmed_actioned_decisions(self, limit=50):
+            return [{"decision_id": "dec-nf", "job_ids": ["job-gone"], "entities": [], "action_types": []}]
+        def update_decision_remediation(self, decision_id, *, confirmed, failed):
+            confirmed_calls.append((decision_id, confirmed, failed))
+
+    class FakeJobs:
+        def get_job(self, jid):
+            return None
+
+    monkeypatch.setattr(das_module, "defender_agent_store", FakeStore())
+    monkeypatch.setattr(uaj_module, "user_admin_jobs", FakeJobs())
+    monkeypatch.setattr(sdj_module, "security_device_jobs", FakeJobs())
+    defender_agent._check_remediation_outcomes()
+    # Job not found — all "not found" jobs are skipped; no pending → confirmed
+    assert len(confirmed_calls) == 1
+    assert confirmed_calls[0][1] is True  # confirmed=True
