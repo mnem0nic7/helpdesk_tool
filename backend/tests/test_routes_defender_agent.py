@@ -402,3 +402,37 @@ def test_update_config_entity_cooldown_hours_max(defender_client):
     )
     assert resp.status_code == 200
     assert resp.json()["entity_cooldown_hours"] == 168
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 — alert_dedup_window_minutes config route
+# ---------------------------------------------------------------------------
+
+def test_get_config_includes_alert_dedup_window_minutes(defender_client):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/config", headers=AZURE_HOST
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "alert_dedup_window_minutes" in body
+    assert isinstance(body["alert_dedup_window_minutes"], int)
+
+
+def test_update_config_alert_dedup_window_minutes(defender_client):
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/config",
+        json={"enabled": True, "alert_dedup_window_minutes": 60},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["alert_dedup_window_minutes"] == 60
+
+
+def test_update_config_alert_dedup_window_zero(defender_client):
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/config",
+        json={"enabled": True, "alert_dedup_window_minutes": 0},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["alert_dedup_window_minutes"] == 0

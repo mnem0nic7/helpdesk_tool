@@ -901,3 +901,103 @@ def test_cooldown_reason_mentions_entity_name():
     triggered, reason = _check_entity_cooldown(entities, ["isolate_device"], recent)
     assert triggered
     assert "WS-PROD" in reason
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 — _build_dedup_index and _find_correlated_decision
+# ---------------------------------------------------------------------------
+
+def test_build_dedup_index_empty():
+    from defender_agent import _build_dedup_index
+    assert _build_dedup_index([]) == {}
+
+
+def test_build_dedup_index_single_decision():
+    from defender_agent import _build_dedup_index
+    decisions = [{
+        "decision_id": "dec-abc",
+        "entities": [{"type": "user", "id": "u1", "name": "Alice"}],
+        "action_types": ["revoke_sessions"],
+    }]
+    idx = _build_dedup_index(decisions)
+    assert idx[("u1", "revoke_sessions")] == "dec-abc"
+
+
+def test_build_dedup_index_multi_entity_multi_action():
+    from defender_agent import _build_dedup_index
+    decisions = [{
+        "decision_id": "dec-multi",
+        "entities": [
+            {"type": "user", "id": "u1"},
+            {"type": "device", "id": "dev1"},
+        ],
+        "action_types": ["isolate_device", "revoke_sessions"],
+    }]
+    idx = _build_dedup_index(decisions)
+    assert ("u1", "isolate_device") in idx
+    assert ("dev1", "revoke_sessions") in idx
+    assert ("u1", "revoke_sessions") in idx
+
+
+def test_build_dedup_index_no_entity_id_skipped():
+    from defender_agent import _build_dedup_index
+    decisions = [{
+        "decision_id": "dec-noid",
+        "entities": [{"type": "user", "name": "Alice"}],  # no id
+        "action_types": ["revoke_sessions"],
+    }]
+    idx = _build_dedup_index(decisions)
+    assert len(idx) == 0
+
+
+def test_build_dedup_index_first_decision_wins():
+    from defender_agent import _build_dedup_index
+    decisions = [
+        {"decision_id": "dec-first", "entities": [{"type": "user", "id": "u1"}], "action_types": ["revoke_sessions"]},
+        {"decision_id": "dec-second", "entities": [{"type": "user", "id": "u1"}], "action_types": ["revoke_sessions"]},
+    ]
+    idx = _build_dedup_index(decisions)
+    assert idx[("u1", "revoke_sessions")] == "dec-first"
+
+
+def test_find_correlated_decision_no_match():
+    from defender_agent import _find_correlated_decision
+    entities = [{"type": "user", "id": "u1", "name": "Alice"}]
+    existing_id, reason = _find_correlated_decision(entities, ["revoke_sessions"], {})
+    assert existing_id is None
+    assert reason == ""
+
+
+def test_find_correlated_decision_user_match():
+    from defender_agent import _find_correlated_decision
+    entities = [{"type": "user", "id": "u1", "name": "Alice"}]
+    dedup_index = {("u1", "revoke_sessions"): "dec-123456789"}
+    existing_id, reason = _find_correlated_decision(entities, ["revoke_sessions"], dedup_index)
+    assert existing_id == "dec-123456789"
+    assert "dec-1234" in reason  # decision_id[:8] truncation
+    assert "Alice" in reason
+
+
+def test_find_correlated_decision_device_match():
+    from defender_agent import _find_correlated_decision
+    entities = [{"type": "device", "id": "dev1", "name": "WS-01"}]
+    dedup_index = {("dev1", "isolate_device"): "dec-abc12345"}
+    existing_id, reason = _find_correlated_decision(entities, ["isolate_device"], dedup_index)
+    assert existing_id is not None
+    assert "WS-01" in reason
+
+
+def test_find_correlated_decision_no_entity_id():
+    from defender_agent import _find_correlated_decision
+    entities = [{"type": "user", "name": "Alice"}]  # no id
+    dedup_index = {("", "revoke_sessions"): "dec-abc"}
+    existing_id, reason = _find_correlated_decision(entities, ["revoke_sessions"], dedup_index)
+    assert existing_id is None
+
+
+def test_find_correlated_decision_different_action_no_match():
+    from defender_agent import _find_correlated_decision
+    entities = [{"type": "user", "id": "u1", "name": "Alice"}]
+    dedup_index = {("u1", "disable_sign_in"): "dec-abc"}
+    existing_id, reason = _find_correlated_decision(entities, ["revoke_sessions"], dedup_index)
+    assert existing_id is None

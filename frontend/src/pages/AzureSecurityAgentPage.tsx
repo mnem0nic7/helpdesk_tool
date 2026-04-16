@@ -19,7 +19,11 @@ function severityColor(sev: string): string {
 }
 
 function tierLabel(d: DefenderAgentDecision): { label: string; color: string } {
-  if (d.decision === "skip")      return { label: "Skipped",       color: "bg-gray-100 text-gray-500" };
+  if (d.decision === "skip") {
+    if (d.reason?.startsWith("Correlated:"))
+      return { label: "Correlated", color: "bg-purple-100 text-purple-700" };
+    return { label: "Skipped", color: "bg-gray-100 text-gray-500" };
+  }
   if (d.decision === "recommend") return { label: "T3 Recommend",  color: "bg-blue-100 text-blue-800" };
   if (d.decision === "queue")     return { label: "T2 Queued",     color: "bg-amber-100 text-amber-800" };
   if (d.decision === "execute")   return { label: "T1 Immediate",  color: "bg-green-100 text-green-800" };
@@ -134,6 +138,7 @@ function ConfigDrawer({
     tier2_delay_minutes: config.tier2_delay_minutes,
     dry_run: config.dry_run,
     entity_cooldown_hours: config.entity_cooldown_hours ?? 24,
+    alert_dedup_window_minutes: config.alert_dedup_window_minutes ?? 30,
   });
 
   return (
@@ -195,6 +200,17 @@ function ConfigDrawer({
             className="mt-1 block w-24 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
           />
         </label>
+        <label className="block">
+          <span className="text-xs text-gray-500">Alert dedup window (min)</span>
+          <input
+            type="number"
+            min={0}
+            max={1440}
+            value={local.alert_dedup_window_minutes ?? 30}
+            onChange={(e) => setLocal((p) => ({ ...p, alert_dedup_window_minutes: Math.max(0, Math.min(1440, parseInt(e.target.value) || 0)) }))}
+            className="mt-1 block w-24 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+          />
+        </label>
         <button
           onClick={() => onSave(local)}
           disabled={saving}
@@ -206,6 +222,7 @@ function ConfigDrawer({
       <div className="text-xs text-gray-400 space-y-0.5">
         <p>T2 delay: the window an operator has to cancel a sign-in disable before it executes. 0 = immediate.</p>
         <p>Entity cooldown: suppress repeat actions on the same user or device within this window. 0 = disabled.</p>
+        <p>Alert dedup window: collapse multiple alerts that would trigger the same action on the same entity within this window into a single decision. 0 = disabled.</p>
       </div>
     </div>
   );

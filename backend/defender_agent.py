@@ -737,6 +737,54 @@ def _check_entity_cooldown(
     return False, ""
 
 
+def _build_dedup_index(
+    recent_decisions: list[dict[str, Any]],
+) -> dict[tuple[str, str], str]:
+    """Build (entity_id, action_type) → decision_id mapping from recent non-skip decisions.
+
+    Used at cycle start to seed the within-cycle deduplication check.  The index
+    is then updated in-place as actions are dispatched during the cycle so that
+    multiple related alerts arriving in the same fetch are collapsed correctly.
+    """
+    index: dict[tuple[str, str], str] = {}
+    for dec in recent_decisions:
+        eid_list = [str(e.get("id") or "") for e in dec.get("entities", []) if e.get("id")]
+        ats = dec.get("action_types") or []
+        for eid in eid_list:
+            for at in ats:
+                if eid and at:
+                    key = (eid, at)
+                    if key not in index:
+                        index[key] = dec["decision_id"]
+    return index
+
+
+def _find_correlated_decision(
+    entities: list[dict[str, Any]],
+    action_types: list[str],
+    dedup_index: dict[tuple[str, str], str],
+) -> tuple[str | None, str]:
+    """Return (existing_decision_id, reason) if this alert overlaps a recent decision.
+
+    Checks each (entity_id, action_type) pair against the dedup index.  The first
+    match is returned so the caller can log a correlated-skip instead of creating
+    a duplicate action.
+    """
+    for at in action_types:
+        for entity in entities:
+            eid = str(entity.get("id") or "")
+            if not eid:
+                continue
+            existing_id = dedup_index.get((eid, at))
+            if existing_id:
+                name = entity.get("name") or eid
+                return existing_id, (
+                    f"Correlated: {at.replace('_', ' ')} already actioned for "
+                    f"'{name}' by decision {existing_id[:8]} within dedup window."
+                )
+    return None, ""
+
+
 def _is_suppressed(
     alert: dict[str, Any],
     entities: list[dict[str, Any]],
@@ -965,6 +1013,11 @@ def _run_agent_cycle() -> None:
             defender_agent_store.get_recent_entity_actions(hours=cooldown_hours)
             if cooldown_hours > 0 else {}
         )
+        dedup_minutes = int(config.get("alert_dedup_window_minutes") or 30)
+        dedup_index = _build_dedup_index(
+            defender_agent_store.get_recent_decisions_for_dedup(since_minutes=dedup_minutes)
+            if dedup_minutes > 0 else []
+        )
 
         for alert in new_alerts:
             alert_id = alert.get("id", uuid.uuid4().hex)
@@ -1006,6 +1059,39 @@ def _run_agent_cycle() -> None:
             tier, decision_type, action_types, reason = _classify_alert(alert, min_severity)
             # Primary action_type is first in list (for display / backward compat)
             action_type = action_types[0] if action_types else ""
+
+            # Deduplication check: skip if we already have a non-skip decision for these
+            # entities + actions within the dedup window (catches within-cycle duplicates too)
+            if decision_type in ("execute", "queue") and dedup_minutes > 0:
+                correlated_id, corr_reason = _find_correlated_decision(
+                    entities, action_types, dedup_index
+                )
+                if correlated_id:
+                    decision_id = uuid.uuid4().hex
+                    defender_agent_store.create_decision(
+                        decision_id=decision_id,
+                        run_id=run_id,
+                        alert_id=alert_id,
+                        alert_title=alert_title,
+                        alert_severity=alert_severity,
+                        alert_category=str(alert.get("category") or ""),
+                        alert_created_at=str(alert.get("createdDateTime") or ""),
+                        service_source=alert_service_source,
+                        entities=entities,
+                        tier=tier,
+                        decision="skip",
+                        action_type=action_type,
+                        action_types=action_types,
+                        job_ids=[],
+                        reason=corr_reason,
+                        not_before_at=None,
+                        alert_raw=alert,
+                        mitre_techniques=mitre_techniques,
+                    )
+                    decisions_made += 1
+                    skip_count += 1
+                    logger.info("Defender agent: correlated skip for alert %s — %s", alert_id, corr_reason)
+                    continue
 
             # Entity cooldown check: skip if all target entities already had this action recently
             if decision_type in ("execute", "queue") and cooldown_hours > 0:
@@ -1108,6 +1194,15 @@ def _run_agent_cycle() -> None:
                         defender_agent_store.update_decision_jobs(decision_id, all_job_ids)
                         actions_queued += len(all_job_ids)
                         jobs_dispatched += len(all_job_ids)
+                        # Update in-memory indexes so within-cycle duplicates are caught
+                        for at in action_types:
+                            for entity in entities:
+                                eid = str(entity.get("id") or "")
+                                if eid:
+                                    dedup_index[(eid, at)] = decision_id
+                                    if eid not in recent_entity_actions:
+                                        recent_entity_actions[eid] = set()
+                                    recent_entity_actions[eid].add(at)
                     if DEFENDER_AGENT_TEAMS_NOTIFY_T1:
                         _notify_teams(
                             title=alert_title, severity=alert_severity, tier=tier,

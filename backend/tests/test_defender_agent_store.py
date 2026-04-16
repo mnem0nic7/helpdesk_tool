@@ -515,3 +515,87 @@ def test_get_recent_entity_actions_multi_entity(tmp_path):
     store.update_decision_jobs(row["decision_id"], ["job-002"])
     result = store.get_recent_entity_actions(hours=24)
     assert "u1" in result or "dev1" in result
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 — alert_dedup_window_minutes config + get_recent_decisions_for_dedup
+# ---------------------------------------------------------------------------
+
+def test_default_config_includes_alert_dedup_window_minutes(tmp_path):
+    store = _store(tmp_path)
+    cfg = store.get_config()
+    assert "alert_dedup_window_minutes" in cfg
+    assert cfg["alert_dedup_window_minutes"] == 30
+
+
+def test_upsert_config_alert_dedup_window_minutes(tmp_path):
+    store = _store(tmp_path)
+    defaults = store.get_config()
+    store.upsert_config(
+        enabled=defaults["enabled"],
+        min_severity=defaults["min_severity"],
+        tier2_delay_minutes=defaults["tier2_delay_minutes"],
+        dry_run=defaults["dry_run"],
+        alert_dedup_window_minutes=60,
+    )
+    cfg = store.get_config()
+    assert cfg["alert_dedup_window_minutes"] == 60
+
+
+def test_upsert_config_alert_dedup_window_zero(tmp_path):
+    store = _store(tmp_path)
+    defaults = store.get_config()
+    store.upsert_config(
+        enabled=defaults["enabled"],
+        min_severity=defaults["min_severity"],
+        tier2_delay_minutes=defaults["tier2_delay_minutes"],
+        dry_run=defaults["dry_run"],
+        alert_dedup_window_minutes=0,
+    )
+    cfg = store.get_config()
+    assert cfg["alert_dedup_window_minutes"] == 0
+
+
+def test_get_recent_decisions_for_dedup_empty(tmp_path):
+    store = _store(tmp_path)
+    result = store.get_recent_decisions_for_dedup(since_minutes=30)
+    assert result == []
+
+
+def test_get_recent_decisions_for_dedup_zero_minutes_returns_empty(tmp_path):
+    store = _store(tmp_path)
+    _make_decision(store, decision_id="dec-dm0")
+    result = store.get_recent_decisions_for_dedup(since_minutes=0)
+    assert result == []
+
+
+def test_get_recent_decisions_for_dedup_returns_non_skip(tmp_path):
+    store = _store(tmp_path)
+    _make_decision(store, decision_id="dec-act", decision="execute", action_type="revoke_sessions")
+    result = store.get_recent_decisions_for_dedup(since_minutes=30)
+    assert len(result) == 1
+    assert result[0]["decision_id"] == "dec-act"
+    assert "revoke_sessions" in result[0]["action_types"]
+
+
+def test_get_recent_decisions_for_dedup_excludes_skip(tmp_path):
+    store = _store(tmp_path)
+    _make_decision(store, decision_id="dec-skip", decision="skip")
+    result = store.get_recent_decisions_for_dedup(since_minutes=30)
+    assert result == []
+
+
+def test_get_recent_decisions_for_dedup_excludes_cancelled(tmp_path):
+    store = _store(tmp_path)
+    row = _make_decision(store, decision_id="dec-can", decision="queue")
+    store.cancel_decision(row["decision_id"], cancelled_by="admin@example.com")
+    result = store.get_recent_decisions_for_dedup(since_minutes=30)
+    assert all(r["decision_id"] != "dec-can" for r in result)
+
+
+def test_get_recent_decisions_for_dedup_includes_entities(tmp_path):
+    store = _store(tmp_path)
+    _make_decision(store, decision_id="dec-ent", action_type="revoke_sessions")
+    result = store.get_recent_decisions_for_dedup(since_minutes=30)
+    assert len(result) == 1
+    assert any(e.get("type") == "user" for e in result[0]["entities"])
