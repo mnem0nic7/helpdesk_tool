@@ -1522,7 +1522,21 @@ export interface DefenderAgentDecision {
   alert_category: string;
   alert_created_at: string;
   service_source: string;
-  entities: Array<{ type: string; id: string; name: string }>;
+  entities: Array<{
+    type: string;
+    id: string;
+    name: string;
+    // User enrichment (from Azure cache)
+    enabled?: boolean;
+    job_title?: string;
+    department?: string;
+    priority_band?: string;
+    last_sign_in?: string;
+    // Device enrichment (from Azure cache)
+    compliance_state?: string;
+    os?: string;
+    last_sync?: string;
+  }>;
   tier: number | null;
   decision: "execute" | "queue" | "recommend" | "skip";
   action_type: string;

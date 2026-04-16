@@ -254,30 +254,69 @@ function ConfigDrawer({
 // Entity chips
 // ---------------------------------------------------------------------------
 
+function complianceColor(state: string | undefined): string {
+  switch ((state || "").toLowerCase()) {
+    case "compliant":    return "bg-emerald-100 text-emerald-700";
+    case "noncompliant": return "bg-red-100 text-red-700";
+    default:             return "bg-gray-100 text-gray-500";
+  }
+}
+
+function priorityBandColor(band: string | undefined): string {
+  switch ((band || "").toLowerCase()) {
+    case "p0": return "bg-red-100 text-red-700";
+    case "p1": return "bg-orange-100 text-orange-700";
+    case "p2": return "bg-yellow-100 text-yellow-700";
+    case "p3": return "bg-slate-100 text-slate-600";
+    default:   return "bg-gray-100 text-gray-500";
+  }
+}
+
 function EntityChips({ entities }: { entities: DefenderAgentDecision["entities"] }) {
   if (!entities.length) return null;
   const shown = entities.slice(0, 2);
   const overflow = entities.length - shown.length;
   return (
     <div className="mt-1 flex flex-wrap gap-1">
-      {shown.map((e, i) => (
-        <span
-          key={i}
-          className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600"
-          title={`${e.type}: ${e.id}`}
-        >
-          {e.type === "user" ? (
-            <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm4.5 4c0-2.485-2.015-4.5-4.5-4.5S3.5 9.515 3.5 12H12.5Z"/>
-            </svg>
-          ) : (
-            <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M2 3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9v1h1.5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1H7v-1H3a1 1 0 0 1-1-1V3Z"/>
-            </svg>
-          )}
-          <span className="max-w-[140px] truncate">{e.name || e.id}</span>
-        </span>
-      ))}
+      {shown.map((e, i) => {
+        const tooltip = [
+          `${e.type}: ${e.id}`,
+          e.department ? `Dept: ${e.department}` : "",
+          e.compliance_state ? `Compliance: ${e.compliance_state}` : "",
+          e.enabled === false ? "DISABLED" : "",
+        ].filter(Boolean).join(" | ");
+        return (
+          <span
+            key={i}
+            className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600"
+            title={tooltip || `${e.type}: ${e.id}`}
+          >
+            {e.type === "user" ? (
+              <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm4.5 4c0-2.485-2.015-4.5-4.5-4.5S3.5 9.515 3.5 12H12.5Z"/>
+              </svg>
+            ) : (
+              <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M2 3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9v1h1.5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1H7v-1H3a1 1 0 0 1-1-1V3Z"/>
+              </svg>
+            )}
+            <span className="max-w-[140px] truncate">{e.name || e.id}</span>
+            {e.enabled === false && (
+              <span className="rounded-full bg-red-200 px-1 text-[10px] text-red-700 font-medium">disabled</span>
+            )}
+            {e.priority_band && (
+              <span className={`rounded-full px-1 text-[10px] font-medium ${priorityBandColor(e.priority_band)}`}>
+                {e.priority_band.toUpperCase()}
+              </span>
+            )}
+            {e.compliance_state && (
+              <span className={`rounded-full px-1 text-[10px] font-medium ${complianceColor(e.compliance_state)}`}>
+                {e.compliance_state}
+              </span>
+            )}
+          </span>
+        );
+      })}
       {overflow > 0 && (
         <span className="inline-flex items-center rounded-full bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
           +{overflow} more
@@ -475,10 +514,39 @@ function AlertDetailDrawer({
                             </svg>
                           )}
                         </span>
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium text-gray-800 break-all">{e.name || e.id}</p>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <p className="text-xs font-medium text-gray-800 break-all">{e.name || e.id}</p>
+                            {e.enabled === false && (
+                              <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700">Disabled</span>
+                            )}
+                            {e.priority_band && (
+                              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityBandColor(e.priority_band)}`}>
+                                {e.priority_band.toUpperCase()}
+                              </span>
+                            )}
+                            {e.compliance_state && (
+                              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${complianceColor(e.compliance_state)}`}>
+                                {e.compliance_state}
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-gray-400 break-all">{e.id}</p>
                           <p className="text-xs text-gray-400 capitalize">{e.type}</p>
+                          {/* User enrichment */}
+                          {(e.job_title || e.department) && (
+                            <p className="text-xs text-gray-500 mt-0.5">
+                              {[e.job_title, e.department].filter(Boolean).join(" · ")}
+                            </p>
+                          )}
+                          {e.last_sign_in && (
+                            <p className="text-xs text-gray-400 mt-0.5">Last sign-in: {fmtTime(e.last_sign_in)}</p>
+                          )}
+                          {/* Device enrichment */}
+                          {e.os && <p className="text-xs text-gray-500 mt-0.5">{e.os}</p>}
+                          {e.last_sync && (
+                            <p className="text-xs text-gray-400 mt-0.5">Last sync: {fmtTime(e.last_sync)}</p>
+                          )}
                         </div>
                       </div>
                     ))}
