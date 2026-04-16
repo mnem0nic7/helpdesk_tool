@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { DefenderAgentBuiltinRule, DefenderAgentConfig, DefenderAgentCustomRule, DefenderAgentDecision, DefenderAgentDispositionStats, DefenderAgentEntityTimeline, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType } from "../lib/api.ts";
+import type { DefenderAgentConfig, DefenderAgentCustomRule, DefenderAgentDecision, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 // ---------------------------------------------------------------------------
@@ -354,7 +354,7 @@ function EntityChips({
               </svg>
             )}
             {isWatchlisted && (
-              <svg className="h-3 w-3 shrink-0 text-amber-600" viewBox="0 0 16 16" fill="currentColor" title="Watchlisted entity">
+              <svg className="h-3 w-3 shrink-0 text-amber-600" viewBox="0 0 16 16" fill="currentColor" aria-label="Watchlisted entity">
                 <path d="M8 1l1.8 3.6L14 5.3l-3 2.9.7 4.1L8 10.2l-3.7 2.1.7-4.1-3-2.9 4.2-.7L8 1Z"/>
               </svg>
             )}
