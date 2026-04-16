@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { DefenderAgentConfig, DefenderAgentDecision } from "../lib/api.ts";
+import type { DefenderAgentConfig, DefenderAgentDecision, DefenderAgentSuppression, DefenderSuppressionType } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 // ---------------------------------------------------------------------------
@@ -249,6 +249,7 @@ function AlertDetailDrawer({
   onUnrestrict,
   onForceInvestigate,
   onExecuteNow,
+  onSuppressEntity,
 }: {
   decisionId: string;
   onClose: () => void;
@@ -259,6 +260,7 @@ function AlertDetailDrawer({
   onUnrestrict: (id: string) => void;
   onForceInvestigate: (id: string) => void;
   onExecuteNow: (id: string) => void;
+  onSuppressEntity: (type: DefenderSuppressionType, value: string) => void;
 }) {
   const { data: d, isLoading } = useQuery({
     queryKey: ["defender-agent-decision", decisionId],
@@ -539,6 +541,45 @@ function AlertDetailDrawer({
             )}
           </div>
         )}
+        {isAdmin && d && d.entities.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-gray-100">
+            <p className="text-xs text-gray-400 mb-2 font-medium uppercase tracking-wider">Suppress entity</p>
+            <div className="flex flex-wrap gap-2">
+              {d.entities.filter(e => e.type === "user" && (e.name || e.id)).map((e, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    const display = e.name || e.id;
+                    if (confirm(`Add suppression for user "${display}"? The agent will skip future alerts for this user.`)) {
+                      onSuppressEntity("entity_user", e.name || e.id);
+                      onClose();
+                    }
+                  }}
+                  className="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                  title={`Suppress user: ${e.name || e.id}`}
+                >
+                  Suppress user: {(e.name || e.id).length > 30 ? (e.name || e.id).slice(0, 28) + "…" : (e.name || e.id)}
+                </button>
+              ))}
+              {d.entities.filter(e => e.type === "device" && (e.name || e.id)).map((e, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    const display = e.name || e.id;
+                    if (confirm(`Add suppression for device "${display}"? The agent will skip future alerts for this device.`)) {
+                      onSuppressEntity("entity_device", e.name || e.id);
+                      onClose();
+                    }
+                  }}
+                  className="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                  title={`Suppress device: ${e.name || e.id}`}
+                >
+                  Suppress device: {(e.name || e.id).length > 30 ? (e.name || e.id).slice(0, 28) + "…" : (e.name || e.id)}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </>
   );
@@ -734,6 +775,23 @@ export default function AzureSecurityAgentPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-indicators"] }),
   });
 
+  const suppressionsQuery = useQuery({
+    queryKey: ["defender-agent-suppressions"],
+    queryFn: () => api.listDefenderAgentSuppressions(),
+    staleTime: 60_000,
+  });
+
+  const createSuppressionMutation = useMutation({
+    mutationFn: (body: { suppression_type: DefenderSuppressionType; value: string; reason: string; expires_at?: string | null }) =>
+      api.createDefenderAgentSuppression(body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-suppressions"] }),
+  });
+
+  const deleteSuppressionMutation = useMutation({
+    mutationFn: (id: string) => api.deleteDefenderAgentSuppression(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-suppressions"] }),
+  });
+
   const { data: me } = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => api.getMe(),
@@ -746,6 +804,14 @@ export default function AzureSecurityAgentPage() {
   const decisionsTotal = decisionsQuery.data?.total ?? 0;
   const runs = runsQuery.data ?? [];
   const indicators = indicatorsQuery.data?.indicators ?? [];
+  const suppressions = suppressionsQuery.data?.suppressions ?? [];
+
+  const [suppressionForm, setSuppressionForm] = useState<{
+    suppression_type: DefenderSuppressionType;
+    value: string;
+    reason: string;
+    expires_at: string;
+  }>({ suppression_type: "entity_user", value: "", reason: "", expires_at: "" });
 
   const isAdmin = me?.is_admin ?? false;
 
@@ -1018,6 +1084,150 @@ export default function AzureSecurityAgentPage() {
         })()}
       </div>
 
+      {/* Suppression rules panel (admin-only) */}
+      {isAdmin && (
+        <div className="mt-6 rounded-xl border border-slate-200 bg-white shadow">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+            <h2 className="text-lg font-semibold text-gray-900">
+              Suppression Rules
+              {suppressions.length > 0 && (
+                <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                  {suppressions.length} active
+                </span>
+              )}
+            </h2>
+            <span className="text-xs text-gray-400">Agent skips alerts matching any active rule</span>
+          </div>
+
+          {/* Add suppression form */}
+          <div className="px-5 py-4 border-b border-slate-100 bg-slate-50/60">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Add suppression</p>
+            <div className="flex flex-wrap gap-3 items-end">
+              <label className="block">
+                <span className="text-xs text-gray-500">Type</span>
+                <select
+                  value={suppressionForm.suppression_type}
+                  onChange={(e) => setSuppressionForm((f) => ({ ...f, suppression_type: e.target.value as DefenderSuppressionType }))}
+                  className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                >
+                  <option value="entity_user">User (UPN / Object ID)</option>
+                  <option value="entity_device">Device (name / ID)</option>
+                  <option value="alert_title">Alert title contains</option>
+                  <option value="alert_category">Alert category equals</option>
+                </select>
+              </label>
+              <label className="block flex-1 min-w-[180px]">
+                <span className="text-xs text-gray-500">Value</span>
+                <input
+                  type="text"
+                  value={suppressionForm.value}
+                  onChange={(e) => setSuppressionForm((f) => ({ ...f, value: e.target.value }))}
+                  placeholder={
+                    suppressionForm.suppression_type === "entity_user" ? "user@example.com" :
+                    suppressionForm.suppression_type === "entity_device" ? "DESKTOP-ABC123" :
+                    suppressionForm.suppression_type === "alert_title" ? "antivirus signature" :
+                    "CredentialAccess"
+                  }
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="block flex-1 min-w-[160px]">
+                <span className="text-xs text-gray-500">Reason</span>
+                <input
+                  type="text"
+                  value={suppressionForm.reason}
+                  onChange={(e) => setSuppressionForm((f) => ({ ...f, reason: e.target.value }))}
+                  placeholder="Known good / false positive"
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs text-gray-500">Expires (optional)</span>
+                <input
+                  type="datetime-local"
+                  value={suppressionForm.expires_at}
+                  onChange={(e) => setSuppressionForm((f) => ({ ...f, expires_at: e.target.value }))}
+                  className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <button
+                onClick={() => {
+                  if (!suppressionForm.value.trim()) return;
+                  createSuppressionMutation.mutate({
+                    suppression_type: suppressionForm.suppression_type,
+                    value: suppressionForm.value.trim(),
+                    reason: suppressionForm.reason,
+                    expires_at: suppressionForm.expires_at
+                      ? new Date(suppressionForm.expires_at).toISOString()
+                      : null,
+                  }, {
+                    onSuccess: () => setSuppressionForm((f) => ({ ...f, value: "", reason: "", expires_at: "" })),
+                  });
+                }}
+                disabled={!suppressionForm.value.trim() || createSuppressionMutation.isPending}
+                className="rounded-lg bg-slate-700 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                {createSuppressionMutation.isPending ? "Adding…" : "Add"}
+              </button>
+            </div>
+          </div>
+
+          {/* Active suppressions list */}
+          {suppressions.length === 0 ? (
+            <p className="py-6 text-center text-sm text-gray-400">No active suppressions.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-xs">
+                <thead className="bg-slate-50">
+                  <tr>
+                    {["Type", "Value", "Reason", "Created by", "Created", "Expires", ""].map((h) => (
+                      <th key={h} className="px-4 py-2 text-left font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {suppressions.map((s: DefenderAgentSuppression) => (
+                    <tr key={s.id} className="hover:bg-slate-50">
+                      <td className="whitespace-nowrap px-4 py-2">
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                          s.suppression_type === "entity_user" ? "bg-violet-100 text-violet-800" :
+                          s.suppression_type === "entity_device" ? "bg-blue-100 text-blue-800" :
+                          s.suppression_type === "alert_title" ? "bg-amber-100 text-amber-800" :
+                          "bg-slate-100 text-slate-700"
+                        }`}>
+                          {s.suppression_type === "entity_user" ? "User" :
+                           s.suppression_type === "entity_device" ? "Device" :
+                           s.suppression_type === "alert_title" ? "Title contains" :
+                           "Category"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 font-mono text-gray-800 max-w-xs truncate" title={s.value}>{s.value}</td>
+                      <td className="px-4 py-2 text-gray-500 max-w-xs truncate" title={s.reason}>{s.reason || "—"}</td>
+                      <td className="whitespace-nowrap px-4 py-2 text-gray-400">{s.created_by || "—"}</td>
+                      <td className="whitespace-nowrap px-4 py-2 text-gray-400">{fmtTime(s.created_at)}</td>
+                      <td className="whitespace-nowrap px-4 py-2 text-gray-400">{s.expires_at ? fmtTime(s.expires_at) : "Permanent"}</td>
+                      <td className="whitespace-nowrap px-4 py-2 text-right">
+                        <button
+                          onClick={() => {
+                            if (confirm(`Remove suppression for "${s.value}"? The agent will resume acting on matching alerts.`)) {
+                              deleteSuppressionMutation.mutate(s.id);
+                            }
+                          }}
+                          disabled={deleteSuppressionMutation.isPending}
+                          className="text-red-500 hover:text-red-700 disabled:opacity-50 text-xs"
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Tenant-wide block indicators panel */}
       {indicators.length > 0 && (
         <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50/60">
@@ -1112,6 +1322,10 @@ export default function AzureSecurityAgentPage() {
           onUnrestrict={(id) => { unrestrictMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onForceInvestigate={(id) => { forceInvestigateMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onExecuteNow={(id) => { executeNowMutation.mutate(id); }}
+          onSuppressEntity={(type, value) => {
+            const reason = prompt(`Suppression reason for "${value}" (optional):`);
+            createSuppressionMutation.mutate({ suppression_type: type, value, reason: reason ?? "" });
+          }}
         />
       )}
     </div>

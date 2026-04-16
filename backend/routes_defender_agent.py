@@ -14,6 +14,9 @@ from models import (
     DefenderAgentDecisionsResponse,
     DefenderAgentRunResponse,
     DefenderAgentSummaryResponse,
+    DefenderAgentSuppressionCreate,
+    DefenderAgentSuppressionItem,
+    DefenderAgentSuppressionsResponse,
 )
 from site_context import get_current_site_scope
 
@@ -375,6 +378,49 @@ def run_now(_session: dict = Depends(require_admin)) -> dict:
         started = False
 
     return {"run_id": run_id, "started": started}
+
+
+# ---------------------------------------------------------------------------
+# Suppressions
+# ---------------------------------------------------------------------------
+
+@router.get("/suppressions", response_model=DefenderAgentSuppressionsResponse)
+def list_suppressions(
+    include_inactive: bool = Query(False),
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    _ensure_azure_site()
+    rows = defender_agent_store.list_suppressions(include_inactive=include_inactive)
+    return {"suppressions": rows, "total": len(rows)}
+
+
+@router.post("/suppressions", response_model=DefenderAgentSuppressionItem)
+def create_suppression(
+    body: DefenderAgentSuppressionCreate,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    row = defender_agent_store.create_suppression(
+        suppression_type=body.suppression_type,
+        value=body.value.strip(),
+        reason=body.reason,
+        created_by=str(_session.get("email") or ""),
+        expires_at=body.expires_at,
+    )
+    return row
+
+
+@router.delete("/suppressions/{suppression_id}", response_model=DefenderAgentSuppressionItem)
+def delete_suppression(
+    suppression_id: str,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    row = defender_agent_store.get_suppression(suppression_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Suppression not found")
+    defender_agent_store.delete_suppression(suppression_id)
+    return defender_agent_store.get_suppression(suppression_id) or row
 
 
 # ---------------------------------------------------------------------------

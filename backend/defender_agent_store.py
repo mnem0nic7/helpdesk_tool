@@ -107,6 +107,19 @@ class DefenderAgentStore:
                     ON defender_agent_decisions (executed_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_defender_decisions_run_id
                     ON defender_agent_decisions (run_id, executed_at DESC);
+
+                CREATE TABLE IF NOT EXISTS defender_agent_suppressions (
+                    id                TEXT PRIMARY KEY,
+                    suppression_type  TEXT NOT NULL,
+                    value             TEXT NOT NULL,
+                    reason            TEXT NOT NULL DEFAULT '',
+                    created_by        TEXT NOT NULL DEFAULT '',
+                    created_at        TEXT NOT NULL,
+                    expires_at        TEXT,
+                    active            INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS idx_defender_suppressions_active
+                    ON defender_agent_suppressions (active, expires_at);
                 """
             )
             conn.commit()
@@ -116,6 +129,17 @@ class DefenderAgentStore:
         for ddl in (
             "ALTER TABLE defender_agent_runs ADD COLUMN skips INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE defender_agent_decisions ADD COLUMN action_types_json TEXT NOT NULL DEFAULT '[]'",
+            """CREATE TABLE IF NOT EXISTS defender_agent_suppressions (
+                    id TEXT PRIMARY KEY,
+                    suppression_type TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_by TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    active INTEGER NOT NULL DEFAULT 1
+                )""",
+            "CREATE INDEX IF NOT EXISTS idx_defender_suppressions_active ON defender_agent_suppressions (active, expires_at)",
         ):
             try:
                 with self._conn() as _mc:
@@ -429,6 +453,86 @@ class DefenderAgentStore:
             "pending_tier2": int(pt2_d.get("c", 0)),
             "recent_decisions": [self._row_to_decision(dict(r), include_raw=False) for r in recent],
         }
+
+    # -------------------------------------------------------------------------
+    # Suppressions
+    # -------------------------------------------------------------------------
+
+    def create_suppression(
+        self,
+        *,
+        suppression_type: str,
+        value: str,
+        reason: str = "",
+        created_by: str = "",
+        expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        sid = uuid.uuid4().hex
+        now = _now()
+        p = self._placeholder()
+        with self._conn() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO defender_agent_suppressions
+                    (id, suppression_type, value, reason, created_by, created_at, expires_at, active)
+                VALUES ({p},{p},{p},{p},{p},{p},{p},{p})
+                """,
+                (sid, suppression_type, value, reason, created_by, now, expires_at, 1),
+            )
+            conn.commit()
+        return self.get_suppression(sid) or {}
+
+    def get_suppression(self, suppression_id: str) -> dict[str, Any] | None:
+        p = self._placeholder()
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT * FROM defender_agent_suppressions WHERE id = {p}",
+                (suppression_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["active"] = bool(d.get("active", 1))
+        return d
+
+    def list_suppressions(self, include_inactive: bool = False) -> list[dict[str, Any]]:
+        now = _now()
+        p = self._placeholder()
+        with self._conn() as conn:
+            if include_inactive:
+                rows = conn.execute(
+                    "SELECT * FROM defender_agent_suppressions ORDER BY created_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM defender_agent_suppressions
+                     WHERE active = {p}
+                       AND (expires_at IS NULL OR expires_at > {p})
+                     ORDER BY created_at DESC
+                    """,
+                    (1, now),
+                ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["active"] = bool(d.get("active", 1))
+            result.append(d)
+        return result
+
+    def delete_suppression(self, suppression_id: str) -> bool:
+        p = self._placeholder()
+        with self._conn() as conn:
+            conn.execute(
+                f"UPDATE defender_agent_suppressions SET active = {p} WHERE id = {p}",
+                (0, suppression_id),
+            )
+            conn.commit()
+        row = self.get_suppression(suppression_id)
+        return row is not None
+
+    def get_active_suppressions(self) -> list[dict[str, Any]]:
+        return self.list_suppressions(include_inactive=False)
 
     @staticmethod
     def _row_to_decision(d: dict[str, Any], *, include_raw: bool = False) -> dict[str, Any]:

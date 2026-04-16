@@ -306,3 +306,79 @@ def test_get_summary_returns_expected_keys(tmp_path):
     assert summary["pending_approvals"] == 1
     # Recent decisions populated
     assert len(summary["recent_decisions"]) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Suppressions
+# ---------------------------------------------------------------------------
+
+def test_create_suppression_persists(tmp_path):
+    store = _store(tmp_path)
+    row = store.create_suppression(
+        suppression_type="entity_user",
+        value="ada@example.com",
+        reason="Known good test account",
+        created_by="admin@example.com",
+    )
+    assert row["suppression_type"] == "entity_user"
+    assert row["value"] == "ada@example.com"
+    assert row["reason"] == "Known good test account"
+    assert row["active"] is True
+    assert row["expires_at"] is None
+
+
+def test_create_suppression_with_expiry(tmp_path):
+    store = _store(tmp_path)
+    row = store.create_suppression(
+        suppression_type="alert_title",
+        value="test alert",
+        expires_at="2099-01-01T00:00:00Z",
+    )
+    assert row["expires_at"] == "2099-01-01T00:00:00Z"
+
+
+def test_list_suppressions_active_only(tmp_path):
+    store = _store(tmp_path)
+    store.create_suppression(suppression_type="entity_user", value="user1@example.com")
+    store.create_suppression(suppression_type="entity_device", value="DEVICE-001")
+    rows = store.list_suppressions()
+    assert len(rows) == 2
+
+
+def test_list_suppressions_excludes_expired(tmp_path):
+    store = _store(tmp_path)
+    store.create_suppression(suppression_type="entity_user", value="user-forever@example.com")
+    store.create_suppression(
+        suppression_type="entity_user",
+        value="user-expired@example.com",
+        expires_at="2000-01-01T00:00:00Z",
+    )
+    rows = store.list_suppressions()
+    values = [r["value"] for r in rows]
+    assert "user-forever@example.com" in values
+    assert "user-expired@example.com" not in values
+
+
+def test_delete_suppression_deactivates(tmp_path):
+    store = _store(tmp_path)
+    row = store.create_suppression(suppression_type="entity_user", value="user@example.com")
+    sid = row["id"]
+    store.delete_suppression(sid)
+    # Should no longer appear in active list
+    active = store.list_suppressions()
+    assert not any(r["id"] == sid for r in active)
+    # But get_suppression still returns it (inactive)
+    fetched = store.get_suppression(sid)
+    assert fetched is not None
+    assert fetched["active"] is False
+
+
+def test_get_active_suppressions_returns_only_active(tmp_path):
+    store = _store(tmp_path)
+    s1 = store.create_suppression(suppression_type="alert_category", value="CredentialAccess")
+    s2 = store.create_suppression(suppression_type="alert_title", value="ransomware")
+    store.delete_suppression(s1["id"])
+    active = store.get_active_suppressions()
+    ids = [r["id"] for r in active]
+    assert s1["id"] not in ids
+    assert s2["id"] in ids
