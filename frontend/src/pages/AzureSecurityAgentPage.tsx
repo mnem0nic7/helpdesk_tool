@@ -1,8 +1,9 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type { DefenderAgentConfig, DefenderAgentCustomRule, DefenderAgentDecision, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
+import { DEFENDER_FAQ } from "../lib/defenderFaq.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -134,6 +135,158 @@ function dispositionBadge(d: DefenderAgentDecision["disposition"]): { label: str
   if (d === "false_positive") return { label: "FP",           color: "bg-red-100 text-red-800" };
   if (d === "inconclusive")   return { label: "Inconclusive", color: "bg-yellow-100 text-yellow-800" };
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// FAQ drawer
+// ---------------------------------------------------------------------------
+
+function renderFaqInline(text: string): ReactNode {
+  const parts: ReactNode[] = [];
+  const re = /(\*\*(.+?)\*\*|`(.+?)`)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    if (m[0].startsWith("**")) {
+      parts.push(<strong key={m.index} className="font-semibold">{m[2]}</strong>);
+    } else {
+      parts.push(
+        <code key={m.index} className="rounded bg-slate-100 px-1 font-mono text-xs text-slate-700">{m[3]}</code>
+      );
+    }
+    last = re.lastIndex;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.length === 1 && typeof parts[0] === "string" ? parts[0] : <>{parts}</>;
+}
+
+function FaqMarkdown({ content }: { content: string }) {
+  const blocks = content.trim().split(/\n\n+/);
+  return (
+    <div className="space-y-4 text-sm leading-relaxed text-gray-800">
+      {blocks.map((block, i) => {
+        const trimmed = block.trim();
+        if (!trimmed) return null;
+
+        // Horizontal rule
+        if (/^-{3,}$/.test(trimmed))
+          return <hr key={i} className="border-gray-200" />;
+
+        // H1 — page title, render as small label
+        if (trimmed.startsWith("# "))
+          return (
+            <p key={i} className="text-xs text-gray-400 uppercase tracking-wide">
+              {trimmed.slice(2)}
+            </p>
+          );
+
+        // H2 — section header
+        if (trimmed.startsWith("## "))
+          return (
+            <h2 key={i} className="mt-2 border-b border-gray-200 pb-1 text-base font-bold text-gray-900">
+              {trimmed.slice(3)}
+            </h2>
+          );
+
+        // H3 — question
+        if (trimmed.startsWith("### "))
+          return (
+            <h3 key={i} className="font-semibold text-gray-900">
+              {trimmed.slice(4)}
+            </h3>
+          );
+
+        // Markdown table
+        const tableLines = trimmed.split("\n");
+        if (tableLines.length >= 3 && tableLines[0].includes("|") && tableLines[1].replace(/[-|: ]/g, "") === "") {
+          const headers = tableLines[0].split("|").map(c => c.trim()).filter(Boolean);
+          const rows = tableLines.slice(2).map(line =>
+            line.split("|").map(c => c.trim()).filter(Boolean)
+          );
+          return (
+            <div key={i} className="overflow-x-auto rounded border border-gray-200">
+              <table className="min-w-full text-xs">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {headers.map((h, j) => (
+                      <th key={j} className="px-3 py-2 text-left font-semibold text-gray-700 whitespace-nowrap">
+                        {renderFaqInline(h)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {rows.map((row, j) => (
+                    <tr key={j} className="even:bg-gray-50/50">
+                      {row.map((cell, k) => (
+                        <td key={k} className="px-3 py-2 text-gray-700 align-top">
+                          {renderFaqInline(cell)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
+
+        const lines = trimmed.split("\n").filter(l => l.trim());
+
+        // Unordered list
+        if (lines.length > 0 && lines.every(l => /^[-*]\s/.test(l))) {
+          return (
+            <ul key={i} className="space-y-1 pl-1">
+              {lines.map((l, j) => (
+                <li key={j} className="flex gap-2">
+                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-gray-400" />
+                  <span>{renderFaqInline(l.replace(/^[-*]\s+/, ""))}</span>
+                </li>
+              ))}
+            </ul>
+          );
+        }
+
+        // Plain paragraph
+        return <p key={i}>{renderFaqInline(trimmed)}</p>;
+      })}
+    </div>
+  );
+}
+
+function FaqDrawer({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/20" onClick={onClose} aria-hidden="true" />
+      <div className="fixed right-0 top-0 z-50 flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Defender Agent — FAQ</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Common questions about tiers, rules, config, and troubleshooting</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="shrink-0 rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            aria-label="Close FAQ"
+          >
+            <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/>
+            </svg>
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          <FaqMarkdown content={DEFENDER_FAQ} />
+        </div>
+      </div>
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1712,6 +1865,7 @@ function CustomRulesPanel() {
 export default function AzureSecurityAgentPage() {
   const queryClient = useQueryClient();
   const [showConfig, setShowConfig] = useState(false);
+  const [showFaq, setShowFaq] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [decisionFilter, setDecisionFilter] = useState<string>("");
   const [mitreFilter, setMitreFilter] = useState<string>("");
@@ -1954,6 +2108,13 @@ export default function AzureSecurityAgentPage() {
           <span className={`rounded-full px-3 py-1 text-xs font-medium ${enabled ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-600"}`}>
             {enabled ? "Agent Enabled" : "Agent Disabled"}
           </span>
+          <button
+            onClick={() => setShowFaq(true)}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 shadow-sm"
+            title="Open FAQ"
+          >
+            FAQ
+          </button>
           <button
             onClick={() => setShowConfig((v) => !v)}
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 shadow-sm"
@@ -2659,6 +2820,9 @@ export default function AzureSecurityAgentPage() {
           }}
         />
       )}
+
+      {/* FAQ drawer */}
+      {showFaq && <FaqDrawer onClose={() => setShowFaq(false)} />}
     </div>
   );
 }
