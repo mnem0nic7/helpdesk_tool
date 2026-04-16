@@ -41,6 +41,14 @@ FW_ Exit tasks with powershell.msg
 # Scratch / planning
 plan.md
 SOP-Helpdesk
+README copy.md
+frontend copy/
+
+# Local tooling / workspace scratch
+tmp/
+
+# Claude Code project state
+.claude/
 
 # One-off scripts with hardcoded credentials
 pull_all_fields.py
