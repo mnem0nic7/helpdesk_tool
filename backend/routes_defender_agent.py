@@ -53,6 +53,7 @@ def update_config(
         tier2_delay_minutes=body.tier2_delay_minutes,
         dry_run=body.dry_run,
         entity_cooldown_hours=body.entity_cooldown_hours,
+        alert_dedup_window_minutes=body.alert_dedup_window_minutes,
         updated_by=str(_session.get("email") or ""),
     )
 

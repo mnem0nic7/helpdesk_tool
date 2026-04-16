@@ -142,6 +142,7 @@ class DefenderAgentStore:
             "CREATE INDEX IF NOT EXISTS idx_defender_suppressions_active ON defender_agent_suppressions (active, expires_at)",
             "ALTER TABLE defender_agent_decisions ADD COLUMN mitre_techniques_json TEXT NOT NULL DEFAULT '[]'",
             "ALTER TABLE defender_agent_config ADD COLUMN entity_cooldown_hours INTEGER NOT NULL DEFAULT 24",
+            "ALTER TABLE defender_agent_config ADD COLUMN alert_dedup_window_minutes INTEGER NOT NULL DEFAULT 30",
         ):
             try:
                 with self._conn() as _mc:
@@ -161,6 +162,7 @@ class DefenderAgentStore:
         "tier2_delay_minutes": 15,
         "dry_run": False,
         "entity_cooldown_hours": 24,
+        "alert_dedup_window_minutes": 30,
         "updated_at": "",
         "updated_by": "",
     }
@@ -173,9 +175,10 @@ class DefenderAgentStore:
         d = dict(row)
         d["enabled"] = bool(d["enabled"])
         d["dry_run"] = bool(d["dry_run"])
-        # Column may not exist on older DBs before migration runs
         if "entity_cooldown_hours" not in d:
             d["entity_cooldown_hours"] = 24
+        if "alert_dedup_window_minutes" not in d:
+            d["alert_dedup_window_minutes"] = 30
         return d
 
     def upsert_config(
@@ -186,6 +189,7 @@ class DefenderAgentStore:
         tier2_delay_minutes: int,
         dry_run: bool,
         entity_cooldown_hours: int = 24,
+        alert_dedup_window_minutes: int = 30,
         updated_by: str = "",
     ) -> dict[str, Any]:
         p = self._placeholder()
@@ -195,19 +199,20 @@ class DefenderAgentStore:
                 f"""
                 INSERT INTO defender_agent_config
                     (id, enabled, min_severity, tier2_delay_minutes, dry_run,
-                     entity_cooldown_hours, updated_at, updated_by)
-                VALUES (1, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+                     entity_cooldown_hours, alert_dedup_window_minutes, updated_at, updated_by)
+                VALUES (1, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
                 ON CONFLICT(id) DO UPDATE SET
-                    enabled               = excluded.enabled,
-                    min_severity          = excluded.min_severity,
-                    tier2_delay_minutes   = excluded.tier2_delay_minutes,
-                    dry_run               = excluded.dry_run,
-                    entity_cooldown_hours = excluded.entity_cooldown_hours,
-                    updated_at            = excluded.updated_at,
-                    updated_by            = excluded.updated_by
+                    enabled                    = excluded.enabled,
+                    min_severity               = excluded.min_severity,
+                    tier2_delay_minutes        = excluded.tier2_delay_minutes,
+                    dry_run                    = excluded.dry_run,
+                    entity_cooldown_hours      = excluded.entity_cooldown_hours,
+                    alert_dedup_window_minutes = excluded.alert_dedup_window_minutes,
+                    updated_at                 = excluded.updated_at,
+                    updated_by                 = excluded.updated_by
                 """,
                 (int(enabled), min_severity, tier2_delay_minutes, int(dry_run),
-                 entity_cooldown_hours, now, updated_by),
+                 entity_cooldown_hours, alert_dedup_window_minutes, now, updated_by),
             )
             conn.commit()
         return self.get_config()
@@ -587,6 +592,45 @@ class DefenderAgentStore:
                 if eid not in result:
                     result[eid] = set()
                 result[eid].update(ats)
+        return result
+
+    # -------------------------------------------------------------------------
+    # Alert deduplication
+    # -------------------------------------------------------------------------
+
+    def get_recent_decisions_for_dedup(self, since_minutes: int = 30) -> list[dict[str, Any]]:
+        """Return lightweight decision records created in the last N minutes for dedup index.
+
+        Only non-skip, non-cancelled decisions are included (i.e. decisions that
+        actually represent actions taken or queued).  The returned dicts are minimal
+        — only decision_id, entities, and action_types — to keep the in-memory
+        dedup index small.
+        """
+        if since_minutes <= 0:
+            return []
+        since = (datetime.now(timezone.utc) - timedelta(minutes=since_minutes)).isoformat()
+        p = self._placeholder()
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT decision_id, entities_json, action_type, action_types_json
+                  FROM defender_agent_decisions
+                 WHERE executed_at >= {p}
+                   AND decision != 'skip'
+                   AND cancelled = 0
+                """,
+                (since,),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            ats = json.loads(row["action_types_json"] or "[]")
+            if not ats and row["action_type"]:
+                ats = [row["action_type"]]
+            result.append({
+                "decision_id": row["decision_id"],
+                "entities": json.loads(row["entities_json"] or "[]"),
+                "action_types": ats,
+            })
         return result
 
     @staticmethod

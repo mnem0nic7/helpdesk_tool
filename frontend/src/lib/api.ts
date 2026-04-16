@@ -1491,6 +1491,7 @@ export interface SetAutoReplyRequest {
 
 export interface DefenderAgentConfig {
   entity_cooldown_hours: number;
+  alert_dedup_window_minutes: number;
   enabled: boolean;
   min_severity: "informational" | "low" | "medium" | "high" | "critical";
   tier2_delay_minutes: number;

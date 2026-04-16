@@ -2429,6 +2429,7 @@ class DefenderAgentConfigResponse(BaseModel):
     tier2_delay_minutes: int = 15
     dry_run: bool = False
     entity_cooldown_hours: int = 24
+    alert_dedup_window_minutes: int = 30
     updated_at: Optional[str] = None
     updated_by: str = ""
 
@@ -2439,6 +2440,7 @@ class DefenderAgentConfigUpdate(BaseModel):
     tier2_delay_minutes: int = Field(default=15, ge=0, le=1440)
     dry_run: bool = False
     entity_cooldown_hours: int = Field(default=24, ge=0, le=168)
+    alert_dedup_window_minutes: int = Field(default=30, ge=0, le=1440)
 
 
 class DefenderAgentRunResponse(BaseModel):
