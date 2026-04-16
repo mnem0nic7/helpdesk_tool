@@ -111,19 +111,18 @@ class DefenderAgentStore:
             )
             conn.commit()
 
-        # Idempotent migrations for existing DBs
-        try:
-            conn.execute("ALTER TABLE defender_agent_runs ADD COLUMN skips INTEGER NOT NULL DEFAULT 0")
-            conn.commit()
-        except Exception:
-            pass  # column already exists
-        try:
-            conn.execute(
-                "ALTER TABLE defender_agent_decisions ADD COLUMN action_types_json TEXT NOT NULL DEFAULT '[]'"
-            )
-            conn.commit()
-        except Exception:
-            pass  # column already exists
+        # Idempotent migrations for existing DBs — each opens its own connection
+        # because the CREATE TABLE context manager above closes the connection on exit.
+        for ddl in (
+            "ALTER TABLE defender_agent_runs ADD COLUMN skips INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN action_types_json TEXT NOT NULL DEFAULT '[]'",
+        ):
+            try:
+                with self._conn() as _mc:
+                    _mc.execute(ddl)
+                    _mc.commit()
+            except Exception:
+                pass  # column already exists
 
     # -------------------------------------------------------------------------
     # Config
@@ -415,14 +414,19 @@ class DefenderAgentStore:
                 "SELECT * FROM defender_agent_decisions"
                 " ORDER BY executed_at DESC LIMIT 10"
             ).fetchall()
+        cfg_d = dict(cfg) if cfg else {}
+        run_d = dict(run) if run else {}
+        pt2_d = dict(pending_tier2) if pending_tier2 else {}
+        pa_d = dict(pending_approvals) if pending_approvals else {}
+        at_d = dict(actions_today) if actions_today else {}
         return {
-            "enabled": bool((cfg or {}).get("enabled", 0)),
-            "last_run_at": (run or {}).get("started_at"),
-            "last_run_error": (run or {}).get("error", ""),
+            "enabled": bool(cfg_d.get("enabled", 0)),
+            "last_run_at": run_d.get("started_at"),
+            "last_run_error": run_d.get("error", ""),
             "total_alerts_today": 0,
-            "total_actions_today": int((actions_today or {}).get("c", 0)),
-            "pending_approvals": int((pending_approvals or {}).get("c", 0)),
-            "pending_tier2": int((pending_tier2 or {}).get("c", 0)),
+            "total_actions_today": int(at_d.get("c", 0)),
+            "pending_approvals": int(pa_d.get("c", 0)),
+            "pending_tier2": int(pt2_d.get("c", 0)),
             "recent_decisions": [self._row_to_decision(dict(r), include_raw=False) for r in recent],
         }
 
