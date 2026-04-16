@@ -858,3 +858,147 @@ def test_disposition_stats_fp_rate_all_tp(tmp_path):
     stats = store.get_disposition_stats()
     assert stats["false_positive_rate"] == 0.0
     assert stats["true_positive"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Phase 13: Entity timeline
+# ---------------------------------------------------------------------------
+
+def test_entity_timeline_empty(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    result = store.get_entity_timeline("nobody@example.com")
+    assert result == []
+
+
+def test_entity_timeline_matches_by_id(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    store.create_decision(
+        decision_id="dec-ent-1",
+        run_id="run-1",
+        alert_id="a1",
+        alert_title="Test",
+        alert_severity="high",
+        alert_category="Suspicious",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="mde",
+        tier=1,
+        decision="execute",
+        action_type="revoke_sessions",
+        action_types=["revoke_sessions"],
+        job_ids=[],
+        reason="r",
+        entities=[{"type": "user", "id": "user-abc", "name": "alice@example.com"}],
+        not_before_at=None,
+    )
+    result = store.get_entity_timeline("user-abc")
+    assert len(result) == 1
+    assert result[0]["decision_id"] == "dec-ent-1"
+
+
+def test_entity_timeline_matches_by_name(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    store.create_decision(
+        decision_id="dec-ent-2",
+        run_id="run-1",
+        alert_id="a2",
+        alert_title="Test2",
+        alert_severity="medium",
+        alert_category="Suspicious",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="mde",
+        tier=2,
+        decision="queue",
+        action_type="disable_sign_in",
+        action_types=["disable_sign_in"],
+        job_ids=[],
+        reason="r",
+        entities=[{"type": "user", "id": "user-xyz", "name": "bob@example.com"}],
+        not_before_at=None,
+    )
+    result = store.get_entity_timeline("bob@example.com")
+    assert len(result) == 1
+    assert result[0]["decision_id"] == "dec-ent-2"
+
+
+def test_entity_timeline_no_false_positive_substring_match(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    store.create_decision(
+        decision_id="dec-ent-3",
+        run_id="run-1",
+        alert_id="a3",
+        alert_title="Test3",
+        alert_severity="low",
+        alert_category="Suspicious",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="mde",
+        tier=3,
+        decision="recommend",
+        action_type="device_wipe",
+        action_types=["device_wipe"],
+        job_ids=[],
+        reason="r",
+        entities=[{"type": "device", "id": "device-longname-extra", "name": "LAPTOP001-extra"}],
+        not_before_at=None,
+    )
+    # Substring of name — should NOT match (exact matching only)
+    result = store.get_entity_timeline("LAPTOP001")
+    assert result == []
+    # Exact match by name — should match
+    result_exact = store.get_entity_timeline("LAPTOP001-extra")
+    assert len(result_exact) == 1
+
+
+def test_entity_timeline_multiple_decisions(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    for i in range(3):
+        store.create_decision(
+            decision_id=f"dec-multi-{i}",
+            run_id="run-1",
+            alert_id=f"alert-multi-{i}",
+            alert_title=f"Alert {i}",
+            alert_severity="high",
+            alert_category="Suspicious",
+            alert_created_at="2026-04-16T00:00:00Z",
+            service_source="mde",
+            tier=1,
+            decision="execute",
+            action_type="revoke_sessions",
+            action_types=["revoke_sessions"],
+            job_ids=[],
+            reason="r",
+            entities=[{"type": "user", "id": "shared-user", "name": "shared@example.com"}],
+            not_before_at=None,
+        )
+    result = store.get_entity_timeline("shared-user")
+    assert len(result) == 3
+
+
+def test_entity_timeline_limit(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    for i in range(10):
+        store.create_decision(
+            decision_id=f"dec-lim-{i}",
+            run_id="run-1",
+            alert_id=f"alert-lim-{i}",
+            alert_title=f"Alert {i}",
+            alert_severity="medium",
+            alert_category="Suspicious",
+            alert_created_at="2026-04-16T00:00:00Z",
+            service_source="mde",
+            tier=1,
+            decision="execute",
+            action_type="revoke_sessions",
+            action_types=["revoke_sessions"],
+            job_ids=[],
+            reason="r",
+            entities=[{"type": "user", "id": "lim-user", "name": "lim@example.com"}],
+            not_before_at=None,
+        )
+    result = store.get_entity_timeline("lim-user", limit=5)
+    assert len(result) == 5

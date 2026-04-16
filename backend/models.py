@@ -2514,6 +2514,12 @@ class DefenderAgentDispositionStats(BaseModel):
     by_tier: dict[str, Any] = Field(default_factory=dict)
 
 
+class DefenderAgentEntityTimelineResponse(BaseModel):
+    entity_id: str
+    decisions: list[DefenderAgentDecisionItem]
+    total: int
+
+
 class DefenderAgentSummaryResponse(BaseModel):
     enabled: bool = False
     last_run_at: Optional[str] = None

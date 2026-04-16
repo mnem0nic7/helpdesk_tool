@@ -740,6 +740,53 @@ class DefenderAgentStore:
 
 
     # -------------------------------------------------------------------------
+    # Entity timeline
+    # -------------------------------------------------------------------------
+
+    def get_entity_timeline(
+        self,
+        entity_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return decisions that involve a specific entity, newest first.
+
+        entity_id may be an Azure AD user/device ID, UPN, or device name.
+        Uses a LIKE pre-filter on entities_json (fast for typical volumes)
+        followed by a Python-side exact-match check so partial substrings
+        (e.g. "ada" matching "ada-admin") are not included.
+        """
+        if not entity_id:
+            return []
+        search = entity_id.lower()
+        p = self._placeholder()
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM defender_agent_decisions
+                 WHERE entities_json LIKE {p}
+                 ORDER BY executed_at DESC
+                 LIMIT {p}
+                """,
+                (f"%{entity_id}%", limit * 5),  # over-fetch; filter below
+            ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            d = self._row_to_decision(dict(row), include_raw=False)
+            # Exact match: check entity id or name in the parsed list
+            entities = d.get("entities") or []
+            matched = any(
+                search == str(e.get("id") or "").lower() or
+                search == str(e.get("name") or "").lower()
+                for e in entities
+            )
+            if matched:
+                results.append(d)
+            if len(results) >= limit:
+                break
+        return results
+
+    # -------------------------------------------------------------------------
     # Analyst disposition
     # -------------------------------------------------------------------------
 

@@ -1580,6 +1580,12 @@ export interface DefenderAgentDispositionStats {
   by_tier: Record<string, Record<string, number>>;
 }
 
+export interface DefenderAgentEntityTimeline {
+  entity_id: string;
+  decisions: DefenderAgentDecision[];
+  total: number;
+}
+
 export interface DefenderAgentSummary {
   enabled: boolean;
   last_run_at: string | null;
@@ -3859,6 +3865,11 @@ export const api = {
   },
   getDefenderAgentDispositionStats(): Promise<DefenderAgentDispositionStats> {
     return fetchJSON<DefenderAgentDispositionStats>("/api/azure/security/defender-agent/disposition-stats");
+  },
+  getEntityTimeline(entityId: string, limit = 100): Promise<DefenderAgentEntityTimeline> {
+    return fetchJSON<DefenderAgentEntityTimeline>(
+      `/api/azure/security/defender-agent/entities/${encodeURIComponent(entityId)}/timeline?limit=${limit}`
+    );
   },
   listDefenderIndicators(): Promise<{ indicators: DefenderIndicator[]; total: number }> {
     return fetchJSON<{ indicators: DefenderIndicator[]; total: number }>(
