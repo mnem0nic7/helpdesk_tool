@@ -826,6 +826,7 @@ function AlertDetailDrawer({
   onUnrestrict,
   onForceInvestigate,
   onExecuteNow,
+  onEnableSignIn,
   onSuppressEntity,
   onOpenEntityTimeline,
 }: {
@@ -838,6 +839,7 @@ function AlertDetailDrawer({
   onUnrestrict: (id: string) => void;
   onForceInvestigate: (id: string) => void;
   onExecuteNow: (id: string) => void;
+  onEnableSignIn: (id: string) => void;
   onSuppressEntity: (type: DefenderSuppressionType, value: string) => void;
   onOpenEntityTimeline: (entityId: string, entityName: string) => void;
 }) {
@@ -893,10 +895,11 @@ function AlertDetailDrawer({
   const status = d ? decisionStatus(d) : null;
   const canCancel = d && d.decision === "queue" && !d.cancelled && !d.job_ids.length;
   const canApprove = d && d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
-  const canUnisolate = d && d.action_type === "isolate_device" && d.job_ids.length > 0 && !d.cancelled && isAdmin;
-  const canUnrestrict = d && d.action_type === "restrict_app_execution" && d.job_ids.length > 0 && !d.cancelled && isAdmin;
-  const canForceInvestigate = d && d.decision === "skip" && d.entities.some(e => e.type === "device") && isAdmin;
   const canExecuteNow = d && d.decision === "queue" && !d.cancelled && !d.job_ids.length && isAdmin;
+  const canForceInvestigate = d && d.entities.some(e => e.type === "device") && isAdmin;
+  const canUnisolate = d && d.entities.some(e => e.type === "device") && !d.cancelled && isAdmin;
+  const canUnrestrict = d && d.entities.some(e => e.type === "device") && !d.cancelled && isAdmin;
+  const canEnableSignIn = d && d.entities.some(e => e.type === "user" || e.type === "account") && !d.cancelled && isAdmin;
 
   function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
@@ -1296,75 +1299,99 @@ function AlertDetailDrawer({
         )}
 
         {/* Footer actions */}
-        {d && (canCancel || canApprove || canUnisolate || canUnrestrict || canForceInvestigate || canExecuteNow) && (
-          <div className="border-t border-gray-200 px-6 py-4 flex justify-end gap-3">
-            {canExecuteNow && (
-              <button
-                onClick={() => {
-                  if (confirm("Execute this T2 action immediately, skipping the delay window?")) {
-                    onExecuteNow(d.decision_id);
-                    onClose();
-                  }
-                }}
-                className="rounded-lg border border-amber-400 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
-              >
-                Execute Now
-              </button>
+        {d && (canCancel || canApprove || canUnisolate || canUnrestrict || canForceInvestigate || canExecuteNow || canEnableSignIn) && (
+          <div className="border-t border-gray-200 px-6 py-4 space-y-3">
+            {(canForceInvestigate || canUnisolate || canUnrestrict || canEnableSignIn) && (
+              <div>
+                <p className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Manual Actions</p>
+                <div className="flex flex-wrap gap-2">
+                  {canForceInvestigate && (
+                    <button
+                      onClick={() => {
+                        if (confirm("Manually trigger an MDE investigation on the device(s) in this alert?")) {
+                          onForceInvestigate(d.decision_id);
+                          onClose();
+                        }
+                      }}
+                      className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-sm text-violet-700 hover:bg-violet-100"
+                    >
+                      Force Investigate
+                    </button>
+                  )}
+                  {canUnisolate && (
+                    <button
+                      onClick={() => {
+                        if (confirm("Manually release device(s) from network isolation?")) {
+                          onUnisolate(d.decision_id);
+                          onClose();
+                        }
+                      }}
+                      className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      Release Isolation
+                    </button>
+                  )}
+                  {canUnrestrict && (
+                    <button
+                      onClick={() => {
+                        if (confirm("Manually remove the app execution restriction from device(s)?")) {
+                          onUnrestrict(d.decision_id);
+                          onClose();
+                        }
+                      }}
+                      className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      Remove App Restriction
+                    </button>
+                  )}
+                  {canEnableSignIn && (
+                    <button
+                      onClick={() => {
+                        if (confirm("Manually re-enable sign-in for the user(s) in this alert?")) {
+                          onEnableSignIn(d.decision_id);
+                          onClose();
+                        }
+                      }}
+                      className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      Enable Sign-in
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
-            {canCancel && (
-              <button
-                onClick={() => { onCancel(d.decision_id); onClose(); }}
-                className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-700 hover:bg-amber-100"
-              >
-                Cancel action
-              </button>
-            )}
-            {canUnisolate && (
-              <button
-                onClick={() => {
-                  if (confirm("Release this device from network isolation? The device will regain full network access.")) {
-                    onUnisolate(d.decision_id);
-                    onClose();
-                  }
-                }}
-                className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 hover:bg-emerald-100"
-              >
-                Release Isolation
-              </button>
-            )}
-            {canUnrestrict && (
-              <button
-                onClick={() => {
-                  if (confirm("Remove the app execution restriction from this device? The device will be able to run all applications again.")) {
-                    onUnrestrict(d.decision_id);
-                    onClose();
-                  }
-                }}
-                className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 hover:bg-emerald-100"
-              >
-                Remove App Restriction
-              </button>
-            )}
-            {canForceInvestigate && (
-              <button
-                onClick={() => {
-                  if (confirm("Trigger an MDE automated investigation on the device(s) in this alert? This will create a device job.")) {
-                    onForceInvestigate(d.decision_id);
-                    onClose();
-                  }
-                }}
-                className="rounded-lg border border-violet-300 bg-violet-50 px-4 py-2 text-sm text-violet-700 hover:bg-violet-100"
-              >
-                Force Investigate
-              </button>
-            )}
-            {canApprove && (
-              <button
-                onClick={() => { onApprove(d.decision_id); onClose(); }}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-              >
-                Approve & execute
-              </button>
+            {(canCancel || canApprove || canExecuteNow) && (
+              <div className="flex justify-end gap-3">
+                {canExecuteNow && (
+                  <button
+                    onClick={() => {
+                      if (confirm("Execute this T2 action immediately, skipping the delay window?")) {
+                        onExecuteNow(d.decision_id);
+                        onClose();
+                      }
+                    }}
+                    className="rounded-lg border border-amber-400 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
+                  >
+                    Execute Now
+                  </button>
+                )}
+                {canCancel && (
+                  <button
+                    onClick={() => { onCancel(d.decision_id); onClose(); }}
+                    className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-700 hover:bg-amber-100"
+                  >
+                    Cancel action
+                  </button>
+                )}
+                {canApprove && (
+                  <button
+                    onClick={() => { onApprove(d.decision_id); onClose(); }}
+                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                  >
+                    Approve & execute
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -1446,16 +1473,13 @@ function DecisionRow({
   const status = decisionStatus(d);
 
   // Primary actions
-  const canCancel         = d.decision === "queue" && !d.cancelled && !d.job_ids.length;
-  const canApprove        = d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
-  const canExecuteNow     = d.decision === "queue" && !d.cancelled && !d.job_ids.length && isAdmin;
-  const canForceInvestigate = d.decision === "skip" && d.entities.some(e => e.type === "device") && isAdmin;
-
-  // Undo actions (require jobs to have been dispatched)
-  const hasJobs = d.job_ids.length > 0;
-  const canUnisolate   = d.action_type === "isolate_device" && hasJobs && !d.cancelled && isAdmin;
-  const canUnrestrict  = d.action_type === "restrict_app_execution" && hasJobs && !d.cancelled && isAdmin;
-  const canEnableSignIn = ["disable_sign_in", "revoke_sessions", "account_lockout"].includes(d.action_type) && hasJobs && !d.cancelled && isAdmin;
+  const canCancel           = d.decision === "queue" && !d.cancelled && !d.job_ids.length;
+  const canApprove          = d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
+  const canExecuteNow       = d.decision === "queue" && !d.cancelled && !d.job_ids.length && isAdmin;
+  const canForceInvestigate = d.entities.some(e => e.type === "device") && isAdmin;
+  const canUnisolate        = d.entities.some(e => e.type === "device") && !d.cancelled && isAdmin;
+  const canUnrestrict       = d.entities.some(e => e.type === "device") && !d.cancelled && isAdmin;
+  const canEnableSignIn     = d.entities.some(e => e.type === "user" || e.type === "account") && !d.cancelled && isAdmin;
 
   const hasAnyAction = canCancel || canApprove || canExecuteNow || canForceInvestigate || canUnisolate || canUnrestrict || canEnableSignIn;
 
@@ -2901,6 +2925,7 @@ export default function AzureSecurityAgentPage() {
           onUnrestrict={(id) => { unrestrictMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onForceInvestigate={(id) => { forceInvestigateMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onExecuteNow={(id) => { executeNowMutation.mutate(id); }}
+          onEnableSignIn={(id) => { enableSignInMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onSuppressEntity={(type, value) => {
             const reason = prompt(`Suppression reason for "${value}" (optional):`);
             createSuppressionMutation.mutate({ suppression_type: type, value, reason: reason ?? "" });

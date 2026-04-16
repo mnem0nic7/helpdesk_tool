@@ -320,10 +320,6 @@ def unrestrict_decision_device(
     row = defender_agent_store.get_decision(decision_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Decision not found")
-    if row.get("action_type") != "restrict_app_execution":
-        raise HTTPException(status_code=400, detail="Only app-restriction decisions can be unrestricted")
-    if not row.get("job_ids"):
-        raise HTTPException(status_code=400, detail="App restriction was never applied (no jobs dispatched)")
 
     from security_device_jobs import security_device_jobs as sdj
 
@@ -364,10 +360,6 @@ def unisolate_decision_device(
     row = defender_agent_store.get_decision(decision_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Decision not found")
-    if row.get("action_type") != "isolate_device":
-        raise HTTPException(status_code=400, detail="Only isolation decisions can be unisolated")
-    if not row.get("job_ids"):
-        raise HTTPException(status_code=400, detail="Device was never isolated (no jobs dispatched)")
 
     from security_device_jobs import security_device_jobs as sdj
 
@@ -408,8 +400,6 @@ def force_investigate_decision(
     row = defender_agent_store.get_decision(decision_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Decision not found")
-    if row.get("decision") != "skip":
-        raise HTTPException(status_code=400, detail="Only skipped decisions can be force-investigated")
 
     from security_device_jobs import security_device_jobs as sdj
 
@@ -454,15 +444,6 @@ def enable_sign_in_decision(
     row = defender_agent_store.get_decision(decision_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Decision not found")
-    action = row.get("action_type", "")
-    if action not in ("disable_sign_in", "revoke_sessions", "account_lockout"):
-        raise HTTPException(
-            status_code=400,
-            detail="enable-sign-in is only available for disable_sign_in, revoke_sessions, or account_lockout decisions",
-        )
-    if not row.get("job_ids"):
-        raise HTTPException(status_code=400, detail="Action was never applied (no jobs dispatched)")
-
     from user_admin_jobs import user_admin_jobs as uaj
 
     user_ids = [
@@ -476,7 +457,7 @@ def enable_sign_in_decision(
         uaj.create_job(
             action_type="enable_sign_in",
             target_user_ids=user_ids,
-            params={"reason": f"Undo {action} for alert: {row.get('alert_title', '')}"},
+            params={"reason": f"Manual enable-sign-in for alert: {row.get('alert_title', '')}"},
             requested_by_email=str(_session.get("email") or ""),
             requested_by_name=str(_session.get("name") or ""),
         )
