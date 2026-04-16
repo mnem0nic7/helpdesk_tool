@@ -32,8 +32,10 @@ function tierLabel(d: DefenderAgentDecision): { label: string; color: string } {
 
 function decisionStatus(d: DefenderAgentDecision): { label: string; color: string } {
   if (d.cancelled)         return { label: "Cancelled",          color: "text-gray-400" };
-  if (d.human_approved)    return { label: "Approved",           color: "text-emerald-600 font-medium" };
   if (d.decision === "skip") return { label: "—",                color: "text-gray-400" };
+  if (d.remediation_confirmed) return { label: "Remediated ✓",  color: "text-emerald-600 font-medium" };
+  if (d.remediation_failed)    return { label: "Action failed ✗", color: "text-red-600 font-medium" };
+  if (d.human_approved)    return { label: "Approved",           color: "text-emerald-600 font-medium" };
   if (d.decision === "recommend" && !d.human_approved)
     return { label: "Awaiting approval",                         color: "text-blue-600 font-medium" };
   if (d.decision === "queue") {
@@ -324,12 +326,12 @@ function AlertDetailDrawer({
     );
   }
 
-  function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  function Row({ label, value, valueClass }: { label: string; value: React.ReactNode; valueClass?: string }) {
     if (!value) return null;
     return (
       <div className="flex gap-2 py-0.5">
         <span className="w-36 shrink-0 text-xs text-gray-400">{label}</span>
-        <span className="text-xs text-gray-800 break-all">{value}</span>
+        <span className={`text-xs break-all ${valueClass ?? "text-gray-800"}`}>{value}</span>
       </div>
     );
   }
@@ -500,6 +502,20 @@ function AlertDetailDrawer({
                   )}
                   {d.not_before_at && <Row label="Execute after" value={fmtTime(d.not_before_at)} />}
                   {d.job_ids.length > 0 && <Row label="Job IDs" value={d.job_ids.join(", ")} />}
+                  {d.remediation_confirmed && (
+                    <Row
+                      label="Remediation"
+                      value={`Confirmed ✓ at ${fmtTime(d.confirmed_at)}`}
+                      valueClass="text-emerald-600 font-medium"
+                    />
+                  )}
+                  {d.remediation_failed && (
+                    <Row
+                      label="Remediation"
+                      value={`Failed ✗ at ${fmtTime(d.confirmed_at)} — check job logs`}
+                      valueClass="text-red-600 font-medium"
+                    />
+                  )}
                   {d.cancelled && (
                     <>
                       <Row label="Cancelled at" value={fmtTime(d.cancelled_at)} />

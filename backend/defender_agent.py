@@ -964,6 +964,57 @@ def _notify_teams(
 # ---------------------------------------------------------------------------
 
 
+def _check_remediation_outcomes() -> None:
+    """Poll job statuses for actioned decisions and update their remediation state.
+
+    Called once per agent cycle before alert processing.  Looks for decisions that
+    have job_ids but no remediation outcome yet, checks each job's status from the
+    user_admin_jobs and security_device_jobs stores, and marks the decision
+    ``remediation_confirmed`` (all jobs completed) or ``remediation_failed`` (any
+    job failed).  Decisions where at least one job is still queued/running are left
+    for the next cycle.
+    """
+    from defender_agent_store import defender_agent_store
+    from user_admin_jobs import user_admin_jobs
+    from security_device_jobs import security_device_jobs as sdj
+
+    decisions = defender_agent_store.get_unconfirmed_actioned_decisions(limit=50)
+    for decision in decisions:
+        job_ids: list[str] = decision.get("job_ids") or []
+        if not job_ids:
+            continue
+
+        any_failed = False
+        any_pending = False
+
+        for jid in job_ids:
+            job = user_admin_jobs.get_job(jid)
+            if job is None:
+                job = sdj.get_job(jid)
+            if job is None:
+                continue  # cleaned up — skip this job
+            status = str(job.get("status") or "").lower()
+            if status == "failed":
+                any_failed = True
+            elif status in ("queued", "running"):
+                any_pending = True
+
+        if any_pending:
+            continue  # still in-flight — check next cycle
+
+        decision_id = str(decision["decision_id"])
+        if any_failed:
+            defender_agent_store.update_decision_remediation(
+                decision_id, confirmed=False, failed=True
+            )
+            logger.info("Defender agent: remediation FAILED for decision %s", decision_id[:8])
+        else:
+            defender_agent_store.update_decision_remediation(
+                decision_id, confirmed=True, failed=False
+            )
+            logger.info("Defender agent: remediation confirmed for decision %s", decision_id[:8])
+
+
 def _run_agent_cycle() -> None:
     """Synchronous cycle called from an executor thread."""
     from defender_agent_store import defender_agent_store
@@ -983,6 +1034,12 @@ def _run_agent_cycle() -> None:
 
     run_id = uuid.uuid4().hex
     defender_agent_store.create_run(run_id)
+
+    # Check remediation outcomes for previously dispatched decisions first
+    try:
+        _check_remediation_outcomes()
+    except Exception as _rem_exc:
+        logger.warning("Defender agent: remediation check failed (non-fatal): %s", _rem_exc)
 
     alerts_fetched = 0
     alerts_new = 0

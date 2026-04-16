@@ -2481,6 +2481,9 @@ class DefenderAgentDecisionItem(BaseModel):
     alert_raw: dict[str, Any] = Field(default_factory=dict)
     alert_written_back: bool = False
     mitre_techniques: list[str] = Field(default_factory=list)
+    remediation_confirmed: bool = False
+    remediation_failed: bool = False
+    confirmed_at: Optional[str] = None
 
 
 class DefenderAgentDecisionsResponse(BaseModel):
