@@ -674,8 +674,16 @@ _RULES: list[dict[str, Any]] = [
     },
 ]
 
+# Assign stable rule_ids at module load — setdefault so hand-coded ids survive reloads.
+for _ri, _rule in enumerate(_RULES):
+    _rule.setdefault("rule_id", f"rule_{_ri:02d}")
 
-def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | None, str, list[str], str, int]:
+
+def _classify_alert(
+    alert: dict[str, Any],
+    min_severity: str,
+    overrides: dict[str, dict[str, Any]] | None = None,
+) -> tuple[int | None, str, list[str], str, int]:
     """Return (tier, decision_type, action_types, reason, confidence_score).
 
     decision_type:    "execute" | "queue" | "recommend" | "skip"
@@ -690,7 +698,13 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
     if _SEV_ORDER.get(severity, 0) < _SEV_ORDER.get(min_severity, 3):
         return None, "skip", [], f"Severity '{severity}' is below configured minimum '{min_severity}'.", 0
 
+    _overrides = overrides or {}
     for rule in _RULES:
+        rule_id = str(rule.get("rule_id", ""))
+        ov = _overrides.get(rule_id, {})
+        # Operator may disable a built-in rule
+        if ov.get("disabled"):
+            continue
         # Severity gate
         rule_min = rule.get("min_severity", "high")
         if _SEV_ORDER.get(severity, 0) < _SEV_ORDER.get(rule_min, 3):
@@ -713,7 +727,8 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
         tier: int = rule["tier"]
         decision: str = rule["decision"]
         reason: str = rule["reason"]
-        confidence: int = int(rule.get("confidence_score", 50))
+        # Operator may override confidence score for a rule
+        confidence: int = int(ov.get("confidence_score") if ov.get("confidence_score") is not None else rule.get("confidence_score", 50))
         # Off-hours escalation: T2/queue → T1/execute outside PT business hours.
         # Only applies to rules explicitly tagged off_hours_escalate=True.
         if (
@@ -728,6 +743,54 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
         return tier, decision, ats, reason, confidence
 
     return None, "skip", [], "Alert category/title did not match any decision rule.", 0
+
+
+def _apply_custom_rules(
+    alert: dict[str, Any],
+    custom_rules: list[dict[str, Any]],
+) -> tuple[int | None, str, list[str], str, int] | None:
+    """Check alert against custom detection rules; return classification or None if no match.
+
+    Custom rules are evaluated after built-in _RULES fail to match (or are all
+    disabled).  Returns the same tuple shape as _classify_alert, or None if no
+    custom rule matches.
+    """
+    title = (alert.get("title") or "").lower()
+    category = (alert.get("category") or "").lower()
+    service_source = (alert.get("serviceSource") or "").lower()
+    severity = (alert.get("severity") or "").lower()
+
+    for cr in custom_rules:
+        match_field = str(cr.get("match_field") or "title").lower()
+        match_value = str(cr.get("match_value") or "").lower()
+        match_mode = str(cr.get("match_mode") or "contains").lower()
+        if not match_value:
+            continue
+        if match_field == "title":
+            haystack = title
+        elif match_field == "category":
+            haystack = category
+        elif match_field == "service_source":
+            haystack = service_source
+        elif match_field == "severity":
+            haystack = severity
+        else:
+            haystack = title
+        if match_mode == "exact":
+            matched = haystack == match_value
+        elif match_mode == "startswith":
+            matched = haystack.startswith(match_value)
+        else:  # contains
+            matched = match_value in haystack
+        if matched:
+            tier = int(cr.get("tier") or 3)
+            action_type = str(cr.get("action_type") or "start_investigation")
+            confidence = int(cr.get("confidence_score") or 50)
+            decision = "execute" if tier == 1 else ("queue" if tier == 2 else "recommend")
+            reason = f"[Custom rule: {cr.get('name', cr.get('id', '?'))}] matched {match_field}={match_value!r}"
+            return tier, decision, [action_type], reason, confidence
+
+    return None
 
 
 def _check_entity_cooldown(
@@ -1041,7 +1104,18 @@ def _notify_teams(
     console_url: str = "https://azure.movedocs.com/security/agent",
 ) -> None:
     """Post an Adaptive Card to the configured Teams webhook. Best-effort — never raises."""
+    # Per-tier webhook routing: check DB config first, fall back to global env webhook
     webhook_url = DEFENDER_AGENT_TEAMS_WEBHOOK_URL
+    try:
+        from defender_agent_store import defender_agent_store as _das
+        _cfg = _das.get_config()
+        tier_key = f"teams_tier{tier}_webhook" if tier in (1, 2, 3) else None
+        if tier_key:
+            _tier_url = str(_cfg.get(tier_key) or "").strip()
+            if _tier_url:
+                webhook_url = _tier_url
+    except Exception:
+        pass
     if not webhook_url:
         return
     try:
@@ -1221,6 +1295,12 @@ def _run_agent_cycle() -> None:
         # Build watchlist lookup once per cycle: lower-cased entity_id → entry
         watchlist_lookup = defender_agent_store.get_watchlist_lookup()
 
+        # Build rule overrides map once per cycle: rule_id → override dict
+        rule_overrides = defender_agent_store.get_rule_overrides()
+
+        # Load custom detection rules once per cycle
+        custom_rules = defender_agent_store.list_custom_rules(enabled_only=True)
+
         for alert in new_alerts:
             alert_id = alert.get("id", uuid.uuid4().hex)
             alert_title = str(alert.get("title") or "")
@@ -1259,7 +1339,14 @@ def _run_agent_cycle() -> None:
                 logger.info("Defender agent: suppressed alert %s — %s", alert_id, suppress_reason)
                 continue
 
-            tier, decision_type, action_types, reason, confidence_score = _classify_alert(alert, min_severity)
+            tier, decision_type, action_types, reason, confidence_score = _classify_alert(
+                alert, min_severity, overrides=rule_overrides
+            )
+            # If built-in rules produced a skip, check custom rules for a match
+            if decision_type == "skip" and custom_rules:
+                cr_result = _apply_custom_rules(alert, custom_rules)
+                if cr_result is not None:
+                    tier, decision_type, action_types, reason, confidence_score = cr_result
             # Primary action_type is first in list (for display / backward compat)
             action_type = action_types[0] if action_types else ""
 
@@ -1844,7 +1931,14 @@ async def _agent_loop() -> None:
             raise
         except Exception:
             logger.exception("Defender agent loop iteration failed")
-        await asyncio.sleep(AZURE_DEFENDER_AGENT_POLL_SECONDS)
+        # Use DB-configurable interval; fall back to env/config default
+        try:
+            from defender_agent_store import defender_agent_store as _das
+            _cfg = _das.get_config()
+            _interval = int(_cfg.get("poll_interval_seconds") or 0) or AZURE_DEFENDER_AGENT_POLL_SECONDS
+        except Exception:
+            _interval = AZURE_DEFENDER_AGENT_POLL_SECONDS
+        await asyncio.sleep(_interval)
 
 
 async def start_worker() -> None:

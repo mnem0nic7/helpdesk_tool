@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { DefenderAgentConfig, DefenderAgentDecision, DefenderAgentDispositionStats, DefenderAgentEntityTimeline, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType } from "../lib/api.ts";
+import type { DefenderAgentBuiltinRule, DefenderAgentConfig, DefenderAgentCustomRule, DefenderAgentDecision, DefenderAgentDispositionStats, DefenderAgentEntityTimeline, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 // ---------------------------------------------------------------------------
@@ -157,6 +157,10 @@ function ConfigDrawer({
     entity_cooldown_hours: config.entity_cooldown_hours ?? 24,
     alert_dedup_window_minutes: config.alert_dedup_window_minutes ?? 30,
     min_confidence: config.min_confidence ?? 0,
+    poll_interval_seconds: config.poll_interval_seconds ?? 0,
+    teams_tier1_webhook: config.teams_tier1_webhook ?? "",
+    teams_tier2_webhook: config.teams_tier2_webhook ?? "",
+    teams_tier3_webhook: config.teams_tier3_webhook ?? "",
   });
 
   return (
@@ -240,6 +244,17 @@ function ConfigDrawer({
             className="mt-1 block w-24 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
           />
         </label>
+        <label className="block">
+          <span className="text-xs text-gray-500">Poll interval (seconds, 0 = default)</span>
+          <input
+            type="number"
+            min={0}
+            max={86400}
+            value={local.poll_interval_seconds ?? 0}
+            onChange={(e) => setLocal((p) => ({ ...p, poll_interval_seconds: Math.max(0, parseInt(e.target.value) || 0) }))}
+            className="mt-1 block w-28 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+          />
+        </label>
         <button
           onClick={() => onSave(local)}
           disabled={saving}
@@ -248,11 +263,30 @@ function ConfigDrawer({
           {saving ? "Saving…" : "Save"}
         </button>
       </div>
-      <div className="text-xs text-gray-400 space-y-0.5">
+      <div className="mt-3 space-y-2">
+        <p className="text-xs font-medium text-gray-600">Teams notification webhooks (per tier, optional — overrides global webhook)</p>
+        {[1, 2, 3].map((tier) => {
+          const key = `teams_tier${tier}_webhook` as keyof DefenderAgentConfig;
+          return (
+            <label key={tier} className="flex items-center gap-2 text-xs">
+              <span className={`w-16 shrink-0 text-right font-medium ${tier === 1 ? "text-green-700" : tier === 2 ? "text-amber-700" : "text-blue-700"}`}>T{tier} hook</span>
+              <input
+                type="url"
+                value={(local[key] as string) ?? ""}
+                placeholder="https://…"
+                onChange={(e) => setLocal((p) => ({ ...p, [key]: e.target.value }))}
+                className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-xs"
+              />
+            </label>
+          );
+        })}
+      </div>
+      <div className="text-xs text-gray-400 space-y-0.5 mt-2">
         <p>T2 delay: the window an operator has to cancel a sign-in disable before it executes. 0 = immediate.</p>
         <p>Entity cooldown: suppress repeat actions on the same user or device within this window. 0 = disabled.</p>
         <p>Alert dedup window: collapse multiple alerts that would trigger the same action on the same entity within this window into a single decision. 0 = disabled.</p>
         <p>Min confidence: T1/T2 decisions from rules below this score (0–100) are downgraded to T3 recommend. 0 = disabled (all rules execute at their assigned tier).</p>
+        <p>Poll interval: how often the agent polls for new alerts. 0 = use the server default (AZURE_DEFENDER_AGENT_POLL_SECONDS).</p>
       </div>
     </div>
   );
@@ -681,6 +715,19 @@ function AlertDetailDrawer({
     },
   });
 
+  const [tagInput, setTagInput] = useState("");
+  const addTagMut = useMutation({
+    mutationFn: (tag: string) => api.addDecisionTag(decisionId, tag),
+    onSuccess: () => {
+      setTagInput("");
+      queryClient.invalidateQueries({ queryKey: ["defender-agent-decision", decisionId] });
+    },
+  });
+  const removeTagMut = useMutation({
+    mutationFn: (tag: string) => api.removeDecisionTag(decisionId, tag),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decision", decisionId] }),
+  });
+
   // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -1016,6 +1063,48 @@ function AlertDetailDrawer({
         )}
 
         {/* Investigation notes */}
+        {/* Tags section */}
+        {d && (
+          <div className="border-t border-gray-100 px-6 py-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Tags</p>
+            <div className="flex flex-wrap gap-1 mb-2">
+              {(d.tags ?? []).map((tag) => (
+                <span key={tag} className="inline-flex items-center gap-1 rounded-full bg-indigo-50 border border-indigo-200 pl-2 pr-1 py-0.5 text-xs text-indigo-700">
+                  #{tag}
+                  <button
+                    onClick={() => removeTagMut.mutate(tag)}
+                    disabled={removeTagMut.isPending}
+                    className="rounded-full p-0.5 hover:bg-indigo-200 disabled:opacity-40"
+                    title={`Remove tag #${tag}`}
+                  >
+                    <svg className="h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor">
+                      <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/>
+                    </svg>
+                  </button>
+                </span>
+              ))}
+              {(d.tags ?? []).length === 0 && <span className="text-xs text-gray-400">No tags.</span>}
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && tagInput.trim()) { addTagMut.mutate(tagInput.trim().toLowerCase()); } }}
+                placeholder="Add tag…"
+                className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              />
+              <button
+                onClick={() => { if (tagInput.trim()) addTagMut.mutate(tagInput.trim().toLowerCase()); }}
+                disabled={!tagInput.trim() || addTagMut.isPending}
+                className="shrink-0 rounded-md bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        )}
+
         {d && (
           <div className="border-t border-gray-100 px-6 py-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Investigation notes</p>
@@ -1228,6 +1317,15 @@ function DecisionRow({
             )}
           </div>
         )}
+        {(d.tags ?? []).length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {(d.tags ?? []).map((tag) => (
+              <span key={tag} className="inline-block rounded-full bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-700">
+                #{tag}
+              </span>
+            ))}
+          </div>
+        )}
       </td>
       <td className="whitespace-nowrap px-3 py-2">
         {(() => { const s = sourceLabel(d.service_source); return (
@@ -1302,6 +1400,308 @@ function DecisionRow({
         )}
       </td>
     </tr>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 17: Built-in rule management panel
+// ---------------------------------------------------------------------------
+
+function RulesPanel() {
+  const queryClient = useQueryClient();
+  const [expanded, setExpanded] = useState(false);
+  const rulesQuery = useQuery({
+    queryKey: ["defender-agent-builtin-rules"],
+    queryFn: () => api.listDefenderAgentBuiltinRules(),
+    enabled: expanded,
+  });
+  const updateRuleMut = useMutation({
+    mutationFn: ({ ruleId, disabled, confidence_score }: { ruleId: string; disabled: boolean; confidence_score?: number | null }) =>
+      api.updateDefenderAgentRule(ruleId, { disabled, confidence_score }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-builtin-rules"] }),
+  });
+
+  return (
+    <div className="mt-6 rounded-xl border border-gray-200 bg-white shadow">
+      <button
+        className="flex w-full items-center justify-between px-5 py-4 border-b border-gray-200 text-left"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+          <svg className={`h-4 w-4 transition-transform text-gray-400 ${expanded ? "rotate-90" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clipRule="evenodd"/>
+          </svg>
+          Built-in Detection Rules
+        </h2>
+        <span className="text-xs text-gray-400">Disable or adjust confidence scores for built-in classification rules</span>
+      </button>
+      {expanded && (
+        <div className="overflow-x-auto">
+          {rulesQuery.isLoading && (
+            <div className="flex items-center justify-center py-8">
+              <div className="h-5 w-5 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+            </div>
+          )}
+          {rulesQuery.data && (
+            <table className="min-w-full text-xs">
+              <thead className="bg-gray-50">
+                <tr>
+                  {["ID", "Tier", "Action", "Confidence", "Keywords", "Status", ""].map((h) => (
+                    <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 bg-white">
+                {rulesQuery.data.map((rule) => (
+                  <tr key={rule.rule_id} className={`hover:bg-gray-50 ${rule.disabled ? "opacity-50" : ""}`}>
+                    <td className="px-3 py-2 font-mono text-gray-500">{rule.rule_id}</td>
+                    <td className="px-3 py-2">
+                      <span className={`rounded-full px-1.5 py-0.5 text-xs font-medium ${rule.tier === 1 ? "bg-green-100 text-green-700" : rule.tier === 2 ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>
+                        T{rule.tier}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-gray-700">{rule.action_type || rule.action_types[0] || "—"}</td>
+                    <td className="px-3 py-2">
+                      {rule.override_confidence != null ? (
+                        <span className="inline-flex items-center gap-1">
+                          <span className="line-through text-gray-400">{rule.confidence_score}%</span>
+                          <span className="text-blue-600 font-medium">{rule.override_confidence}%</span>
+                        </span>
+                      ) : (
+                        <span className="text-gray-600">{rule.confidence_score}%</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-gray-500 max-w-xs truncate" title={[...rule.title_keywords, ...rule.category_keywords].join(", ") || rule.reason}>
+                      {[...rule.title_keywords, ...rule.category_keywords].slice(0, 3).join(", ") || <span className="italic text-gray-300">catch-all</span>}
+                    </td>
+                    <td className="px-3 py-2">
+                      {rule.disabled ? (
+                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-700">Disabled</span>
+                      ) : (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700">Active</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <button
+                        onClick={() => updateRuleMut.mutate({ ruleId: rule.rule_id, disabled: !rule.disabled, confidence_score: rule.override_confidence })}
+                        disabled={updateRuleMut.isPending}
+                        className={`mr-2 text-xs rounded px-2 py-1 ${rule.disabled ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "bg-red-50 text-red-600 hover:bg-red-100"} disabled:opacity-40`}
+                      >
+                        {rule.disabled ? "Enable" : "Disable"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 18: Custom detection rules panel
+// ---------------------------------------------------------------------------
+
+function CustomRulesPanel() {
+  const queryClient = useQueryClient();
+  const [expanded, setExpanded] = useState(false);
+  const [form, setForm] = useState<Partial<DefenderAgentCustomRule>>({
+    name: "",
+    match_field: "title",
+    match_value: "",
+    match_mode: "contains",
+    tier: 3,
+    action_type: "start_investigation",
+    confidence_score: 50,
+  });
+
+  const rulesQuery = useQuery({
+    queryKey: ["defender-agent-custom-rules"],
+    queryFn: () => api.listDefenderAgentCustomRules(),
+    enabled: expanded,
+  });
+  const createMut = useMutation({
+    mutationFn: (body: Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at">) =>
+      api.createDefenderAgentCustomRule(body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["defender-agent-custom-rules"] });
+      setForm({ name: "", match_field: "title", match_value: "", match_mode: "contains", tier: 3, action_type: "start_investigation", confidence_score: 50 });
+    },
+  });
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.deleteDefenderAgentCustomRule(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-custom-rules"] }),
+  });
+  const toggleMut = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => api.toggleDefenderAgentCustomRule(id, enabled),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-custom-rules"] }),
+  });
+
+  return (
+    <div className="mt-6 rounded-xl border border-gray-200 bg-white shadow">
+      <button
+        className="flex w-full items-center justify-between px-5 py-4 border-b border-gray-200 text-left"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+          <svg className={`h-4 w-4 transition-transform text-gray-400 ${expanded ? "rotate-90" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clipRule="evenodd"/>
+          </svg>
+          Custom Detection Rules
+        </h2>
+        <span className="text-xs text-gray-400">Add keyword / field matching rules beyond the built-in ruleset</span>
+      </button>
+      {expanded && (
+        <div>
+          {/* Add form */}
+          <div className="border-b border-gray-100 bg-gray-50 px-5 py-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">New custom rule</p>
+            <div className="flex flex-wrap gap-3 items-end">
+              <label className="block">
+                <span className="text-xs text-gray-500">Name (optional)</span>
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm w-40"
+                  placeholder="e.g. Phishing catch"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs text-gray-500">Match field</span>
+                <select value={form.match_field} onChange={(e) => setForm((f) => ({ ...f, match_field: e.target.value as DefenderAgentCustomRule["match_field"] }))}
+                  className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm">
+                  <option value="title">Alert title</option>
+                  <option value="category">Category</option>
+                  <option value="service_source">Service source</option>
+                  <option value="severity">Severity</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs text-gray-500">Mode</span>
+                <select value={form.match_mode} onChange={(e) => setForm((f) => ({ ...f, match_mode: e.target.value as DefenderAgentCustomRule["match_mode"] }))}
+                  className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm">
+                  <option value="contains">Contains</option>
+                  <option value="exact">Exact</option>
+                  <option value="startswith">Starts with</option>
+                </select>
+              </label>
+              <label className="block flex-1 min-w-[140px]">
+                <span className="text-xs text-gray-500">Match value *</span>
+                <input
+                  type="text"
+                  value={form.match_value}
+                  onChange={(e) => setForm((f) => ({ ...f, match_value: e.target.value }))}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                  placeholder="e.g. phishing"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs text-gray-500">Tier</span>
+                <select value={form.tier} onChange={(e) => setForm((f) => ({ ...f, tier: Number(e.target.value) }))}
+                  className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm">
+                  <option value={1}>T1 Immediate</option>
+                  <option value={2}>T2 Queued</option>
+                  <option value={3}>T3 Recommend</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs text-gray-500">Action type</span>
+                <input
+                  type="text"
+                  value={form.action_type}
+                  onChange={(e) => setForm((f) => ({ ...f, action_type: e.target.value }))}
+                  className="mt-1 block w-40 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                  placeholder="start_investigation"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs text-gray-500">Confidence</span>
+                <input type="number" min={0} max={100} value={form.confidence_score}
+                  onChange={(e) => setForm((f) => ({ ...f, confidence_score: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) }))}
+                  className="mt-1 block w-20 rounded-md border border-gray-300 px-2 py-1.5 text-sm" />
+              </label>
+              <button
+                onClick={() => {
+                  if (!form.match_value?.trim()) return;
+                  createMut.mutate(form as Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at">);
+                }}
+                disabled={!form.match_value?.trim() || createMut.isPending}
+                className="self-end rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
+              >
+                {createMut.isPending ? "Adding…" : "Add rule"}
+              </button>
+            </div>
+          </div>
+          {/* Rules table */}
+          {rulesQuery.isLoading ? (
+            <div className="flex items-center justify-center py-6">
+              <div className="h-5 w-5 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+            </div>
+          ) : (rulesQuery.data?.length ?? 0) === 0 ? (
+            <p className="py-6 text-center text-sm text-gray-400">No custom rules. Add one above.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-xs">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {["Name", "Match", "Tier", "Action", "Confidence", "Status", ""].map((h) => (
+                      <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {rulesQuery.data!.map((cr) => (
+                    <tr key={cr.id} className={`hover:bg-gray-50 ${!cr.enabled ? "opacity-50" : ""}`}>
+                      <td className="px-3 py-2 text-gray-700">{cr.name || <span className="italic text-gray-400">unnamed</span>}</td>
+                      <td className="px-3 py-2">
+                        <span className="text-gray-500">{cr.match_field}</span>
+                        <span className="mx-1 text-gray-300">·</span>
+                        <span className="text-gray-400">{cr.match_mode}</span>
+                        <span className="mx-1 text-gray-300">·</span>
+                        <span className="font-mono text-gray-800">{cr.match_value}</span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={`rounded-full px-1.5 py-0.5 text-xs font-medium ${cr.tier === 1 ? "bg-green-100 text-green-700" : cr.tier === 2 ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>
+                          T{cr.tier}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-gray-600">{cr.action_type}</td>
+                      <td className="px-3 py-2 text-gray-600">{cr.confidence_score}%</td>
+                      <td className="px-3 py-2">
+                        {cr.enabled
+                          ? <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700">Active</span>
+                          : <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">Disabled</span>
+                        }
+                      </td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => toggleMut.mutate({ id: cr.id, enabled: !cr.enabled })}
+                          disabled={toggleMut.isPending}
+                          className={`mr-2 text-xs rounded px-2 py-1 ${cr.enabled ? "bg-gray-50 text-gray-600 hover:bg-gray-100" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"} disabled:opacity-40`}
+                        >
+                          {cr.enabled ? "Disable" : "Enable"}
+                        </button>
+                        <button
+                          onClick={() => { if (confirm(`Delete custom rule "${cr.name || cr.match_value}"?`)) deleteMut.mutate(cr.id); }}
+                          disabled={deleteMut.isPending}
+                          className="text-xs text-red-500 hover:text-red-700 disabled:opacity-40"
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1623,6 +2023,17 @@ export default function AzureSecurityAgentPage() {
             {filteredDecisions.length}{(decisionFilter || mitreFilter) ? ` of ${decisions.length}` : ""}
           </span>
           <div className="ml-auto flex items-center gap-2 flex-wrap">
+            <a
+              href={api.exportDefenderAgentDecisions(30)}
+              download
+              className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+              title="Export last 30 days of decisions as CSV"
+            >
+              <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 3a.75.75 0 0 1 .75.75v6.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V3.75A.75.75 0 0 1 10 3Zm-5.25 12a.75.75 0 0 1 0-1.5h10.5a.75.75 0 0 1 0 1.5H4.75Z" clipRule="evenodd"/>
+              </svg>
+              Export CSV
+            </a>
             {allMitreTechniques.length > 0 && (
               <select
                 value={mitreFilter}
@@ -2179,6 +2590,16 @@ export default function AzureSecurityAgentPage() {
             </table>
           </div>
         </div>
+      )}
+
+      {/* Phase 17: Rule management panel (admin-only) */}
+      {isAdmin && (
+        <RulesPanel />
+      )}
+
+      {/* Phase 18: Custom detection rules panel (admin-only) */}
+      {isAdmin && (
+        <CustomRulesPanel />
       )}
 
       {/* Error expand modal */}
