@@ -1492,6 +1492,7 @@ export interface SetAutoReplyRequest {
 export interface DefenderAgentConfig {
   entity_cooldown_hours: number;
   alert_dedup_window_minutes: number;
+  min_confidence: number;
   enabled: boolean;
   min_severity: "informational" | "low" | "medium" | "high" | "critical";
   tier2_delay_minutes: number;
@@ -1542,6 +1543,7 @@ export interface DefenderAgentDecision {
   remediation_confirmed: boolean;
   remediation_failed: boolean;
   confirmed_at: string | null;
+  confidence_score: number;
 }
 
 export interface DefenderAgentDecisionsResponse {

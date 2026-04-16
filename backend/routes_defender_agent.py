@@ -54,6 +54,7 @@ def update_config(
         dry_run=body.dry_run,
         entity_cooldown_hours=body.entity_cooldown_hours,
         alert_dedup_window_minutes=body.alert_dedup_window_minutes,
+        min_confidence=body.min_confidence,
         updated_by=str(_session.get("email") or ""),
     )
 

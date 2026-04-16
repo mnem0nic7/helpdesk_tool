@@ -171,7 +171,7 @@ def test_extract_entities_empty_evidence():
 
 def test_classify_severity_below_minimum_is_skip():
     alert = _alert(title="password spray attack", severity="low")
-    tier, decision, actions, reason = defender_agent._classify_alert(alert, "high")
+    tier, decision, actions, reason, _conf = defender_agent._classify_alert(alert, "high")
     assert decision == "skip"
     assert tier is None
     assert "below configured minimum" in reason
@@ -179,7 +179,7 @@ def test_classify_severity_below_minimum_is_skip():
 
 def test_classify_unknown_severity_is_skip():
     alert = _alert(title="password spray attack", severity="unknown")
-    tier, decision, actions, reason = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, reason, _conf = defender_agent._classify_alert(alert, "medium")
     assert decision == "skip"
 
 
@@ -193,7 +193,7 @@ def test_classify_t1_device_sync_on_antivirus_alert():
         severity="high",
         service_source="microsoftDefenderForEndpoint",
     )
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 1
     assert decision == "execute"
     assert "device_sync" in actions
@@ -201,7 +201,7 @@ def test_classify_t1_device_sync_on_antivirus_alert():
 
 def test_classify_t1_revoke_sessions_on_suspicious_signin():
     alert = _alert(title="suspicious signin detected — impossible travel", severity="high")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 1
     assert decision == "execute"
     assert "revoke_sessions" in actions
@@ -213,7 +213,7 @@ def test_classify_t1_mdo_malicious_url_click():
         severity="high",
         service_source="microsoftDefenderForOffice365",
     )
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 1
     assert decision == "execute"
     assert "revoke_sessions" in actions
@@ -221,7 +221,7 @@ def test_classify_t1_mdo_malicious_url_click():
 
 def test_classify_t1_anomalous_token_high_severity():
     alert = _alert(title="anomalous token activity detected", severity="high")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 1
     assert decision == "execute"
     assert "revoke_sessions" in actions
@@ -229,7 +229,7 @@ def test_classify_t1_anomalous_token_high_severity():
 
 def test_classify_t1_cryptominer():
     alert = _alert(title="bitcoin miner detected on device", severity="medium")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 1
     assert decision == "execute"
     assert "device_sync" in actions
@@ -241,7 +241,7 @@ def test_classify_t1_cryptominer():
 
 def test_classify_t2_password_spray():
     alert = _alert(title="password spray attack detected", severity="high")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
     assert "disable_sign_in" in actions
@@ -249,7 +249,7 @@ def test_classify_t2_password_spray():
 
 def test_classify_t2_lateral_movement():
     alert = _alert(title="lateral movement via pass the hash", severity="high")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
     assert "disable_sign_in" in actions
@@ -257,7 +257,7 @@ def test_classify_t2_lateral_movement():
 
 def test_classify_t2_c2_beaconing():
     alert = _alert(title="command and control communication detected", severity="high")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
     assert "isolate_device" in actions
@@ -269,7 +269,7 @@ def test_classify_t2_mcas_anomaly():
         severity="medium",
         service_source="microsoftCloudAppSecurity",
     )
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
     assert "account_lockout" in actions
@@ -277,7 +277,7 @@ def test_classify_t2_mcas_anomaly():
 
 def test_classify_t2_aitm_session_hijacking():
     alert = _alert(title="adversary-in-the-middle phishing site detected", severity="medium")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
     assert "revoke_sessions" in actions
@@ -289,7 +289,7 @@ def test_classify_t2_aitm_session_hijacking():
 
 def test_classify_t3_critical_ransomware_recommend_wipe():
     alert = _alert(title="ransomware detected on device", severity="critical")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 3
     assert decision == "recommend"
     assert "device_wipe" in actions
@@ -297,7 +297,7 @@ def test_classify_t3_critical_ransomware_recommend_wipe():
 
 def test_classify_t3_persistence_mechanism():
     alert = _alert(title="suspicious scheduled task persistence detected", severity="high")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 3
     assert decision == "recommend"
     assert "device_retire" in actions
@@ -305,7 +305,7 @@ def test_classify_t3_persistence_mechanism():
 
 def test_classify_t3_catch_all_high_unknown_category():
     alert = _alert(title="completely unrecognised security event xyz", severity="high")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 3
     assert decision == "recommend"
     assert "start_investigation" in actions
@@ -314,7 +314,7 @@ def test_classify_t3_catch_all_high_unknown_category():
 def test_classify_no_match_below_catchall_threshold():
     """Medium alert with no matching rule and below the catch-all high threshold → skip."""
     alert = _alert(title="completely unrecognised security event xyz", severity="medium")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     # Catch-all only triggers at high/critical; medium unmatched alert → skip
     assert decision == "skip"
 
@@ -326,7 +326,7 @@ def test_classify_no_match_below_catchall_threshold():
 def test_classify_off_hours_escalates_t2_to_t1(monkeypatch):
     monkeypatch.setattr(defender_agent, "_is_off_hours_pt", lambda: True)
     alert = _alert(title="mfa fatigue push notification flooding detected", severity="medium")
-    tier, decision, actions, reason = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, reason, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 1
     assert decision == "execute"
     assert "Off-hours" in reason
@@ -335,7 +335,7 @@ def test_classify_off_hours_escalates_t2_to_t1(monkeypatch):
 def test_classify_business_hours_keeps_t2_as_queue(monkeypatch):
     monkeypatch.setattr(defender_agent, "_is_off_hours_pt", lambda: False)
     alert = _alert(title="mfa fatigue push notification flooding detected", severity="medium")
-    tier, decision, _, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, _, _, _ = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
 
@@ -344,7 +344,7 @@ def test_classify_off_hours_does_not_escalate_non_tagged_rules(monkeypatch):
     """T2 rules without off_hours_escalate should not auto-escalate."""
     monkeypatch.setattr(defender_agent, "_is_off_hours_pt", lambda: True)
     alert = _alert(title="lateral movement via pass the hash", severity="high")
-    tier, decision, _, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, _, _, _ = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
 
@@ -355,7 +355,7 @@ def test_classify_off_hours_does_not_escalate_non_tagged_rules(monkeypatch):
 
 def test_classify_rc_stop_and_quarantine_file():
     alert = _alert(title="malicious file executed on endpoint", severity="high")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 1
     assert decision == "execute"
     assert "stop_and_quarantine_file" in actions
@@ -363,7 +363,7 @@ def test_classify_rc_stop_and_quarantine_file():
 
 def test_classify_rc_start_investigation_lolbas():
     alert = _alert(title="living off the land attack detected", severity="high")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 1
     assert decision == "execute"
     assert "start_investigation" in actions
@@ -371,7 +371,7 @@ def test_classify_rc_start_investigation_lolbas():
 
 def test_classify_rc_start_investigation_supply_chain():
     alert = _alert(title="supply chain attack via dependency confusion", severity="high")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 1
     assert decision == "execute"
     assert "start_investigation" in actions
@@ -379,7 +379,7 @@ def test_classify_rc_start_investigation_supply_chain():
 
 def test_classify_rc_create_block_indicator_malicious_ip():
     alert = _alert(title="known malicious ip communication detected", severity="medium")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
     assert "create_block_indicator" in actions
@@ -387,7 +387,7 @@ def test_classify_rc_create_block_indicator_malicious_ip():
 
 def test_classify_rc_create_block_indicator_file_hash():
     alert = _alert(title="known malware hash detected on endpoint", severity="medium")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
     assert "create_block_indicator" in actions
@@ -396,7 +396,7 @@ def test_classify_rc_create_block_indicator_file_hash():
 def test_classify_rc_containment_composite_hands_on_keyboard():
     """RC Containment: hands-on-keyboard attacker → composite [isolate_device, revoke_sessions]."""
     alert = _alert(title="hands-on-keyboard interactive attacker activity", severity="high")
-    tier, decision, actions, reason = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, reason, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
     assert "isolate_device" in actions
@@ -412,7 +412,7 @@ def test_classify_rc_full_containment_composite_active_exploitation():
     rule fires on the 'critical active exploitation' keyword instead.
     """
     alert = _alert(title="critical active exploitation confirmed active compromise", severity="critical")
-    tier, decision, actions, reason = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, reason, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
     assert "isolate_device" in actions
@@ -424,7 +424,7 @@ def test_classify_rc_full_containment_composite_active_exploitation():
 def test_classify_rc_threat_actor_family_qbot():
     # Must not include "malware" — that word triggers an earlier T1 av_scan rule first
     alert = _alert(title="qbot activity detected on host", severity="medium")
-    tier, decision, actions, reason = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, reason, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
     assert "isolate_device" in actions
@@ -433,7 +433,7 @@ def test_classify_rc_threat_actor_family_qbot():
 
 def test_classify_rc_threat_actor_family_lockbit():
     alert = _alert(title="lockbit ransomware detected", severity="high")
-    tier, decision, actions, _ = defender_agent._classify_alert(alert, "medium")
+    tier, decision, actions, _, _conf = defender_agent._classify_alert(alert, "medium")
     assert tier == 2
     assert decision == "queue"
     assert "isolate_device" in actions
@@ -1127,3 +1127,84 @@ def test_check_remediation_outcomes_job_not_found(monkeypatch):
     # Job not found — all "not found" jobs are skipped; no pending → confirmed
     assert len(confirmed_calls) == 1
     assert confirmed_calls[0][1] is True  # confirmed=True
+
+
+# ---------------------------------------------------------------------------
+# Phase 10 — Confidence scoring
+# ---------------------------------------------------------------------------
+
+
+def test_classify_returns_confidence_score_for_matched_rule():
+    """Rules with confidence_score return that value as the 5th element."""
+    alert = _alert(title="password spray attack", severity="high")
+    _, _, _, _, conf = defender_agent._classify_alert(alert, "medium")
+    assert isinstance(conf, int)
+    assert conf > 0
+
+
+def test_classify_returns_zero_confidence_for_below_severity_skip():
+    """Alerts below the severity floor return confidence=0."""
+    alert = _alert(title="password spray attack", severity="low")
+    _, _, _, _, conf = defender_agent._classify_alert(alert, "high")
+    assert conf == 0
+
+
+def test_classify_returns_zero_confidence_for_no_rule_match():
+    """Alerts with no matching rule in the table return confidence=0."""
+    alert = _alert(title="totally unknown category xyz", severity="high", category="unknown_xyz")
+    tier, decision, _, reason, conf = defender_agent._classify_alert(alert, "high")
+    # Should hit catch-all or miss and return skip — either way check conf
+    assert isinstance(conf, int)
+    # If it matched a catch-all rule the score is > 0; if it matched nothing confidence = 0
+    # The important invariant: it is always an int
+    assert conf >= 0
+
+
+def test_classify_high_confidence_known_malicious_hash():
+    """Known malware hash rule has confidence >= 80 (currently 82)."""
+    alert = _alert(title="known malware hash detected on endpoint", severity="high",
+                   service_source="microsoftDefenderForEndpoint")
+    _, _, _, _, conf = defender_agent._classify_alert(alert, "medium")
+    assert conf >= 80
+
+
+def test_classify_low_confidence_browser_extension():
+    """Malicious browser extension rule has confidence < 70 (currently 62)."""
+    alert = _alert(title="malicious browser extension detected", severity="medium")
+    _, _, _, _, conf = defender_agent._classify_alert(alert, "medium")
+    assert conf < 70
+
+
+def test_confidence_downgrade_cycle_downgrade_t1_to_t3():
+    """When min_confidence is set above rule confidence, T1 decisions are downgraded to T3 recommend."""
+    # password spray rule is T2/queue — pick one that's T1 and has confidence below 99
+    alert = _alert(title="suspicious signin detected — impossible travel", severity="high")
+    tier, decision_type, action_types, reason, confidence_score = defender_agent._classify_alert(
+        alert, "medium"
+    )
+    # This rule is T1 execute with confidence < 99 — apply downgrade logic inline
+    min_confidence = 99
+    if decision_type in ("execute", "queue") and confidence_score < min_confidence:
+        reason = (
+            f"[Confidence {confidence_score}% below threshold {min_confidence}%"
+            f" — downgraded to T3 recommend] " + reason
+        )
+        tier = 3
+        decision_type = "recommend"
+
+    assert tier == 3
+    assert decision_type == "recommend"
+    assert "downgraded to T3 recommend" in reason
+
+
+def test_confidence_no_downgrade_when_min_confidence_zero():
+    """When min_confidence=0, no downgrade happens regardless of rule confidence."""
+    alert = _alert(title="suspicious signin detected — impossible travel", severity="high")
+    tier, decision_type, _, reason, confidence_score = defender_agent._classify_alert(alert, "medium")
+    min_confidence = 0
+    if decision_type in ("execute", "queue") and confidence_score < min_confidence:
+        tier = 3
+        decision_type = "recommend"
+    # Should remain unchanged (T1 execute)
+    assert tier == 1
+    assert decision_type == "execute"

@@ -92,6 +92,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "device_sync",
+        "confidence_score": 55,
         "reason": "Defender reported antivirus/signature issue on device; sync to force policy refresh.",
     },
     # T1 — revoke sessions (fast, reversible)
@@ -105,6 +106,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "revoke_sessions",
+        "confidence_score": 72,
         "reason": "Defender detected suspicious identity activity; revoking active sessions.",
     },
     # T2 — disable sign-in (queued with delay; escalates to T1 off-hours)
@@ -118,6 +120,7 @@ _RULES: list[dict[str, Any]] = [
         "decision": "queue",
         "action_type": "disable_sign_in",
         "off_hours_escalate": True,
+        "confidence_score": 73,
         "reason": "Defender detected credential or mailbox attack pattern; sign-in disable queued with cancellation window.",
     },
     {
@@ -126,6 +129,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "disable_sign_in",
+        "confidence_score": 82,
         "reason": "Critical credential harvesting alert; sign-in disable queued with cancellation window.",
     },
     # T2 — lateral movement
@@ -135,6 +139,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "disable_sign_in",
+        "confidence_score": 83,
         "reason": "Lateral movement technique detected; sign-in disable queued with cancellation window.",
     },
     # T1 — MDO confirmed malicious URL click (RC-6) — takes priority over generic phishing T2
@@ -149,6 +154,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "revoke_sessions",
+        "confidence_score": 93,
         "reason": "MDO confirmed malicious URL click (high severity); revoking sessions immediately.",
     },
     # T2 — phishing / malicious link
@@ -158,6 +164,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "disable_sign_in",
+        "confidence_score": 68,
         "reason": "Phishing or malicious link activity detected; sign-in disable queued with cancellation window.",
     },
     # T2 — MFA fatigue (escalates to T1 off-hours — attacker persistence exploit)
@@ -168,6 +175,7 @@ _RULES: list[dict[str, Any]] = [
         "decision": "queue",
         "action_type": "disable_sign_in",
         "off_hours_escalate": True,
+        "confidence_score": 75,
         "reason": "MFA fatigue attack pattern detected; sign-in disable queued with cancellation window.",
     },
     # T2 — AiTM / session hijacking → revoke sessions (escalates to T1 off-hours)
@@ -182,6 +190,7 @@ _RULES: list[dict[str, Any]] = [
         "decision": "queue",
         "action_type": "revoke_sessions",
         "off_hours_escalate": True,
+        "confidence_score": 78,
         "reason": "AiTM phishing / session-hijacking detected; revoking active sessions pending investigation.",
     },
     # T1/T2 — anomalous token activity (RC-7)
@@ -194,6 +203,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "revoke_sessions",
+        "confidence_score": 78,
         "reason": "Anomalous token activity (high severity); revoking active sessions immediately.",
     },
     {
@@ -206,6 +216,7 @@ _RULES: list[dict[str, Any]] = [
         "decision": "queue",
         "action_type": "disable_sign_in",
         "off_hours_escalate": True,
+        "confidence_score": 68,
         "reason": "Anomalous token activity (medium severity); sign-in disable queued with cancellation window.",
     },
     # T2 — suspicious OAuth / app consent
@@ -215,6 +226,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "disable_sign_in",
+        "confidence_score": 65,
         "reason": "Suspicious OAuth app consent detected; sign-in disable queued with cancellation window.",
     },
     # T2 — MCAS / Defender for Cloud Apps behavioral anomaly → account lockout (RC-8)
@@ -230,6 +242,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "account_lockout",
+        "confidence_score": 72,
         "reason": "MCAS/Defender for Cloud Apps behavioral anomaly; account lockout (revoke + disable) queued.",
     },
     # T1 — cryptominer (non-destructive policy sync sufficient)
@@ -239,6 +252,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "device_sync",
+        "confidence_score": 65,
         "reason": "Cryptominer detected on device; sync to force AV/policy update.",
     },
     # T3 — recommend only (irreversible)
@@ -248,6 +262,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 3,
         "decision": "recommend",
         "action_type": "device_wipe",
+        "confidence_score": 88,
         "reason": "Ransomware activity detected on device; wipe recommended — requires human approval.",
     },
     {
@@ -256,6 +271,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "isolate_device",
+        "confidence_score": 88,
         "reason": "Active malware confirmed on device; isolating to prevent lateral spread (preserves for forensics).",
     },
     # T3 — data exfiltration
@@ -265,6 +281,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 3,
         "decision": "recommend",
         "action_type": "device_retire",
+        "confidence_score": 78,
         "reason": "Data exfiltration pattern detected; device retire recommended — requires human approval.",
     },
     # T3 — persistence mechanisms
@@ -278,6 +295,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 3,
         "decision": "recommend",
         "action_type": "device_retire",
+        "confidence_score": 75,
         "reason": "Persistence mechanism detected on device; retire recommended — requires human approval.",
     },
     # T2 — C2 communication → isolate (was T3 retire; isolation is better first response)
@@ -287,6 +305,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "isolate_device",
+        "confidence_score": 85,
         "reason": "C2/beaconing detected; isolating device to cut attacker network access.",
     },
     # T2 — ransomware/wipers → isolate immediately to prevent spread
@@ -297,6 +316,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "isolate_device",
+        "confidence_score": 88,
         "reason": "Ransomware/wiper detected; isolating device to prevent encryption spread.",
     },
     # T2 — backdoors and RATs → isolate to cut persistence channel
@@ -306,6 +326,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "isolate_device",
+        "confidence_score": 85,
         "reason": "Backdoor/RAT implant detected; isolating device to cut persistence channel.",
     },
     # T1 — malware signature detected → trigger AV scan (non-destructive first response)
@@ -316,6 +337,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "run_av_scan",
+        "confidence_score": 70,
         "reason": "Potential malware signature detected; triggering full AV scan.",
     },
     # T1 — suspicious process/exploit → AV scan to confirm threat
@@ -326,6 +348,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "run_av_scan",
+        "confidence_score": 78,
         "reason": "Suspicious process/exploit activity detected; triggering AV scan to confirm threat.",
     },
     # T3 — privilege escalation / credential dumping → restrict app execution
@@ -336,6 +359,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 3,
         "decision": "recommend",
         "action_type": "restrict_app_execution",
+        "confidence_score": 85,
         "reason": "Active credential/privilege escalation attack detected; app execution restriction recommended.",
     },
     # T2 — forensic investigation requested → collect investigation package
@@ -345,6 +369,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "collect_investigation_package",
+        "confidence_score": 72,
         "reason": "Complex attack pattern detected; collecting forensic investigation package.",
     },
     # --- Email / Collaboration threats ---
@@ -358,6 +383,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "revoke_sessions",
+        "confidence_score": 80,
         "reason": "High-severity inbox manipulation detected; revoking sessions immediately to cut attacker access.",
     },
     # T2 — inbox rule manipulation / email forwarding abuse (medium severity; escalates T1 off-hours)
@@ -371,6 +397,7 @@ _RULES: list[dict[str, Any]] = [
         "decision": "queue",
         "action_type": "disable_sign_in",
         "off_hours_escalate": True,
+        "confidence_score": 72,
         "reason": "Attacker-created inbox rule or forwarding detected; disabling sign-in to cut persistent access.",
     },
     # T2 — BEC / email impersonation (escalates to T1 off-hours)
@@ -384,6 +411,7 @@ _RULES: list[dict[str, Any]] = [
         "decision": "queue",
         "action_type": "disable_sign_in",
         "off_hours_escalate": True,
+        "confidence_score": 75,
         "reason": "Business email compromise / impersonation detected; disabling sign-in pending investigation.",
     },
     # T1 — email-delivered malware / phishing link clicked
@@ -396,6 +424,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "revoke_sessions",
+        "confidence_score": 87,
         "reason": "Email-delivered malware or phishing link clicked; revoking sessions immediately.",
     },
     # --- Endpoint technique gaps ---
@@ -410,6 +439,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "start_investigation",
+        "confidence_score": 85,
         "reason": "Process/code injection technique detected; triggering MDE automated investigation.",
     },
     # T2 — DLL hijacking / side-loading
@@ -422,6 +452,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "start_investigation",
+        "confidence_score": 78,
         "reason": "DLL hijacking/side-loading technique detected; investigation queued.",
     },
     # T2 — WMI / DCOM / PSExec lateral movement
@@ -434,6 +465,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "isolate_device",
+        "confidence_score": 82,
         "reason": "WMI/DCOM/PSExec lateral movement detected; isolating device to contain spread.",
     },
     # T1 — malicious Office macro / script
@@ -446,6 +478,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "run_av_scan",
+        "confidence_score": 75,
         "reason": "Malicious Office macro/script detected; triggering full AV scan.",
     },
     # T1 — malicious browser extension / modifier
@@ -458,6 +491,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "run_av_scan",
+        "confidence_score": 62,
         "reason": "Malicious browser extension/modifier detected; triggering full AV scan.",
     },
     # --- Reconnaissance / discovery ---
@@ -471,6 +505,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "collect_investigation_package",
+        "confidence_score": 60,
         "reason": "Network reconnaissance/scanning detected; collecting forensic package for analysis.",
     },
     # T2 — LDAP / account enumeration / user discovery
@@ -483,6 +518,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "collect_investigation_package",
+        "confidence_score": 62,
         "reason": "Directory/account enumeration detected; collecting investigation package.",
     },
     # --- High-impact CVE exploitation ---
@@ -497,6 +533,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "isolate_device",
+        "confidence_score": 90,
         "reason": "High-impact CVE exploitation detected; isolating device immediately.",
     },
     # T3 — confirmed account compromise → recommend password reset
@@ -509,6 +546,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 3,
         "decision": "recommend",
         "action_type": "reset_password",
+        "confidence_score": 85,
         "reason": "Confirmed account compromise; password reset recommended — requires human approval.",
     },
     # --- Red Canary parity rules ---
@@ -522,6 +560,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "stop_and_quarantine_file",
+        "confidence_score": 92,
         "reason": "Active malicious file execution detected; stopping process and quarantining file.",
     },
     # T1 — fileless / multi-stage / supply-chain → trigger MDE automated investigation
@@ -534,6 +573,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "start_investigation",
+        "confidence_score": 85,
         "reason": "Complex/fileless attack pattern; triggering automated MDE investigation.",
     },
     # T1 — supply chain attack → trigger investigation
@@ -546,6 +586,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 1,
         "decision": "execute",
         "action_type": "start_investigation",
+        "confidence_score": 82,
         "reason": "Supply chain attack pattern detected; triggering MDE automated investigation.",
     },
     # T2 — known malicious IOC (IP/domain/C2 infrastructure) → block indicator tenant-wide
@@ -559,6 +600,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "create_block_indicator",
+        "confidence_score": 80,
         "reason": "Confirmed malicious IOC detected; blocking indicator tenant-wide.",
     },
     # T2 — known malware file hash → block indicator tenant-wide
@@ -571,6 +613,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "create_block_indicator",
+        "confidence_score": 82,
         "reason": "Known malicious file hash detected; creating tenant-wide block indicator.",
     },
     # T2 — RC Containment: confirmed active attacker on endpoint + identity component
@@ -585,6 +628,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_types": ["isolate_device", "revoke_sessions"],
+        "confidence_score": 90,
         "reason": "RC Containment: active attacker presence confirmed; isolating endpoint + revoking sessions simultaneously.",
     },
     # T2 — RC Full Containment: critical severity active exploitation with identity component
@@ -599,6 +643,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_types": ["isolate_device", "revoke_sessions", "disable_sign_in"],
+        "confidence_score": 92,
         "reason": "RC Full Containment: critical active attack; isolating endpoint + full account lockout queued.",
     },
     # T2 — known threat actor families → isolate endpoint (RC-17)
@@ -612,6 +657,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "isolate_device",
+        "confidence_score": 82,
         "reason": "Known threat actor family (RC-17) detected on endpoint; isolating device to contain spread.",
     },
     # --- Catch-all (MUST remain last) ---
@@ -622,16 +668,18 @@ _RULES: list[dict[str, Any]] = [
         "tier": 3,
         "decision": "recommend",
         "action_type": "start_investigation",
+        "confidence_score": 50,
         "reason": "Unclassified high/critical alert; manual review and MDE investigation recommended.",
     },
 ]
 
 
-def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | None, str, list[str], str]:
-    """Return (tier, decision_type, action_types, reason).
+def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | None, str, list[str], str, int]:
+    """Return (tier, decision_type, action_types, reason, confidence_score).
 
-    decision_type: "execute" | "queue" | "recommend" | "skip"
-    action_types:  list of action type strings (composite rules have >1; empty for skip)
+    decision_type:    "execute" | "queue" | "recommend" | "skip"
+    action_types:     list of action type strings (composite rules have >1; empty for skip)
+    confidence_score: 0–100 integer from matched rule (0 for unmatched/skip)
     """
     severity = (alert.get("severity") or "unknown").lower()
     title = (alert.get("title") or "").lower()
@@ -639,7 +687,7 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
 
     # Reject alerts below operator-configured floor
     if _SEV_ORDER.get(severity, 0) < _SEV_ORDER.get(min_severity, 3):
-        return None, "skip", [], f"Severity '{severity}' is below configured minimum '{min_severity}'."
+        return None, "skip", [], f"Severity '{severity}' is below configured minimum '{min_severity}'.", 0
 
     for rule in _RULES:
         # Severity gate
@@ -664,6 +712,7 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
         tier: int = rule["tier"]
         decision: str = rule["decision"]
         reason: str = rule["reason"]
+        confidence: int = int(rule.get("confidence_score", 50))
         # Off-hours escalation: T2/queue → T1/execute outside PT business hours.
         # Only applies to rules explicitly tagged off_hours_escalate=True.
         if (
@@ -675,9 +724,9 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
             tier = 1
             decision = "execute"
             reason = reason + " [Off-hours: escalated to T1 — no cancellation window available.]"
-        return tier, decision, ats, reason
+        return tier, decision, ats, reason, confidence
 
-    return None, "skip", [], "Alert category/title did not match any decision rule."
+    return None, "skip", [], "Alert category/title did not match any decision rule.", 0
 
 
 def _check_entity_cooldown(
@@ -1062,6 +1111,7 @@ def _run_agent_cycle() -> None:
         min_severity = str(config.get("min_severity") or "high").lower()
         dry_run = bool(config.get("dry_run", False))
         tier2_delay = int(config.get("tier2_delay_minutes") or 15)
+        min_confidence = int(config.get("min_confidence") or 0)
         jobs_dispatched = 0
 
         active_suppressions = defender_agent_store.get_active_suppressions()
@@ -1107,15 +1157,25 @@ def _run_agent_cycle() -> None:
                     not_before_at=None,
                     alert_raw=alert,
                     mitre_techniques=mitre_techniques,
+                    confidence_score=0,
                 )
                 decisions_made += 1
                 skip_count += 1
                 logger.info("Defender agent: suppressed alert %s — %s", alert_id, suppress_reason)
                 continue
 
-            tier, decision_type, action_types, reason = _classify_alert(alert, min_severity)
+            tier, decision_type, action_types, reason, confidence_score = _classify_alert(alert, min_severity)
             # Primary action_type is first in list (for display / backward compat)
             action_type = action_types[0] if action_types else ""
+
+            # Confidence downgrade: T1/T2 below min_confidence floor → T3 recommend
+            if decision_type in ("execute", "queue") and confidence_score < min_confidence:
+                reason = (
+                    f"[Confidence {confidence_score}% below threshold {min_confidence}%"
+                    f" — downgraded to T3 recommend] " + reason
+                )
+                tier = 3
+                decision_type = "recommend"
 
             # Deduplication check: skip if we already have a non-skip decision for these
             # entities + actions within the dedup window (catches within-cycle duplicates too)
@@ -1144,6 +1204,7 @@ def _run_agent_cycle() -> None:
                         not_before_at=None,
                         alert_raw=alert,
                         mitre_techniques=mitre_techniques,
+                        confidence_score=confidence_score,
                     )
                     decisions_made += 1
                     skip_count += 1
@@ -1176,6 +1237,7 @@ def _run_agent_cycle() -> None:
                         not_before_at=None,
                         alert_raw=alert,
                         mitre_techniques=mitre_techniques,
+                        confidence_score=confidence_score,
                     )
                     decisions_made += 1
                     skip_count += 1
@@ -1209,6 +1271,7 @@ def _run_agent_cycle() -> None:
                 not_before_at=not_before_at,
                 alert_raw=alert,
                 mitre_techniques=mitre_techniques,
+                confidence_score=confidence_score,
             )
             decisions_made += 1
             if decision_type == "skip":

@@ -146,6 +146,8 @@ class DefenderAgentStore:
             "ALTER TABLE defender_agent_decisions ADD COLUMN remediation_confirmed INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE defender_agent_decisions ADD COLUMN remediation_failed INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE defender_agent_decisions ADD COLUMN confirmed_at TEXT",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN confidence_score INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE defender_agent_config ADD COLUMN min_confidence INTEGER NOT NULL DEFAULT 0",
         ):
             try:
                 with self._conn() as _mc:
@@ -166,6 +168,7 @@ class DefenderAgentStore:
         "dry_run": False,
         "entity_cooldown_hours": 24,
         "alert_dedup_window_minutes": 30,
+        "min_confidence": 0,
         "updated_at": "",
         "updated_by": "",
     }
@@ -182,6 +185,8 @@ class DefenderAgentStore:
             d["entity_cooldown_hours"] = 24
         if "alert_dedup_window_minutes" not in d:
             d["alert_dedup_window_minutes"] = 30
+        if "min_confidence" not in d:
+            d["min_confidence"] = 0
         return d
 
     def upsert_config(
@@ -193,6 +198,7 @@ class DefenderAgentStore:
         dry_run: bool,
         entity_cooldown_hours: int = 24,
         alert_dedup_window_minutes: int = 30,
+        min_confidence: int = 0,
         updated_by: str = "",
     ) -> dict[str, Any]:
         p = self._placeholder()
@@ -202,8 +208,9 @@ class DefenderAgentStore:
                 f"""
                 INSERT INTO defender_agent_config
                     (id, enabled, min_severity, tier2_delay_minutes, dry_run,
-                     entity_cooldown_hours, alert_dedup_window_minutes, updated_at, updated_by)
-                VALUES (1, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+                     entity_cooldown_hours, alert_dedup_window_minutes, min_confidence,
+                     updated_at, updated_by)
+                VALUES (1, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
                 ON CONFLICT(id) DO UPDATE SET
                     enabled                    = excluded.enabled,
                     min_severity               = excluded.min_severity,
@@ -211,11 +218,12 @@ class DefenderAgentStore:
                     dry_run                    = excluded.dry_run,
                     entity_cooldown_hours      = excluded.entity_cooldown_hours,
                     alert_dedup_window_minutes = excluded.alert_dedup_window_minutes,
+                    min_confidence             = excluded.min_confidence,
                     updated_at                 = excluded.updated_at,
                     updated_by                 = excluded.updated_by
                 """,
                 (int(enabled), min_severity, tier2_delay_minutes, int(dry_run),
-                 entity_cooldown_hours, alert_dedup_window_minutes, now, updated_by),
+                 entity_cooldown_hours, alert_dedup_window_minutes, min_confidence, now, updated_by),
             )
             conn.commit()
         return self.get_config()
@@ -296,6 +304,7 @@ class DefenderAgentStore:
         not_before_at: str | None = None,
         alert_raw: dict[str, Any] | None = None,
         mitre_techniques: list[str] | None = None,
+        confidence_score: int = 0,
     ) -> dict[str, Any]:
         p = self._placeholder()
         now = _now()
@@ -308,8 +317,9 @@ class DefenderAgentStore:
                     decision_id, run_id, alert_id, alert_title, alert_severity,
                     alert_category, alert_created_at, service_source, entities_json,
                     tier, decision, action_type, action_types_json, job_ids_json, reason,
-                    executed_at, not_before_at, alert_raw_json, mitre_techniques_json
-                ) VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+                    executed_at, not_before_at, alert_raw_json, mitre_techniques_json,
+                    confidence_score
+                ) VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
                 """,
                 (
                     decision_id, run_id, alert_id, alert_title, alert_severity,
@@ -318,6 +328,7 @@ class DefenderAgentStore:
                     json.dumps(ats), json.dumps(job_ids), reason, now, not_before_at,
                     json.dumps(alert_raw) if alert_raw else "",
                     json.dumps(mitre_techniques or []),
+                    confidence_score,
                 ),
             )
             conn.commit()
@@ -716,6 +727,7 @@ class DefenderAgentStore:
         d["mitre_techniques"] = json.loads(d.pop("mitre_techniques_json", "[]") or "[]")
         d["remediation_confirmed"] = bool(d.get("remediation_confirmed", 0))
         d["remediation_failed"] = bool(d.get("remediation_failed", 0))
+        d["confidence_score"] = int(d.get("confidence_score") or 0)
         return d
 
 
