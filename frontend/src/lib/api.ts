@@ -1586,6 +1586,18 @@ export interface DefenderAgentEntityTimeline {
   total: number;
 }
 
+export interface DefenderAgentMetrics {
+  period_days: number;
+  total_decisions: number;
+  by_tier: Record<string, number>;
+  daily_volumes: Array<{ date: string; count: number }>;
+  top_entities: Array<{ id: string; name: string; type: string; count: number }>;
+  top_alert_titles: Array<{ title: string; count: number }>;
+  disposition_summary: Record<string, number>;
+  false_positive_rate: number;
+  top_actions: Array<{ action: string; count: number }>;
+}
+
 export interface DefenderAgentSummary {
   enabled: boolean;
   last_run_at: string | null;
@@ -3870,6 +3882,9 @@ export const api = {
     return fetchJSON<DefenderAgentEntityTimeline>(
       `/api/azure/security/defender-agent/entities/${encodeURIComponent(entityId)}/timeline?limit=${limit}`
     );
+  },
+  getDefenderAgentMetrics(days = 30): Promise<DefenderAgentMetrics> {
+    return fetchJSON<DefenderAgentMetrics>(`/api/azure/security/defender-agent/metrics?days=${days}`);
   },
   listDefenderIndicators(): Promise<{ indicators: DefenderIndicator[]; total: number }> {
     return fetchJSON<{ indicators: DefenderIndicator[]; total: number }>(

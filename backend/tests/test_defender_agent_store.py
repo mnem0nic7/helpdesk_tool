@@ -1002,3 +1002,103 @@ def test_entity_timeline_limit(tmp_path):
         )
     result = store.get_entity_timeline("lim-user", limit=5)
     assert len(result) == 5
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: Agent metrics
+# ---------------------------------------------------------------------------
+
+def test_get_agent_metrics_empty(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    m = store.get_agent_metrics(days=30)
+    assert m["total_decisions"] == 0
+    assert m["by_tier"] == {"T1": 0, "T2": 0, "T3": 0, "skip": 0}
+    assert m["daily_volumes"] == []
+    assert m["top_entities"] == []
+    assert m["top_alert_titles"] == []
+    assert m["false_positive_rate"] == 0.0
+    assert m["top_actions"] == []
+
+
+def test_get_agent_metrics_tier_counts(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    _make_decision(store, decision_id="dec-m1", decision="execute", tier=1)
+    _make_decision(store, decision_id="dec-m2", decision="queue", tier=2)
+    _make_decision(store, decision_id="dec-m3", decision="queue", tier=2)
+    _make_decision(store, decision_id="dec-m4", decision="recommend", tier=3)
+    _make_decision(store, decision_id="dec-m5", decision="skip", tier=None)
+    m = store.get_agent_metrics(days=30)
+    assert m["total_decisions"] == 5
+    assert m["by_tier"]["T1"] == 1
+    assert m["by_tier"]["T2"] == 2
+    assert m["by_tier"]["T3"] == 1
+    assert m["by_tier"]["skip"] == 1
+
+
+def test_get_agent_metrics_daily_volumes(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    _make_decision(store, decision_id="dec-mv1")
+    _make_decision(store, decision_id="dec-mv2")
+    m = store.get_agent_metrics(days=30)
+    assert len(m["daily_volumes"]) == 1
+    assert m["daily_volumes"][0]["count"] == 2
+
+
+def test_get_agent_metrics_top_entities(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    for i in range(3):
+        store.create_decision(
+            decision_id=f"dec-me-{i}",
+            run_id="run-1",
+            alert_id=f"a-{i}",
+            alert_title="Test",
+            alert_severity="high",
+            alert_category="Suspicious",
+            alert_created_at="2026-04-16T00:00:00Z",
+            service_source="mde",
+            tier=1,
+            decision="execute",
+            action_type="revoke_sessions",
+            action_types=["revoke_sessions"],
+            job_ids=[],
+            reason="r",
+            entities=[{"type": "user", "id": "top-user", "name": "top@example.com"}],
+            not_before_at=None,
+        )
+    m = store.get_agent_metrics(days=30)
+    assert len(m["top_entities"]) == 1
+    assert m["top_entities"][0]["id"] == "top-user"
+    assert m["top_entities"][0]["count"] == 3
+
+
+def test_get_agent_metrics_disposition_and_fp_rate(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    for i in range(4):
+        row = _make_decision(store, decision_id=f"dec-mfp-{i}")
+    store.set_decision_disposition("dec-mfp-0", "true_positive")
+    store.set_decision_disposition("dec-mfp-1", "false_positive")
+    store.set_decision_disposition("dec-mfp-2", "inconclusive")
+    m = store.get_agent_metrics(days=30)
+    ds = m["disposition_summary"]
+    assert ds["true_positive"] == 1
+    assert ds["false_positive"] == 1
+    assert ds["inconclusive"] == 1
+    assert ds["unreviewed"] == 1
+    assert round(m["false_positive_rate"], 3) == round(1 / 3, 3)
+
+
+def test_get_agent_metrics_period_days_filter(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    _make_decision(store, decision_id="dec-old")
+    # With 0-day window nothing should show (executed_at is just now, so 1-day should include)
+    m_1 = store.get_agent_metrics(days=1)
+    m_90 = store.get_agent_metrics(days=90)
+    assert m_1["total_decisions"] == m_90["total_decisions"]
+    assert m_1["period_days"] == 1
+    assert m_90["period_days"] == 90

@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { DefenderAgentConfig, DefenderAgentDecision, DefenderAgentDispositionStats, DefenderAgentEntityTimeline, DefenderAgentSuppression, DefenderSuppressionType } from "../lib/api.ts";
+import type { DefenderAgentConfig, DefenderAgentDecision, DefenderAgentDispositionStats, DefenderAgentEntityTimeline, DefenderAgentMetrics, DefenderAgentSuppression, DefenderSuppressionType } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 // ---------------------------------------------------------------------------
@@ -451,6 +451,169 @@ function EntityTimelineDrawer({
         </div>
       </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Metrics dashboard
+// ---------------------------------------------------------------------------
+
+const ACTION_LABELS_SHORT: Record<string, string> = {
+  isolate_device: "Isolate Device",
+  unisolate_device: "Release Isolation",
+  run_av_scan: "AV Scan",
+  collect_investigation_package: "Forensic Pkg",
+  restrict_app_execution: "Restrict App",
+  revoke_sessions: "Revoke Sessions",
+  disable_sign_in: "Disable Sign-In",
+  device_sync: "Device Sync",
+  device_retire: "Retire Device",
+  device_wipe: "Wipe Device",
+  stop_and_quarantine_file: "Stop+Quarantine",
+  start_investigation: "Start Invest.",
+  create_block_indicator: "Block IOC",
+  unrestrict_app_execution: "Remove Restriction",
+  reset_password: "Reset Password",
+  account_lockout: "Account Lockout",
+};
+
+function MetricsDashboard({ metrics }: { metrics: DefenderAgentMetrics }) {
+  const tierOrder = ["T1", "T2", "T3", "skip"] as const;
+  const tierColors: Record<string, string> = {
+    T1: "bg-green-500",
+    T2: "bg-amber-500",
+    T3: "bg-blue-500",
+    skip: "bg-gray-300",
+  };
+  const tierLabels: Record<string, string> = { T1: "T1 Immediate", T2: "T2 Queued", T3: "T3 Recommend", skip: "Skipped" };
+  const total = metrics.total_decisions || 1;
+
+  const maxDaily = Math.max(...metrics.daily_volumes.map((d) => d.count), 1);
+
+  const dispColors: Record<string, string> = {
+    true_positive: "text-emerald-700",
+    false_positive: "text-red-600",
+    inconclusive: "text-yellow-600",
+    unreviewed: "text-gray-400",
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Tier distribution */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Tier Distribution ({metrics.total_decisions} decisions)</p>
+        <div className="flex h-4 rounded-full overflow-hidden gap-px bg-gray-100">
+          {tierOrder.map((tier) => {
+            const count = metrics.by_tier[tier] ?? 0;
+            const pct = (count / total) * 100;
+            if (!pct) return null;
+            return (
+              <div
+                key={tier}
+                className={`${tierColors[tier]} h-full transition-all`}
+                style={{ width: `${pct}%` }}
+                title={`${tierLabels[tier]}: ${count} (${pct.toFixed(0)}%)`}
+              />
+            );
+          })}
+        </div>
+        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+          {tierOrder.map((tier) => {
+            const count = metrics.by_tier[tier] ?? 0;
+            return (
+              <span key={tier} className="flex items-center gap-1 text-xs text-gray-600">
+                <span className={`inline-block h-2 w-2 rounded-full ${tierColors[tier]}`} />
+                {tierLabels[tier]}: <strong>{count}</strong>
+              </span>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Daily volume sparkline */}
+      {metrics.daily_volumes.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Daily Volume (last {metrics.period_days} days)</p>
+          <div className="flex items-end gap-0.5 h-12">
+            {metrics.daily_volumes.map((d) => (
+              <div
+                key={d.date}
+                className="flex-1 bg-blue-200 rounded-t min-w-[2px]"
+                style={{ height: `${Math.max(4, (d.count / maxDaily) * 48)}px` }}
+                title={`${d.date}: ${d.count}`}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Disposition summary */}
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Disposition</p>
+          <div className="space-y-0.5">
+            {(["true_positive", "false_positive", "inconclusive", "unreviewed"] as const).map((key) => {
+              const count = metrics.disposition_summary[key] ?? 0;
+              return (
+                <div key={key} className="flex justify-between text-xs">
+                  <span className={dispColors[key]}>{key.replace(/_/g, " ")}</span>
+                  <strong className={dispColors[key]}>{count}</strong>
+                </div>
+              );
+            })}
+            <div className="flex justify-between text-xs border-t border-gray-100 pt-0.5 mt-0.5">
+              <span className="text-gray-500">FP rate</span>
+              <strong className={metrics.false_positive_rate > 0.2 ? "text-red-600" : "text-gray-700"}>
+                {(metrics.false_positive_rate * 100).toFixed(0)}%
+              </strong>
+            </div>
+          </div>
+        </div>
+
+        {/* Top entities */}
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Top Entities</p>
+          {metrics.top_entities.length === 0 && <p className="text-xs text-gray-400">None</p>}
+          <div className="space-y-0.5">
+            {metrics.top_entities.slice(0, 5).map((e) => (
+              <div key={e.id} className="flex justify-between text-xs gap-2">
+                <span className="text-gray-700 truncate" title={e.id}>{e.name || e.id}</span>
+                <strong className="text-gray-500 shrink-0">{e.count}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Top alert types */}
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Top Alert Types</p>
+          {metrics.top_alert_titles.length === 0 && <p className="text-xs text-gray-400">None</p>}
+          <div className="space-y-0.5">
+            {metrics.top_alert_titles.slice(0, 5).map((a) => (
+              <div key={a.title} className="flex justify-between text-xs gap-2">
+                <span className="text-gray-700 truncate" title={a.title}>{a.title}</span>
+                <strong className="text-gray-500 shrink-0">{a.count}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Top actions */}
+      {metrics.top_actions.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Top Response Actions</p>
+          <div className="flex flex-wrap gap-1.5">
+            {metrics.top_actions.slice(0, 8).map((a) => (
+              <span key={a.action} className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
+                {ACTION_LABELS_SHORT[a.action] ?? a.action.replace(/_/g, " ")}
+                <span className="rounded-full bg-gray-200 px-1 font-medium">{a.count}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1130,6 +1293,15 @@ export default function AzureSecurityAgentPage() {
     staleTime: 60_000,
   });
 
+  const [metricsDays, setMetricsDays] = useState(30);
+  const [showMetrics, setShowMetrics] = useState(false);
+  const metricsQuery = useQuery({
+    queryKey: ["defender-agent-metrics", metricsDays],
+    queryFn: () => api.getDefenderAgentMetrics(metricsDays),
+    staleTime: 120_000,
+    enabled: showMetrics,
+  });
+
   const cancelMutation = useMutation({
     mutationFn: (id: string) => api.cancelDefenderAgentDecision(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }),
@@ -1469,6 +1641,52 @@ export default function AzureSecurityAgentPage() {
               </div>
             )}
           </>
+        )}
+      </div>
+
+      {/* Metrics dashboard */}
+      <div className="rounded-lg bg-white shadow">
+        <div className="border-b border-gray-200 px-5 py-4 flex items-center justify-between gap-3">
+          <button
+            className="flex items-center gap-2 text-lg font-semibold text-gray-900 hover:text-blue-600 transition-colors"
+            onClick={() => setShowMetrics((v) => !v)}
+          >
+            <svg
+              className={`h-4 w-4 transition-transform ${showMetrics ? "rotate-90" : ""}`}
+              viewBox="0 0 20 20" fill="currentColor"
+            >
+              <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clipRule="evenodd"/>
+            </svg>
+            Detection Metrics
+          </button>
+          {showMetrics && (
+            <div className="flex items-center gap-1">
+              {[7, 14, 30, 90].map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setMetricsDays(d)}
+                  className={`rounded px-2 py-0.5 text-xs font-medium ${metricsDays === d ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                >
+                  {d}d
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {showMetrics && (
+          <div className="px-5 py-4">
+            {metricsQuery.isLoading && (
+              <div className="flex items-center justify-center py-8">
+                <div className="h-5 w-5 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+              </div>
+            )}
+            {metricsQuery.data && !metricsQuery.isLoading && (
+              <MetricsDashboard metrics={metricsQuery.data} />
+            )}
+            {metricsQuery.isError && (
+              <p className="text-sm text-red-500 py-4 text-center">Failed to load metrics.</p>
+            )}
+          </div>
         )}
       </div>
 

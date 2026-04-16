@@ -2552,3 +2552,37 @@ class DefenderAgentSuppressionCreate(BaseModel):
 class DefenderAgentSuppressionsResponse(BaseModel):
     suppressions: list[DefenderAgentSuppressionItem]
     total: int
+
+
+class DefenderAgentMetricsEntity(BaseModel):
+    id: str
+    name: str
+    type: str
+    count: int
+
+
+class DefenderAgentMetricsAlertTitle(BaseModel):
+    title: str
+    count: int
+
+
+class DefenderAgentMetricsAction(BaseModel):
+    action: str
+    count: int
+
+
+class DefenderAgentMetricsDailyVolume(BaseModel):
+    date: str
+    count: int
+
+
+class DefenderAgentMetrics(BaseModel):
+    period_days: int
+    total_decisions: int
+    by_tier: dict[str, int]
+    daily_volumes: list[DefenderAgentMetricsDailyVolume]
+    top_entities: list[DefenderAgentMetricsEntity]
+    top_alert_titles: list[DefenderAgentMetricsAlertTitle]
+    disposition_summary: dict[str, int]
+    false_positive_rate: float
+    top_actions: list[DefenderAgentMetricsAction]

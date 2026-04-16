@@ -17,6 +17,7 @@ from models import (
     DefenderAgentEntityTimelineResponse,
     DefenderAgentRunResponse,
     DefenderAgentSummaryResponse,
+    DefenderAgentMetrics,
     DefenderAgentSuppressionCreate,
     DefenderAgentSuppressionItem,
     DefenderAgentSuppressionsResponse,
@@ -432,6 +433,15 @@ def get_disposition_stats(
 ) -> dict:
     _ensure_azure_site()
     return defender_agent_store.get_disposition_stats()
+
+
+@router.get("/metrics", response_model=DefenderAgentMetrics)
+def get_agent_metrics(
+    days: int = Query(default=30, ge=1, le=365),
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    _ensure_azure_site()
+    return defender_agent_store.get_agent_metrics(days=days)
 
 
 # ---------------------------------------------------------------------------

@@ -874,4 +874,154 @@ class DefenderAgentStore:
         }
 
 
+    # -------------------------------------------------------------------------
+    # Agent metrics
+    # -------------------------------------------------------------------------
+
+    def get_agent_metrics(self, days: int = 30) -> dict[str, Any]:
+        """Return aggregate operational metrics for the agent over the last N days.
+
+        Returns tier distribution, daily decision volumes, top affected entities,
+        top alert titles, disposition summary, and FP rate trend.
+        """
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        p = self._placeholder()
+        with self._conn() as conn:
+            # Tier / decision type distribution
+            tier_rows = conn.execute(
+                f"""
+                SELECT decision, tier, COUNT(*) AS c
+                  FROM defender_agent_decisions
+                 WHERE executed_at >= {p}
+                 GROUP BY decision, tier
+                """,
+                (since,),
+            ).fetchall()
+
+            # Daily decision volumes (all decisions)
+            daily_rows = conn.execute(
+                f"""
+                SELECT SUBSTR(executed_at, 1, 10) AS day, COUNT(*) AS c
+                  FROM defender_agent_decisions
+                 WHERE executed_at >= {p}
+                 GROUP BY day
+                 ORDER BY day
+                """,
+                (since,),
+            ).fetchall()
+
+            # Top 10 most-affected entities (by number of decisions)
+            entity_rows = conn.execute(
+                f"""
+                SELECT entities_json
+                  FROM defender_agent_decisions
+                 WHERE executed_at >= {p}
+                """,
+                (since,),
+            ).fetchall()
+
+            # Top 10 alert titles
+            title_rows = conn.execute(
+                f"""
+                SELECT alert_title, COUNT(*) AS c
+                  FROM defender_agent_decisions
+                 WHERE executed_at >= {p}
+                   AND alert_title IS NOT NULL AND alert_title != ''
+                 GROUP BY alert_title
+                 ORDER BY c DESC
+                 LIMIT 10
+                """,
+                (since,),
+            ).fetchall()
+
+            # Disposition summary (non-skip only) for the period
+            disp_rows = conn.execute(
+                f"""
+                SELECT disposition, COUNT(*) AS c
+                  FROM defender_agent_decisions
+                 WHERE executed_at >= {p}
+                   AND decision != 'skip'
+                 GROUP BY disposition
+                """,
+                (since,),
+            ).fetchall()
+
+            # Action type distribution
+            action_rows = conn.execute(
+                f"""
+                SELECT action_type, COUNT(*) AS c
+                  FROM defender_agent_decisions
+                 WHERE executed_at >= {p}
+                   AND action_type IS NOT NULL AND action_type != ''
+                 GROUP BY action_type
+                 ORDER BY c DESC
+                 LIMIT 10
+                """,
+                (since,),
+            ).fetchall()
+
+        # Build tier distribution
+        by_tier: dict[str, int] = {"T1": 0, "T2": 0, "T3": 0, "skip": 0}
+        for row in tier_rows:
+            dec = row["decision"]
+            if dec == "skip":
+                by_tier["skip"] += int(row["c"])
+            elif dec == "execute":
+                by_tier["T1"] += int(row["c"])
+            elif dec == "queue":
+                by_tier["T2"] += int(row["c"])
+            elif dec == "recommend":
+                by_tier["T3"] += int(row["c"])
+
+        # Build daily volumes
+        daily_volumes = [{"date": r["day"], "count": int(r["c"])} for r in daily_rows]
+
+        # Aggregate entity counts from JSON blobs
+        entity_counts: dict[str, dict[str, Any]] = {}
+        for row in entity_rows:
+            try:
+                entities = json.loads(row["entities_json"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for e in entities:
+                key = str(e.get("id") or e.get("name") or "")
+                if not key:
+                    continue
+                if key not in entity_counts:
+                    entity_counts[key] = {"id": key, "name": e.get("name") or key, "type": e.get("type", ""), "count": 0}
+                entity_counts[key]["count"] += 1
+        top_entities = sorted(entity_counts.values(), key=lambda x: x["count"], reverse=True)[:10]
+
+        # Top alert titles
+        top_alert_titles = [{"title": r["alert_title"], "count": int(r["c"])} for r in title_rows]
+
+        # Disposition summary
+        disp_summary: dict[str, int] = {"true_positive": 0, "false_positive": 0, "inconclusive": 0, "unreviewed": 0}
+        for row in disp_rows:
+            key = row["disposition"] or "unreviewed"
+            if key in disp_summary:
+                disp_summary[key] += int(row["c"])
+            else:
+                disp_summary["unreviewed"] += int(row["c"])
+
+        reviewed = disp_summary["true_positive"] + disp_summary["false_positive"] + disp_summary["inconclusive"]
+        fp_rate = round(disp_summary["false_positive"] / reviewed, 3) if reviewed > 0 else 0.0
+
+        # Action type distribution
+        top_actions = [{"action": r["action_type"], "count": int(r["c"])} for r in action_rows]
+
+        total = sum(by_tier.values())
+        return {
+            "period_days": days,
+            "total_decisions": total,
+            "by_tier": by_tier,
+            "daily_volumes": daily_volumes,
+            "top_entities": top_entities,
+            "top_alert_titles": top_alert_titles,
+            "disposition_summary": disp_summary,
+            "false_positive_rate": fp_rate,
+            "top_actions": top_actions,
+        }
+
+
 defender_agent_store = DefenderAgentStore()
