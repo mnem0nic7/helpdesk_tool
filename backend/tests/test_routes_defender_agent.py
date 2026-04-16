@@ -217,7 +217,7 @@ def test_approve_decision_not_found(defender_client):
     assert resp.status_code == 404
 
 
-def test_approve_non_recommend_decision_returns_400(defender_client, store):
+def test_approve_any_decision_succeeds(defender_client, store):
     store.create_run("run-1")
     store.create_decision(
         decision_id="dec-t1",
@@ -240,7 +240,8 @@ def test_approve_non_recommend_decision_returns_400(defender_client, store):
         "/api/azure/security/defender-agent/decisions/dec-t1/approve",
         headers=AZURE_HOST,
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    assert resp.json()["human_approved"] is True
 
 
 # ---------------------------------------------------------------------------
