@@ -138,17 +138,21 @@ def execute_decision_now(
 
     entities = row.get("entities") or []
     reason = f"{row.get('reason', '')} [Force-executed early by {_session.get('email')}]"
-    job_ids = _dispatch_action(
-        action_type=str(row.get("action_type") or ""),
-        entities=entities,
-        alert={},
-        user_admin_jobs=user_admin_jobs,
-        security_device_jobs=sdj,
-        reason=reason,
-        alert_severity=str(row.get("alert_severity") or ""),
-    )
-    if job_ids:
-        defender_agent_store.update_decision_jobs(decision_id, job_ids)
+    stored_ats: list[str] = row.get("action_types") or [str(row.get("action_type") or "")]
+    all_job_ids: list[str] = []
+    for at in stored_ats:
+        jids = _dispatch_action(
+            action_type=at,
+            entities=entities,
+            alert={},
+            user_admin_jobs=user_admin_jobs,
+            security_device_jobs=sdj,
+            reason=reason,
+            alert_severity=str(row.get("alert_severity") or ""),
+        )
+        all_job_ids.extend(jids)
+    if all_job_ids:
+        defender_agent_store.update_decision_jobs(decision_id, all_job_ids)
 
     return defender_agent_store.get_decision(decision_id) or row
 

@@ -1523,6 +1523,7 @@ export interface DefenderAgentDecision {
   tier: number | null;
   decision: "execute" | "queue" | "recommend" | "skip";
   action_type: string;
+  action_types: string[];
   job_ids: string[];
   reason: string;
   executed_at: string;

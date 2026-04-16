@@ -539,6 +539,34 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "create_block_indicator",
         "reason": "Known malicious file hash detected; creating tenant-wide block indicator.",
     },
+    # T2 — RC Containment: confirmed active attacker on endpoint + identity component
+    # Composite: isolate device AND revoke sessions simultaneously
+    {
+        "title_keywords": (
+            "hands-on-keyboard", "interactive attacker", "active incident",
+            "active breach", "attacker in session", "confirmed attacker activity",
+            "human operated attack", "operator activity detected",
+        ),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_types": ["isolate_device", "revoke_sessions"],
+        "reason": "RC Containment: active attacker presence confirmed; isolating endpoint + revoking sessions simultaneously.",
+    },
+    # T2 — RC Full Containment: critical severity active exploitation with identity component
+    # Composite: isolate device + revoke sessions + disable sign-in
+    {
+        "title_keywords": (
+            "ransomware encryption in progress", "active encryption",
+            "critical active exploitation", "confirmed active compromise",
+            "critical ransomware", "mass encryption detected",
+        ),
+        "min_severity": "critical",
+        "tier": 2,
+        "decision": "queue",
+        "action_types": ["isolate_device", "revoke_sessions", "disable_sign_in"],
+        "reason": "RC Full Containment: critical active attack; isolating endpoint + full account lockout queued.",
+    },
     # T2 — known threat actor families → isolate endpoint (RC-17)
     {
         "title_keywords": (
@@ -565,10 +593,11 @@ _RULES: list[dict[str, Any]] = [
 ]
 
 
-def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | None, str, str, str]:
-    """Return (tier, decision_type, action_type, reason).
+def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | None, str, list[str], str]:
+    """Return (tier, decision_type, action_types, reason).
 
     decision_type: "execute" | "queue" | "recommend" | "skip"
+    action_types:  list of action type strings (composite rules have >1; empty for skip)
     """
     severity = (alert.get("severity") or "unknown").lower()
     title = (alert.get("title") or "").lower()
@@ -576,7 +605,7 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
 
     # Reject alerts below operator-configured floor
     if _SEV_ORDER.get(severity, 0) < _SEV_ORDER.get(min_severity, 3):
-        return None, "skip", "", f"Severity '{severity}' is below configured minimum '{min_severity}'."
+        return None, "skip", [], f"Severity '{severity}' is below configured minimum '{min_severity}'."
 
     for rule in _RULES:
         # Severity gate
@@ -596,9 +625,11 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
         svc_filter = rule.get("service_source_contains")
         if svc_filter and not any(s in service_source for s in svc_filter):
             continue
-        return rule["tier"], rule["decision"], rule["action_type"], rule["reason"]
+        # Support composite action_types list or single action_type
+        ats: list[str] = rule.get("action_types") or ([rule["action_type"]] if rule.get("action_type") else [])
+        return rule["tier"], rule["decision"], ats, rule["reason"]
 
-    return None, "skip", "", "Alert category/title did not match any decision rule."
+    return None, "skip", [], "Alert category/title did not match any decision rule."
 
 
 def _extract_entities(alert: dict[str, Any]) -> list[dict[str, Any]]:
@@ -758,7 +789,9 @@ def _run_agent_cycle() -> None:
             alert_title = str(alert.get("title") or "")
             alert_severity = str(alert.get("severity") or "")
             alert_service_source = str(alert.get("serviceSource") or "")
-            tier, decision_type, action_type, reason = _classify_alert(alert, min_severity)
+            tier, decision_type, action_types, reason = _classify_alert(alert, min_severity)
+            # Primary action_type is first in list (for display / backward compat)
+            action_type = action_types[0] if action_types else ""
             entities = _extract_entities(alert)
             decision_id = uuid.uuid4().hex
             not_before_at: str | None = None
@@ -781,6 +814,7 @@ def _run_agent_cycle() -> None:
                 tier=tier,
                 decision=decision_type,
                 action_type=action_type,
+                action_types=action_types,
                 job_ids=[],
                 reason=reason,
                 not_before_at=not_before_at,
@@ -811,19 +845,22 @@ def _run_agent_cycle() -> None:
             # T1 — execute immediately (subject to per-cycle cap)
             if decision_type == "execute" and not dry_run:
                 if jobs_dispatched < DEFENDER_AGENT_MAX_JOBS_PER_CYCLE:
-                    job_ids = _dispatch_action(
-                        action_type=action_type,
-                        entities=entities,
-                        alert=alert,
-                        user_admin_jobs=user_admin_jobs,
-                        security_device_jobs=security_device_jobs,
-                        reason=reason,
-                        alert_severity=alert_severity,
-                    )
-                    if job_ids:
-                        defender_agent_store.update_decision_jobs(decision_id, job_ids)
-                        actions_queued += len(job_ids)
-                        jobs_dispatched += len(job_ids)
+                    all_job_ids: list[str] = []
+                    for at in action_types:
+                        jids = _dispatch_action(
+                            action_type=at,
+                            entities=entities,
+                            alert=alert,
+                            user_admin_jobs=user_admin_jobs,
+                            security_device_jobs=security_device_jobs,
+                            reason=reason,
+                            alert_severity=alert_severity,
+                        )
+                        all_job_ids.extend(jids)
+                    if all_job_ids:
+                        defender_agent_store.update_decision_jobs(decision_id, all_job_ids)
+                        actions_queued += len(all_job_ids)
+                        jobs_dispatched += len(all_job_ids)
                     if DEFENDER_AGENT_TEAMS_NOTIFY_T1:
                         _notify_teams(
                             title=alert_title, severity=alert_severity, tier=tier,
@@ -861,19 +898,23 @@ def _run_agent_cycle() -> None:
                 logger.warning("Defender agent: per-cycle job cap reached during T2 flush; deferring remaining T2 rows")
                 break
             stored_entities: list[dict[str, Any]] = row.get("entities") or []
-            job_ids = _dispatch_action(
-                action_type=str(row.get("action_type") or ""),
-                entities=stored_entities,
-                alert={},
-                user_admin_jobs=user_admin_jobs,
-                security_device_jobs=security_device_jobs,
-                reason=str(row.get("reason") or ""),
-                alert_severity=str(row.get("alert_severity") or ""),
-            )
-            if job_ids:
-                defender_agent_store.update_decision_jobs(str(row["decision_id"]), job_ids)
-                actions_queued += len(job_ids)
-                jobs_dispatched += len(job_ids)
+            stored_ats: list[str] = row.get("action_types") or [str(row.get("action_type") or "")]
+            t2_job_ids: list[str] = []
+            for at in stored_ats:
+                jids = _dispatch_action(
+                    action_type=at,
+                    entities=stored_entities,
+                    alert={},
+                    user_admin_jobs=user_admin_jobs,
+                    security_device_jobs=security_device_jobs,
+                    reason=str(row.get("reason") or ""),
+                    alert_severity=str(row.get("alert_severity") or ""),
+                )
+                t2_job_ids.extend(jids)
+            if t2_job_ids:
+                defender_agent_store.update_decision_jobs(str(row["decision_id"]), t2_job_ids)
+                actions_queued += len(t2_job_ids)
+                jobs_dispatched += len(t2_job_ids)
 
         defender_agent_store.complete_run(
             run_id,
@@ -1193,18 +1234,22 @@ def dispatch_approved_t3(decision_id: str) -> list[str]:
     row = defender_agent_store.get_decision(decision_id)
     if not row:
         return []
-    job_ids = _dispatch_action(
-        action_type=str(row.get("action_type") or ""),
-        entities=row.get("entities") or [],
-        alert={},
-        user_admin_jobs=user_admin_jobs,
-        security_device_jobs=security_device_jobs,
-        reason=str(row.get("reason") or ""),
-        alert_severity=str(row.get("alert_severity") or ""),
-    )
-    if job_ids:
-        defender_agent_store.update_decision_jobs(decision_id, job_ids)
-    return job_ids
+    stored_ats: list[str] = row.get("action_types") or [str(row.get("action_type") or "")]
+    all_job_ids: list[str] = []
+    for at in stored_ats:
+        jids = _dispatch_action(
+            action_type=at,
+            entities=row.get("entities") or [],
+            alert={},
+            user_admin_jobs=user_admin_jobs,
+            security_device_jobs=security_device_jobs,
+            reason=str(row.get("reason") or ""),
+            alert_severity=str(row.get("alert_severity") or ""),
+        )
+        all_job_ids.extend(jids)
+    if all_job_ids:
+        defender_agent_store.update_decision_jobs(decision_id, all_job_ids)
+    return all_job_ids
 
 
 # ---------------------------------------------------------------------------

@@ -117,6 +117,13 @@ class DefenderAgentStore:
             conn.commit()
         except Exception:
             pass  # column already exists
+        try:
+            conn.execute(
+                "ALTER TABLE defender_agent_decisions ADD COLUMN action_types_json TEXT NOT NULL DEFAULT '[]'"
+            )
+            conn.commit()
+        except Exception:
+            pass  # column already exists
 
     # -------------------------------------------------------------------------
     # Config
@@ -242,6 +249,7 @@ class DefenderAgentStore:
         tier: int | None,
         decision: str,
         action_type: str,
+        action_types: list[str] | None = None,
         job_ids: list[str],
         reason: str,
         not_before_at: str | None = None,
@@ -249,21 +257,23 @@ class DefenderAgentStore:
     ) -> dict[str, Any]:
         p = self._placeholder()
         now = _now()
+        # Normalize action_types: always a list; action_type is the primary (first) element
+        ats = action_types if action_types else ([action_type] if action_type else [])
         with self._conn() as conn:
             conn.execute(
                 f"""
                 INSERT INTO defender_agent_decisions (
                     decision_id, run_id, alert_id, alert_title, alert_severity,
                     alert_category, alert_created_at, service_source, entities_json,
-                    tier, decision, action_type, job_ids_json, reason,
+                    tier, decision, action_type, action_types_json, job_ids_json, reason,
                     executed_at, not_before_at, alert_raw_json
-                ) VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+                ) VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
                 """,
                 (
                     decision_id, run_id, alert_id, alert_title, alert_severity,
                     alert_category, alert_created_at, service_source,
                     json.dumps(entities), tier, decision, action_type,
-                    json.dumps(job_ids), reason, now, not_before_at,
+                    json.dumps(ats), json.dumps(job_ids), reason, now, not_before_at,
                     json.dumps(alert_raw) if alert_raw else "",
                 ),
             )
@@ -420,6 +430,12 @@ class DefenderAgentStore:
     def _row_to_decision(d: dict[str, Any], *, include_raw: bool = False) -> dict[str, Any]:
         d["entities"] = json.loads(d.pop("entities_json", "[]") or "[]")
         d["job_ids"] = json.loads(d.pop("job_ids_json", "[]") or "[]")
+        raw_ats = json.loads(d.pop("action_types_json", "[]") or "[]")
+        # Ensure action_types is always populated (fall back to [action_type] for older rows)
+        if raw_ats:
+            d["action_types"] = raw_ats
+        else:
+            d["action_types"] = [d["action_type"]] if d.get("action_type") else []
         d["cancelled"] = bool(d.get("cancelled", 0))
         d["human_approved"] = bool(d.get("human_approved", 0))
         raw_str = d.pop("alert_raw_json", "") or ""

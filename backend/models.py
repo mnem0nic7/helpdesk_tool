@@ -2463,6 +2463,7 @@ class DefenderAgentDecisionItem(BaseModel):
     tier: Optional[int] = None
     decision: str = "skip"
     action_type: str = ""
+    action_types: list[str] = Field(default_factory=list)
     job_ids: list[str] = Field(default_factory=list)
     reason: str = ""
     executed_at: str = ""

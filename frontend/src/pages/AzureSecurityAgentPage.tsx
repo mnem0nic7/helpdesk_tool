@@ -421,7 +421,19 @@ function AlertDetailDrawer({
               {/* Decision trace */}
               <Section title="Decision trace">
                 <div className="space-y-0.5">
-                  <Row label="Tier / action" value={d.tier ? `T${d.tier} — ${fmtAction(d)}` : `Skip — ${d.reason}`} />
+                  <Row
+                    label="Tier / action"
+                    value={
+                      d.tier ? (
+                        <span>
+                          {`T${d.tier} — `}
+                          {(d.action_types?.length ?? 0) > 1
+                            ? (d.action_types ?? []).map(at => ACTION_LABELS[at] ?? at.replace(/_/g, " ")).join(" + ")
+                            : fmtAction(d)}
+                        </span>
+                      ) : `Skip — ${d.reason}`
+                    }
+                  />
                   <Row label="Reason" value={d.reason} />
                   <Row label="Logged at" value={fmtTime(d.executed_at)} />
                   {d.decision !== "skip" && (
@@ -590,8 +602,16 @@ function DecisionRow({
       </td>
       <td className="whitespace-nowrap px-3 py-2">
         {d.action_type ? (
-          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${actionBadgeColor(d.action_type)}`}>
-            {fmtAction(d)}
+          <span className="inline-flex items-center gap-1">
+            <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${actionBadgeColor(d.action_type)}`}>
+              {fmtAction(d)}
+            </span>
+            {(d.action_types?.length ?? 0) > 1 && (
+              <span className="rounded-full bg-gray-200 px-1.5 py-0.5 text-xs text-gray-600 font-medium"
+                title={(d.action_types ?? []).map(at => ACTION_LABELS[at] ?? at.replace(/_/g, " ")).join(" + ")}>
+                +{d.action_types.length - 1}
+              </span>
+            )}
           </span>
         ) : <span className="text-xs text-gray-400">—</span>}
       </td>
