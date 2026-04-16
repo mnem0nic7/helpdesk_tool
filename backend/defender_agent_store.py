@@ -152,6 +152,7 @@ class DefenderAgentStore:
             "ALTER TABLE defender_agent_decisions ADD COLUMN disposition_note TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE defender_agent_decisions ADD COLUMN disposition_by TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE defender_agent_decisions ADD COLUMN disposition_at TEXT",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN investigation_notes_json TEXT NOT NULL DEFAULT '[]'",
         ):
             try:
                 with self._conn() as _mc:
@@ -736,6 +737,8 @@ class DefenderAgentStore:
         d.setdefault("disposition_note", "")
         d.setdefault("disposition_by", "")
         d.setdefault("disposition_at", None)
+        raw_notes = d.pop("investigation_notes_json", "[]") or "[]"
+        d["investigation_notes"] = json.loads(raw_notes)
         return d
 
 
@@ -821,6 +824,42 @@ class DefenderAgentStore:
                  WHERE decision_id = {p}
                 """,
                 (disposition, note, by, now, decision_id),
+            )
+            conn.commit()
+        return self.get_decision(decision_id)
+
+    # -------------------------------------------------------------------------
+    # Investigation notes
+    # -------------------------------------------------------------------------
+
+    def append_investigation_note(
+        self,
+        decision_id: str,
+        text: str,
+        *,
+        by: str = "",
+    ) -> dict[str, Any] | None:
+        """Append an analyst note to a decision's investigation log.
+
+        Notes are stored as a JSON array: [{text, by, at}, ...].
+        Returns the updated decision, or None if not found.
+        """
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("note text cannot be empty")
+        p = self._placeholder()
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT investigation_notes_json FROM defender_agent_decisions WHERE decision_id = {p}",
+                (decision_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            existing: list[dict[str, Any]] = json.loads(row["investigation_notes_json"] or "[]")
+            existing.append({"text": text, "by": by, "at": _now()})
+            conn.execute(
+                f"UPDATE defender_agent_decisions SET investigation_notes_json = {p} WHERE decision_id = {p}",
+                (json.dumps(existing), decision_id),
             )
             conn.commit()
         return self.get_decision(decision_id)

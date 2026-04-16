@@ -1102,3 +1102,70 @@ def test_get_agent_metrics_period_days_filter(tmp_path):
     assert m_1["total_decisions"] == m_90["total_decisions"]
     assert m_1["period_days"] == 1
     assert m_90["period_days"] == 90
+
+
+# ---------------------------------------------------------------------------
+# Phase 15: Investigation notes
+# ---------------------------------------------------------------------------
+
+def test_append_investigation_note_empty_text_raises(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    _make_decision(store)
+    import pytest
+    with pytest.raises(ValueError):
+        store.append_investigation_note("dec-1", "")
+    with pytest.raises(ValueError):
+        store.append_investigation_note("dec-1", "   ")
+
+
+def test_append_investigation_note_not_found_returns_none(tmp_path):
+    store = _store(tmp_path)
+    result = store.append_investigation_note("nonexistent", "hello")
+    assert result is None
+
+
+def test_append_investigation_note_single(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    _make_decision(store)
+    result = store.append_investigation_note("dec-1", "First note", by="analyst@example.com")
+    assert result is not None
+    notes = result["investigation_notes"]
+    assert len(notes) == 1
+    assert notes[0]["text"] == "First note"
+    assert notes[0]["by"] == "analyst@example.com"
+    assert notes[0]["at"]
+
+
+def test_append_investigation_note_multiple_preserves_order(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    _make_decision(store)
+    store.append_investigation_note("dec-1", "Note A")
+    store.append_investigation_note("dec-1", "Note B")
+    result = store.append_investigation_note("dec-1", "Note C")
+    assert result is not None
+    notes = result["investigation_notes"]
+    assert len(notes) == 3
+    assert notes[0]["text"] == "Note A"
+    assert notes[1]["text"] == "Note B"
+    assert notes[2]["text"] == "Note C"
+
+
+def test_investigation_notes_default_empty_on_new_decision(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    dec = _make_decision(store)
+    assert dec["investigation_notes"] == []
+
+
+def test_investigation_notes_persisted_across_get(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    _make_decision(store)
+    store.append_investigation_note("dec-1", "Persistent note")
+    fetched = store.get_decision("dec-1")
+    assert fetched is not None
+    assert len(fetched["investigation_notes"]) == 1
+    assert fetched["investigation_notes"][0]["text"] == "Persistent note"

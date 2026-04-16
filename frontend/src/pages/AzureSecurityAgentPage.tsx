@@ -664,6 +664,15 @@ function AlertDetailDrawer({
     },
   });
 
+  const [noteText, setNoteText] = useState("");
+  const noteMut = useMutation({
+    mutationFn: () => api.addDecisionNote(decisionId, noteText),
+    onSuccess: () => {
+      setNoteText("");
+      queryClient.invalidateQueries({ queryKey: ["defender-agent-decision", decisionId] });
+    },
+  });
+
   // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -994,6 +1003,44 @@ function AlertDetailDrawer({
                 onChange={(e) => setDispositionNote(e.target.value)}
                 className="ml-1 flex-1 min-w-[160px] rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
               />
+            </div>
+          </div>
+        )}
+
+        {/* Investigation notes */}
+        {d && (
+          <div className="border-t border-gray-100 px-6 py-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Investigation notes</p>
+            {(d.investigation_notes ?? []).length > 0 && (
+              <div className="mb-2 space-y-1.5 max-h-40 overflow-y-auto">
+                {(d.investigation_notes ?? []).map((n, i) => (
+                  <div key={i} className="rounded-md bg-gray-50 border border-gray-100 px-3 py-2 text-xs">
+                    <p className="text-gray-800 whitespace-pre-wrap break-words">{n.text}</p>
+                    <p className="mt-0.5 text-gray-400">
+                      {n.by ? `${n.by} · ` : ""}{fmtTime(n.at)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(d.investigation_notes ?? []).length === 0 && (
+              <p className="text-xs text-gray-400 mb-2">No notes yet.</p>
+            )}
+            <div className="flex gap-2">
+              <textarea
+                rows={2}
+                placeholder="Add an investigation note…"
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-700 placeholder-gray-400 resize-none focus:outline-none focus:ring-1 focus:ring-blue-400"
+              />
+              <button
+                onClick={() => { if (noteText.trim()) noteMut.mutate(); }}
+                disabled={!noteText.trim() || noteMut.isPending}
+                className="shrink-0 self-end rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40"
+              >
+                {noteMut.isPending ? "…" : "Add"}
+              </button>
             </div>
           </div>
         )}
