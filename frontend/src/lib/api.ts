@@ -1562,6 +1562,7 @@ export interface DefenderAgentDecision {
   disposition_note: string;
   disposition_by: string;
   disposition_at: string | null;
+  investigation_notes: Array<{ text: string; by: string; at: string }>;
 }
 
 export interface DefenderAgentDecisionsResponse {
@@ -3885,6 +3886,12 @@ export const api = {
   },
   getDefenderAgentMetrics(days = 30): Promise<DefenderAgentMetrics> {
     return fetchJSON<DefenderAgentMetrics>(`/api/azure/security/defender-agent/metrics?days=${days}`);
+  },
+  addDecisionNote(decisionId: string, text: string): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(
+      `/api/azure/security/defender-agent/decisions/${decisionId}/notes`,
+      { text }
+    );
   },
   listDefenderIndicators(): Promise<{ indicators: DefenderIndicator[]; total: number }> {
     return fetchJSON<{ indicators: DefenderIndicator[]; total: number }>(

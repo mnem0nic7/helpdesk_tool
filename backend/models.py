@@ -2491,6 +2491,7 @@ class DefenderAgentDecisionItem(BaseModel):
     disposition_note: str = ""
     disposition_by: str = ""
     disposition_at: Optional[str] = None
+    investigation_notes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DefenderAgentDecisionsResponse(BaseModel):
@@ -2501,6 +2502,10 @@ class DefenderAgentDecisionsResponse(BaseModel):
 class DefenderAgentDispositionUpdate(BaseModel):
     disposition: Literal["true_positive", "false_positive", "inconclusive"]
     note: str = ""
+
+
+class DefenderAgentNoteCreate(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000)
 
 
 class DefenderAgentDispositionStats(BaseModel):

@@ -18,6 +18,7 @@ from models import (
     DefenderAgentRunResponse,
     DefenderAgentSummaryResponse,
     DefenderAgentMetrics,
+    DefenderAgentNoteCreate,
     DefenderAgentSuppressionCreate,
     DefenderAgentSuppressionItem,
     DefenderAgentSuppressionsResponse,
@@ -442,6 +443,30 @@ def get_agent_metrics(
 ) -> dict:
     _ensure_azure_site()
     return defender_agent_store.get_agent_metrics(days=days)
+
+
+# ---------------------------------------------------------------------------
+# Investigation notes
+# ---------------------------------------------------------------------------
+
+@router.post("/decisions/{decision_id}/notes", response_model=DefenderAgentDecisionItem)
+def add_investigation_note(
+    decision_id: str,
+    body: DefenderAgentNoteCreate,
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    _ensure_azure_site()
+    try:
+        result = defender_agent_store.append_investigation_note(
+            decision_id,
+            body.text,
+            by=str(_session.get("email") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    return result
 
 
 # ---------------------------------------------------------------------------

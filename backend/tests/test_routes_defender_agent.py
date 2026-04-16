@@ -738,3 +738,71 @@ def test_get_agent_metrics_invalid_days(defender_client, store):
         headers=AZURE_HOST,
     )
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Phase 15: Investigation notes route
+# ---------------------------------------------------------------------------
+
+def test_add_note_success(defender_client, store):
+    store.create_run("run-1")
+    row = _make_route_decision(store, "dec-note-1", "execute")
+    resp = defender_client.post(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}/notes",
+        json={"text": "Investigating lateral movement pattern"},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["investigation_notes"]) == 1
+    assert body["investigation_notes"][0]["text"] == "Investigating lateral movement pattern"
+
+
+def test_add_note_multiple_appends(defender_client, store):
+    store.create_run("run-1")
+    row = _make_route_decision(store, "dec-note-2", "execute")
+    for note in ("Note 1", "Note 2", "Note 3"):
+        defender_client.post(
+            f"/api/azure/security/defender-agent/decisions/{row['decision_id']}/notes",
+            json={"text": note},
+            headers=AZURE_HOST,
+        )
+    resp = defender_client.get(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()["investigation_notes"]) == 3
+
+
+def test_add_note_empty_text_422(defender_client, store):
+    store.create_run("run-1")
+    row = _make_route_decision(store, "dec-note-empty", "execute")
+    resp = defender_client.post(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}/notes",
+        json={"text": ""},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 422
+
+
+def test_add_note_not_found_404(defender_client, store):
+    resp = defender_client.post(
+        "/api/azure/security/defender-agent/decisions/nonexistent/notes",
+        json={"text": "hello"},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 404
+
+
+def test_decision_includes_investigation_notes_field(defender_client, store):
+    store.create_run("run-1")
+    row = _make_route_decision(store, "dec-note-field", "execute")
+    resp = defender_client.get(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "investigation_notes" in body
+    assert body["investigation_notes"] == []
