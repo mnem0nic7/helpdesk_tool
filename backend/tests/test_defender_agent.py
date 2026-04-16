@@ -653,3 +653,155 @@ def test_dispatch_unknown_action_type_returns_empty_without_raising():
         security_device_jobs=sdj,
     )
     assert job_ids == []
+
+
+# ---------------------------------------------------------------------------
+# _is_suppressed
+# ---------------------------------------------------------------------------
+
+def _suppression(suppression_type: str, value: str, sid: str = "s-001") -> dict:
+    return {"id": sid, "suppression_type": suppression_type, "value": value}
+
+
+def test_is_suppressed_no_rules():
+    suppressed, _ = defender_agent._is_suppressed(_alert(title="Suspicious Sign-In"), [], [])
+    assert not suppressed
+
+
+def test_is_suppressed_by_user_upn():
+    entities = [{"type": "user", "id": "aad-1", "name": "ada@example.com"}]
+    suppressions = [_suppression("entity_user", "ada@example.com")]
+    suppressed, reason = defender_agent._is_suppressed(_alert(), entities, suppressions)
+    assert suppressed
+    assert "ada@example.com" in reason
+
+
+def test_is_suppressed_by_user_id():
+    entities = [{"type": "user", "id": "aad-object-1", "name": ""}]
+    suppressions = [_suppression("entity_user", "aad-object-1")]
+    suppressed, _ = defender_agent._is_suppressed(_alert(), entities, suppressions)
+    assert suppressed
+
+
+def test_is_suppressed_by_device_name():
+    entities = [{"type": "device", "id": "dev-abc", "name": "DESKTOP-001"}]
+    suppressions = [_suppression("entity_device", "DESKTOP-001")]
+    suppressed, reason = defender_agent._is_suppressed(_alert(), entities, suppressions)
+    assert suppressed
+    assert "DESKTOP-001" in reason
+
+
+def test_is_suppressed_by_device_id():
+    entities = [{"type": "device", "id": "mde-device-xyz", "name": ""}]
+    suppressions = [_suppression("entity_device", "mde-device-xyz")]
+    suppressed, _ = defender_agent._is_suppressed(_alert(), entities, suppressions)
+    assert suppressed
+
+
+def test_is_suppressed_by_alert_title_substring():
+    alert = _alert(title="Suspicious Sign-In from Anonymous IP")
+    suppressions = [_suppression("alert_title", "anonymous ip")]
+    suppressed, _ = defender_agent._is_suppressed(alert, [], suppressions)
+    assert suppressed
+
+
+def test_is_suppressed_by_alert_category_exact_match():
+    alert = _alert(category="CredentialAccess")
+    suppressions = [_suppression("alert_category", "credentialaccess")]
+    suppressed, _ = defender_agent._is_suppressed(alert, [], suppressions)
+    assert suppressed
+
+
+def test_is_suppressed_alert_category_partial_does_not_match():
+    alert = _alert(category="CredentialAccess")
+    suppressions = [_suppression("alert_category", "credential")]
+    suppressed, _ = defender_agent._is_suppressed(alert, [], suppressions)
+    assert not suppressed
+
+
+def test_is_suppressed_user_rule_does_not_match_device():
+    entities = [{"type": "device", "id": "dev-1", "name": "ada@example.com"}]
+    suppressions = [_suppression("entity_user", "ada@example.com")]
+    suppressed, _ = defender_agent._is_suppressed(_alert(), entities, suppressions)
+    assert not suppressed
+
+
+def test_is_suppressed_empty_suppression_value_skipped():
+    entities = [{"type": "user", "id": "aad-1", "name": "user@example.com"}]
+    suppressions = [_suppression("entity_user", "")]
+    suppressed, _ = defender_agent._is_suppressed(_alert(), entities, suppressions)
+    assert not suppressed
+
+
+def test_is_suppressed_case_insensitive_user():
+    entities = [{"type": "user", "id": "aad-1", "name": "ADA@EXAMPLE.COM"}]
+    suppressions = [_suppression("entity_user", "ada@example.com")]
+    suppressed, _ = defender_agent._is_suppressed(_alert(), entities, suppressions)
+    assert suppressed
+
+
+def test_is_suppressed_first_matching_rule_wins():
+    alert = _alert(title="Password Spray", category="CredentialAccess")
+    entities = [{"type": "user", "id": "aad-1", "name": "user@example.com"}]
+    suppressions = [
+        _suppression("alert_title", "password spray", sid="s-001"),
+        _suppression("entity_user", "user@example.com", sid="s-002"),
+    ]
+    suppressed, reason = defender_agent._is_suppressed(alert, entities, suppressions)
+    assert suppressed
+    assert "s-001" in reason
+
+
+# ---------------------------------------------------------------------------
+# _extract_mitre_techniques
+# ---------------------------------------------------------------------------
+
+def test_extract_mitre_empty_alert():
+    assert defender_agent._extract_mitre_techniques({}) == []
+
+
+def test_extract_mitre_top_level():
+    alert = {"mitreTechniques": ["T1078", "T1110.003"]}
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert result == ["T1078", "T1110.003"]
+
+
+def test_extract_mitre_normalizes_to_uppercase():
+    alert = {"mitreTechniques": ["t1059", "t1055"]}
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert result == ["T1059", "T1055"]
+
+
+def test_extract_mitre_deduplicates():
+    alert = {"mitreTechniques": ["T1078", "T1078", "T1110"]}
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert result == ["T1078", "T1110"]
+
+
+def test_extract_mitre_fallback_from_evidence():
+    alert = {
+        "evidence": [
+            {"techniques": ["T1059", "T1055"]},
+            {"techniques": ["T1059"]},
+        ]
+    }
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert set(result) == {"T1059", "T1055"}
+
+
+def test_extract_mitre_top_level_takes_precedence_over_evidence():
+    alert = {
+        "mitreTechniques": ["T1078"],
+        "evidence": [{"techniques": ["T9999"]}],
+    }
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert result == ["T1078"]
+    assert "T9999" not in result
+
+
+def test_extract_mitre_ignores_non_string_entries():
+    alert = {"mitreTechniques": ["T1078", None, 42, "T1110"]}
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert "T1078" in result
+    assert "T1110" in result
+    assert len(result) == 2

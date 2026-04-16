@@ -1536,6 +1536,7 @@ export interface DefenderAgentDecision {
   approved_by: string;
   alert_raw?: Record<string, unknown>;
   alert_written_back: boolean;
+  mitre_techniques: string[];
 }
 
 export interface DefenderAgentDecisionsResponse {
@@ -1564,6 +1565,24 @@ export interface DefenderIndicator {
   createdBy?: string;
   creationTimeDateTimeUtc?: string;
   description?: string;
+}
+
+export type DefenderSuppressionType = "entity_user" | "entity_device" | "alert_title" | "alert_category";
+
+export interface DefenderAgentSuppression {
+  id: string;
+  suppression_type: DefenderSuppressionType;
+  value: string;
+  reason: string;
+  created_by: string;
+  created_at: string;
+  expires_at: string | null;
+  active: boolean;
+}
+
+export interface DefenderAgentSuppressionsResponse {
+  suppressions: DefenderAgentSuppression[];
+  total: number;
 }
 
 export interface MailboxDelegateEntry {
@@ -3803,6 +3822,25 @@ export const api = {
       if (res.status === 401) { window.location.href = "/api/auth/login"; throw new Error("Not authenticated"); }
       if (!res.ok) throw new Error(`DELETE ${url} failed: ${res.status}`);
       return res.json() as Promise<{ deleted: boolean; indicator_id: string }>;
+    });
+  },
+  listDefenderAgentSuppressions(): Promise<DefenderAgentSuppressionsResponse> {
+    return fetchJSON<DefenderAgentSuppressionsResponse>("/api/azure/security/defender-agent/suppressions");
+  },
+  createDefenderAgentSuppression(body: {
+    suppression_type: DefenderSuppressionType;
+    value: string;
+    reason?: string;
+    expires_at?: string | null;
+  }): Promise<DefenderAgentSuppression> {
+    return postJSON<DefenderAgentSuppression>("/api/azure/security/defender-agent/suppressions", body);
+  },
+  deleteDefenderAgentSuppression(suppressionId: string): Promise<DefenderAgentSuppression> {
+    const url = `/api/azure/security/defender-agent/suppressions/${encodeURIComponent(suppressionId)}`;
+    return fetch(url, { method: "DELETE" }).then(async res => {
+      if (res.status === 401) { window.location.href = "/api/auth/login"; throw new Error("Not authenticated"); }
+      if (!res.ok) throw new Error(`DELETE ${url} failed: ${res.status}`);
+      return res.json() as Promise<DefenderAgentSuppression>;
     });
   },
   runDefenderAgentNow(): Promise<{ run_id: string; started: boolean }> {

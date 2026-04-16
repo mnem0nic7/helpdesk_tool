@@ -2476,6 +2476,7 @@ class DefenderAgentDecisionItem(BaseModel):
     approved_by: str = ""
     alert_raw: dict[str, Any] = Field(default_factory=dict)
     alert_written_back: bool = False
+    mitre_techniques: list[str] = Field(default_factory=list)
 
 
 class DefenderAgentDecisionsResponse(BaseModel):
@@ -2492,3 +2493,26 @@ class DefenderAgentSummaryResponse(BaseModel):
     pending_approvals: int = 0
     pending_tier2: int = 0
     recent_decisions: list[DefenderAgentDecisionItem] = Field(default_factory=list)
+
+
+class DefenderAgentSuppressionItem(BaseModel):
+    id: str
+    suppression_type: Literal["entity_user", "entity_device", "alert_title", "alert_category"]
+    value: str
+    reason: str = ""
+    created_by: str = ""
+    created_at: str = ""
+    expires_at: Optional[str] = None
+    active: bool = True
+
+
+class DefenderAgentSuppressionCreate(BaseModel):
+    suppression_type: Literal["entity_user", "entity_device", "alert_title", "alert_category"]
+    value: str = Field(..., min_length=1, max_length=500)
+    reason: str = Field(default="", max_length=1000)
+    expires_at: Optional[str] = None
+
+
+class DefenderAgentSuppressionsResponse(BaseModel):
+    suppressions: list[DefenderAgentSuppressionItem]
+    total: int

@@ -680,6 +680,76 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
     return None, "skip", [], "Alert category/title did not match any decision rule."
 
 
+def _is_suppressed(
+    alert: dict[str, Any],
+    entities: list[dict[str, Any]],
+    suppressions: list[dict[str, Any]],
+) -> tuple[bool, str]:
+    """Return (suppressed, reason) if the alert matches any active suppression rule."""
+    title = (alert.get("title") or "").lower()
+    category = (alert.get("category") or "").lower()
+
+    for s in suppressions:
+        stype = str(s.get("suppression_type") or "")
+        val = str(s.get("value") or "").lower()
+        if not val:
+            continue
+
+        if stype == "alert_title" and val in title:
+            return True, f"Suppressed: alert title matches '{s['value']}' (rule {s['id'][:8]})"
+        if stype == "alert_category" and val == category:
+            return True, f"Suppressed: alert category '{s['value']}' is suppressed (rule {s['id'][:8]})"
+        if stype == "entity_user":
+            for e in entities:
+                if e.get("type") == "user":
+                    name_match = val == (e.get("name") or "").lower()
+                    id_match = val == (e.get("id") or "").lower()
+                    if name_match or id_match:
+                        display = e.get("name") or e.get("id") or val
+                        return True, f"Suppressed: user '{display}' is suppressed (rule {s['id'][:8]})"
+        if stype == "entity_device":
+            for e in entities:
+                if e.get("type") == "device":
+                    name_match = val == (e.get("name") or "").lower()
+                    id_match = val == (e.get("id") or "").lower()
+                    if name_match or id_match:
+                        display = e.get("name") or e.get("id") or val
+                        return True, f"Suppressed: device '{display}' is suppressed (rule {s['id'][:8]})"
+
+    return False, ""
+
+
+def _extract_mitre_techniques(alert: dict[str, Any]) -> list[str]:
+    """Return deduplicated MITRE ATT&CK technique IDs from a Graph Security alert.
+
+    Graph surfaces these in two places:
+    - Top-level ``mitreTechniques`` list (e.g. ["T1078", "T1110.003"])
+    - Per-evidence ``detectionStatus``/``techniques`` on some alert types
+    We prefer the top-level field and fall back to evidence scanning.
+    """
+    seen: set[str] = set()
+    techniques: list[str] = []
+
+    def _add(val: str) -> None:
+        normalized = val.strip().upper()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            techniques.append(normalized)
+
+    for t in (alert.get("mitreTechniques") or []):
+        if isinstance(t, str):
+            _add(t)
+
+    # Fallback: some alert types embed techniques in evidence items
+    if not techniques:
+        for item in (alert.get("evidence") or []):
+            for t in (item.get("techniques") or []):
+                if isinstance(t, str):
+                    _add(t)
+
+    return techniques
+
+
 def _extract_entities(alert: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract user and device entities from Graph alert evidence."""
     entities: list[dict[str, Any]] = []
@@ -832,15 +902,48 @@ def _run_agent_cycle() -> None:
         tier2_delay = int(config.get("tier2_delay_minutes") or 15)
         jobs_dispatched = 0
 
+        active_suppressions = defender_agent_store.get_active_suppressions()
+
         for alert in new_alerts:
             alert_id = alert.get("id", uuid.uuid4().hex)
             alert_title = str(alert.get("title") or "")
             alert_severity = str(alert.get("severity") or "")
             alert_service_source = str(alert.get("serviceSource") or "")
+            entities = _extract_entities(alert)
+
+            mitre_techniques = _extract_mitre_techniques(alert)
+
+            suppressed, suppress_reason = _is_suppressed(alert, entities, active_suppressions)
+            if suppressed:
+                decision_id = uuid.uuid4().hex
+                defender_agent_store.create_decision(
+                    decision_id=decision_id,
+                    run_id=run_id,
+                    alert_id=alert_id,
+                    alert_title=alert_title,
+                    alert_severity=alert_severity,
+                    alert_category=str(alert.get("category") or ""),
+                    alert_created_at=str(alert.get("createdDateTime") or ""),
+                    service_source=alert_service_source,
+                    entities=entities,
+                    tier=None,
+                    decision="skip",
+                    action_type="",
+                    action_types=[],
+                    job_ids=[],
+                    reason=suppress_reason,
+                    not_before_at=None,
+                    alert_raw=alert,
+                    mitre_techniques=mitre_techniques,
+                )
+                decisions_made += 1
+                skip_count += 1
+                logger.info("Defender agent: suppressed alert %s — %s", alert_id, suppress_reason)
+                continue
+
             tier, decision_type, action_types, reason = _classify_alert(alert, min_severity)
             # Primary action_type is first in list (for display / backward compat)
             action_type = action_types[0] if action_types else ""
-            entities = _extract_entities(alert)
             decision_id = uuid.uuid4().hex
             not_before_at: str | None = None
 
@@ -867,6 +970,7 @@ def _run_agent_cycle() -> None:
                 reason=reason,
                 not_before_at=not_before_at,
                 alert_raw=alert,
+                mitre_techniques=mitre_techniques,
             )
             decisions_made += 1
             if decision_type == "skip":
