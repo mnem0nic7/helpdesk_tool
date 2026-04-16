@@ -894,7 +894,7 @@ function AlertDetailDrawer({
   const tier = d ? tierLabel(d) : null;
   const status = d ? decisionStatus(d) : null;
   const canCancel = d && d.decision === "queue" && !d.cancelled && !d.job_ids.length;
-  const canApprove = d && d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
+  const canApprove = d && !d.human_approved && !d.cancelled && isAdmin;
   const canExecuteNow = d && d.decision === "queue" && !d.cancelled && !d.job_ids.length && isAdmin;
   const canForceInvestigate = d && d.entities.some(e => e.type === "device") && isAdmin;
   const canUnisolate = d && d.entities.some(e => e.type === "device") && !d.cancelled && isAdmin;
@@ -1475,7 +1475,7 @@ function DecisionRow({
 
   // Primary actions
   const canCancel           = d.decision === "queue" && !d.cancelled && !d.job_ids.length;
-  const canApprove          = d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
+  const canApprove          = !d.human_approved && !d.cancelled && isAdmin;
   const canExecuteNow       = d.decision === "queue" && !d.cancelled && !d.job_ids.length && isAdmin;
   const canForceInvestigate = d.entities.some(e => e.type === "device") && isAdmin;
   const canUnisolate        = d.entities.some(e => e.type === "device") && !d.cancelled && isAdmin;

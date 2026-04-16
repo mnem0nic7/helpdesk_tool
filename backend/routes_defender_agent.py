@@ -268,8 +268,6 @@ def approve_decision(
     row = defender_agent_store.get_decision(decision_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Decision not found")
-    if row.get("decision") != "recommend":
-        raise HTTPException(status_code=400, detail="Only T3 recommended decisions can be approved")
     if row.get("human_approved"):
         raise HTTPException(status_code=400, detail="Decision is already approved")
     if row.get("cancelled"):
