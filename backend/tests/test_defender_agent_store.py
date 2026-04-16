@@ -1169,3 +1169,97 @@ def test_investigation_notes_persisted_across_get(tmp_path):
     assert fetched is not None
     assert len(fetched["investigation_notes"]) == 1
     assert fetched["investigation_notes"][0]["text"] == "Persistent note"
+
+
+# ---------------------------------------------------------------------------
+# Phase 16: Entity watchlist
+# ---------------------------------------------------------------------------
+
+def test_add_watchlist_entry_basic(tmp_path):
+    store = _store(tmp_path)
+    entry = store.add_watchlist_entry("user", "alice@example.com", entity_name="Alice", reason="VIP", boost_tier=True)
+    assert entry["entity_id"] == "alice@example.com"
+    assert entry["entity_name"] == "Alice"
+    assert entry["boost_tier"] is True
+    assert entry["active"] is True
+
+
+def test_add_watchlist_invalid_type_raises(tmp_path):
+    store = _store(tmp_path)
+    import pytest
+    with pytest.raises(ValueError):
+        store.add_watchlist_entry("ip", "1.2.3.4")
+
+
+def test_add_watchlist_empty_id_raises(tmp_path):
+    store = _store(tmp_path)
+    import pytest
+    with pytest.raises(ValueError):
+        store.add_watchlist_entry("user", "")
+
+
+def test_add_watchlist_duplicate_updates(tmp_path):
+    store = _store(tmp_path)
+    store.add_watchlist_entry("user", "bob@example.com", reason="Original")
+    updated = store.add_watchlist_entry("user", "bob@example.com", reason="Updated", boost_tier=True)
+    assert updated["reason"] == "Updated"
+    assert updated["boost_tier"] is True
+    entries = store.list_watchlist()
+    assert len(entries) == 1
+
+
+def test_remove_watchlist_entry(tmp_path):
+    store = _store(tmp_path)
+    entry = store.add_watchlist_entry("device", "LAPTOP-001", reason="Critical device")
+    assert store.remove_watchlist_entry(entry["id"]) is True
+    assert store.list_watchlist() == []
+
+
+def test_remove_watchlist_entry_not_found(tmp_path):
+    store = _store(tmp_path)
+    assert store.remove_watchlist_entry("nonexistent") is False
+
+
+def test_list_watchlist_active_only(tmp_path):
+    store = _store(tmp_path)
+    e1 = store.add_watchlist_entry("user", "user-a@example.com")
+    e2 = store.add_watchlist_entry("user", "user-b@example.com")
+    store.remove_watchlist_entry(e1["id"])
+    active = store.list_watchlist()
+    assert len(active) == 1
+    assert active[0]["entity_id"] == "user-b@example.com"
+
+
+def test_get_watchlist_lookup(tmp_path):
+    store = _store(tmp_path)
+    store.add_watchlist_entry("user", "Alice@Example.COM", entity_name="Alice", boost_tier=True)
+    lookup = store.get_watchlist_lookup()
+    assert "alice@example.com" in lookup
+    assert lookup["alice@example.com"]["boost_tier"] is True
+
+
+def test_watchlisted_entities_stored_on_decision(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    wl_entry = {"id": "wl-1", "entity_id": "user-1", "entity_name": "Ada", "entity_type": "user", "boost_tier": True}
+    row = store.create_decision(
+        decision_id="dec-wl-1",
+        run_id="run-1",
+        alert_id="a-wl",
+        alert_title="WL Test",
+        alert_severity="high",
+        alert_category="Suspicious",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="mde",
+        tier=1,
+        decision="execute",
+        action_type="revoke_sessions",
+        action_types=["revoke_sessions"],
+        job_ids=[],
+        reason="r",
+        entities=[{"type": "user", "id": "user-1", "name": "Ada"}],
+        not_before_at=None,
+        watchlisted_entities=[wl_entry],
+    )
+    assert len(row["watchlisted_entities"]) == 1
+    assert row["watchlisted_entities"][0]["entity_id"] == "user-1"
