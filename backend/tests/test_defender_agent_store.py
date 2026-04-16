@@ -419,3 +419,99 @@ def test_get_active_suppressions_returns_only_active(tmp_path):
     ids = [r["id"] for r in active]
     assert s1["id"] not in ids
     assert s2["id"] in ids
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — entity_cooldown_hours config + get_recent_entity_actions
+# ---------------------------------------------------------------------------
+
+def test_default_config_includes_entity_cooldown_hours(tmp_path):
+    store = _store(tmp_path)
+    cfg = store.get_config()
+    assert "entity_cooldown_hours" in cfg
+    assert cfg["entity_cooldown_hours"] == 24
+
+
+def test_upsert_config_entity_cooldown_hours(tmp_path):
+    store = _store(tmp_path)
+    defaults = store.get_config()
+    store.upsert_config(
+        enabled=defaults["enabled"],
+        min_severity=defaults["min_severity"],
+        tier2_delay_minutes=defaults["tier2_delay_minutes"],
+        dry_run=defaults["dry_run"],
+        entity_cooldown_hours=48,
+    )
+    cfg = store.get_config()
+    assert cfg["entity_cooldown_hours"] == 48
+
+
+def test_upsert_config_cooldown_zero_allowed(tmp_path):
+    store = _store(tmp_path)
+    defaults = store.get_config()
+    store.upsert_config(
+        enabled=defaults["enabled"],
+        min_severity=defaults["min_severity"],
+        tier2_delay_minutes=defaults["tier2_delay_minutes"],
+        dry_run=defaults["dry_run"],
+        entity_cooldown_hours=0,
+    )
+    cfg = store.get_config()
+    assert cfg["entity_cooldown_hours"] == 0
+
+
+def test_get_recent_entity_actions_empty(tmp_path):
+    store = _store(tmp_path)
+    result = store.get_recent_entity_actions(hours=24)
+    assert result == {}
+
+
+def test_get_recent_entity_actions_zero_hours_returns_empty(tmp_path):
+    store = _store(tmp_path)
+    row = _make_decision(store, decision_id="dec-zh", action_type="revoke_sessions")
+    store.update_decision_jobs(row["decision_id"], ["job-zh"])
+    result = store.get_recent_entity_actions(hours=0)
+    assert result == {}
+
+
+def test_get_recent_entity_actions_returns_dispatched(tmp_path):
+    store = _store(tmp_path)
+    row = _make_decision(store, decision_id="dec-rd", action_type="revoke_sessions")
+    store.update_decision_jobs(row["decision_id"], ["job-001"])
+    result = store.get_recent_entity_actions(hours=24)
+    assert "user-1" in result
+    assert "revoke_sessions" in result["user-1"]
+
+
+def test_get_recent_entity_actions_skips_not_dispatched(tmp_path):
+    store = _store(tmp_path)
+    _make_decision(store, decision_id="dec-nd", decision="skip", action_type="revoke_sessions")
+    result = store.get_recent_entity_actions(hours=24)
+    assert "user-1" not in result
+
+
+def test_get_recent_entity_actions_multi_entity(tmp_path):
+    store = _store(tmp_path)
+    row = store.create_decision(
+        decision_id="dec-me",
+        run_id="run-me",
+        alert_id="a2",
+        alert_title="Multi",
+        alert_severity="medium",
+        alert_category="Malware",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="microsoftDefenderForEndpoint",
+        tier=1,
+        decision="execute",
+        action_type="isolate_device",
+        action_types=["isolate_device"],
+        job_ids=[],
+        reason="test",
+        entities=[
+            {"type": "user", "id": "u1", "name": "Alice"},
+            {"type": "device", "id": "dev1", "name": "WS-01"},
+        ],
+    )
+    store.update_decision_jobs(row["decision_id"], ["job-002"])
+    result = store.get_recent_entity_actions(hours=24)
+    assert "u1" in result or "dev1" in result
