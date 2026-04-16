@@ -363,7 +363,7 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         "name": row["name"],
         "expires_at": expires_at,
         "auth_provider": str(row["auth_provider"] or "entra"),
-        "is_admin": bool(stored_is_admin) if stored_is_admin is not None else is_admin_user(str(row["email"] or "")),
+        "is_admin": is_admin_user(str(row["email"] or "")),
         "can_manage_users": (
             bool(stored_can_manage_users)
             if stored_can_manage_users is not None
@@ -580,11 +580,8 @@ def is_allowed_user(email: str) -> bool:
 
 
 def is_admin_user(email: str) -> bool:
-    """Check if email is in the ADMIN_USERS list. Empty = all authenticated users are admin."""
-    if not ADMIN_USERS:
-        return True
-    admins = {e.strip().lower() for e in ADMIN_USERS.split(",") if e.strip()}
-    return email.lower() in admins
+    """All authenticated users are admins."""
+    return True
 
 
 def user_can_access_tools(email: str) -> bool:
