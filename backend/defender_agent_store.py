@@ -227,6 +227,9 @@ class DefenderAgentStore:
             "ALTER TABLE defender_agent_config ADD COLUMN teams_tier1_webhook TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE defender_agent_config ADD COLUMN teams_tier2_webhook TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE defender_agent_config ADD COLUMN teams_tier3_webhook TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN resolved INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN resolved_at TEXT",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN resolved_by TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 with self._conn() as _mc:
@@ -482,6 +485,20 @@ class DefenderAgentStore:
                  WHERE decision_id = {p} AND human_approved = {p}
                 """,
                 (1, _now(), approved_by, decision_id, 0),
+            )
+            conn.commit()
+        return self.get_decision(decision_id)
+
+    def resolve_decision(self, decision_id: str, resolved_by: str = "") -> dict[str, Any] | None:
+        p = self._placeholder()
+        with self._conn() as conn:
+            conn.execute(
+                f"""
+                UPDATE defender_agent_decisions
+                   SET resolved = {p}, resolved_at = {p}, resolved_by = {p}
+                 WHERE decision_id = {p}
+                """,
+                (1, _now(), resolved_by, decision_id),
             )
             conn.commit()
         return self.get_decision(decision_id)
@@ -826,6 +843,7 @@ class DefenderAgentStore:
             d["action_types"] = [d["action_type"]] if d.get("action_type") else []
         d["cancelled"] = bool(d.get("cancelled", 0))
         d["human_approved"] = bool(d.get("human_approved", 0))
+        d["resolved"] = bool(d.get("resolved", 0))
         raw_str = d.pop("alert_raw_json", "") or ""
         if include_raw:
             d["alert_raw"] = json.loads(raw_str) if raw_str else {}

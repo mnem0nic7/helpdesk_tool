@@ -308,6 +308,23 @@ def approve_decision(
     return updated or row
 
 
+@router.post("/decisions/{decision_id}/resolve", response_model=DefenderAgentDecisionItem)
+def resolve_decision(
+    decision_id: str,
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    """Mark a decision as resolved/handled. Works for any decision type including skips."""
+    _ensure_azure_site()
+    row = defender_agent_store.get_decision(decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    updated = defender_agent_store.resolve_decision(
+        decision_id,
+        resolved_by=str(_session.get("email") or ""),
+    )
+    return updated or row
+
+
 @router.post("/decisions/{decision_id}/unrestrict", response_model=DefenderAgentDecisionItem)
 def unrestrict_decision_device(
     decision_id: str,

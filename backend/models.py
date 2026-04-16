@@ -2502,6 +2502,9 @@ class DefenderAgentDecisionItem(BaseModel):
     investigation_notes: list[dict[str, Any]] = Field(default_factory=list)
     watchlisted_entities: list[dict[str, Any]] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    resolved: bool = False
+    resolved_at: Optional[str] = None
+    resolved_by: str = ""
 
 
 class DefenderAgentDecisionsResponse(BaseModel):

@@ -822,6 +822,7 @@ function AlertDetailDrawer({
   isAdmin,
   onCancel,
   onApprove,
+  onResolve,
   onUnisolate,
   onUnrestrict,
   onForceInvestigate,
@@ -835,6 +836,7 @@ function AlertDetailDrawer({
   isAdmin: boolean;
   onCancel: (id: string) => void;
   onApprove: (id: string) => void;
+  onResolve: (id: string) => void;
   onUnisolate: (id: string) => void;
   onUnrestrict: (id: string) => void;
   onForceInvestigate: (id: string) => void;
@@ -895,6 +897,7 @@ function AlertDetailDrawer({
   const status = d ? decisionStatus(d) : null;
   const canCancel = d && d.decision === "queue" && !d.cancelled && !d.job_ids.length;
   const canApprove = d && !d.human_approved && !d.cancelled && isAdmin;
+  const canResolve = d && !d.resolved;
   const canExecuteNow = d && d.decision === "queue" && !d.cancelled && !d.job_ids.length && isAdmin;
   const canForceInvestigate = d && d.entities.some(e => e.type === "device") && isAdmin;
   const canUnisolate = d && d.entities.some(e => e.type === "device") && !d.cancelled && isAdmin;
@@ -1340,7 +1343,7 @@ function AlertDetailDrawer({
       </div>
 
       {/* Sticky footer — always visible at the bottom of the drawer */}
-      {d && (canCancel || canApprove || canUnisolate || canUnrestrict || canForceInvestigate || canExecuteNow || canEnableSignIn) && (
+      {d && (canCancel || canApprove || canResolve || canUnisolate || canUnrestrict || canForceInvestigate || canExecuteNow || canEnableSignIn) && (
         <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4 space-y-3">
           {(canForceInvestigate || canUnisolate || canUnrestrict || canEnableSignIn) && (
             <div>
@@ -1401,7 +1404,7 @@ function AlertDetailDrawer({
               </div>
             </div>
           )}
-          {(canCancel || canApprove || canExecuteNow) && (
+          {(canCancel || canApprove || canResolve || canExecuteNow) && (
             <div className="flex justify-end gap-3">
               {canExecuteNow && (
                 <button
@@ -1422,6 +1425,14 @@ function AlertDetailDrawer({
                   className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-700 hover:bg-amber-100"
                 >
                   Cancel action
+                </button>
+              )}
+              {canResolve && (
+                <button
+                  onClick={() => { onResolve(d.decision_id); onClose(); }}
+                  className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+                >
+                  Mark Resolved
                 </button>
               )}
               {canApprove && (
@@ -1449,6 +1460,7 @@ function DecisionRow({
   isAdmin,
   onCancel,
   onApprove,
+  onResolve,
   onUnisolate,
   onUnrestrict,
   onForceInvestigate,
@@ -1461,6 +1473,7 @@ function DecisionRow({
   isAdmin: boolean;
   onCancel: (id: string) => void;
   onApprove: (id: string) => void;
+  onResolve: (id: string) => void;
   onUnisolate: (id: string) => void;
   onUnrestrict: (id: string) => void;
   onForceInvestigate: (id: string) => void;
@@ -1476,13 +1489,14 @@ function DecisionRow({
   // Primary actions
   const canCancel           = d.decision === "queue" && !d.cancelled && !d.job_ids.length;
   const canApprove          = !d.human_approved && !d.cancelled && isAdmin;
+  const canResolve          = !d.resolved;
   const canExecuteNow       = d.decision === "queue" && !d.cancelled && !d.job_ids.length && isAdmin;
   const canForceInvestigate = d.entities.some(e => e.type === "device") && isAdmin;
   const canUnisolate        = d.entities.some(e => e.type === "device") && !d.cancelled && isAdmin;
   const canUnrestrict       = d.entities.some(e => e.type === "device") && !d.cancelled && isAdmin;
   const canEnableSignIn     = d.entities.some(e => e.type === "user" || e.type === "account") && !d.cancelled && isAdmin;
 
-  const hasAnyAction = canCancel || canApprove || canExecuteNow || canForceInvestigate || canUnisolate || canUnrestrict || canEnableSignIn;
+  const hasAnyAction = canCancel || canApprove || canResolve || canExecuteNow || canForceInvestigate || canUnisolate || canUnrestrict || canEnableSignIn;
 
   return (
     <>
@@ -1609,6 +1623,14 @@ function DecisionRow({
                   className="rounded border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
                 >
                   ✓ Approve & Execute
+                </button>
+              )}
+              {canResolve && (
+                <button
+                  onClick={() => { onResolve(d.decision_id); setExpanded(false); }}
+                  className="rounded border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                >
+                  ✓ Mark Resolved
                 </button>
               )}
               {canForceInvestigate && (
@@ -2049,6 +2071,11 @@ export default function AzureSecurityAgentPage() {
     },
   });
 
+  const resolveMutation = useMutation({
+    mutationFn: (id: string) => api.resolveDefenderAgentDecision(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }),
+  });
+
   const unisolateMutation = useMutation({
     mutationFn: (id: string) => api.unisolateDefenderAgentDecision(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }),
@@ -2403,6 +2430,7 @@ export default function AzureSecurityAgentPage() {
                       isAdmin={isAdmin}
                       onCancel={(id) => cancelMutation.mutate(id)}
                       onApprove={(id) => approveMutation.mutate(id)}
+                      onResolve={(id) => resolveMutation.mutate(id)}
                       onUnisolate={(id) => unisolateMutation.mutate(id)}
                       onUnrestrict={(id) => unrestrictMutation.mutate(id)}
                       onForceInvestigate={(id) => forceInvestigateMutation.mutate(id)}
@@ -2927,6 +2955,7 @@ export default function AzureSecurityAgentPage() {
           onForceInvestigate={(id) => { forceInvestigateMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onExecuteNow={(id) => { executeNowMutation.mutate(id); }}
           onEnableSignIn={(id) => { enableSignInMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
+          onResolve={(id) => { resolveMutation.mutate(id); queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }); }}
           onSuppressEntity={(type, value) => {
             const reason = prompt(`Suppression reason for "${value}" (optional):`);
             createSuppressionMutation.mutate({ suppression_type: type, value, reason: reason ?? "" });

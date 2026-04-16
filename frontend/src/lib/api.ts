@@ -1602,6 +1602,9 @@ export interface DefenderAgentDecision {
   investigation_notes: Array<{ text: string; by: string; at: string }>;
   watchlisted_entities: Array<{ id: string; entity_id: string; entity_name: string; entity_type: string; boost_tier: boolean; reason: string }>;
   tags: string[];
+  resolved: boolean;
+  resolved_at: string | null;
+  resolved_by: string;
 }
 
 export interface DefenderAgentWatchlistEntry {
@@ -3904,6 +3907,9 @@ export const api = {
   },
   approveDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
     return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/approve`, {});
+  },
+  resolveDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/resolve`, {});
   },
   unisolateDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
     return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/unisolate`, {});
