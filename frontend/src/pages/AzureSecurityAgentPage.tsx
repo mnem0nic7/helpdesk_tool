@@ -1421,8 +1421,11 @@ function DecisionRow({
   isAdmin,
   onCancel,
   onApprove,
-  cancelling,
-  approving,
+  onUnisolate,
+  onUnrestrict,
+  onForceInvestigate,
+  onExecuteNow,
+  onEnableSignIn,
   onOpenDetail,
   onOpenEntityTimeline,
 }: {
@@ -1430,129 +1433,222 @@ function DecisionRow({
   isAdmin: boolean;
   onCancel: (id: string) => void;
   onApprove: (id: string) => void;
-  cancelling: boolean;
-  approving: boolean;
+  onUnisolate: (id: string) => void;
+  onUnrestrict: (id: string) => void;
+  onForceInvestigate: (id: string) => void;
+  onExecuteNow: (id: string) => void;
+  onEnableSignIn: (id: string) => void;
   onOpenDetail: (id: string) => void;
   onOpenEntityTimeline: (entityId: string, entityName: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const tier = tierLabel(d);
   const status = decisionStatus(d);
-  const canCancel = d.decision === "queue" && !d.cancelled && !d.job_ids.length;
-  const canApprove = d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
+
+  // Primary actions
+  const canCancel         = d.decision === "queue" && !d.cancelled && !d.job_ids.length;
+  const canApprove        = d.decision === "recommend" && !d.human_approved && !d.cancelled && isAdmin;
+  const canExecuteNow     = d.decision === "queue" && !d.cancelled && !d.job_ids.length && isAdmin;
+  const canForceInvestigate = d.decision === "skip" && d.entities.some(e => e.type === "device") && isAdmin;
+
+  // Undo actions (require jobs to have been dispatched)
+  const hasJobs = d.job_ids.length > 0;
+  const canUnisolate   = d.action_type === "isolate_device" && hasJobs && !d.cancelled && isAdmin;
+  const canUnrestrict  = d.action_type === "restrict_app_execution" && hasJobs && !d.cancelled && isAdmin;
+  const canEnableSignIn = ["disable_sign_in", "revoke_sessions", "account_lockout"].includes(d.action_type) && hasJobs && !d.cancelled && isAdmin;
+
+  const hasAnyAction = canCancel || canApprove || canExecuteNow || canForceInvestigate || canUnisolate || canUnrestrict || canEnableSignIn;
 
   return (
-    <tr
-      className="hover:bg-gray-50 cursor-pointer"
-      onClick={() => onOpenDetail(d.decision_id)}
-    >
-      <td className="whitespace-nowrap px-3 py-2 text-xs text-gray-500">{fmtTime(d.executed_at)}</td>
-      <td className="px-3 py-2 max-w-xs">
-        <div className="text-sm font-medium text-gray-800 truncate" title={d.alert_title}>
-          {d.alert_title || d.alert_id}
-        </div>
-        {d.reason && <div className="text-xs text-gray-400 truncate" title={d.reason}>{d.reason}</div>}
-        <EntityChips
-          entities={d.entities}
-          onEntityClick={onOpenEntityTimeline}
-          watchlistedIds={d.watchlisted_entities?.length ? new Set(d.watchlisted_entities.map(w => w.entity_id?.toLowerCase())) : undefined}
-        />
-        {(d.mitre_techniques ?? []).length > 0 && (
-          <div className="mt-1 flex flex-wrap gap-1">
-            {(d.mitre_techniques ?? []).slice(0, 3).map((t) => (
-              <span key={t} className="inline-block rounded bg-red-50 border border-red-200 px-1 py-0.5 text-xs font-mono text-red-700">
-                {t}
-              </span>
-            ))}
-            {(d.mitre_techniques ?? []).length > 3 && (
-              <span className="inline-block rounded bg-red-50 border border-red-200 px-1 py-0.5 text-xs font-mono text-red-500">
-                +{(d.mitre_techniques ?? []).length - 3}
-              </span>
-            )}
-          </div>
-        )}
-        {(d.tags ?? []).length > 0 && (
-          <div className="mt-1 flex flex-wrap gap-1">
-            {(d.tags ?? []).map((tag) => (
-              <span key={tag} className="inline-block rounded-full bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-700">
-                #{tag}
-              </span>
-            ))}
-          </div>
-        )}
-      </td>
-      <td className="whitespace-nowrap px-3 py-2">
-        {(() => { const s = sourceLabel(d.service_source); return (
-          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${s.color}`} title={d.service_source}>
-            {s.label}
-          </span>
-        ); })()}
-      </td>
-      <td className="whitespace-nowrap px-3 py-2">
-        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${severityColor(d.alert_severity)}`}>
-          {d.alert_severity || "—"}
-        </span>
-      </td>
-      <td className="whitespace-nowrap px-3 py-2">
-        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${tier.color}`}>
-          {tier.label}
-        </span>
-        {(d.confidence_score ?? 0) > 0 && (
-          <span className={`ml-1 inline-block rounded-full px-1.5 py-0.5 text-xs font-medium ${confidenceBadge(d.confidence_score ?? 0).color}`}
-            title={`Rule confidence: ${d.confidence_score}%`}>
-            {d.confidence_score}%
-          </span>
-        )}
-      </td>
-      <td className="whitespace-nowrap px-3 py-2">
-        {d.action_type ? (
-          <span className="inline-flex items-center gap-1">
-            <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${actionBadgeColor(d.action_type)}`}>
-              {fmtAction(d)}
-            </span>
-            {(d.action_types?.length ?? 0) > 1 && (
-              <span className="rounded-full bg-gray-200 px-1.5 py-0.5 text-xs text-gray-600 font-medium"
-                title={(d.action_types ?? []).map(at => ACTION_LABELS[at] ?? at.replace(/_/g, " ")).join(" + ")}>
-                +{d.action_types.length - 1}
-              </span>
-            )}
-          </span>
-        ) : <span className="text-xs text-gray-400">—</span>}
-      </td>
-      <td className="px-3 py-2 text-xs">
-        <div className={status.color}>{status.label}</div>
-        {d.not_before_at && !d.cancelled && !d.job_ids.length && (
-          <div className="text-gray-400 text-xs">executes {fmtTime(d.not_before_at)}</div>
-        )}
-        {dispositionBadge(d.disposition) && (
-          <span className={`mt-1 inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium ${dispositionBadge(d.disposition)!.color}`}>
-            {dispositionBadge(d.disposition)!.label}
-          </span>
-        )}
-      </td>
-      <td
-        className="whitespace-nowrap px-3 py-2 text-right"
-        onClick={(e) => e.stopPropagation()}
+    <>
+      <tr
+        className={`hover:bg-gray-50 cursor-pointer ${expanded ? "bg-blue-50/40" : ""}`}
+        onClick={() => setExpanded((v) => !v)}
       >
-        {canCancel && (
-          <button
-            onClick={() => onCancel(d.decision_id)}
-            disabled={cancelling}
-            className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-700 hover:bg-amber-100 disabled:opacity-40"
-          >
-            Cancel
-          </button>
-        )}
-        {canApprove && (
-          <button
-            onClick={() => onApprove(d.decision_id)}
-            disabled={approving}
-            className="rounded border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs text-blue-700 hover:bg-blue-100 disabled:opacity-40"
-          >
-            Approve
-          </button>
-        )}
-      </td>
-    </tr>
+        <td className="whitespace-nowrap px-3 py-2 text-xs text-gray-500">{fmtTime(d.executed_at)}</td>
+        <td className="px-3 py-2 max-w-xs">
+          <div className="text-sm font-medium text-gray-800 truncate" title={d.alert_title}>
+            {d.alert_title || d.alert_id}
+          </div>
+          {d.reason && <div className="text-xs text-gray-400 truncate" title={d.reason}>{d.reason}</div>}
+          <EntityChips
+            entities={d.entities}
+            onEntityClick={onOpenEntityTimeline}
+            watchlistedIds={d.watchlisted_entities?.length ? new Set(d.watchlisted_entities.map(w => w.entity_id?.toLowerCase())) : undefined}
+          />
+          {(d.mitre_techniques ?? []).length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {(d.mitre_techniques ?? []).slice(0, 3).map((t) => (
+                <span key={t} className="inline-block rounded bg-red-50 border border-red-200 px-1 py-0.5 text-xs font-mono text-red-700">
+                  {t}
+                </span>
+              ))}
+              {(d.mitre_techniques ?? []).length > 3 && (
+                <span className="inline-block rounded bg-red-50 border border-red-200 px-1 py-0.5 text-xs font-mono text-red-500">
+                  +{(d.mitre_techniques ?? []).length - 3}
+                </span>
+              )}
+            </div>
+          )}
+          {(d.tags ?? []).length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {(d.tags ?? []).map((tag) => (
+                <span key={tag} className="inline-block rounded-full bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-700">
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </td>
+        <td className="whitespace-nowrap px-3 py-2">
+          {(() => { const s = sourceLabel(d.service_source); return (
+            <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${s.color}`} title={d.service_source}>
+              {s.label}
+            </span>
+          ); })()}
+        </td>
+        <td className="whitespace-nowrap px-3 py-2">
+          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${severityColor(d.alert_severity)}`}>
+            {d.alert_severity || "—"}
+          </span>
+        </td>
+        <td className="whitespace-nowrap px-3 py-2">
+          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${tier.color}`}>
+            {tier.label}
+          </span>
+          {(d.confidence_score ?? 0) > 0 && (
+            <span className={`ml-1 inline-block rounded-full px-1.5 py-0.5 text-xs font-medium ${confidenceBadge(d.confidence_score ?? 0).color}`}
+              title={`Rule confidence: ${d.confidence_score}%`}>
+              {d.confidence_score}%
+            </span>
+          )}
+        </td>
+        <td className="whitespace-nowrap px-3 py-2">
+          {d.action_type ? (
+            <span className="inline-flex items-center gap-1">
+              <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${actionBadgeColor(d.action_type)}`}>
+                {fmtAction(d)}
+              </span>
+              {(d.action_types?.length ?? 0) > 1 && (
+                <span className="rounded-full bg-gray-200 px-1.5 py-0.5 text-xs text-gray-600 font-medium"
+                  title={(d.action_types ?? []).map(at => ACTION_LABELS[at] ?? at.replace(/_/g, " ")).join(" + ")}>
+                  +{d.action_types.length - 1}
+                </span>
+              )}
+            </span>
+          ) : <span className="text-xs text-gray-400">—</span>}
+        </td>
+        <td className="px-3 py-2 text-xs">
+          <div className={status.color}>{status.label}</div>
+          {d.not_before_at && !d.cancelled && !d.job_ids.length && (
+            <div className="text-gray-400 text-xs">executes {fmtTime(d.not_before_at)}</div>
+          )}
+          {dispositionBadge(d.disposition) && (
+            <span className={`mt-1 inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium ${dispositionBadge(d.disposition)!.color}`}>
+              {dispositionBadge(d.disposition)!.label}
+            </span>
+          )}
+        </td>
+        <td className="whitespace-nowrap px-3 py-2 text-right">
+          <svg className={`inline h-4 w-4 text-gray-400 transition-transform ${expanded ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd"/>
+          </svg>
+        </td>
+      </tr>
+
+      {/* Inline action panel */}
+      {expanded && (
+        <tr className="bg-blue-50/30">
+          <td colSpan={8} className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Primary actions */}
+              {canExecuteNow && (
+                <button
+                  onClick={() => { onExecuteNow(d.decision_id); setExpanded(false); }}
+                  className="rounded border border-green-300 bg-green-50 px-2.5 py-1 text-xs font-medium text-green-700 hover:bg-green-100"
+                >
+                  ⚡ Execute Now
+                </button>
+              )}
+              {canCancel && (
+                <button
+                  onClick={() => { onCancel(d.decision_id); setExpanded(false); }}
+                  className="rounded border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                >
+                  ✕ Cancel
+                </button>
+              )}
+              {canApprove && (
+                <button
+                  onClick={() => { onApprove(d.decision_id); setExpanded(false); }}
+                  className="rounded border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                >
+                  ✓ Approve & Execute
+                </button>
+              )}
+              {canForceInvestigate && (
+                <button
+                  onClick={() => { onForceInvestigate(d.decision_id); setExpanded(false); }}
+                  className="rounded border border-purple-300 bg-purple-50 px-2.5 py-1 text-xs font-medium text-purple-700 hover:bg-purple-100"
+                >
+                  🔍 Force Investigate
+                </button>
+              )}
+
+              {/* Undo / reversal actions */}
+              {canEnableSignIn && (
+                <>
+                  {(canCancel || canApprove || canExecuteNow || canForceInvestigate) && (
+                    <span className="text-gray-300 select-none">|</span>
+                  )}
+                  <button
+                    onClick={() => { onEnableSignIn(d.decision_id); setExpanded(false); }}
+                    className="rounded border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                  >
+                    ↩ Enable Sign-in
+                  </button>
+                </>
+              )}
+              {canUnisolate && (
+                <>
+                  {(canCancel || canApprove || canExecuteNow || canForceInvestigate) && (
+                    <span className="text-gray-300 select-none">|</span>
+                  )}
+                  <button
+                    onClick={() => { onUnisolate(d.decision_id); setExpanded(false); }}
+                    className="rounded border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                  >
+                    ↩ Release Isolation
+                  </button>
+                </>
+              )}
+              {canUnrestrict && (
+                <button
+                  onClick={() => { onUnrestrict(d.decision_id); setExpanded(false); }}
+                  className="rounded border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  ↩ Remove App Restriction
+                </button>
+              )}
+
+              {!hasAnyAction && (
+                <span className="text-xs text-gray-400 italic">No actions available for this decision</span>
+              )}
+
+              {/* Spacer + details link */}
+              <span className="ml-auto">
+                <button
+                  onClick={() => { setExpanded(false); onOpenDetail(d.decision_id); }}
+                  className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                >
+                  Details →
+                </button>
+              </span>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -1951,6 +2047,11 @@ export default function AzureSecurityAgentPage() {
     },
   });
 
+  const enableSignInMutation = useMutation({
+    mutationFn: (id: string) => api.enableSignInDecision(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] }),
+  });
+
   const indicatorsQuery = useQuery({
     queryKey: ["defender-agent-indicators"],
     queryFn: () => api.listDefenderIndicators(),
@@ -2277,8 +2378,11 @@ export default function AzureSecurityAgentPage() {
                       isAdmin={isAdmin}
                       onCancel={(id) => cancelMutation.mutate(id)}
                       onApprove={(id) => approveMutation.mutate(id)}
-                      cancelling={cancelMutation.isPending}
-                      approving={approveMutation.isPending}
+                      onUnisolate={(id) => unisolateMutation.mutate(id)}
+                      onUnrestrict={(id) => unrestrictMutation.mutate(id)}
+                      onForceInvestigate={(id) => forceInvestigateMutation.mutate(id)}
+                      onExecuteNow={(id) => executeNowMutation.mutate(id)}
+                      onEnableSignIn={(id) => enableSignInMutation.mutate(id)}
                       onOpenDetail={setSelectedDecisionId}
                       onOpenEntityTimeline={(id, name) => setSelectedEntity({ id, name })}
                     />

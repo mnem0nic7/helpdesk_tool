@@ -3917,6 +3917,9 @@ export const api = {
   executeDecisionNow(decisionId: string): Promise<DefenderAgentDecision> {
     return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/execute-now`, {});
   },
+  enableSignInDecision(decisionId: string): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/enable-sign-in`, {});
+  },
   setDefenderAgentDisposition(
     decisionId: string,
     disposition: "true_positive" | "false_positive" | "inconclusive",

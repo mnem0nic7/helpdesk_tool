@@ -444,6 +444,48 @@ def force_investigate_decision(
     return row
 
 
+@router.post("/decisions/{decision_id}/enable-sign-in", response_model=DefenderAgentDecisionItem)
+def enable_sign_in_decision(
+    decision_id: str,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    """Re-enable sign-in for user entities from a disable_sign_in or revoke_sessions decision (admin only)."""
+    _ensure_azure_site()
+    row = defender_agent_store.get_decision(decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    action = row.get("action_type", "")
+    if action not in ("disable_sign_in", "revoke_sessions", "account_lockout"):
+        raise HTTPException(
+            status_code=400,
+            detail="enable-sign-in is only available for disable_sign_in, revoke_sessions, or account_lockout decisions",
+        )
+    if not row.get("job_ids"):
+        raise HTTPException(status_code=400, detail="Action was never applied (no jobs dispatched)")
+
+    from user_admin_jobs import user_admin_jobs as uaj
+
+    user_ids = [
+        e["id"] for e in (row.get("entities") or [])
+        if e.get("type") in ("user", "account") and e.get("id")
+    ]
+    if not user_ids:
+        raise HTTPException(status_code=400, detail="No user entities found in this decision")
+
+    try:
+        uaj.create_job(
+            action_type="enable_sign_in",
+            target_user_ids=user_ids,
+            params={"reason": f"Undo {action} for alert: {row.get('alert_title', '')}"},
+            requested_by_email=str(_session.get("email") or ""),
+            requested_by_name=str(_session.get("name") or ""),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return row
+
+
 # ---------------------------------------------------------------------------
 # Summary (for security workspace hub)
 # ---------------------------------------------------------------------------
