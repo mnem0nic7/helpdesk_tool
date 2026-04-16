@@ -1558,11 +1558,26 @@ export interface DefenderAgentDecision {
   remediation_failed: boolean;
   confirmed_at: string | null;
   confidence_score: number;
+  disposition: "true_positive" | "false_positive" | "inconclusive" | null;
+  disposition_note: string;
+  disposition_by: string;
+  disposition_at: string | null;
 }
 
 export interface DefenderAgentDecisionsResponse {
   decisions: DefenderAgentDecision[];
   total: number;
+}
+
+export interface DefenderAgentDispositionStats {
+  total_actioned: number;
+  reviewed: number;
+  unreviewed: number;
+  true_positive: number;
+  false_positive: number;
+  inconclusive: number;
+  false_positive_rate: number;
+  by_tier: Record<string, Record<string, number>>;
 }
 
 export interface DefenderAgentSummary {
@@ -3831,6 +3846,19 @@ export const api = {
   },
   executeDecisionNow(decisionId: string): Promise<DefenderAgentDecision> {
     return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}/execute-now`, {});
+  },
+  setDefenderAgentDisposition(
+    decisionId: string,
+    disposition: "true_positive" | "false_positive" | "inconclusive",
+    note = ""
+  ): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(
+      `/api/azure/security/defender-agent/decisions/${decisionId}/disposition`,
+      { disposition, note }
+    );
+  },
+  getDefenderAgentDispositionStats(): Promise<DefenderAgentDispositionStats> {
+    return fetchJSON<DefenderAgentDispositionStats>("/api/azure/security/defender-agent/disposition-stats");
   },
   listDefenderIndicators(): Promise<{ indicators: DefenderIndicator[]; total: number }> {
     return fetchJSON<{ indicators: DefenderIndicator[]; total: number }>(

@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { DefenderAgentConfig, DefenderAgentDecision, DefenderAgentSuppression, DefenderSuppressionType } from "../lib/api.ts";
+import type { DefenderAgentConfig, DefenderAgentDecision, DefenderAgentDispositionStats, DefenderAgentSuppression, DefenderSuppressionType } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 // ---------------------------------------------------------------------------
@@ -126,6 +126,14 @@ function confidenceBadge(score: number): { label: string; color: string } {
   if (score >= 70) return { label: `${score}%`, color: "bg-yellow-100 text-yellow-800" };
   if (score > 0)   return { label: `${score}%`, color: "bg-orange-100 text-orange-800" };
   return { label: "—", color: "bg-gray-100 text-gray-400" };
+}
+
+function dispositionBadge(d: DefenderAgentDecision["disposition"]): { label: string; color: string } | null {
+  if (!d) return null;
+  if (d === "true_positive")  return { label: "TP",           color: "bg-emerald-100 text-emerald-800" };
+  if (d === "false_positive") return { label: "FP",           color: "bg-red-100 text-red-800" };
+  if (d === "inconclusive")   return { label: "Inconclusive", color: "bg-yellow-100 text-yellow-800" };
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,10 +361,22 @@ function AlertDetailDrawer({
   onExecuteNow: (id: string) => void;
   onSuppressEntity: (type: DefenderSuppressionType, value: string) => void;
 }) {
+  const queryClient = useQueryClient();
   const { data: d, isLoading } = useQuery({
     queryKey: ["defender-agent-decision", decisionId],
     queryFn: () => api.getDefenderAgentDecision(decisionId),
     staleTime: 10_000,
+  });
+
+  const [dispositionNote, setDispositionNote] = useState("");
+  const dispositionMut = useMutation({
+    mutationFn: ({ disp }: { disp: "true_positive" | "false_positive" | "inconclusive" }) =>
+      api.setDefenderAgentDisposition(decisionId, disp, dispositionNote),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["defender-agent-decision", decisionId] });
+      queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] });
+      queryClient.invalidateQueries({ queryKey: ["defender-agent-disposition-stats"] });
+    },
   });
 
   // Close on Escape
@@ -626,11 +646,64 @@ function AlertDetailDrawer({
                       <Row label="Approved by" value={d.approved_by} />
                     </>
                   )}
+                  {d.disposition && (
+                    <>
+                      <Row
+                        label="Disposition"
+                        value={
+                          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${dispositionBadge(d.disposition)?.color ?? ""}`}>
+                            {d.disposition === "true_positive" ? "True Positive" :
+                             d.disposition === "false_positive" ? "False Positive" : "Inconclusive"}
+                          </span>
+                        }
+                      />
+                      {d.disposition_note && <Row label="Analyst note" value={d.disposition_note} />}
+                      {d.disposition_by && <Row label="Reviewed by" value={d.disposition_by} />}
+                      {d.disposition_at && <Row label="Reviewed at" value={fmtTime(d.disposition_at)} />}
+                    </>
+                  )}
                 </div>
               </Section>
             </>
           )}
         </div>
+
+        {/* Analyst disposition panel — always shown for non-skip decisions */}
+        {d && d.decision !== "skip" && (
+          <div className="border-t border-gray-100 px-6 py-3 bg-gray-50">
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Analyst disposition</p>
+            <div className="flex flex-wrap items-center gap-2">
+              {(["true_positive", "false_positive", "inconclusive"] as const).map((disp) => {
+                const active = d.disposition === disp;
+                const styles: Record<string, string> = {
+                  true_positive:  active ? "bg-emerald-600 text-white border-emerald-600" : "border-gray-300 text-gray-600 hover:bg-emerald-50 hover:border-emerald-400",
+                  false_positive: active ? "bg-red-600 text-white border-red-600"         : "border-gray-300 text-gray-600 hover:bg-red-50 hover:border-red-400",
+                  inconclusive:   active ? "bg-yellow-500 text-white border-yellow-500"   : "border-gray-300 text-gray-600 hover:bg-yellow-50 hover:border-yellow-400",
+                };
+                const labels: Record<string, string> = {
+                  true_positive: "True Positive", false_positive: "False Positive", inconclusive: "Inconclusive",
+                };
+                return (
+                  <button
+                    key={disp}
+                    onClick={() => dispositionMut.mutate({ disp })}
+                    disabled={dispositionMut.isPending}
+                    className={`rounded-md border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${styles[disp]}`}
+                  >
+                    {labels[disp]}
+                  </button>
+                );
+              })}
+              <input
+                type="text"
+                placeholder="Optional note…"
+                value={dispositionNote}
+                onChange={(e) => setDispositionNote(e.target.value)}
+                className="ml-1 flex-1 min-w-[160px] rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              />
+            </div>
+          </div>
+        )}
 
         {/* Footer actions */}
         {d && (canCancel || canApprove || canUnisolate || canUnrestrict || canForceInvestigate || canExecuteNow) && (
@@ -845,6 +918,11 @@ function DecisionRow({
         {d.not_before_at && !d.cancelled && !d.job_ids.length && (
           <div className="text-gray-400 text-xs">executes {fmtTime(d.not_before_at)}</div>
         )}
+        {dispositionBadge(d.disposition) && (
+          <span className={`mt-1 inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium ${dispositionBadge(d.disposition)!.color}`}>
+            {dispositionBadge(d.disposition)!.label}
+          </span>
+        )}
       </td>
       <td
         className="whitespace-nowrap px-3 py-2 text-right"
@@ -911,6 +989,12 @@ export default function AzureSecurityAgentPage() {
     queryKey: ["defender-agent-runs"],
     queryFn: () => api.listDefenderAgentRuns(10),
     ...getPollingQueryOptions("live_30s"),
+  });
+
+  const dispositionStatsQuery = useQuery({
+    queryKey: ["defender-agent-disposition-stats"],
+    queryFn: () => api.getDefenderAgentDispositionStats(),
+    staleTime: 60_000,
   });
 
   const cancelMutation = useMutation({
@@ -1176,6 +1260,31 @@ export default function AzureSecurityAgentPage() {
             </select>
           </div>
         </div>
+
+        {/* Disposition stats strip */}
+        {dispositionStatsQuery.data && dispositionStatsQuery.data.reviewed > 0 && (
+          <div className="border-b border-gray-100 bg-gray-50 px-5 py-2 flex flex-wrap items-center gap-4 text-xs">
+            <span className="font-medium text-gray-600">Analyst coverage:</span>
+            <span className="text-gray-500">{dispositionStatsQuery.data.reviewed}/{dispositionStatsQuery.data.total_actioned} reviewed</span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              <span className="text-emerald-700 font-medium">{dispositionStatsQuery.data.true_positive} TP</span>
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-red-500" />
+              <span className="text-red-700 font-medium">{dispositionStatsQuery.data.false_positive} FP</span>
+              {dispositionStatsQuery.data.false_positive_rate > 0 && (
+                <span className="text-gray-400">({(dispositionStatsQuery.data.false_positive_rate * 100).toFixed(0)}%)</span>
+              )}
+            </span>
+            {dispositionStatsQuery.data.inconclusive > 0 && (
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2 w-2 rounded-full bg-yellow-400" />
+                <span className="text-yellow-700 font-medium">{dispositionStatsQuery.data.inconclusive} Inconclusive</span>
+              </span>
+            )}
+          </div>
+        )}
 
         {decisionsQuery.isLoading ? (
           <div className="flex items-center justify-center py-12">

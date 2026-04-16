@@ -754,3 +754,107 @@ def test_list_decisions_includes_confidence_score(tmp_path):
     match = next((d for d in decisions if d["decision_id"] == "dec-listconf"), None)
     assert match is not None
     assert match["confidence_score"] == 68
+
+
+# ---------------------------------------------------------------------------
+# Phase 12 — Analyst disposition
+# ---------------------------------------------------------------------------
+
+
+def test_set_decision_disposition_true_positive(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    row = _make_decision(store, decision_id="dec-tp")
+    result = store.set_decision_disposition(row["decision_id"], "true_positive", by="analyst@example.com")
+    assert result is not None
+    assert result["disposition"] == "true_positive"
+    assert result["disposition_by"] == "analyst@example.com"
+    assert result["disposition_at"] is not None
+
+
+def test_set_decision_disposition_false_positive(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    row = _make_decision(store, decision_id="dec-fp")
+    result = store.set_decision_disposition(row["decision_id"], "false_positive", note="Noise from lab machine")
+    assert result is not None
+    assert result["disposition"] == "false_positive"
+    assert result["disposition_note"] == "Noise from lab machine"
+
+
+def test_set_decision_disposition_inconclusive(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    row = _make_decision(store, decision_id="dec-inc")
+    result = store.set_decision_disposition(row["decision_id"], "inconclusive")
+    assert result is not None
+    assert result["disposition"] == "inconclusive"
+
+
+def test_set_decision_disposition_invalid_raises(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    row = _make_decision(store, decision_id="dec-invalid")
+    import pytest
+    with pytest.raises(ValueError):
+        store.set_decision_disposition(row["decision_id"], "banana")
+
+
+def test_set_decision_disposition_not_found_returns_none(tmp_path):
+    store = _store(tmp_path)
+    result = store.set_decision_disposition("nonexistent", "true_positive")
+    assert result is None
+
+
+def test_decision_disposition_defaults_null(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    row = _make_decision(store, decision_id="dec-nodisp")
+    fetched = store.get_decision(row["decision_id"])
+    assert fetched["disposition"] is None
+    assert fetched["disposition_note"] == ""
+    assert fetched["disposition_by"] == ""
+    assert fetched["disposition_at"] is None
+
+
+def test_get_disposition_stats_empty(tmp_path):
+    store = _store(tmp_path)
+    stats = store.get_disposition_stats()
+    assert stats["total_actioned"] == 0
+    assert stats["reviewed"] == 0
+    assert stats["false_positive_rate"] == 0.0
+
+
+def test_get_disposition_stats_counts(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    for i, (dec_id, decision, disp) in enumerate([
+        ("dec-s1", "execute", "true_positive"),
+        ("dec-s2", "execute", "false_positive"),
+        ("dec-s3", "queue",   "true_positive"),
+        ("dec-s4", "recommend", None),
+        ("dec-s5", "skip",    None),  # skips excluded
+    ]):
+        _make_decision(store, decision_id=dec_id, decision=decision)
+        if disp:
+            store.set_decision_disposition(dec_id, disp)
+    stats = store.get_disposition_stats()
+    # 4 non-skip decisions; 3 reviewed
+    assert stats["total_actioned"] == 4
+    assert stats["reviewed"] == 3
+    assert stats["unreviewed"] == 1
+    assert stats["true_positive"] == 2
+    assert stats["false_positive"] == 1
+    assert stats["inconclusive"] == 0
+    assert round(stats["false_positive_rate"], 3) == round(1 / 3, 3)
+
+
+def test_disposition_stats_fp_rate_all_tp(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    for i in range(3):
+        row = _make_decision(store, decision_id=f"dec-alltp-{i}")
+        store.set_decision_disposition(row["decision_id"], "true_positive")
+    stats = store.get_disposition_stats()
+    assert stats["false_positive_rate"] == 0.0
+    assert stats["true_positive"] == 3

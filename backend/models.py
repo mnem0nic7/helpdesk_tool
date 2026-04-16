@@ -2487,11 +2487,31 @@ class DefenderAgentDecisionItem(BaseModel):
     remediation_failed: bool = False
     confirmed_at: Optional[str] = None
     confidence_score: int = 0
+    disposition: Optional[str] = None
+    disposition_note: str = ""
+    disposition_by: str = ""
+    disposition_at: Optional[str] = None
 
 
 class DefenderAgentDecisionsResponse(BaseModel):
     decisions: list[DefenderAgentDecisionItem]
     total: int
+
+
+class DefenderAgentDispositionUpdate(BaseModel):
+    disposition: Literal["true_positive", "false_positive", "inconclusive"]
+    note: str = ""
+
+
+class DefenderAgentDispositionStats(BaseModel):
+    total_actioned: int = 0
+    reviewed: int = 0
+    unreviewed: int = 0
+    true_positive: int = 0
+    false_positive: int = 0
+    inconclusive: int = 0
+    false_positive_rate: float = 0.0
+    by_tier: dict[str, Any] = Field(default_factory=dict)
 
 
 class DefenderAgentSummaryResponse(BaseModel):
