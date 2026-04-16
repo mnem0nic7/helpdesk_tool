@@ -32,19 +32,9 @@ function tierLabel(d: DefenderAgentDecision): { label: string; color: string } {
 }
 
 function decisionStatus(d: DefenderAgentDecision): { label: string; color: string } {
-  if (d.cancelled)         return { label: "Cancelled",          color: "text-gray-400" };
-  if (d.decision === "skip") return { label: "—",                color: "text-gray-400" };
-  if (d.remediation_confirmed) return { label: "Remediated ✓",  color: "text-emerald-600 font-medium" };
-  if (d.remediation_failed)    return { label: "Action failed ✗", color: "text-red-600 font-medium" };
-  if (d.human_approved)    return { label: "Approved",           color: "text-emerald-600 font-medium" };
-  if (d.decision === "recommend" && !d.human_approved)
-    return { label: "Awaiting approval",                         color: "text-blue-600 font-medium" };
-  if (d.decision === "queue") {
-    if (d.job_ids.length) return { label: "Dispatched",          color: "text-emerald-600" };
-    return { label: "Pending (cancellable)",                     color: "text-amber-600 font-medium" };
-  }
-  if (d.job_ids.length)    return { label: "Executed",           color: "text-emerald-600" };
-  return { label: "Logged",                                      color: "text-gray-500" };
+  if (d.resolved)       return { label: "Resolved", color: "text-emerald-600 font-medium" };
+  if (d.human_approved) return { label: "Approved", color: "text-blue-600 font-medium" };
+  return { label: "Logged",                          color: "text-gray-500" };
 }
 
 function fmtTime(iso: string | null | undefined): string {
