@@ -884,3 +884,414 @@ def test_watchlist_invalid_entity_type_422(defender_client, store):
         headers=AZURE_HOST,
     )
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Phase 17: Built-in rule management routes
+# ---------------------------------------------------------------------------
+
+def test_list_rules_returns_all_rules(defender_client):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/rules",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body, list)
+    assert len(body) > 0
+    rule = body[0]
+    assert "rule_id" in rule
+    assert "tier" in rule
+    assert "decision" in rule
+    assert "disabled" in rule
+
+
+def test_list_rules_have_stable_ids(defender_client):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/rules",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    ids = [r["rule_id"] for r in resp.json()]
+    assert "rule_00" in ids
+
+
+def test_update_rule_disable(defender_client, store):
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/rules/rule_00",
+        json={"disabled": True},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["disabled"] is True
+    assert body["rule_id"] == "rule_00"
+
+
+def test_update_rule_override_confidence(defender_client, store):
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/rules/rule_00",
+        json={"disabled": False, "confidence_score": 99},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["override_confidence"] == 99
+
+
+def test_update_rule_not_found_404(defender_client):
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/rules/does_not_exist",
+        json={"disabled": True},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 404
+
+
+def test_overrides_persist_in_list_rules(defender_client, store):
+    defender_client.put(
+        "/api/azure/security/defender-agent/rules/rule_01",
+        json={"disabled": True},
+        headers=AZURE_HOST,
+    )
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/rules",
+        headers=AZURE_HOST,
+    )
+    rule_01 = next(r for r in resp.json() if r["rule_id"] == "rule_01")
+    assert rule_01["disabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 18: Custom detection rules routes
+# ---------------------------------------------------------------------------
+
+def test_list_custom_rules_empty(defender_client):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/custom-rules",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_create_custom_rule(defender_client):
+    resp = defender_client.post(
+        "/api/azure/security/defender-agent/custom-rules",
+        json={
+            "name": "Catch phishing keywords",
+            "match_field": "title",
+            "match_value": "phishing",
+            "match_mode": "contains",
+            "tier": 2,
+            "action_type": "revoke_sessions",
+            "confidence_score": 75,
+        },
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["match_value"] == "phishing"
+    assert body["tier"] == 2
+    assert body["enabled"] is True
+
+
+def test_list_custom_rules_after_create(defender_client):
+    defender_client.post(
+        "/api/azure/security/defender-agent/custom-rules",
+        json={"match_value": "ransomware", "tier": 1, "action_type": "revoke_sessions"},
+        headers=AZURE_HOST,
+    )
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/custom-rules",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    rules = resp.json()
+    assert any(r["match_value"] == "ransomware" for r in rules)
+
+
+def test_delete_custom_rule(defender_client):
+    create_resp = defender_client.post(
+        "/api/azure/security/defender-agent/custom-rules",
+        json={"match_value": "todelete", "tier": 3, "action_type": "start_investigation"},
+        headers=AZURE_HOST,
+    )
+    rid = create_resp.json()["id"]
+    del_resp = defender_client.delete(
+        f"/api/azure/security/defender-agent/custom-rules/{rid}",
+        headers=AZURE_HOST,
+    )
+    assert del_resp.status_code == 200
+    assert del_resp.json()["deleted"] is True
+    list_resp = defender_client.get(
+        "/api/azure/security/defender-agent/custom-rules",
+        headers=AZURE_HOST,
+    )
+    assert not any(r["id"] == rid for r in list_resp.json())
+
+
+def test_delete_custom_rule_not_found(defender_client):
+    resp = defender_client.delete(
+        "/api/azure/security/defender-agent/custom-rules/nonexistent",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 404
+
+
+def test_toggle_custom_rule_disable(defender_client):
+    cr = defender_client.post(
+        "/api/azure/security/defender-agent/custom-rules",
+        json={"match_value": "toggle-me", "tier": 3, "action_type": "start_investigation"},
+        headers=AZURE_HOST,
+    ).json()
+    resp = defender_client.put(
+        f"/api/azure/security/defender-agent/custom-rules/{cr['id']}/toggle?enabled=false",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is False
+
+
+def test_enabled_only_filter(defender_client):
+    cr = defender_client.post(
+        "/api/azure/security/defender-agent/custom-rules",
+        json={"match_value": "disabled-rule", "tier": 3, "action_type": "start_investigation"},
+        headers=AZURE_HOST,
+    ).json()
+    defender_client.put(
+        f"/api/azure/security/defender-agent/custom-rules/{cr['id']}/toggle?enabled=false",
+        headers=AZURE_HOST,
+    )
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/custom-rules?enabled_only=true",
+        headers=AZURE_HOST,
+    )
+    ids = [r["id"] for r in resp.json()]
+    assert cr["id"] not in ids
+
+
+# ---------------------------------------------------------------------------
+# Phase 19: Alert tagging routes
+# ---------------------------------------------------------------------------
+
+def test_list_known_tags_empty(defender_client):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/tags",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["tags"] == []
+
+
+def test_add_tag_to_decision(defender_client, store):
+    store.create_run("run-1")
+    row = _make_route_decision(store, "dec-tag-1", "execute")
+    resp = defender_client.post(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}/tags/malware",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "malware" in body["tags"]
+
+
+def test_add_tag_idempotent(defender_client, store):
+    store.create_run("run-1")
+    row = _make_route_decision(store, "dec-tag-idem", "execute")
+    for _ in range(3):
+        defender_client.post(
+            f"/api/azure/security/defender-agent/decisions/{row['decision_id']}/tags/phishing",
+            headers=AZURE_HOST,
+        )
+    resp = defender_client.get(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}",
+        headers=AZURE_HOST,
+    )
+    assert resp.json()["tags"].count("phishing") == 1
+
+
+def test_remove_tag_from_decision(defender_client, store):
+    store.create_run("run-1")
+    row = _make_route_decision(store, "dec-tag-rm", "execute")
+    defender_client.post(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}/tags/fp",
+        headers=AZURE_HOST,
+    )
+    resp = defender_client.delete(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}/tags/fp",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert "fp" not in resp.json()["tags"]
+
+
+def test_list_known_tags_after_tag(defender_client, store):
+    store.create_run("run-1")
+    row = _make_route_decision(store, "dec-tag-known", "execute")
+    defender_client.post(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}/tags/critical-asset",
+        headers=AZURE_HOST,
+    )
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/tags",
+        headers=AZURE_HOST,
+    )
+    assert "critical-asset" in resp.json()["tags"]
+
+
+def test_add_tag_not_found_404(defender_client):
+    resp = defender_client.post(
+        "/api/azure/security/defender-agent/decisions/nonexistent/tags/foo",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 404
+
+
+def test_decision_includes_tags_field(defender_client, store):
+    store.create_run("run-1")
+    row = _make_route_decision(store, "dec-tags-field", "execute")
+    resp = defender_client.get(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert "tags" in resp.json()
+    assert resp.json()["tags"] == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 20: Configurable poll interval
+# ---------------------------------------------------------------------------
+
+def test_config_includes_poll_interval_seconds(defender_client):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/config",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert "poll_interval_seconds" in resp.json()
+
+
+def test_update_config_poll_interval(defender_client):
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/config",
+        json={"enabled": True, "poll_interval_seconds": 300},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["poll_interval_seconds"] == 300
+
+
+def test_update_config_poll_interval_zero_allowed(defender_client):
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/config",
+        json={"enabled": True, "poll_interval_seconds": 0},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["poll_interval_seconds"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 21: Decision CSV export
+# ---------------------------------------------------------------------------
+
+def test_export_decisions_empty_csv(defender_client):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/decisions/export",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert "text/csv" in resp.headers["content-type"]
+    # Only header row
+    lines = resp.text.strip().splitlines()
+    assert len(lines) == 1
+    assert "decision_id" in lines[0]
+
+
+def test_export_decisions_contains_rows(defender_client, store):
+    store.create_run("run-export")
+    store.create_decision(
+        decision_id="dec-export-1",
+        run_id="run-export",
+        alert_id="alert-export-1",
+        alert_title="Export Test",
+        alert_severity="high",
+        alert_category="Malware",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="mde",
+        tier=1,
+        decision="execute",
+        action_type="revoke_sessions",
+        action_types=["revoke_sessions"],
+        job_ids=[],
+        reason="export test",
+        entities=[],
+    )
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/decisions/export?days=365",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    lines = resp.text.strip().splitlines()
+    assert len(lines) == 2
+    assert "Export Test" in lines[1]
+
+
+def test_export_decisions_content_disposition(defender_client):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/decisions/export?days=7",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert "defender-decisions-7d.csv" in resp.headers.get("content-disposition", "")
+
+
+# ---------------------------------------------------------------------------
+# Phase 22: Notification routing (per-tier webhook config)
+# ---------------------------------------------------------------------------
+
+def test_config_includes_tier_webhooks(defender_client):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/config",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "teams_tier1_webhook" in body
+    assert "teams_tier2_webhook" in body
+    assert "teams_tier3_webhook" in body
+
+
+def test_update_config_tier_webhooks(defender_client):
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/config",
+        json={
+            "enabled": True,
+            "teams_tier1_webhook": "https://example.com/hook1",
+            "teams_tier2_webhook": "https://example.com/hook2",
+            "teams_tier3_webhook": "https://example.com/hook3",
+        },
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["teams_tier1_webhook"] == "https://example.com/hook1"
+    assert body["teams_tier2_webhook"] == "https://example.com/hook2"
+    assert body["teams_tier3_webhook"] == "https://example.com/hook3"
+
+
+def test_update_config_clear_tier_webhooks(defender_client):
+    # Set then clear
+    defender_client.put(
+        "/api/azure/security/defender-agent/config",
+        json={"enabled": True, "teams_tier1_webhook": "https://example.com/hook1"},
+        headers=AZURE_HOST,
+    )
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/config",
+        json={"enabled": True, "teams_tier1_webhook": ""},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["teams_tier1_webhook"] == ""

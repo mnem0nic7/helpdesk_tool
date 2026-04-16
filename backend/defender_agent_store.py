@@ -134,6 +134,28 @@ class DefenderAgentStore:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_defender_watchlist_entity
                     ON defender_agent_watchlist (entity_id, active);
+
+                CREATE TABLE IF NOT EXISTS defender_agent_rule_overrides (
+                    rule_id         TEXT PRIMARY KEY,
+                    disabled        INTEGER NOT NULL DEFAULT 0,
+                    confidence_score INTEGER,
+                    updated_at      TEXT NOT NULL DEFAULT '',
+                    updated_by      TEXT NOT NULL DEFAULT ''
+                );
+
+                CREATE TABLE IF NOT EXISTS defender_agent_custom_rules (
+                    id              TEXT PRIMARY KEY,
+                    name            TEXT NOT NULL DEFAULT '',
+                    match_field     TEXT NOT NULL DEFAULT 'title',
+                    match_value     TEXT NOT NULL DEFAULT '',
+                    match_mode      TEXT NOT NULL DEFAULT 'contains',
+                    tier            INTEGER NOT NULL DEFAULT 3,
+                    action_type     TEXT NOT NULL DEFAULT 'start_investigation',
+                    confidence_score INTEGER NOT NULL DEFAULT 50,
+                    enabled         INTEGER NOT NULL DEFAULT 1,
+                    created_by      TEXT NOT NULL DEFAULT '',
+                    created_at      TEXT NOT NULL DEFAULT ''
+                );
                 """
             )
             conn.commit()
@@ -180,6 +202,31 @@ class DefenderAgentStore:
                     active       INTEGER NOT NULL DEFAULT 1
                 )""",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_defender_watchlist_entity ON defender_agent_watchlist (entity_id, active)",
+            """CREATE TABLE IF NOT EXISTS defender_agent_rule_overrides (
+                    rule_id         TEXT PRIMARY KEY,
+                    disabled        INTEGER NOT NULL DEFAULT 0,
+                    confidence_score INTEGER,
+                    updated_at      TEXT NOT NULL DEFAULT '',
+                    updated_by      TEXT NOT NULL DEFAULT ''
+                )""",
+            """CREATE TABLE IF NOT EXISTS defender_agent_custom_rules (
+                    id              TEXT PRIMARY KEY,
+                    name            TEXT NOT NULL DEFAULT '',
+                    match_field     TEXT NOT NULL DEFAULT 'title',
+                    match_value     TEXT NOT NULL DEFAULT '',
+                    match_mode      TEXT NOT NULL DEFAULT 'contains',
+                    tier            INTEGER NOT NULL DEFAULT 3,
+                    action_type     TEXT NOT NULL DEFAULT 'start_investigation',
+                    confidence_score INTEGER NOT NULL DEFAULT 50,
+                    enabled         INTEGER NOT NULL DEFAULT 1,
+                    created_by      TEXT NOT NULL DEFAULT '',
+                    created_at      TEXT NOT NULL DEFAULT ''
+                )""",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE defender_agent_config ADD COLUMN poll_interval_seconds INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE defender_agent_config ADD COLUMN teams_tier1_webhook TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE defender_agent_config ADD COLUMN teams_tier2_webhook TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE defender_agent_config ADD COLUMN teams_tier3_webhook TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 with self._conn() as _mc:
@@ -201,6 +248,10 @@ class DefenderAgentStore:
         "entity_cooldown_hours": 24,
         "alert_dedup_window_minutes": 30,
         "min_confidence": 0,
+        "poll_interval_seconds": 0,
+        "teams_tier1_webhook": "",
+        "teams_tier2_webhook": "",
+        "teams_tier3_webhook": "",
         "updated_at": "",
         "updated_by": "",
     }
@@ -219,6 +270,14 @@ class DefenderAgentStore:
             d["alert_dedup_window_minutes"] = 30
         if "min_confidence" not in d:
             d["min_confidence"] = 0
+        if "poll_interval_seconds" not in d:
+            d["poll_interval_seconds"] = 0
+        if "teams_tier1_webhook" not in d:
+            d["teams_tier1_webhook"] = ""
+        if "teams_tier2_webhook" not in d:
+            d["teams_tier2_webhook"] = ""
+        if "teams_tier3_webhook" not in d:
+            d["teams_tier3_webhook"] = ""
         return d
 
     def upsert_config(
@@ -231,6 +290,10 @@ class DefenderAgentStore:
         entity_cooldown_hours: int = 24,
         alert_dedup_window_minutes: int = 30,
         min_confidence: int = 0,
+        poll_interval_seconds: int = 0,
+        teams_tier1_webhook: str = "",
+        teams_tier2_webhook: str = "",
+        teams_tier3_webhook: str = "",
         updated_by: str = "",
     ) -> dict[str, Any]:
         p = self._placeholder()
@@ -241,8 +304,10 @@ class DefenderAgentStore:
                 INSERT INTO defender_agent_config
                     (id, enabled, min_severity, tier2_delay_minutes, dry_run,
                      entity_cooldown_hours, alert_dedup_window_minutes, min_confidence,
+                     poll_interval_seconds,
+                     teams_tier1_webhook, teams_tier2_webhook, teams_tier3_webhook,
                      updated_at, updated_by)
-                VALUES (1, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+                VALUES (1, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
                 ON CONFLICT(id) DO UPDATE SET
                     enabled                    = excluded.enabled,
                     min_severity               = excluded.min_severity,
@@ -251,11 +316,18 @@ class DefenderAgentStore:
                     entity_cooldown_hours      = excluded.entity_cooldown_hours,
                     alert_dedup_window_minutes = excluded.alert_dedup_window_minutes,
                     min_confidence             = excluded.min_confidence,
+                    poll_interval_seconds      = excluded.poll_interval_seconds,
+                    teams_tier1_webhook        = excluded.teams_tier1_webhook,
+                    teams_tier2_webhook        = excluded.teams_tier2_webhook,
+                    teams_tier3_webhook        = excluded.teams_tier3_webhook,
                     updated_at                 = excluded.updated_at,
                     updated_by                 = excluded.updated_by
                 """,
                 (int(enabled), min_severity, tier2_delay_minutes, int(dry_run),
-                 entity_cooldown_hours, alert_dedup_window_minutes, min_confidence, now, updated_by),
+                 entity_cooldown_hours, alert_dedup_window_minutes, min_confidence,
+                 poll_interval_seconds,
+                 teams_tier1_webhook, teams_tier2_webhook, teams_tier3_webhook,
+                 now, updated_by),
             )
             conn.commit()
         return self.get_config()
@@ -770,6 +842,8 @@ class DefenderAgentStore:
         d["investigation_notes"] = json.loads(raw_notes)
         raw_wl = d.pop("watchlisted_entities_json", "[]") or "[]"
         d["watchlisted_entities"] = json.loads(raw_wl)
+        raw_tags = d.pop("tags_json", "[]") or "[]"
+        d["tags"] = json.loads(raw_tags)
         return d
 
 
@@ -1191,6 +1265,195 @@ class DefenderAgentStore:
             "false_positive_rate": fp_rate,
             "top_actions": top_actions,
         }
+
+
+    # -------------------------------------------------------------------------
+    # Rule overrides (Phase 17)
+    # -------------------------------------------------------------------------
+
+    def get_rule_overrides(self) -> dict[str, dict[str, Any]]:
+        """Return {rule_id: override_dict} for all overridden rules."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM defender_agent_rule_overrides"
+            ).fetchall()
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            d = dict(row)
+            d["disabled"] = bool(d.get("disabled", 0))
+            result[d["rule_id"]] = d
+        return result
+
+    def upsert_rule_override(
+        self,
+        rule_id: str,
+        *,
+        disabled: bool = False,
+        confidence_score: int | None = None,
+        updated_by: str = "",
+    ) -> dict[str, Any]:
+        """Create or update a rule override. Returns the stored override dict."""
+        p = self._placeholder()
+        now = _now()
+        with self._conn() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO defender_agent_rule_overrides
+                    (rule_id, disabled, confidence_score, updated_at, updated_by)
+                VALUES ({p}, {p}, {p}, {p}, {p})
+                ON CONFLICT(rule_id) DO UPDATE SET
+                    disabled         = excluded.disabled,
+                    confidence_score = excluded.confidence_score,
+                    updated_at       = excluded.updated_at,
+                    updated_by       = excluded.updated_by
+                """,
+                (rule_id, int(disabled), confidence_score, now, updated_by),
+            )
+            conn.commit()
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT * FROM defender_agent_rule_overrides WHERE rule_id = {p}", (rule_id,)
+            ).fetchone()
+        d = dict(row)
+        d["disabled"] = bool(d.get("disabled", 0))
+        return d
+
+    # -------------------------------------------------------------------------
+    # Custom detection rules (Phase 18)
+    # -------------------------------------------------------------------------
+
+    def list_custom_rules(self, *, enabled_only: bool = False) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            if enabled_only:
+                rows = conn.execute(
+                    "SELECT * FROM defender_agent_custom_rules WHERE enabled = 1 ORDER BY created_at"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM defender_agent_custom_rules ORDER BY created_at"
+                ).fetchall()
+        return [self._row_to_custom_rule(dict(r)) for r in rows]
+
+    def create_custom_rule(
+        self,
+        *,
+        name: str,
+        match_field: str,
+        match_value: str,
+        match_mode: str = "contains",
+        tier: int = 3,
+        action_type: str = "start_investigation",
+        confidence_score: int = 50,
+        created_by: str = "",
+    ) -> dict[str, Any]:
+        rid = str(uuid.uuid4())
+        p = self._placeholder()
+        now = _now()
+        with self._conn() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO defender_agent_custom_rules
+                    (id, name, match_field, match_value, match_mode, tier, action_type,
+                     confidence_score, enabled, created_by, created_at)
+                VALUES ({p},{p},{p},{p},{p},{p},{p},{p},1,{p},{p})
+                """,
+                (rid, name, match_field, match_value, match_mode, tier, action_type,
+                 confidence_score, created_by, now),
+            )
+            conn.commit()
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT * FROM defender_agent_custom_rules WHERE id = {p}", (rid,)
+            ).fetchone()
+        return self._row_to_custom_rule(dict(row))
+
+    def delete_custom_rule(self, rule_id: str) -> bool:
+        p = self._placeholder()
+        with self._conn() as conn:
+            cur = conn.execute(
+                f"DELETE FROM defender_agent_custom_rules WHERE id = {p}", (rule_id,)
+            )
+            conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    def toggle_custom_rule(self, rule_id: str, *, enabled: bool) -> dict[str, Any] | None:
+        p = self._placeholder()
+        with self._conn() as conn:
+            conn.execute(
+                f"UPDATE defender_agent_custom_rules SET enabled = {p} WHERE id = {p}",
+                (int(enabled), rule_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                f"SELECT * FROM defender_agent_custom_rules WHERE id = {p}", (rule_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_custom_rule(dict(row))
+
+    @staticmethod
+    def _row_to_custom_rule(d: dict[str, Any]) -> dict[str, Any]:
+        d["enabled"] = bool(d.get("enabled", 1))
+        return d
+
+    # -------------------------------------------------------------------------
+    # Alert tagging (Phase 19)
+    # -------------------------------------------------------------------------
+
+    def add_decision_tag(self, decision_id: str, tag: str) -> dict[str, Any] | None:
+        tag = (tag or "").strip().lower()
+        if not tag:
+            raise ValueError("tag cannot be empty")
+        p = self._placeholder()
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT tags_json FROM defender_agent_decisions WHERE decision_id = {p}",
+                (decision_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            tags: list[str] = json.loads(row["tags_json"] or "[]")
+            if tag not in tags:
+                tags.append(tag)
+                conn.execute(
+                    f"UPDATE defender_agent_decisions SET tags_json = {p} WHERE decision_id = {p}",
+                    (json.dumps(tags), decision_id),
+                )
+                conn.commit()
+        return self.get_decision(decision_id)
+
+    def remove_decision_tag(self, decision_id: str, tag: str) -> dict[str, Any] | None:
+        tag = (tag or "").strip().lower()
+        p = self._placeholder()
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT tags_json FROM defender_agent_decisions WHERE decision_id = {p}",
+                (decision_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            tags: list[str] = json.loads(row["tags_json"] or "[]")
+            tags = [t for t in tags if t != tag]
+            conn.execute(
+                f"UPDATE defender_agent_decisions SET tags_json = {p} WHERE decision_id = {p}",
+                (json.dumps(tags), decision_id),
+            )
+            conn.commit()
+        return self.get_decision(decision_id)
+
+    def list_known_tags(self) -> list[str]:
+        """Return a deduplicated sorted list of all tags used across decisions."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT tags_json FROM defender_agent_decisions"
+                " WHERE tags_json IS NOT NULL AND tags_json != '[]'"
+            ).fetchall()
+        tag_set: set[str] = set()
+        for row in rows:
+            for t in json.loads(row["tags_json"] or "[]"):
+                if t:
+                    tag_set.add(str(t))
+        return sorted(tag_set)
 
 
 defender_agent_store = DefenderAgentStore()

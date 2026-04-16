@@ -2431,6 +2431,10 @@ class DefenderAgentConfigResponse(BaseModel):
     entity_cooldown_hours: int = 24
     alert_dedup_window_minutes: int = 30
     min_confidence: int = 0
+    poll_interval_seconds: int = 0
+    teams_tier1_webhook: str = ""
+    teams_tier2_webhook: str = ""
+    teams_tier3_webhook: str = ""
     updated_at: Optional[str] = None
     updated_by: str = ""
 
@@ -2443,6 +2447,10 @@ class DefenderAgentConfigUpdate(BaseModel):
     entity_cooldown_hours: int = Field(default=24, ge=0, le=168)
     alert_dedup_window_minutes: int = Field(default=30, ge=0, le=1440)
     min_confidence: int = Field(default=0, ge=0, le=100)
+    poll_interval_seconds: int = Field(default=0, ge=0, le=86400)
+    teams_tier1_webhook: str = Field(default="", max_length=500)
+    teams_tier2_webhook: str = Field(default="", max_length=500)
+    teams_tier3_webhook: str = Field(default="", max_length=500)
 
 
 class DefenderAgentRunResponse(BaseModel):
@@ -2493,6 +2501,7 @@ class DefenderAgentDecisionItem(BaseModel):
     disposition_at: Optional[str] = None
     investigation_notes: list[dict[str, Any]] = Field(default_factory=list)
     watchlisted_entities: list[dict[str, Any]] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
 
 
 class DefenderAgentDecisionsResponse(BaseModel):
@@ -2617,3 +2626,60 @@ class DefenderAgentMetrics(BaseModel):
     disposition_summary: dict[str, int]
     false_positive_rate: float
     top_actions: list[DefenderAgentMetricsAction]
+
+
+# ---------------------------------------------------------------------------
+# Defender Agent — Phase 17: Rule management
+# ---------------------------------------------------------------------------
+
+class DefenderAgentBuiltinRule(BaseModel):
+    rule_id: str
+    title_keywords: list[str] = Field(default_factory=list)
+    category_keywords: list[str] = Field(default_factory=list)
+    service_source_contains: list[str] = Field(default_factory=list)
+    min_severity: str = "high"
+    tier: int
+    decision: str
+    action_type: str = ""
+    action_types: list[str] = Field(default_factory=list)
+    confidence_score: int = 50
+    reason: str = ""
+    off_hours_escalate: bool = False
+    # Operator overrides (merged in, may be absent)
+    disabled: bool = False
+    override_confidence: Optional[int] = None
+    updated_at: Optional[str] = None
+    updated_by: str = ""
+
+
+class DefenderAgentRuleUpdate(BaseModel):
+    disabled: bool = False
+    confidence_score: Optional[int] = Field(default=None, ge=0, le=100)
+
+
+# ---------------------------------------------------------------------------
+# Defender Agent — Phase 18: Custom detection rules
+# ---------------------------------------------------------------------------
+
+class DefenderAgentCustomRule(BaseModel):
+    id: str
+    name: str = ""
+    match_field: Literal["title", "category", "service_source", "severity"] = "title"
+    match_value: str
+    match_mode: Literal["contains", "exact", "startswith"] = "contains"
+    tier: int = 3
+    action_type: str = "start_investigation"
+    confidence_score: int = 50
+    enabled: bool = True
+    created_by: str = ""
+    created_at: str = ""
+
+
+class DefenderAgentCustomRuleCreate(BaseModel):
+    name: str = Field(default="", max_length=200)
+    match_field: Literal["title", "category", "service_source", "severity"] = "title"
+    match_value: str = Field(..., min_length=1, max_length=500)
+    match_mode: Literal["contains", "exact", "startswith"] = "contains"
+    tier: int = Field(default=3, ge=1, le=3)
+    action_type: str = Field(default="start_investigation", max_length=100)
+    confidence_score: int = Field(default=50, ge=0, le=100)

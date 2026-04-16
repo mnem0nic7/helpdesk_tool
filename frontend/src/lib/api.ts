@@ -1497,8 +1497,45 @@ export interface DefenderAgentConfig {
   min_severity: "informational" | "low" | "medium" | "high" | "critical";
   tier2_delay_minutes: number;
   dry_run: boolean;
+  poll_interval_seconds: number;
+  teams_tier1_webhook: string;
+  teams_tier2_webhook: string;
+  teams_tier3_webhook: string;
   updated_at: string | null;
   updated_by: string;
+}
+
+export interface DefenderAgentBuiltinRule {
+  rule_id: string;
+  title_keywords: string[];
+  category_keywords: string[];
+  service_source_contains: string[];
+  min_severity: string;
+  tier: number;
+  decision: string;
+  action_type: string;
+  action_types: string[];
+  confidence_score: number;
+  reason: string;
+  off_hours_escalate: boolean;
+  disabled: boolean;
+  override_confidence: number | null;
+  updated_at: string | null;
+  updated_by: string;
+}
+
+export interface DefenderAgentCustomRule {
+  id: string;
+  name: string;
+  match_field: "title" | "category" | "service_source" | "severity";
+  match_value: string;
+  match_mode: "contains" | "exact" | "startswith";
+  tier: number;
+  action_type: string;
+  confidence_score: number;
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
 }
 
 export interface DefenderAgentRun {
@@ -1564,6 +1601,7 @@ export interface DefenderAgentDecision {
   disposition_at: string | null;
   investigation_notes: Array<{ text: string; by: string; at: string }>;
   watchlisted_entities: Array<{ id: string; entity_id: string; entity_name: string; entity_type: string; boost_tier: boolean; reason: string }>;
+  tags: string[];
 }
 
 export interface DefenderAgentWatchlistEntry {
@@ -3952,6 +3990,46 @@ export const api = {
   },
   runDefenderAgentNow(): Promise<{ run_id: string; started: boolean }> {
     return postJSON<{ run_id: string; started: boolean }>("/api/azure/security/defender-agent/run-now", {});
+  },
+  listDefenderAgentBuiltinRules(): Promise<DefenderAgentBuiltinRule[]> {
+    return fetchJSON<DefenderAgentBuiltinRule[]>("/api/azure/security/defender-agent/rules");
+  },
+  updateDefenderAgentRule(ruleId: string, body: { disabled: boolean; confidence_score?: number | null }): Promise<DefenderAgentBuiltinRule> {
+    return putJSON<DefenderAgentBuiltinRule>(`/api/azure/security/defender-agent/rules/${encodeURIComponent(ruleId)}`, body);
+  },
+  listDefenderAgentCustomRules(enabledOnly = false): Promise<DefenderAgentCustomRule[]> {
+    return fetchJSON<DefenderAgentCustomRule[]>(`/api/azure/security/defender-agent/custom-rules?enabled_only=${enabledOnly}`);
+  },
+  createDefenderAgentCustomRule(body: Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at">): Promise<DefenderAgentCustomRule> {
+    return postJSON<DefenderAgentCustomRule>("/api/azure/security/defender-agent/custom-rules", body);
+  },
+  deleteDefenderAgentCustomRule(ruleId: string): Promise<{ deleted: boolean; id: string }> {
+    const url = `/api/azure/security/defender-agent/custom-rules/${encodeURIComponent(ruleId)}`;
+    return fetch(url, { method: "DELETE" }).then(async res => {
+      if (res.status === 401) { window.location.href = "/api/auth/login"; throw new Error("Not authenticated"); }
+      if (!res.ok) throw new Error(`DELETE ${url} failed: ${res.status}`);
+      return res.json() as Promise<{ deleted: boolean; id: string }>;
+    });
+  },
+  toggleDefenderAgentCustomRule(ruleId: string, enabled: boolean): Promise<DefenderAgentCustomRule> {
+    return putJSON<DefenderAgentCustomRule>(`/api/azure/security/defender-agent/custom-rules/${encodeURIComponent(ruleId)}/toggle?enabled=${enabled}`, {});
+  },
+  listDefenderAgentKnownTags(): Promise<{ tags: string[] }> {
+    return fetchJSON<{ tags: string[] }>("/api/azure/security/defender-agent/tags");
+  },
+  addDecisionTag(decisionId: string, tag: string): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${encodeURIComponent(decisionId)}/tags/${encodeURIComponent(tag)}`, {});
+  },
+  removeDecisionTag(decisionId: string, tag: string): Promise<DefenderAgentDecision> {
+    const url = `/api/azure/security/defender-agent/decisions/${encodeURIComponent(decisionId)}/tags/${encodeURIComponent(tag)}`;
+    return fetch(url, { method: "DELETE" }).then(async res => {
+      if (res.status === 401) { window.location.href = "/api/auth/login"; throw new Error("Not authenticated"); }
+      if (!res.ok) throw new Error(`DELETE ${url} failed: ${res.status}`);
+      return res.json() as Promise<DefenderAgentDecision>;
+    });
+  },
+  exportDefenderAgentDecisions(days = 30): string {
+    return `/api/azure/security/defender-agent/decisions/export?days=${days}`;
   },
 
   listMailboxDelegates(mailbox: string): Promise<MailboxDelegatesStatus> {

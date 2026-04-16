@@ -2,20 +2,25 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import require_admin, require_authenticated_user
 from defender_agent_store import defender_agent_store
 from models import (
+    DefenderAgentBuiltinRule,
     DefenderAgentConfigResponse,
     DefenderAgentConfigUpdate,
+    DefenderAgentCustomRule,
+    DefenderAgentCustomRuleCreate,
     DefenderAgentDecisionItem,
     DefenderAgentDecisionsResponse,
     DefenderAgentDispositionStats,
     DefenderAgentDispositionUpdate,
     DefenderAgentEntityTimelineResponse,
     DefenderAgentRunResponse,
+    DefenderAgentRuleUpdate,
     DefenderAgentSummaryResponse,
     DefenderAgentMetrics,
     DefenderAgentNoteCreate,
@@ -63,6 +68,10 @@ def update_config(
         entity_cooldown_hours=body.entity_cooldown_hours,
         alert_dedup_window_minutes=body.alert_dedup_window_minutes,
         min_confidence=body.min_confidence,
+        poll_interval_seconds=body.poll_interval_seconds,
+        teams_tier1_webhook=body.teams_tier1_webhook,
+        teams_tier2_webhook=body.teams_tier2_webhook,
+        teams_tier3_webhook=body.teams_tier3_webhook,
         updated_by=str(_session.get("email") or ""),
     )
 
@@ -93,6 +102,85 @@ def list_decisions(
     _ensure_azure_site()
     decisions, total = defender_agent_store.list_decisions(limit=limit, offset=offset)
     return {"decisions": decisions, "total": total}
+
+
+# ---------------------------------------------------------------------------
+# Phase 21: Decision CSV export (must be before /{decision_id} to avoid route conflict)
+# ---------------------------------------------------------------------------
+
+@router.get("/decisions/export")
+def export_decisions(
+    days: int = Query(default=30, ge=1, le=365),
+    _session: dict = Depends(require_authenticated_user),
+) -> object:
+    """Stream a CSV of decisions from the last N days."""
+    import csv
+    import io
+    from datetime import datetime, timedelta, timezone
+    from fastapi.responses import StreamingResponse
+
+    _ensure_azure_site()
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    with defender_agent_store._conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM defender_agent_decisions WHERE executed_at >= ? ORDER BY executed_at DESC",
+            (since,),
+        ).fetchall()
+
+    def _generate() -> object:
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([
+            "decision_id", "alert_id", "alert_title", "alert_severity", "alert_category",
+            "alert_created_at", "service_source", "tier", "decision", "action_type",
+            "confidence_score", "reason", "executed_at", "not_before_at",
+            "cancelled", "cancelled_at", "cancelled_by",
+            "human_approved", "approved_at", "approved_by",
+            "disposition", "disposition_note", "disposition_by", "disposition_at",
+            "tags",
+        ])
+        yield buf.getvalue()
+        buf.seek(0); buf.truncate(0)
+        for row in rows:
+            d = dict(row)
+            tags = json.loads(d.get("tags_json") or "[]")
+            writer.writerow([
+                d.get("decision_id", ""),
+                d.get("alert_id", ""),
+                d.get("alert_title", ""),
+                d.get("alert_severity", ""),
+                d.get("alert_category", ""),
+                d.get("alert_created_at", ""),
+                d.get("service_source", ""),
+                d.get("tier", ""),
+                d.get("decision", ""),
+                d.get("action_type", ""),
+                d.get("confidence_score", ""),
+                d.get("reason", ""),
+                d.get("executed_at", ""),
+                d.get("not_before_at", ""),
+                bool(d.get("cancelled", 0)),
+                d.get("cancelled_at", ""),
+                d.get("cancelled_by", ""),
+                bool(d.get("human_approved", 0)),
+                d.get("approved_at", ""),
+                d.get("approved_by", ""),
+                d.get("disposition", ""),
+                d.get("disposition_note", ""),
+                d.get("disposition_by", ""),
+                d.get("disposition_at", ""),
+                "|".join(tags),
+            ])
+            yield buf.getvalue()
+            buf.seek(0); buf.truncate(0)
+
+    filename = f"defender-decisions-{days}d.csv"
+    return StreamingResponse(
+        _generate(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/decisions/{decision_id}", response_model=DefenderAgentDecisionItem)
@@ -585,3 +673,179 @@ def delete_indicator(
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to delete indicator from MDE")
     return {"deleted": True, "indicator_id": indicator_id}
+
+
+# ---------------------------------------------------------------------------
+# Phase 17: Built-in rule management
+# ---------------------------------------------------------------------------
+
+@router.get("/rules", response_model=list[DefenderAgentBuiltinRule])
+def list_rules(_session: dict = Depends(require_authenticated_user)) -> list[dict]:
+    """Return all built-in classification rules with any operator overrides merged in."""
+    _ensure_azure_site()
+    from defender_agent import _RULES
+    overrides = defender_agent_store.get_rule_overrides()
+    result: list[dict] = []
+    for rule in _RULES:
+        rid = str(rule.get("rule_id", ""))
+        ov = overrides.get(rid, {})
+        title_kw = list(rule.get("title_keywords") or [])
+        cat_kw = list(rule.get("category_keywords") or [])
+        svc_filter = list(rule.get("service_source_contains") or [])
+        action_types = list(rule.get("action_types") or ([rule["action_type"]] if rule.get("action_type") else []))
+        result.append({
+            "rule_id": rid,
+            "title_keywords": title_kw,
+            "category_keywords": cat_kw,
+            "service_source_contains": svc_filter,
+            "min_severity": rule.get("min_severity", "high"),
+            "tier": rule["tier"],
+            "decision": rule["decision"],
+            "action_type": rule.get("action_type", ""),
+            "action_types": action_types,
+            "confidence_score": int(rule.get("confidence_score", 50)),
+            "reason": rule.get("reason", ""),
+            "off_hours_escalate": bool(rule.get("off_hours_escalate", False)),
+            "disabled": bool(ov.get("disabled", False)),
+            "override_confidence": ov.get("confidence_score"),
+            "updated_at": ov.get("updated_at"),
+            "updated_by": ov.get("updated_by", ""),
+        })
+    return result
+
+
+@router.put("/rules/{rule_id}", response_model=DefenderAgentBuiltinRule)
+def update_rule(
+    rule_id: str,
+    body: DefenderAgentRuleUpdate,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    """Override a built-in rule: disable it or adjust its confidence score."""
+    _ensure_azure_site()
+    from defender_agent import _RULES
+    rule_ids = {str(r.get("rule_id", "")) for r in _RULES}
+    if rule_id not in rule_ids:
+        raise HTTPException(status_code=404, detail=f"Rule '{rule_id}' not found")
+    ov = defender_agent_store.upsert_rule_override(
+        rule_id,
+        disabled=body.disabled,
+        confidence_score=body.confidence_score,
+        updated_by=str(_session.get("email") or ""),
+    )
+    # Return full merged view
+    rule = next((r for r in _RULES if str(r.get("rule_id", "")) == rule_id), {})
+    action_types = list(rule.get("action_types") or ([rule["action_type"]] if rule.get("action_type") else []))
+    return {
+        "rule_id": rule_id,
+        "title_keywords": list(rule.get("title_keywords") or []),
+        "category_keywords": list(rule.get("category_keywords") or []),
+        "service_source_contains": list(rule.get("service_source_contains") or []),
+        "min_severity": rule.get("min_severity", "high"),
+        "tier": rule.get("tier", 3),
+        "decision": rule.get("decision", "recommend"),
+        "action_type": rule.get("action_type", ""),
+        "action_types": action_types,
+        "confidence_score": int(rule.get("confidence_score", 50)),
+        "reason": rule.get("reason", ""),
+        "off_hours_escalate": bool(rule.get("off_hours_escalate", False)),
+        "disabled": ov.get("disabled", False),
+        "override_confidence": ov.get("confidence_score"),
+        "updated_at": ov.get("updated_at"),
+        "updated_by": ov.get("updated_by", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 18: Custom detection rules
+# ---------------------------------------------------------------------------
+
+@router.get("/custom-rules", response_model=list[DefenderAgentCustomRule])
+def list_custom_rules(
+    enabled_only: bool = Query(False),
+    _session: dict = Depends(require_authenticated_user),
+) -> list[dict]:
+    _ensure_azure_site()
+    return defender_agent_store.list_custom_rules(enabled_only=enabled_only)
+
+
+@router.post("/custom-rules", response_model=DefenderAgentCustomRule)
+def create_custom_rule(
+    body: DefenderAgentCustomRuleCreate,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    return defender_agent_store.create_custom_rule(
+        name=body.name,
+        match_field=body.match_field,
+        match_value=body.match_value.strip(),
+        match_mode=body.match_mode,
+        tier=body.tier,
+        action_type=body.action_type,
+        confidence_score=body.confidence_score,
+        created_by=str(_session.get("email") or ""),
+    )
+
+
+@router.delete("/custom-rules/{rule_id}")
+def delete_custom_rule(
+    rule_id: str,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    found = defender_agent_store.delete_custom_rule(rule_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Custom rule not found")
+    return {"deleted": True, "id": rule_id}
+
+
+@router.put("/custom-rules/{rule_id}/toggle", response_model=DefenderAgentCustomRule)
+def toggle_custom_rule(
+    rule_id: str,
+    enabled: bool = Query(...),
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    result = defender_agent_store.toggle_custom_rule(rule_id, enabled=enabled)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Custom rule not found")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 19: Alert tagging
+# ---------------------------------------------------------------------------
+
+@router.get("/tags")
+def list_known_tags(_session: dict = Depends(require_authenticated_user)) -> dict:
+    _ensure_azure_site()
+    tags = defender_agent_store.list_known_tags()
+    return {"tags": tags}
+
+
+@router.post("/decisions/{decision_id}/tags/{tag}", response_model=DefenderAgentDecisionItem)
+def add_decision_tag(
+    decision_id: str,
+    tag: str,
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    _ensure_azure_site()
+    try:
+        result = defender_agent_store.add_decision_tag(decision_id, tag)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    return result
+
+
+@router.delete("/decisions/{decision_id}/tags/{tag}", response_model=DefenderAgentDecisionItem)
+def remove_decision_tag(
+    decision_id: str,
+    tag: str,
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    _ensure_azure_site()
+    result = defender_agent_store.remove_decision_tag(decision_id, tag)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    return result
