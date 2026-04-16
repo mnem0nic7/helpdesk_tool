@@ -140,6 +140,7 @@ class DefenderAgentStore:
                     active INTEGER NOT NULL DEFAULT 1
                 )""",
             "CREATE INDEX IF NOT EXISTS idx_defender_suppressions_active ON defender_agent_suppressions (active, expires_at)",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN mitre_techniques_json TEXT NOT NULL DEFAULT '[]'",
         ):
             try:
                 with self._conn() as _mc:
@@ -277,6 +278,7 @@ class DefenderAgentStore:
         reason: str,
         not_before_at: str | None = None,
         alert_raw: dict[str, Any] | None = None,
+        mitre_techniques: list[str] | None = None,
     ) -> dict[str, Any]:
         p = self._placeholder()
         now = _now()
@@ -289,8 +291,8 @@ class DefenderAgentStore:
                     decision_id, run_id, alert_id, alert_title, alert_severity,
                     alert_category, alert_created_at, service_source, entities_json,
                     tier, decision, action_type, action_types_json, job_ids_json, reason,
-                    executed_at, not_before_at, alert_raw_json
-                ) VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+                    executed_at, not_before_at, alert_raw_json, mitre_techniques_json
+                ) VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
                 """,
                 (
                     decision_id, run_id, alert_id, alert_title, alert_severity,
@@ -298,6 +300,7 @@ class DefenderAgentStore:
                     json.dumps(entities), tier, decision, action_type,
                     json.dumps(ats), json.dumps(job_ids), reason, now, not_before_at,
                     json.dumps(alert_raw) if alert_raw else "",
+                    json.dumps(mitre_techniques or []),
                 ),
             )
             conn.commit()
@@ -550,6 +553,7 @@ class DefenderAgentStore:
         if include_raw:
             d["alert_raw"] = json.loads(raw_str) if raw_str else {}
         d["alert_written_back"] = bool(d.get("alert_written_back", 0))
+        d["mitre_techniques"] = json.loads(d.pop("mitre_techniques_json", "[]") or "[]")
         return d
 
 

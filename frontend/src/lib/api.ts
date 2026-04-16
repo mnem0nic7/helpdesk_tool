@@ -1536,6 +1536,7 @@ export interface DefenderAgentDecision {
   approved_by: string;
   alert_raw?: Record<string, unknown>;
   alert_written_back: boolean;
+  mitre_techniques: string[];
 }
 
 export interface DefenderAgentDecisionsResponse {

@@ -380,6 +380,26 @@ function AlertDetailDrawer({
                 </div>
               </Section>
 
+              {/* MITRE ATT&CK techniques */}
+              {(d.mitre_techniques ?? []).length > 0 && (
+                <Section title="MITRE ATT&CK">
+                  <div className="flex flex-wrap gap-1.5">
+                    {(d.mitre_techniques ?? []).map((t) => (
+                      <a
+                        key={t}
+                        href={`https://attack.mitre.org/techniques/${t.replace(".", "/")}/`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center rounded-md bg-red-50 border border-red-200 px-2 py-0.5 text-xs font-mono font-medium text-red-700 hover:bg-red-100"
+                        title={`View ${t} on MITRE ATT&CK`}
+                      >
+                        {t}
+                      </a>
+                    ))}
+                  </div>
+                </Section>
+              )}
+
               {description && (
                 <Section title="Description">
                   <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">{description}</p>
@@ -623,6 +643,20 @@ function DecisionRow({
         </div>
         {d.reason && <div className="text-xs text-gray-400 truncate" title={d.reason}>{d.reason}</div>}
         <EntityChips entities={d.entities} />
+        {(d.mitre_techniques ?? []).length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {(d.mitre_techniques ?? []).slice(0, 3).map((t) => (
+              <span key={t} className="inline-block rounded bg-red-50 border border-red-200 px-1 py-0.5 text-xs font-mono text-red-700">
+                {t}
+              </span>
+            ))}
+            {(d.mitre_techniques ?? []).length > 3 && (
+              <span className="inline-block rounded bg-red-50 border border-red-200 px-1 py-0.5 text-xs font-mono text-red-500">
+                +{(d.mitre_techniques ?? []).length - 3}
+              </span>
+            )}
+          </div>
+        )}
       </td>
       <td className="whitespace-nowrap px-3 py-2">
         {(() => { const s = sourceLabel(d.service_source); return (
@@ -698,6 +732,7 @@ export default function AzureSecurityAgentPage() {
   const [showConfig, setShowConfig] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [decisionFilter, setDecisionFilter] = useState<string>("");
+  const [mitreFilter, setMitreFilter] = useState<string>("");
   const [runningNow, setRunningNow] = useState(false);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
   const [showFindingsOnly, setShowFindingsOnly] = useState(false);
@@ -847,12 +882,26 @@ export default function AzureSecurityAgentPage() {
     }
   }
 
+  const allMitreTechniques = useMemo(() => {
+    const seen = new Set<string>();
+    for (const d of decisions) {
+      for (const t of (d.mitre_techniques ?? [])) seen.add(t);
+    }
+    return Array.from(seen).sort();
+  }, [decisions]);
+
   const filteredDecisions = useMemo(() => {
-    if (!decisionFilter) return decisions;
-    if (decisionFilter === "action_recommended")
-      return decisions.filter((d) => d.decision !== "skip");
-    return decisions.filter((d) => d.decision === decisionFilter);
-  }, [decisions, decisionFilter]);
+    let result = decisions;
+    if (decisionFilter === "action_recommended") {
+      result = result.filter((d) => d.decision !== "skip");
+    } else if (decisionFilter) {
+      result = result.filter((d) => d.decision === decisionFilter);
+    }
+    if (mitreFilter) {
+      result = result.filter((d) => (d.mitre_techniques ?? []).includes(mitreFilter));
+    }
+    return result;
+  }, [decisions, decisionFilter, mitreFilter]);
 
   function filterAndScrollToDecisions(filter: string) {
     setDecisionFilter(filter);
@@ -947,9 +996,22 @@ export default function AzureSecurityAgentPage() {
         <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
           <h2 className="text-lg font-semibold text-gray-900">Decision Feed</h2>
           <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
-            {filteredDecisions.length}{decisionFilter ? ` of ${decisions.length}` : ""}
+            {filteredDecisions.length}{(decisionFilter || mitreFilter) ? ` of ${decisions.length}` : ""}
           </span>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2 flex-wrap">
+            {allMitreTechniques.length > 0 && (
+              <select
+                value={mitreFilter}
+                onChange={(e) => setMitreFilter(e.target.value)}
+                className="rounded-md border border-gray-300 px-2 py-1 text-xs"
+                title="Filter by MITRE ATT&CK technique"
+              >
+                <option value="">All techniques</option>
+                {allMitreTechniques.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            )}
             <select
               value={decisionFilter}
               onChange={(e) => setDecisionFilter(e.target.value)}

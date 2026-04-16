@@ -719,6 +719,37 @@ def _is_suppressed(
     return False, ""
 
 
+def _extract_mitre_techniques(alert: dict[str, Any]) -> list[str]:
+    """Return deduplicated MITRE ATT&CK technique IDs from a Graph Security alert.
+
+    Graph surfaces these in two places:
+    - Top-level ``mitreTechniques`` list (e.g. ["T1078", "T1110.003"])
+    - Per-evidence ``detectionStatus``/``techniques`` on some alert types
+    We prefer the top-level field and fall back to evidence scanning.
+    """
+    seen: set[str] = set()
+    techniques: list[str] = []
+
+    def _add(val: str) -> None:
+        normalized = val.strip().upper()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            techniques.append(normalized)
+
+    for t in (alert.get("mitreTechniques") or []):
+        if isinstance(t, str):
+            _add(t)
+
+    # Fallback: some alert types embed techniques in evidence items
+    if not techniques:
+        for item in (alert.get("evidence") or []):
+            for t in (item.get("techniques") or []):
+                if isinstance(t, str):
+                    _add(t)
+
+    return techniques
+
+
 def _extract_entities(alert: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract user and device entities from Graph alert evidence."""
     entities: list[dict[str, Any]] = []
@@ -880,6 +911,8 @@ def _run_agent_cycle() -> None:
             alert_service_source = str(alert.get("serviceSource") or "")
             entities = _extract_entities(alert)
 
+            mitre_techniques = _extract_mitre_techniques(alert)
+
             suppressed, suppress_reason = _is_suppressed(alert, entities, active_suppressions)
             if suppressed:
                 decision_id = uuid.uuid4().hex
@@ -901,6 +934,7 @@ def _run_agent_cycle() -> None:
                     reason=suppress_reason,
                     not_before_at=None,
                     alert_raw=alert,
+                    mitre_techniques=mitre_techniques,
                 )
                 decisions_made += 1
                 skip_count += 1
@@ -936,6 +970,7 @@ def _run_agent_cycle() -> None:
                 reason=reason,
                 not_before_at=not_before_at,
                 alert_raw=alert,
+                mitre_techniques=mitre_techniques,
             )
             decisions_made += 1
             if decision_type == "skip":

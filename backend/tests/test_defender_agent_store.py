@@ -124,6 +124,43 @@ def test_create_and_get_decision(tmp_path):
     assert dec["decision"] == "execute"
     assert dec["action_type"] == "revoke_sessions"
     assert dec["tier"] == 1
+    assert dec["mitre_techniques"] == []
+
+
+def test_create_decision_with_mitre_techniques(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    store.create_decision(
+        decision_id="dec-mitre",
+        run_id="run-1",
+        alert_id="ext-mitre-1",
+        alert_title="Suspicious Sign-In",
+        alert_severity="high",
+        alert_category="CredentialAccess",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="microsoftDefenderForIdentity",
+        tier=1,
+        decision="execute",
+        action_type="revoke_sessions",
+        action_types=["revoke_sessions"],
+        job_ids=[],
+        reason="Test",
+        entities=[],
+        mitre_techniques=["T1078", "T1110.003"],
+    )
+    dec = store.get_decision("dec-mitre")
+    assert dec is not None
+    assert "T1078" in dec["mitre_techniques"]
+    assert "T1110.003" in dec["mitre_techniques"]
+
+
+def test_decision_mitre_techniques_default_empty(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    _make_decision(store)
+    dec = store.get_decision("dec-1")
+    assert isinstance(dec["mitre_techniques"], list)
+    assert dec["mitre_techniques"] == []
 
 
 def test_get_decision_not_found_returns_none(tmp_path):

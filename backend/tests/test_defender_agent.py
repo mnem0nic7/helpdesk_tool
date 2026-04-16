@@ -750,3 +750,58 @@ def test_is_suppressed_first_matching_rule_wins():
     suppressed, reason = defender_agent._is_suppressed(alert, entities, suppressions)
     assert suppressed
     assert "s-001" in reason
+
+
+# ---------------------------------------------------------------------------
+# _extract_mitre_techniques
+# ---------------------------------------------------------------------------
+
+def test_extract_mitre_empty_alert():
+    assert defender_agent._extract_mitre_techniques({}) == []
+
+
+def test_extract_mitre_top_level():
+    alert = {"mitreTechniques": ["T1078", "T1110.003"]}
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert result == ["T1078", "T1110.003"]
+
+
+def test_extract_mitre_normalizes_to_uppercase():
+    alert = {"mitreTechniques": ["t1059", "t1055"]}
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert result == ["T1059", "T1055"]
+
+
+def test_extract_mitre_deduplicates():
+    alert = {"mitreTechniques": ["T1078", "T1078", "T1110"]}
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert result == ["T1078", "T1110"]
+
+
+def test_extract_mitre_fallback_from_evidence():
+    alert = {
+        "evidence": [
+            {"techniques": ["T1059", "T1055"]},
+            {"techniques": ["T1059"]},
+        ]
+    }
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert set(result) == {"T1059", "T1055"}
+
+
+def test_extract_mitre_top_level_takes_precedence_over_evidence():
+    alert = {
+        "mitreTechniques": ["T1078"],
+        "evidence": [{"techniques": ["T9999"]}],
+    }
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert result == ["T1078"]
+    assert "T9999" not in result
+
+
+def test_extract_mitre_ignores_non_string_entries():
+    alert = {"mitreTechniques": ["T1078", None, 42, "T1110"]}
+    result = defender_agent._extract_mitre_techniques(alert)
+    assert "T1078" in result
+    assert "T1110" in result
+    assert len(result) == 2
