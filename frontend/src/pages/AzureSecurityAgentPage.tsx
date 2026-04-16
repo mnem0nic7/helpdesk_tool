@@ -1298,103 +1298,6 @@ function AlertDetailDrawer({
           </div>
         )}
 
-        {/* Footer actions */}
-        {d && (canCancel || canApprove || canUnisolate || canUnrestrict || canForceInvestigate || canExecuteNow || canEnableSignIn) && (
-          <div className="border-t border-gray-200 px-6 py-4 space-y-3">
-            {(canForceInvestigate || canUnisolate || canUnrestrict || canEnableSignIn) && (
-              <div>
-                <p className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Manual Actions</p>
-                <div className="flex flex-wrap gap-2">
-                  {canForceInvestigate && (
-                    <button
-                      onClick={() => {
-                        if (confirm("Manually trigger an MDE investigation on the device(s) in this alert?")) {
-                          onForceInvestigate(d.decision_id);
-                          onClose();
-                        }
-                      }}
-                      className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-sm text-violet-700 hover:bg-violet-100"
-                    >
-                      Force Investigate
-                    </button>
-                  )}
-                  {canUnisolate && (
-                    <button
-                      onClick={() => {
-                        if (confirm("Manually release device(s) from network isolation?")) {
-                          onUnisolate(d.decision_id);
-                          onClose();
-                        }
-                      }}
-                      className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
-                    >
-                      Release Isolation
-                    </button>
-                  )}
-                  {canUnrestrict && (
-                    <button
-                      onClick={() => {
-                        if (confirm("Manually remove the app execution restriction from device(s)?")) {
-                          onUnrestrict(d.decision_id);
-                          onClose();
-                        }
-                      }}
-                      className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
-                    >
-                      Remove App Restriction
-                    </button>
-                  )}
-                  {canEnableSignIn && (
-                    <button
-                      onClick={() => {
-                        if (confirm("Manually re-enable sign-in for the user(s) in this alert?")) {
-                          onEnableSignIn(d.decision_id);
-                          onClose();
-                        }
-                      }}
-                      className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
-                    >
-                      Enable Sign-in
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-            {(canCancel || canApprove || canExecuteNow) && (
-              <div className="flex justify-end gap-3">
-                {canExecuteNow && (
-                  <button
-                    onClick={() => {
-                      if (confirm("Execute this T2 action immediately, skipping the delay window?")) {
-                        onExecuteNow(d.decision_id);
-                        onClose();
-                      }
-                    }}
-                    className="rounded-lg border border-amber-400 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
-                  >
-                    Execute Now
-                  </button>
-                )}
-                {canCancel && (
-                  <button
-                    onClick={() => { onCancel(d.decision_id); onClose(); }}
-                    className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-700 hover:bg-amber-100"
-                  >
-                    Cancel action
-                  </button>
-                )}
-                {canApprove && (
-                  <button
-                    onClick={() => { onApprove(d.decision_id); onClose(); }}
-                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                  >
-                    Approve & execute
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        )}
         {isAdmin && d && d.entities.length > 0 && (
           <div className="mt-4 pt-3 border-t border-gray-100">
             <p className="text-xs text-gray-400 mb-2 font-medium uppercase tracking-wider">Suppress entity</p>
@@ -1435,6 +1338,104 @@ function AlertDetailDrawer({
           </div>
         )}
       </div>
+
+      {/* Sticky footer — always visible at the bottom of the drawer */}
+      {d && (canCancel || canApprove || canUnisolate || canUnrestrict || canForceInvestigate || canExecuteNow || canEnableSignIn) && (
+        <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4 space-y-3">
+          {(canForceInvestigate || canUnisolate || canUnrestrict || canEnableSignIn) && (
+            <div>
+              <p className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Manual Actions</p>
+              <div className="flex flex-wrap gap-2">
+                {canForceInvestigate && (
+                  <button
+                    onClick={() => {
+                      if (confirm("Manually trigger an MDE investigation on the device(s) in this alert?")) {
+                        onForceInvestigate(d.decision_id);
+                        onClose();
+                      }
+                    }}
+                    className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-sm text-violet-700 hover:bg-violet-100"
+                  >
+                    Force Investigate
+                  </button>
+                )}
+                {canUnisolate && (
+                  <button
+                    onClick={() => {
+                      if (confirm("Manually release device(s) from network isolation?")) {
+                        onUnisolate(d.decision_id);
+                        onClose();
+                      }
+                    }}
+                    className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
+                  >
+                    Release Isolation
+                  </button>
+                )}
+                {canUnrestrict && (
+                  <button
+                    onClick={() => {
+                      if (confirm("Manually remove the app execution restriction from device(s)?")) {
+                        onUnrestrict(d.decision_id);
+                        onClose();
+                      }
+                    }}
+                    className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
+                  >
+                    Remove App Restriction
+                  </button>
+                )}
+                {canEnableSignIn && (
+                  <button
+                    onClick={() => {
+                      if (confirm("Manually re-enable sign-in for the user(s) in this alert?")) {
+                        onEnableSignIn(d.decision_id);
+                        onClose();
+                      }
+                    }}
+                    className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
+                  >
+                    Enable Sign-in
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+          {(canCancel || canApprove || canExecuteNow) && (
+            <div className="flex justify-end gap-3">
+              {canExecuteNow && (
+                <button
+                  onClick={() => {
+                    if (confirm("Execute this T2 action immediately, skipping the delay window?")) {
+                      onExecuteNow(d.decision_id);
+                      onClose();
+                    }
+                  }}
+                  className="rounded-lg border border-amber-400 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
+                >
+                  Execute Now
+                </button>
+              )}
+              {canCancel && (
+                <button
+                  onClick={() => { onCancel(d.decision_id); onClose(); }}
+                  className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-700 hover:bg-amber-100"
+                >
+                  Cancel action
+                </button>
+              )}
+              {canApprove && (
+                <button
+                  onClick={() => { onApprove(d.decision_id); onClose(); }}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                >
+                  Approve & execute
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }
