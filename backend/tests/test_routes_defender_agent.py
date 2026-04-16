@@ -531,3 +531,97 @@ def test_decision_includes_confidence_score(defender_client, store):
     body = resp.json()
     assert "confidence_score" in body
     assert body["confidence_score"] == 85
+
+
+# ---------------------------------------------------------------------------
+# Phase 12 — Analyst disposition route tests
+# ---------------------------------------------------------------------------
+
+def _make_route_decision(store, decision_id: str, decision: str = "execute") -> dict:
+    store.create_run("run-route")
+    return store.create_decision(
+        decision_id=decision_id,
+        run_id="run-route",
+        alert_id=f"alert-{decision_id}",
+        alert_title="Test Alert",
+        alert_severity="high",
+        alert_category="Malware",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="mde",
+        tier=1,
+        decision=decision,
+        action_type="revoke_sessions",
+        action_types=["revoke_sessions"],
+        job_ids=[],
+        reason="test",
+        entities=[],
+    )
+
+
+def test_set_disposition_true_positive(defender_client, store):
+    row = _make_route_decision(store, "dec-disp-tp", "execute")
+    resp = defender_client.post(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}/disposition",
+        json={"disposition": "true_positive", "note": "Confirmed malware"},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["disposition"] == "true_positive"
+    assert body["disposition_note"] == "Confirmed malware"
+
+
+def test_set_disposition_false_positive(defender_client, store):
+    row = _make_route_decision(store, "dec-disp-fp", "queue")
+    resp = defender_client.post(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}/disposition",
+        json={"disposition": "false_positive"},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["disposition"] == "false_positive"
+
+
+def test_set_disposition_invalid_422(defender_client, store):
+    row = _make_route_decision(store, "dec-disp-invalid", "execute")
+    resp = defender_client.post(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}/disposition",
+        json={"disposition": "banana"},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 422
+
+
+def test_set_disposition_not_found_404(defender_client):
+    resp = defender_client.post(
+        "/api/azure/security/defender-agent/decisions/nonexistent/disposition",
+        json={"disposition": "true_positive"},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 404
+
+
+def test_get_disposition_stats(defender_client, store):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/disposition-stats",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "total_actioned" in body
+    assert "false_positive_rate" in body
+    assert "by_tier" in body
+
+
+def test_decision_includes_disposition_fields(defender_client, store):
+    row = _make_route_decision(store, "dec-disp-fields", "execute")
+    resp = defender_client.get(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "disposition" in body
+    assert body["disposition"] is None
+    assert "disposition_note" in body
+    assert "disposition_at" in body

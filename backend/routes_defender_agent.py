@@ -12,6 +12,8 @@ from models import (
     DefenderAgentConfigUpdate,
     DefenderAgentDecisionItem,
     DefenderAgentDecisionsResponse,
+    DefenderAgentDispositionStats,
+    DefenderAgentDispositionUpdate,
     DefenderAgentRunResponse,
     DefenderAgentSummaryResponse,
     DefenderAgentSuppressionCreate,
@@ -381,6 +383,39 @@ def run_now(_session: dict = Depends(require_admin)) -> dict:
         started = False
 
     return {"run_id": run_id, "started": started}
+
+
+# ---------------------------------------------------------------------------
+# Analyst disposition
+# ---------------------------------------------------------------------------
+
+@router.post("/decisions/{decision_id}/disposition", response_model=DefenderAgentDecisionItem)
+def set_disposition(
+    decision_id: str,
+    body: DefenderAgentDispositionUpdate,
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    _ensure_azure_site()
+    try:
+        result = defender_agent_store.set_decision_disposition(
+            decision_id,
+            body.disposition,
+            note=body.note,
+            by=str(_session.get("email") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    return result
+
+
+@router.get("/disposition-stats", response_model=DefenderAgentDispositionStats)
+def get_disposition_stats(
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    _ensure_azure_site()
+    return defender_agent_store.get_disposition_stats()
 
 
 # ---------------------------------------------------------------------------

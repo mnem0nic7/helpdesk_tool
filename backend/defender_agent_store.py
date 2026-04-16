@@ -148,6 +148,10 @@ class DefenderAgentStore:
             "ALTER TABLE defender_agent_decisions ADD COLUMN confirmed_at TEXT",
             "ALTER TABLE defender_agent_decisions ADD COLUMN confidence_score INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE defender_agent_config ADD COLUMN min_confidence INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN disposition TEXT",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN disposition_note TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN disposition_by TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN disposition_at TEXT",
         ):
             try:
                 with self._conn() as _mc:
@@ -728,7 +732,99 @@ class DefenderAgentStore:
         d["remediation_confirmed"] = bool(d.get("remediation_confirmed", 0))
         d["remediation_failed"] = bool(d.get("remediation_failed", 0))
         d["confidence_score"] = int(d.get("confidence_score") or 0)
+        d.setdefault("disposition", None)
+        d.setdefault("disposition_note", "")
+        d.setdefault("disposition_by", "")
+        d.setdefault("disposition_at", None)
         return d
+
+
+    # -------------------------------------------------------------------------
+    # Analyst disposition
+    # -------------------------------------------------------------------------
+
+    _VALID_DISPOSITIONS = {"true_positive", "false_positive", "inconclusive"}
+
+    def set_decision_disposition(
+        self,
+        decision_id: str,
+        disposition: str,
+        *,
+        note: str = "",
+        by: str = "",
+    ) -> dict[str, Any] | None:
+        """Set or update the analyst disposition on a decision.
+
+        disposition must be one of: true_positive | false_positive | inconclusive.
+        Pass disposition=None to clear (treated as empty string → stored as NULL).
+        Returns the updated decision or None if not found.
+        """
+        if disposition not in self._VALID_DISPOSITIONS:
+            raise ValueError(f"disposition must be one of {self._VALID_DISPOSITIONS}")
+        p = self._placeholder()
+        now = _now()
+        with self._conn() as conn:
+            conn.execute(
+                f"""
+                UPDATE defender_agent_decisions
+                   SET disposition      = {p},
+                       disposition_note = {p},
+                       disposition_by   = {p},
+                       disposition_at   = {p}
+                 WHERE decision_id = {p}
+                """,
+                (disposition, note, by, now, decision_id),
+            )
+            conn.commit()
+        return self.get_decision(decision_id)
+
+    def get_disposition_stats(self) -> dict[str, Any]:
+        """Return aggregate TP/FP/Inconclusive counts and per-tier breakdown.
+
+        Counts non-skip decisions only (skips are not dispositioned by analysts).
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT tier, disposition, COUNT(*) AS c
+                  FROM defender_agent_decisions
+                 WHERE decision != 'skip'
+                 GROUP BY tier, disposition
+                """
+            ).fetchall()
+            total_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM defender_agent_decisions WHERE decision != 'skip'"
+            ).fetchone()
+            reviewed_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM defender_agent_decisions"
+                " WHERE decision != 'skip' AND disposition IS NOT NULL"
+            ).fetchone()
+        total = int(total_row["c"]) if total_row else 0
+        reviewed = int(reviewed_row["c"]) if reviewed_row else 0
+
+        counts: dict[str, int] = {"true_positive": 0, "false_positive": 0, "inconclusive": 0}
+        by_tier: dict[str, dict[str, int]] = {}
+        for row in rows:
+            tier_key = f"T{row['tier']}" if row["tier"] else "skip"
+            disp = row["disposition"] or "unreviewed"
+            cnt = int(row["c"])
+            if disp in counts:
+                counts[disp] += cnt
+            if tier_key not in by_tier:
+                by_tier[tier_key] = {}
+            by_tier[tier_key][disp] = by_tier[tier_key].get(disp, 0) + cnt
+
+        fp_rate = round(counts["false_positive"] / reviewed, 3) if reviewed > 0 else 0.0
+        return {
+            "total_actioned": total,
+            "reviewed": reviewed,
+            "unreviewed": total - reviewed,
+            "true_positive": counts["true_positive"],
+            "false_positive": counts["false_positive"],
+            "inconclusive": counts["inconclusive"],
+            "false_positive_rate": fp_rate,
+            "by_tier": by_tier,
+        }
 
 
 defender_agent_store = DefenderAgentStore()
