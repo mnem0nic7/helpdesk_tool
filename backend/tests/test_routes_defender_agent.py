@@ -702,3 +702,39 @@ def test_entity_timeline_limit_param(defender_client, store):
     assert resp.status_code == 200
     body = resp.json()
     assert len(body["decisions"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: Agent metrics route
+# ---------------------------------------------------------------------------
+
+def test_get_agent_metrics_200(defender_client, store):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/metrics",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "total_decisions" in body
+    assert "by_tier" in body
+    assert "daily_volumes" in body
+    assert "top_entities" in body
+    assert "disposition_summary" in body
+    assert "false_positive_rate" in body
+
+
+def test_get_agent_metrics_days_param(defender_client, store):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/metrics?days=7",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["period_days"] == 7
+
+
+def test_get_agent_metrics_invalid_days(defender_client, store):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/metrics?days=0",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 422
