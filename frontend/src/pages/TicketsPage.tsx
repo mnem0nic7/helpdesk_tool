@@ -2,7 +2,7 @@ import { startTransition, useState, useCallback, useEffect, useMemo } from "reac
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api.ts";
-import type { PriorityOption, RequestTypeOption, TicketCreatePayload, TicketQueryParams, TicketRow } from "../lib/api.ts";
+import type { TicketCreatePayload, TicketQueryParams, TicketRow } from "../lib/api.ts";
 import TicketFilters from "../components/TicketFilters.tsx";
 import type { TicketFilterValues } from "../components/TicketFilters.tsx";
 import TicketTable from "../components/TicketTable.tsx";
@@ -10,185 +10,11 @@ import TicketKanbanBoard from "../components/TicketKanbanBoard.tsx";
 import Pagination from "../components/Pagination.tsx";
 import TicketWorkbenchDrawer from "../components/TicketWorkbenchDrawer.tsx";
 import TicketViewToggle, { type TicketListView } from "../components/TicketViewToggle.tsx";
+import CreateTicketModal from "../components/CreateTicketModal.tsx";
 import { getSiteBranding } from "../lib/siteContext.ts";
 import { activeTicketListQueryOptions } from "../lib/ticketQueryOptions.ts";
 
 const PAGE_SIZE = 250;
-const EMPTY_CREATE_FORM: TicketCreatePayload = {
-  summary: "",
-  description: "",
-  priority: "",
-  request_type_id: "",
-};
-
-interface CreateTicketModalProps {
-  isOpen: boolean;
-  form: TicketCreatePayload;
-  priorities: PriorityOption[];
-  requestTypes: RequestTypeOption[];
-  isLoadingOptions: boolean;
-  isSubmitting: boolean;
-  errorText: string;
-  onChange: (field: keyof TicketCreatePayload, value: string) => void;
-  onClose: () => void;
-  onSubmit: () => void;
-}
-
-function CreateTicketModal({
-  isOpen,
-  form,
-  priorities,
-  requestTypes,
-  isLoadingOptions,
-  isSubmitting,
-  errorText,
-  onChange,
-  onClose,
-  onSubmit,
-}: CreateTicketModalProps) {
-  if (!isOpen) return null;
-
-  const isSubmitDisabled =
-    isSubmitting ||
-    isLoadingOptions ||
-    !form.summary.trim() ||
-    !form.priority.trim() ||
-    !form.request_type_id.trim();
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-5" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="create-ticket-title"
-        className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="border-b border-slate-200 px-6 py-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 id="create-ticket-title" className="text-xl font-semibold text-slate-900">
-                Create Ticket
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Create a new OIT service request without leaving it-app.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={isSubmitting}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-
-        <div className="space-y-5 px-6 py-5">
-          {errorText && (
-            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {errorText}
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <label htmlFor="create-ticket-summary" className="text-sm font-medium text-slate-700">
-              Summary
-            </label>
-            <input
-              id="create-ticket-summary"
-              type="text"
-              value={form.summary}
-              onChange={(event) => onChange("summary", event.target.value)}
-              placeholder="Brief description of the request"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-              disabled={isSubmitting}
-              autoFocus
-            />
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <label htmlFor="create-ticket-priority" className="text-sm font-medium text-slate-700">
-                Priority
-              </label>
-              <select
-                id="create-ticket-priority"
-                value={form.priority}
-                onChange={(event) => onChange("priority", event.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                disabled={isSubmitting || isLoadingOptions}
-              >
-                <option value="">{isLoadingOptions ? "Loading priorities..." : "Select priority"}</option>
-                {priorities.map((priority) => (
-                  <option key={priority.id || priority.name} value={priority.name}>
-                    {priority.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="create-ticket-request-type" className="text-sm font-medium text-slate-700">
-                Request Type
-              </label>
-              <select
-                id="create-ticket-request-type"
-                value={form.request_type_id}
-                onChange={(event) => onChange("request_type_id", event.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                disabled={isSubmitting || isLoadingOptions}
-              >
-                <option value="">{isLoadingOptions ? "Loading request types..." : "Select request type"}</option>
-                {requestTypes.map((requestType) => (
-                  <option key={requestType.id} value={requestType.id}>
-                    {requestType.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label htmlFor="create-ticket-description" className="text-sm font-medium text-slate-700">
-              Description
-            </label>
-            <textarea
-              id="create-ticket-description"
-              value={form.description}
-              onChange={(event) => onChange("description", event.target.value)}
-              placeholder="Add any helpful background, symptoms, or requested action."
-              rows={8}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-              disabled={isSubmitting}
-            />
-          </div>
-        </div>
-
-        <div className="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isSubmitting}
-            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onSubmit}
-            disabled={isSubmitDisabled}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
-          >
-            {isSubmitting ? "Creating..." : "Create Ticket"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /** Derive initial filter values from URL search params. */
 function filtersFromParams(sp: URLSearchParams): TicketFilterValues {
   return {
@@ -224,7 +50,6 @@ export default function TicketsPage() {
   const [page, setPage] = useState(1);
   const [openTicket, setOpenTicket] = useState<TicketRow | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [createForm, setCreateForm] = useState<TicketCreatePayload>(EMPTY_CREATE_FORM);
 
   // Reset filters when navigating to /tickets with new filter params.
   useEffect(() => {
@@ -359,7 +184,6 @@ export default function TicketsPage() {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["ticket-detail"] });
       queryClient.invalidateQueries({ queryKey: ["filter-options"] });
-      setCreateForm(EMPTY_CREATE_FORM);
       setIsCreateModalOpen(false);
       setOpenTicket(response.detail.ticket);
       const next = new URLSearchParams(searchParams);
@@ -386,25 +210,15 @@ export default function TicketsPage() {
     refreshVisibleMutation.mutate(tickets.map((ticket) => ticket.key));
   }, [refreshVisibleMutation, tickets]);
 
-  const handleCreateFieldChange = useCallback((field: keyof TicketCreatePayload, value: string) => {
-    setCreateForm((current) => ({ ...current, [field]: value }));
-  }, []);
-
   const handleCreateModalClose = useCallback(() => {
     if (createTicketMutation.isPending) return;
     setIsCreateModalOpen(false);
-    setCreateForm(EMPTY_CREATE_FORM);
     createTicketMutation.reset();
   }, [createTicketMutation]);
 
-  const handleCreateTicket = useCallback(() => {
-    createTicketMutation.mutate({
-      summary: createForm.summary.trim(),
-      description: createForm.description,
-      priority: createForm.priority.trim(),
-      request_type_id: createForm.request_type_id.trim(),
-    });
-  }, [createForm, createTicketMutation]);
+  const handleCreateTicket = useCallback((payload: TicketCreatePayload) => {
+    createTicketMutation.mutate(payload);
+  }, [createTicketMutation]);
 
   const isRefreshingVisible = refreshVisibleMutation.isPending;
   const headerCountContent = isLoading ? (
@@ -526,13 +340,11 @@ export default function TicketsPage() {
       />
       <CreateTicketModal
         isOpen={isCreateModalOpen}
-        form={createForm}
         priorities={priorities}
         requestTypes={requestTypes}
         isLoadingOptions={isLoadingPriorities || isLoadingRequestTypes}
         isSubmitting={createTicketMutation.isPending}
         errorText={createTicketMutation.error instanceof Error ? createTicketMutation.error.message : ""}
-        onChange={handleCreateFieldChange}
         onClose={handleCreateModalClose}
         onSubmit={handleCreateTicket}
       />

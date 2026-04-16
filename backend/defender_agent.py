@@ -51,6 +51,34 @@ _SEV_ORDER: dict[str, int] = {
 }
 
 # ---------------------------------------------------------------------------
+# Time-gating helpers (Pacific Time)
+# ---------------------------------------------------------------------------
+
+
+def _is_off_hours_pt() -> bool:
+    """Return True if the current moment is outside business hours in Pacific Time.
+
+    Business hours: Monday–Friday, 08:00–17:00 US/Pacific (DST-aware).
+    Weekends and outside 08:00–17:00 are considered off-hours.
+    Rules tagged with ``off_hours_escalate=True`` use this to automatically
+    upgrade from T2-queue to T1-execute when no operator is available to cancel.
+    """
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+        tz: Any = ZoneInfo("America/Los_Angeles")
+    except Exception:
+        # Fallback: UTC-8 (no DST — conservative, slightly wrong for PDT)
+        tz = timezone(timedelta(hours=-8))
+
+    now_pt = datetime.now(tz)
+    weekday = now_pt.weekday()  # 0=Mon … 6=Sun
+    hour = now_pt.hour
+    if weekday >= 5:          # Saturday or Sunday
+        return True
+    return hour < 8 or hour >= 17  # before 08:00 or at/after 17:00
+
+
+# ---------------------------------------------------------------------------
 # Decision rule table
 # (evaluated top-to-bottom; first match wins)
 # ---------------------------------------------------------------------------
@@ -79,7 +107,7 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "revoke_sessions",
         "reason": "Defender detected suspicious identity activity; revoking active sessions.",
     },
-    # T2 — disable sign-in (queued with delay)
+    # T2 — disable sign-in (queued with delay; escalates to T1 off-hours)
     {
         "title_keywords": (
             "password spray", "brute force", "unusual volume",
@@ -89,6 +117,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "disable_sign_in",
+        "off_hours_escalate": True,
         "reason": "Defender detected credential or mailbox attack pattern; sign-in disable queued with cancellation window.",
     },
     {
@@ -131,16 +160,17 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "disable_sign_in",
         "reason": "Phishing or malicious link activity detected; sign-in disable queued with cancellation window.",
     },
-    # T2 — MFA fatigue
+    # T2 — MFA fatigue (escalates to T1 off-hours — attacker persistence exploit)
     {
         "title_keywords": ("mfa fatigue", "mfa spam", "suspicious mfa", "push notification flooding"),
         "min_severity": "medium",
         "tier": 2,
         "decision": "queue",
         "action_type": "disable_sign_in",
+        "off_hours_escalate": True,
         "reason": "MFA fatigue attack pattern detected; sign-in disable queued with cancellation window.",
     },
-    # T2 — AiTM / session hijacking → revoke sessions (identity threat, not device-level)
+    # T2 — AiTM / session hijacking → revoke sessions (escalates to T1 off-hours)
     {
         "title_keywords": (
             "adversary-in-the-middle", "aitm", "phishing site",
@@ -151,6 +181,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "revoke_sessions",
+        "off_hours_escalate": True,
         "reason": "AiTM phishing / session-hijacking detected; revoking active sessions pending investigation.",
     },
     # T1/T2 — anomalous token activity (RC-7)
@@ -174,6 +205,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "disable_sign_in",
+        "off_hours_escalate": True,
         "reason": "Anomalous token activity (medium severity); sign-in disable queued with cancellation window.",
     },
     # T2 — suspicious OAuth / app consent
@@ -328,7 +360,7 @@ _RULES: list[dict[str, Any]] = [
         "action_type": "revoke_sessions",
         "reason": "High-severity inbox manipulation detected; revoking sessions immediately to cut attacker access.",
     },
-    # T2 — inbox rule manipulation / email forwarding abuse (medium severity)
+    # T2 — inbox rule manipulation / email forwarding abuse (medium severity; escalates T1 off-hours)
     {
         "title_keywords": (
             "inbox rule", "mailbox forwarding", "email forwarding rule",
@@ -338,9 +370,10 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "disable_sign_in",
+        "off_hours_escalate": True,
         "reason": "Attacker-created inbox rule or forwarding detected; disabling sign-in to cut persistent access.",
     },
-    # T2 — BEC / email impersonation
+    # T2 — BEC / email impersonation (escalates to T1 off-hours)
     {
         "title_keywords": (
             "business email compromise", "bec attack", "email impersonation",
@@ -350,6 +383,7 @@ _RULES: list[dict[str, Any]] = [
         "tier": 2,
         "decision": "queue",
         "action_type": "disable_sign_in",
+        "off_hours_escalate": True,
         "reason": "Business email compromise / impersonation detected; disabling sign-in pending investigation.",
     },
     # T1 — email-delivered malware / phishing link clicked
@@ -627,7 +661,21 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
             continue
         # Support composite action_types list or single action_type
         ats: list[str] = rule.get("action_types") or ([rule["action_type"]] if rule.get("action_type") else [])
-        return rule["tier"], rule["decision"], ats, rule["reason"]
+        tier: int = rule["tier"]
+        decision: str = rule["decision"]
+        reason: str = rule["reason"]
+        # Off-hours escalation: T2/queue → T1/execute outside PT business hours.
+        # Only applies to rules explicitly tagged off_hours_escalate=True.
+        if (
+            rule.get("off_hours_escalate")
+            and tier == 2
+            and decision == "queue"
+            and _is_off_hours_pt()
+        ):
+            tier = 1
+            decision = "execute"
+            reason = reason + " [Off-hours: escalated to T1 — no cancellation window available.]"
+        return tier, decision, ats, reason
 
     return None, "skip", [], "Alert category/title did not match any decision rule."
 
