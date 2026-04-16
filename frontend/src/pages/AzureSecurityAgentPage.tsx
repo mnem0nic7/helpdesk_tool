@@ -121,6 +121,13 @@ function actionBadgeColor(actionType: string): string {
   return ACTION_COLORS[actionType] ?? "bg-gray-100 text-gray-600";
 }
 
+function confidenceBadge(score: number): { label: string; color: string } {
+  if (score >= 85) return { label: `${score}%`, color: "bg-emerald-100 text-emerald-800" };
+  if (score >= 70) return { label: `${score}%`, color: "bg-yellow-100 text-yellow-800" };
+  if (score > 0)   return { label: `${score}%`, color: "bg-orange-100 text-orange-800" };
+  return { label: "—", color: "bg-gray-100 text-gray-400" };
+}
+
 // ---------------------------------------------------------------------------
 // Config drawer
 // ---------------------------------------------------------------------------
@@ -141,6 +148,7 @@ function ConfigDrawer({
     dry_run: config.dry_run,
     entity_cooldown_hours: config.entity_cooldown_hours ?? 24,
     alert_dedup_window_minutes: config.alert_dedup_window_minutes ?? 30,
+    min_confidence: config.min_confidence ?? 0,
   });
 
   return (
@@ -213,6 +221,17 @@ function ConfigDrawer({
             className="mt-1 block w-24 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
           />
         </label>
+        <label className="block">
+          <span className="text-xs text-gray-500">Min confidence (0–100)</span>
+          <input
+            type="number"
+            min={0}
+            max={100}
+            value={local.min_confidence ?? 0}
+            onChange={(e) => setLocal((p) => ({ ...p, min_confidence: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) }))}
+            className="mt-1 block w-24 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+          />
+        </label>
         <button
           onClick={() => onSave(local)}
           disabled={saving}
@@ -225,6 +244,7 @@ function ConfigDrawer({
         <p>T2 delay: the window an operator has to cancel a sign-in disable before it executes. 0 = immediate.</p>
         <p>Entity cooldown: suppress repeat actions on the same user or device within this window. 0 = disabled.</p>
         <p>Alert dedup window: collapse multiple alerts that would trigger the same action on the same entity within this window into a single decision. 0 = disabled.</p>
+        <p>Min confidence: T1/T2 decisions from rules below this score (0–100) are downgraded to T3 recommend. 0 = disabled (all rules execute at their assigned tier).</p>
       </div>
     </div>
   );
@@ -489,6 +509,16 @@ function AlertDetailDrawer({
                     }
                   />
                   <Row label="Reason" value={d.reason} />
+                  {(d.confidence_score ?? 0) > 0 && (
+                    <Row
+                      label="Confidence"
+                      value={
+                        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${confidenceBadge(d.confidence_score ?? 0).color}`}>
+                          {confidenceBadge(d.confidence_score ?? 0).label}
+                        </span>
+                      }
+                    />
+                  )}
                   <Row label="Logged at" value={fmtTime(d.executed_at)} />
                   {d.decision !== "skip" && (
                     <Row
@@ -720,6 +750,12 @@ function DecisionRow({
         <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${tier.color}`}>
           {tier.label}
         </span>
+        {(d.confidence_score ?? 0) > 0 && (
+          <span className={`ml-1 inline-block rounded-full px-1.5 py-0.5 text-xs font-medium ${confidenceBadge(d.confidence_score ?? 0).color}`}
+            title={`Rule confidence: ${d.confidence_score}%`}>
+            {d.confidence_score}%
+          </span>
+        )}
       </td>
       <td className="whitespace-nowrap px-3 py-2">
         {d.action_type ? (

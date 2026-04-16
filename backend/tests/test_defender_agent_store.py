@@ -674,3 +674,83 @@ def test_decision_remediation_defaults_false(tmp_path):
     assert fetched["remediation_confirmed"] is False
     assert fetched["remediation_failed"] is False
     assert fetched.get("confirmed_at") is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 10 — Confidence scoring store tests
+# ---------------------------------------------------------------------------
+
+
+def test_config_min_confidence_default(tmp_path):
+    store = _store(tmp_path)
+    cfg = store.get_config()
+    assert "min_confidence" in cfg
+    assert cfg["min_confidence"] == 0
+
+
+def test_upsert_config_min_confidence(tmp_path):
+    store = _store(tmp_path)
+    store.upsert_config(enabled=True, min_severity="high", tier2_delay_minutes=15,
+                        dry_run=False, min_confidence=75)
+    cfg = store.get_config()
+    assert cfg["min_confidence"] == 75
+
+
+def test_create_decision_stores_confidence_score(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    store.create_decision(
+        decision_id="dec-conf",
+        run_id="run-1",
+        alert_id="alert-c",
+        alert_title="Test",
+        alert_severity="high",
+        alert_category="Malware",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="microsoftDefenderForEndpoint",
+        entities=[],
+        tier=1,
+        decision="execute",
+        action_type="revoke_sessions",
+        job_ids=[],
+        reason="Test",
+        confidence_score=82,
+    )
+    dec = store.get_decision("dec-conf")
+    assert dec is not None
+    assert dec["confidence_score"] == 82
+
+
+def test_create_decision_defaults_confidence_zero(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    _make_decision(store, decision_id="dec-noconf")
+    dec = store.get_decision("dec-noconf")
+    assert dec is not None
+    assert dec["confidence_score"] == 0
+
+
+def test_list_decisions_includes_confidence_score(tmp_path):
+    store = _store(tmp_path)
+    store.create_run("run-1")
+    store.create_decision(
+        decision_id="dec-listconf",
+        run_id="run-1",
+        alert_id="alert-lc",
+        alert_title="Test",
+        alert_severity="high",
+        alert_category="Malware",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="microsoftDefenderForEndpoint",
+        entities=[],
+        tier=2,
+        decision="queue",
+        action_type="disable_sign_in",
+        job_ids=[],
+        reason="Test",
+        confidence_score=68,
+    )
+    decisions, total = store.list_decisions()
+    match = next((d for d in decisions if d["decision_id"] == "dec-listconf"), None)
+    assert match is not None
+    assert match["confidence_score"] == 68

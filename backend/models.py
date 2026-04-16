@@ -2430,6 +2430,7 @@ class DefenderAgentConfigResponse(BaseModel):
     dry_run: bool = False
     entity_cooldown_hours: int = 24
     alert_dedup_window_minutes: int = 30
+    min_confidence: int = 0
     updated_at: Optional[str] = None
     updated_by: str = ""
 
@@ -2441,6 +2442,7 @@ class DefenderAgentConfigUpdate(BaseModel):
     dry_run: bool = False
     entity_cooldown_hours: int = Field(default=24, ge=0, le=168)
     alert_dedup_window_minutes: int = Field(default=30, ge=0, le=1440)
+    min_confidence: int = Field(default=0, ge=0, le=100)
 
 
 class DefenderAgentRunResponse(BaseModel):
@@ -2484,6 +2486,7 @@ class DefenderAgentDecisionItem(BaseModel):
     remediation_confirmed: bool = False
     remediation_failed: bool = False
     confirmed_at: Optional[str] = None
+    confidence_score: int = 0
 
 
 class DefenderAgentDecisionsResponse(BaseModel):

@@ -470,3 +470,64 @@ def test_decision_includes_remediation_fields(defender_client, store):
     assert "remediation_failed" in body
     assert body["remediation_confirmed"] is False
     assert body["remediation_failed"] is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 10 — Confidence score route tests
+# ---------------------------------------------------------------------------
+
+def test_update_config_min_confidence(defender_client, store):
+    defaults = store.get_config()
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/config",
+        json={
+            "enabled": defaults["enabled"],
+            "min_severity": defaults["min_severity"],
+            "tier2_delay_minutes": defaults["tier2_delay_minutes"],
+            "dry_run": defaults["dry_run"],
+            "entity_cooldown_hours": defaults["entity_cooldown_hours"],
+            "alert_dedup_window_minutes": defaults["alert_dedup_window_minutes"],
+            "min_confidence": 70,
+        },
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["min_confidence"] == 70
+
+
+def test_get_config_includes_min_confidence(defender_client, store):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/config",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert "min_confidence" in resp.json()
+
+
+def test_decision_includes_confidence_score(defender_client, store):
+    row = store.create_decision(
+        decision_id="dec-confroute",
+        run_id="run-cr",
+        alert_id="alert-cr",
+        alert_title="Test Confidence",
+        alert_severity="high",
+        alert_category="Malware",
+        alert_created_at="2026-04-16T00:00:00Z",
+        service_source="mde",
+        tier=1,
+        decision="execute",
+        action_type="revoke_sessions",
+        action_types=["revoke_sessions"],
+        job_ids=[],
+        reason="test",
+        entities=[],
+        confidence_score=85,
+    )
+    resp = defender_client.get(
+        f"/api/azure/security/defender-agent/decisions/{row['decision_id']}",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "confidence_score" in body
+    assert body["confidence_score"] == 85
