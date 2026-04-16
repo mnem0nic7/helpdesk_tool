@@ -680,6 +680,63 @@ def _classify_alert(alert: dict[str, Any], min_severity: str) -> tuple[int | Non
     return None, "skip", [], "Alert category/title did not match any decision rule."
 
 
+def _check_entity_cooldown(
+    entities: list[dict[str, Any]],
+    action_types: list[str],
+    recent_actions: dict[str, set[str]],
+) -> tuple[bool, str]:
+    """Return (on_cooldown, reason) if any entity already had the same action dispatched recently.
+
+    ``recent_actions`` maps entity_id → set of dispatched action_types (built
+    from defender_agent_store.get_recent_entity_actions()).
+
+    Cooldown fires when ALL actionable entities for a given action type are
+    already covered.  If at least one entity is new or uncooled, we let the
+    cycle proceed — the dispatch handlers already target only the relevant IDs.
+    """
+    if not recent_actions or not action_types or not entities:
+        return False, ""
+
+    for at in action_types:
+        # Determine which entity types this action targets
+        is_user_action = at in (
+            "revoke_sessions", "disable_sign_in", "account_lockout",
+            "reset_password",
+        )
+        is_device_action = at in (
+            "isolate_device", "unisolate_device", "run_av_scan",
+            "device_sync", "device_wipe", "device_retire",
+            "restrict_app_execution", "unrestrict_app_execution",
+            "collect_investigation_package", "start_investigation",
+            "stop_and_quarantine_file", "create_block_indicator",
+        )
+        if not is_user_action and not is_device_action:
+            continue
+
+        if is_user_action:
+            target_entities = [e for e in entities if e.get("type") == "user" and e.get("id")]
+        else:
+            target_entities = [e for e in entities if e.get("type") == "device" and e.get("id")]
+
+        if not target_entities:
+            continue
+
+        cooled = [
+            e for e in target_entities
+            if at in recent_actions.get(str(e["id"]), set())
+        ]
+        if cooled and len(cooled) == len(target_entities):
+            names = ", ".join(e.get("name") or e["id"] for e in cooled[:2])
+            if len(cooled) > 2:
+                names += f" +{len(cooled) - 2}"
+            return True, (
+                f"Cooldown: {at.replace('_', ' ')} was already applied to "
+                f"{names} within the cooldown window."
+            )
+
+    return False, ""
+
+
 def _is_suppressed(
     alert: dict[str, Any],
     entities: list[dict[str, Any]],
@@ -903,6 +960,11 @@ def _run_agent_cycle() -> None:
         jobs_dispatched = 0
 
         active_suppressions = defender_agent_store.get_active_suppressions()
+        cooldown_hours = int(config.get("entity_cooldown_hours") or 24)
+        recent_entity_actions = (
+            defender_agent_store.get_recent_entity_actions(hours=cooldown_hours)
+            if cooldown_hours > 0 else {}
+        )
 
         for alert in new_alerts:
             alert_id = alert.get("id", uuid.uuid4().hex)
@@ -944,6 +1006,39 @@ def _run_agent_cycle() -> None:
             tier, decision_type, action_types, reason = _classify_alert(alert, min_severity)
             # Primary action_type is first in list (for display / backward compat)
             action_type = action_types[0] if action_types else ""
+
+            # Entity cooldown check: skip if all target entities already had this action recently
+            if decision_type in ("execute", "queue") and cooldown_hours > 0:
+                on_cooldown, cooldown_reason = _check_entity_cooldown(
+                    entities, action_types, recent_entity_actions
+                )
+                if on_cooldown:
+                    decision_id = uuid.uuid4().hex
+                    defender_agent_store.create_decision(
+                        decision_id=decision_id,
+                        run_id=run_id,
+                        alert_id=alert_id,
+                        alert_title=alert_title,
+                        alert_severity=alert_severity,
+                        alert_category=str(alert.get("category") or ""),
+                        alert_created_at=str(alert.get("createdDateTime") or ""),
+                        service_source=alert_service_source,
+                        entities=entities,
+                        tier=tier,
+                        decision="skip",
+                        action_type=action_type,
+                        action_types=action_types,
+                        job_ids=[],
+                        reason=cooldown_reason,
+                        not_before_at=None,
+                        alert_raw=alert,
+                        mitre_techniques=mitre_techniques,
+                    )
+                    decisions_made += 1
+                    skip_count += 1
+                    logger.info("Defender agent: cooldown skip for alert %s — %s", alert_id, cooldown_reason)
+                    continue
+
             decision_id = uuid.uuid4().hex
             not_before_at: str | None = None
 

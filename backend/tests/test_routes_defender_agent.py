@@ -358,3 +358,47 @@ def test_delete_suppression_not_found(defender_client):
 def test_suppressions_404_on_primary_host(defender_client):
     resp = defender_client.get("/api/azure/security/defender-agent/suppressions")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — entity_cooldown_hours config route
+# ---------------------------------------------------------------------------
+
+def test_get_config_includes_entity_cooldown_hours(defender_client):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/config", headers=AZURE_HOST
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "entity_cooldown_hours" in body
+    assert isinstance(body["entity_cooldown_hours"], int)
+
+
+def test_update_config_entity_cooldown_hours(defender_client):
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/config",
+        json={"enabled": True, "entity_cooldown_hours": 48},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["entity_cooldown_hours"] == 48
+
+
+def test_update_config_entity_cooldown_hours_zero(defender_client):
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/config",
+        json={"enabled": True, "entity_cooldown_hours": 0},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["entity_cooldown_hours"] == 0
+
+
+def test_update_config_entity_cooldown_hours_max(defender_client):
+    resp = defender_client.put(
+        "/api/azure/security/defender-agent/config",
+        json={"enabled": True, "entity_cooldown_hours": 168},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["entity_cooldown_hours"] == 168

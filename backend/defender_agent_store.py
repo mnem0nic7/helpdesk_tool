@@ -141,6 +141,7 @@ class DefenderAgentStore:
                 )""",
             "CREATE INDEX IF NOT EXISTS idx_defender_suppressions_active ON defender_agent_suppressions (active, expires_at)",
             "ALTER TABLE defender_agent_decisions ADD COLUMN mitre_techniques_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE defender_agent_config ADD COLUMN entity_cooldown_hours INTEGER NOT NULL DEFAULT 24",
         ):
             try:
                 with self._conn() as _mc:
@@ -159,6 +160,7 @@ class DefenderAgentStore:
         "min_severity": "medium",
         "tier2_delay_minutes": 15,
         "dry_run": False,
+        "entity_cooldown_hours": 24,
         "updated_at": "",
         "updated_by": "",
     }
@@ -171,6 +173,9 @@ class DefenderAgentStore:
         d = dict(row)
         d["enabled"] = bool(d["enabled"])
         d["dry_run"] = bool(d["dry_run"])
+        # Column may not exist on older DBs before migration runs
+        if "entity_cooldown_hours" not in d:
+            d["entity_cooldown_hours"] = 24
         return d
 
     def upsert_config(
@@ -180,6 +185,7 @@ class DefenderAgentStore:
         min_severity: str,
         tier2_delay_minutes: int,
         dry_run: bool,
+        entity_cooldown_hours: int = 24,
         updated_by: str = "",
     ) -> dict[str, Any]:
         p = self._placeholder()
@@ -188,17 +194,20 @@ class DefenderAgentStore:
             conn.execute(
                 f"""
                 INSERT INTO defender_agent_config
-                    (id, enabled, min_severity, tier2_delay_minutes, dry_run, updated_at, updated_by)
-                VALUES (1, {p}, {p}, {p}, {p}, {p}, {p})
+                    (id, enabled, min_severity, tier2_delay_minutes, dry_run,
+                     entity_cooldown_hours, updated_at, updated_by)
+                VALUES (1, {p}, {p}, {p}, {p}, {p}, {p}, {p})
                 ON CONFLICT(id) DO UPDATE SET
-                    enabled             = excluded.enabled,
-                    min_severity        = excluded.min_severity,
-                    tier2_delay_minutes = excluded.tier2_delay_minutes,
-                    dry_run             = excluded.dry_run,
-                    updated_at          = excluded.updated_at,
-                    updated_by          = excluded.updated_by
+                    enabled               = excluded.enabled,
+                    min_severity          = excluded.min_severity,
+                    tier2_delay_minutes   = excluded.tier2_delay_minutes,
+                    dry_run               = excluded.dry_run,
+                    entity_cooldown_hours = excluded.entity_cooldown_hours,
+                    updated_at            = excluded.updated_at,
+                    updated_by            = excluded.updated_by
                 """,
-                (int(enabled), min_severity, tier2_delay_minutes, int(dry_run), now, updated_by),
+                (int(enabled), min_severity, tier2_delay_minutes, int(dry_run),
+                 entity_cooldown_hours, now, updated_by),
             )
             conn.commit()
         return self.get_config()
@@ -536,6 +545,49 @@ class DefenderAgentStore:
 
     def get_active_suppressions(self) -> list[dict[str, Any]]:
         return self.list_suppressions(include_inactive=False)
+
+    # -------------------------------------------------------------------------
+    # Entity cooldown
+    # -------------------------------------------------------------------------
+
+    def get_recent_entity_actions(self, hours: int = 24) -> dict[str, set[str]]:
+        """Return {entity_id: {action_types}} for non-skip decisions in the last N hours.
+
+        Used by the agent cycle to detect when an entity has already been
+        acted on recently so the same action is not repeated.
+        Only decisions that produced jobs (i.e. the action was actually dispatched)
+        are counted — queued-but-not-yet-executed T2 rows and recommend-only rows
+        are excluded so the cooldown doesn't block the original dispatch.
+        """
+        if hours <= 0:
+            return {}
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        p = self._placeholder()
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT entities_json, action_types_json, action_type
+                  FROM defender_agent_decisions
+                 WHERE executed_at >= {p}
+                   AND decision != 'skip'
+                   AND job_ids_json != '[]'
+                """,
+                (since,),
+            ).fetchall()
+        result: dict[str, set[str]] = {}
+        for row in rows:
+            entities = json.loads(row["entities_json"] or "[]")
+            ats = json.loads(row["action_types_json"] or "[]")
+            if not ats and row["action_type"]:
+                ats = [row["action_type"]]
+            for entity in entities:
+                eid = str(entity.get("id") or "")
+                if not eid:
+                    continue
+                if eid not in result:
+                    result[eid] = set()
+                result[eid].update(ats)
+        return result
 
     @staticmethod
     def _row_to_decision(d: dict[str, Any], *, include_raw: bool = False) -> dict[str, Any]:

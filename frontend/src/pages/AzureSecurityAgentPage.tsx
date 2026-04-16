@@ -133,6 +133,7 @@ function ConfigDrawer({
     min_severity: config.min_severity,
     tier2_delay_minutes: config.tier2_delay_minutes,
     dry_run: config.dry_run,
+    entity_cooldown_hours: config.entity_cooldown_hours ?? 24,
   });
 
   return (
@@ -183,6 +184,17 @@ function ConfigDrawer({
             className="mt-1 block w-24 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
           />
         </label>
+        <label className="block">
+          <span className="text-xs text-gray-500">Entity cooldown (hours)</span>
+          <input
+            type="number"
+            min={0}
+            max={168}
+            value={local.entity_cooldown_hours ?? 24}
+            onChange={(e) => setLocal((p) => ({ ...p, entity_cooldown_hours: Math.max(0, Math.min(168, parseInt(e.target.value) || 0)) }))}
+            className="mt-1 block w-24 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+          />
+        </label>
         <button
           onClick={() => onSave(local)}
           disabled={saving}
@@ -191,9 +203,10 @@ function ConfigDrawer({
           {saving ? "Saving…" : "Save"}
         </button>
       </div>
-      <p className="text-xs text-gray-400">
-        T2 delay: the window an operator has to cancel a sign-in disable before it executes. 0 = immediate.
-      </p>
+      <div className="text-xs text-gray-400 space-y-0.5">
+        <p>T2 delay: the window an operator has to cancel a sign-in disable before it executes. 0 = immediate.</p>
+        <p>Entity cooldown: suppress repeat actions on the same user or device within this window. 0 = disabled.</p>
+      </div>
     </div>
   );
 }

@@ -805,3 +805,99 @@ def test_extract_mitre_ignores_non_string_entries():
     assert "T1078" in result
     assert "T1110" in result
     assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — _check_entity_cooldown
+# ---------------------------------------------------------------------------
+
+def test_cooldown_empty_recent_actions_no_cooldown():
+    from defender_agent import _check_entity_cooldown
+    entities = [{"type": "user", "id": "u1", "name": "Alice"}]
+    action_types = ["revoke_sessions"]
+    triggered, reason = _check_entity_cooldown(entities, action_types, {})
+    assert not triggered
+    assert reason == ""
+
+
+def test_cooldown_no_action_types_no_cooldown():
+    from defender_agent import _check_entity_cooldown
+    entities = [{"type": "user", "id": "u1", "name": "Alice"}]
+    triggered, reason = _check_entity_cooldown(entities, [], {"u1": {"revoke_sessions"}})
+    assert not triggered
+
+
+def test_cooldown_no_entities_no_cooldown():
+    from defender_agent import _check_entity_cooldown
+    triggered, reason = _check_entity_cooldown([], ["revoke_sessions"], {"u1": {"revoke_sessions"}})
+    assert not triggered
+
+
+def test_cooldown_user_action_all_cooled():
+    from defender_agent import _check_entity_cooldown
+    entities = [{"type": "user", "id": "u1", "name": "Alice"}]
+    recent = {"u1": {"revoke_sessions"}}
+    triggered, reason = _check_entity_cooldown(entities, ["revoke_sessions"], recent)
+    assert triggered
+    assert "revoke_sessions" in reason.lower() or "revoke" in reason.lower()
+
+
+def test_cooldown_user_action_only_partial_cooled_no_trigger():
+    from defender_agent import _check_entity_cooldown
+    entities = [
+        {"type": "user", "id": "u1", "name": "Alice"},
+        {"type": "user", "id": "u2", "name": "Bob"},
+    ]
+    recent = {"u1": {"revoke_sessions"}}  # u2 not cooled
+    triggered, reason = _check_entity_cooldown(entities, ["revoke_sessions"], recent)
+    assert not triggered
+
+
+def test_cooldown_device_action_all_cooled():
+    from defender_agent import _check_entity_cooldown
+    entities = [{"type": "device", "id": "dev1", "name": "WS-01"}]
+    recent = {"dev1": {"isolate_device"}}
+    triggered, reason = _check_entity_cooldown(entities, ["isolate_device"], recent)
+    assert triggered
+
+
+def test_cooldown_different_action_type_no_trigger():
+    from defender_agent import _check_entity_cooldown
+    entities = [{"type": "user", "id": "u1", "name": "Alice"}]
+    recent = {"u1": {"revoke_sessions"}}
+    triggered, reason = _check_entity_cooldown(entities, ["disable_sign_in"], recent)
+    assert not triggered
+
+
+def test_cooldown_unknown_action_type_skipped():
+    from defender_agent import _check_entity_cooldown
+    entities = [{"type": "user", "id": "u1", "name": "Alice"}]
+    recent = {"u1": {"some_unknown_action"}}
+    triggered, reason = _check_entity_cooldown(entities, ["some_unknown_action"], recent)
+    assert not triggered
+
+
+def test_cooldown_multiple_action_types_one_cooled_triggers():
+    from defender_agent import _check_entity_cooldown
+    entities = [{"type": "user", "id": "u1", "name": "Alice"}]
+    recent = {"u1": {"disable_sign_in"}}
+    triggered, reason = _check_entity_cooldown(entities, ["revoke_sessions", "disable_sign_in"], recent)
+    # disable_sign_in is cooled for u1 → should trigger on that action
+    assert triggered
+
+
+def test_cooldown_entity_without_id_ignored():
+    from defender_agent import _check_entity_cooldown
+    entities = [{"type": "user", "name": "Alice"}]  # no id
+    recent = {"": {"revoke_sessions"}}
+    triggered, reason = _check_entity_cooldown(entities, ["revoke_sessions"], recent)
+    assert not triggered
+
+
+def test_cooldown_reason_mentions_entity_name():
+    from defender_agent import _check_entity_cooldown
+    entities = [{"type": "device", "id": "dev42", "name": "WS-PROD"}]
+    recent = {"dev42": {"isolate_device"}}
+    triggered, reason = _check_entity_cooldown(entities, ["isolate_device"], recent)
+    assert triggered
+    assert "WS-PROD" in reason
