@@ -120,6 +120,20 @@ class DefenderAgentStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_defender_suppressions_active
                     ON defender_agent_suppressions (active, expires_at);
+
+                CREATE TABLE IF NOT EXISTS defender_agent_watchlist (
+                    id           TEXT PRIMARY KEY,
+                    entity_type  TEXT NOT NULL,
+                    entity_id    TEXT NOT NULL,
+                    entity_name  TEXT NOT NULL DEFAULT '',
+                    reason       TEXT NOT NULL DEFAULT '',
+                    boost_tier   INTEGER NOT NULL DEFAULT 0,
+                    created_by   TEXT NOT NULL DEFAULT '',
+                    created_at   TEXT NOT NULL,
+                    active       INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_defender_watchlist_entity
+                    ON defender_agent_watchlist (entity_id, active);
                 """
             )
             conn.commit()
@@ -153,6 +167,19 @@ class DefenderAgentStore:
             "ALTER TABLE defender_agent_decisions ADD COLUMN disposition_by TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE defender_agent_decisions ADD COLUMN disposition_at TEXT",
             "ALTER TABLE defender_agent_decisions ADD COLUMN investigation_notes_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN watchlisted_entities_json TEXT NOT NULL DEFAULT '[]'",
+            """CREATE TABLE IF NOT EXISTS defender_agent_watchlist (
+                    id           TEXT PRIMARY KEY,
+                    entity_type  TEXT NOT NULL,
+                    entity_id    TEXT NOT NULL,
+                    entity_name  TEXT NOT NULL DEFAULT '',
+                    reason       TEXT NOT NULL DEFAULT '',
+                    boost_tier   INTEGER NOT NULL DEFAULT 0,
+                    created_by   TEXT NOT NULL DEFAULT '',
+                    created_at   TEXT NOT NULL,
+                    active       INTEGER NOT NULL DEFAULT 1
+                )""",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_defender_watchlist_entity ON defender_agent_watchlist (entity_id, active)",
         ):
             try:
                 with self._conn() as _mc:
@@ -310,6 +337,7 @@ class DefenderAgentStore:
         alert_raw: dict[str, Any] | None = None,
         mitre_techniques: list[str] | None = None,
         confidence_score: int = 0,
+        watchlisted_entities: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         p = self._placeholder()
         now = _now()
@@ -323,8 +351,8 @@ class DefenderAgentStore:
                     alert_category, alert_created_at, service_source, entities_json,
                     tier, decision, action_type, action_types_json, job_ids_json, reason,
                     executed_at, not_before_at, alert_raw_json, mitre_techniques_json,
-                    confidence_score
-                ) VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+                    confidence_score, watchlisted_entities_json
+                ) VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
                 """,
                 (
                     decision_id, run_id, alert_id, alert_title, alert_severity,
@@ -334,6 +362,7 @@ class DefenderAgentStore:
                     json.dumps(alert_raw) if alert_raw else "",
                     json.dumps(mitre_techniques or []),
                     confidence_score,
+                    json.dumps(watchlisted_entities or []),
                 ),
             )
             conn.commit()
@@ -739,6 +768,8 @@ class DefenderAgentStore:
         d.setdefault("disposition_at", None)
         raw_notes = d.pop("investigation_notes_json", "[]") or "[]"
         d["investigation_notes"] = json.loads(raw_notes)
+        raw_wl = d.pop("watchlisted_entities_json", "[]") or "[]"
+        d["watchlisted_entities"] = json.loads(raw_wl)
         return d
 
 
@@ -827,6 +858,105 @@ class DefenderAgentStore:
             )
             conn.commit()
         return self.get_decision(decision_id)
+
+    # -------------------------------------------------------------------------
+    # Watchlist
+    # -------------------------------------------------------------------------
+
+    _VALID_WATCHLIST_ENTITY_TYPES = {"user", "device"}
+
+    def add_watchlist_entry(
+        self,
+        entity_type: str,
+        entity_id: str,
+        entity_name: str = "",
+        reason: str = "",
+        boost_tier: bool = False,
+        created_by: str = "",
+    ) -> dict[str, Any]:
+        """Add an entity to the watchlist.
+
+        If the entity_id is already active in the watchlist, updates the
+        existing entry's metadata instead of inserting a duplicate.
+        """
+        if entity_type not in self._VALID_WATCHLIST_ENTITY_TYPES:
+            raise ValueError(f"entity_type must be one of {self._VALID_WATCHLIST_ENTITY_TYPES}")
+        entity_id = (entity_id or "").strip()
+        if not entity_id:
+            raise ValueError("entity_id cannot be empty")
+        p = self._placeholder()
+        now = _now()
+        entry_id = str(uuid.uuid4())
+        with self._conn() as conn:
+            # Check if already active
+            existing = conn.execute(
+                f"SELECT id FROM defender_agent_watchlist WHERE entity_id = {p} AND active = 1",
+                (entity_id,),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    f"""
+                    UPDATE defender_agent_watchlist
+                       SET entity_type = {p}, entity_name = {p}, reason = {p},
+                           boost_tier = {p}, created_by = {p}, created_at = {p}
+                     WHERE id = {p}
+                    """,
+                    (entity_type, entity_name, reason, int(boost_tier), created_by, now, existing["id"]),
+                )
+                entry_id = existing["id"]
+            else:
+                conn.execute(
+                    f"""
+                    INSERT INTO defender_agent_watchlist
+                        (id, entity_type, entity_id, entity_name, reason, boost_tier, created_by, created_at, active)
+                    VALUES ({p},{p},{p},{p},{p},{p},{p},{p},1)
+                    """,
+                    (entry_id, entity_type, entity_id, entity_name, reason, int(boost_tier), created_by, now),
+                )
+            conn.commit()
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT * FROM defender_agent_watchlist WHERE id = {p}", (entry_id,)
+            ).fetchone()
+        return self._row_to_watchlist(dict(row))
+
+    def remove_watchlist_entry(self, entry_id: str) -> bool:
+        """Deactivate a watchlist entry. Returns True if found, False otherwise."""
+        p = self._placeholder()
+        with self._conn() as conn:
+            cur = conn.execute(
+                f"UPDATE defender_agent_watchlist SET active = 0 WHERE id = {p} AND active = 1",
+                (entry_id,),
+            )
+            conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    def list_watchlist(self, *, include_inactive: bool = False) -> list[dict[str, Any]]:
+        """Return watchlist entries, newest first."""
+        with self._conn() as conn:
+            if include_inactive:
+                rows = conn.execute(
+                    "SELECT * FROM defender_agent_watchlist ORDER BY created_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM defender_agent_watchlist WHERE active = 1 ORDER BY created_at DESC"
+                ).fetchall()
+        return [self._row_to_watchlist(dict(r)) for r in rows]
+
+    def get_watchlist_lookup(self) -> dict[str, dict[str, Any]]:
+        """Return a lookup dict keyed by lower-cased entity_id for the active watchlist.
+
+        Used by the agent cycle to check entities in O(1).
+        """
+        entries = self.list_watchlist()
+        return {e["entity_id"].lower(): e for e in entries}
+
+    @staticmethod
+    def _row_to_watchlist(d: dict[str, Any]) -> dict[str, Any]:
+        d["active"] = bool(d.get("active", 1))
+        d["boost_tier"] = bool(d.get("boost_tier", 0))
+        return d
 
     # -------------------------------------------------------------------------
     # Investigation notes

@@ -19,6 +19,9 @@ from models import (
     DefenderAgentSummaryResponse,
     DefenderAgentMetrics,
     DefenderAgentNoteCreate,
+    DefenderAgentWatchlistCreate,
+    DefenderAgentWatchlistEntry,
+    DefenderAgentWatchlistResponse,
     DefenderAgentSuppressionCreate,
     DefenderAgentSuppressionItem,
     DefenderAgentSuppressionsResponse,
@@ -467,6 +470,51 @@ def add_investigation_note(
     if result is None:
         raise HTTPException(status_code=404, detail="Decision not found")
     return result
+
+
+# ---------------------------------------------------------------------------
+# Watchlist
+# ---------------------------------------------------------------------------
+
+@router.get("/watchlist", response_model=DefenderAgentWatchlistResponse)
+def list_watchlist(
+    include_inactive: bool = Query(False),
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    _ensure_azure_site()
+    entries = defender_agent_store.list_watchlist(include_inactive=include_inactive)
+    return {"entries": entries, "total": len(entries)}
+
+
+@router.post("/watchlist", response_model=DefenderAgentWatchlistEntry)
+def add_watchlist_entry(
+    body: DefenderAgentWatchlistCreate,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    try:
+        return defender_agent_store.add_watchlist_entry(
+            body.entity_type,
+            body.entity_id,
+            entity_name=body.entity_name,
+            reason=body.reason,
+            boost_tier=body.boost_tier,
+            created_by=str(_session.get("email") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.delete("/watchlist/{entry_id}")
+def remove_watchlist_entry(
+    entry_id: str,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    found = defender_agent_store.remove_watchlist_entry(entry_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Watchlist entry not found")
+    return {"deleted": True, "id": entry_id}
 
 
 # ---------------------------------------------------------------------------

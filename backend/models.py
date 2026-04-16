@@ -2492,6 +2492,7 @@ class DefenderAgentDecisionItem(BaseModel):
     disposition_by: str = ""
     disposition_at: Optional[str] = None
     investigation_notes: list[dict[str, Any]] = Field(default_factory=list)
+    watchlisted_entities: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DefenderAgentDecisionsResponse(BaseModel):
@@ -2506,6 +2507,31 @@ class DefenderAgentDispositionUpdate(BaseModel):
 
 class DefenderAgentNoteCreate(BaseModel):
     text: str = Field(..., min_length=1, max_length=5000)
+
+
+class DefenderAgentWatchlistEntry(BaseModel):
+    id: str
+    entity_type: str
+    entity_id: str
+    entity_name: str = ""
+    reason: str = ""
+    boost_tier: bool = False
+    created_by: str = ""
+    created_at: str = ""
+    active: bool = True
+
+
+class DefenderAgentWatchlistCreate(BaseModel):
+    entity_type: Literal["user", "device"]
+    entity_id: str = Field(..., min_length=1, max_length=500)
+    entity_name: str = Field(default="", max_length=500)
+    reason: str = Field(default="", max_length=1000)
+    boost_tier: bool = False
+
+
+class DefenderAgentWatchlistResponse(BaseModel):
+    entries: list[DefenderAgentWatchlistEntry]
+    total: int
 
 
 class DefenderAgentDispositionStats(BaseModel):

@@ -806,3 +806,81 @@ def test_decision_includes_investigation_notes_field(defender_client, store):
     body = resp.json()
     assert "investigation_notes" in body
     assert body["investigation_notes"] == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 16: Watchlist routes
+# ---------------------------------------------------------------------------
+
+def test_get_watchlist_empty(defender_client, store):
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/watchlist",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["entries"] == []
+    assert body["total"] == 0
+
+
+def test_add_watchlist_entry_admin(defender_client, store):
+    resp = defender_client.post(
+        "/api/azure/security/defender-agent/watchlist",
+        json={"entity_type": "user", "entity_id": "vip@example.com", "reason": "VIP", "boost_tier": True},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["entity_id"] == "vip@example.com"
+    assert body["boost_tier"] is True
+
+
+def test_get_watchlist_returns_entry(defender_client, store):
+    defender_client.post(
+        "/api/azure/security/defender-agent/watchlist",
+        json={"entity_type": "device", "entity_id": "LAPTOP-001"},
+        headers=AZURE_HOST,
+    )
+    resp = defender_client.get(
+        "/api/azure/security/defender-agent/watchlist",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 1
+
+
+def test_remove_watchlist_entry(defender_client, store):
+    add_resp = defender_client.post(
+        "/api/azure/security/defender-agent/watchlist",
+        json={"entity_type": "user", "entity_id": "del@example.com"},
+        headers=AZURE_HOST,
+    )
+    entry_id = add_resp.json()["id"]
+    del_resp = defender_client.delete(
+        f"/api/azure/security/defender-agent/watchlist/{entry_id}",
+        headers=AZURE_HOST,
+    )
+    assert del_resp.status_code == 200
+    # Should be gone
+    list_resp = defender_client.get(
+        "/api/azure/security/defender-agent/watchlist",
+        headers=AZURE_HOST,
+    )
+    assert list_resp.json()["total"] == 0
+
+
+def test_remove_watchlist_not_found_404(defender_client, store):
+    resp = defender_client.delete(
+        "/api/azure/security/defender-agent/watchlist/nonexistent",
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 404
+
+
+def test_watchlist_invalid_entity_type_422(defender_client, store):
+    resp = defender_client.post(
+        "/api/azure/security/defender-agent/watchlist",
+        json={"entity_type": "ip", "entity_id": "1.2.3.4"},
+        headers=AZURE_HOST,
+    )
+    assert resp.status_code == 422

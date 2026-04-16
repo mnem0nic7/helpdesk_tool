@@ -1563,6 +1563,19 @@ export interface DefenderAgentDecision {
   disposition_by: string;
   disposition_at: string | null;
   investigation_notes: Array<{ text: string; by: string; at: string }>;
+  watchlisted_entities: Array<{ id: string; entity_id: string; entity_name: string; entity_type: string; boost_tier: boolean; reason: string }>;
+}
+
+export interface DefenderAgentWatchlistEntry {
+  id: string;
+  entity_type: "user" | "device";
+  entity_id: string;
+  entity_name: string;
+  reason: string;
+  boost_tier: boolean;
+  created_by: string;
+  created_at: string;
+  active: boolean;
 }
 
 export interface DefenderAgentDecisionsResponse {
@@ -3892,6 +3905,18 @@ export const api = {
       `/api/azure/security/defender-agent/decisions/${decisionId}/notes`,
       { text }
     );
+  },
+  listWatchlist(includeInactive = false): Promise<{ entries: DefenderAgentWatchlistEntry[]; total: number }> {
+    return fetchJSON(`/api/azure/security/defender-agent/watchlist?include_inactive=${includeInactive}`);
+  },
+  addWatchlistEntry(entry: { entity_type: string; entity_id: string; entity_name?: string; reason?: string; boost_tier?: boolean }): Promise<DefenderAgentWatchlistEntry> {
+    return postJSON("/api/azure/security/defender-agent/watchlist", entry);
+  },
+  removeWatchlistEntry(entryId: string): Promise<void> {
+    return fetch(`/api/azure/security/defender-agent/watchlist/${encodeURIComponent(entryId)}`, { method: "DELETE" }).then(async res => {
+      if (res.status === 401) { window.location.href = "/api/auth/login"; throw new Error("Not authenticated"); }
+      if (!res.ok) { const t = await res.text(); throw new Error(t || `HTTP ${res.status}`); }
+    });
   },
   listDefenderIndicators(): Promise<{ indicators: DefenderIndicator[]; total: number }> {
     return fetchJSON<{ indicators: DefenderIndicator[]; total: number }>(

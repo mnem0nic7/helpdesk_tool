@@ -1218,6 +1218,9 @@ def _run_agent_cycle() -> None:
         # Build entity enrichment indexes once per cycle (best-effort, never raises)
         _user_index, _device_index = _build_entity_indexes()
 
+        # Build watchlist lookup once per cycle: lower-cased entity_id → entry
+        watchlist_lookup = defender_agent_store.get_watchlist_lookup()
+
         for alert in new_alerts:
             alert_id = alert.get("id", uuid.uuid4().hex)
             alert_title = str(alert.get("title") or "")
@@ -1268,6 +1271,25 @@ def _run_agent_cycle() -> None:
                 )
                 tier = 3
                 decision_type = "recommend"
+
+            # Watchlist check: flag entities and optionally boost tier one level
+            matched_watchlist: list[dict] = []
+            for entity in entities:
+                eid = str(entity.get("id") or entity.get("name") or "").lower()
+                if eid and eid in watchlist_lookup:
+                    entry = watchlist_lookup[eid]
+                    matched_watchlist.append(entry)
+            if matched_watchlist:
+                # Boost one tier if any matched entry has boost_tier enabled
+                if any(e.get("boost_tier") for e in matched_watchlist):
+                    if decision_type == "recommend":
+                        tier = 2
+                        decision_type = "queue"
+                        reason = "[Watchlist boost T3→T2] " + reason
+                    elif decision_type == "queue":
+                        tier = 1
+                        decision_type = "execute"
+                        reason = "[Watchlist boost T2→T1] " + reason
 
             # Deduplication check: skip if we already have a non-skip decision for these
             # entities + actions within the dedup window (catches within-cycle duplicates too)
@@ -1364,6 +1386,7 @@ def _run_agent_cycle() -> None:
                 alert_raw=alert,
                 mitre_techniques=mitre_techniques,
                 confidence_score=confidence_score,
+                watchlisted_entities=matched_watchlist,
             )
             decisions_made += 1
             if decision_type == "skip":

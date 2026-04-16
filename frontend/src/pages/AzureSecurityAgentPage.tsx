@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { DefenderAgentConfig, DefenderAgentDecision, DefenderAgentDispositionStats, DefenderAgentEntityTimeline, DefenderAgentMetrics, DefenderAgentSuppression, DefenderSuppressionType } from "../lib/api.ts";
+import type { DefenderAgentConfig, DefenderAgentDecision, DefenderAgentDispositionStats, DefenderAgentEntityTimeline, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 // ---------------------------------------------------------------------------
@@ -283,9 +283,11 @@ function priorityBandColor(band: string | undefined): string {
 function EntityChips({
   entities,
   onEntityClick,
+  watchlistedIds,
 }: {
   entities: DefenderAgentDecision["entities"];
   onEntityClick?: (entityId: string, entityName: string) => void;
+  watchlistedIds?: Set<string>;
 }) {
   if (!entities.length) return null;
   const shown = entities.slice(0, 2);
@@ -300,10 +302,11 @@ function EntityChips({
           e.enabled === false ? "DISABLED" : "",
         ].filter(Boolean).join(" | ");
         const entityLookupKey = e.id || e.name;
+        const isWatchlisted = watchlistedIds && entityLookupKey ? watchlistedIds.has((entityLookupKey).toLowerCase()) : false;
         return (
           <span
             key={i}
-            className={`inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600 ${onEntityClick ? "cursor-pointer hover:bg-gray-200" : ""}`}
+            className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs ${isWatchlisted ? "bg-amber-100 text-amber-800 ring-1 ring-amber-300" : "bg-gray-100 text-gray-600"} ${onEntityClick ? "cursor-pointer hover:bg-gray-200" : ""}`}
             title={onEntityClick ? `${tooltip} — click to view timeline` : tooltip || `${e.type}: ${e.id}`}
             onClick={onEntityClick && entityLookupKey ? (ev) => { ev.stopPropagation(); onEntityClick(entityLookupKey, e.name || e.id); } : undefined}
           >
@@ -314,6 +317,11 @@ function EntityChips({
             ) : (
               <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M2 3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9v1h1.5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1H7v-1H3a1 1 0 0 1-1-1V3Z"/>
+              </svg>
+            )}
+            {isWatchlisted && (
+              <svg className="h-3 w-3 shrink-0 text-amber-600" viewBox="0 0 16 16" fill="currentColor" title="Watchlisted entity">
+                <path d="M8 1l1.8 3.6L14 5.3l-3 2.9.7 4.1L8 10.2l-3.7 2.1.7-4.1-3-2.9 4.2-.7L8 1Z"/>
               </svg>
             )}
             <span className="max-w-[140px] truncate">{e.name || e.id}</span>
@@ -1201,7 +1209,11 @@ function DecisionRow({
           {d.alert_title || d.alert_id}
         </div>
         {d.reason && <div className="text-xs text-gray-400 truncate" title={d.reason}>{d.reason}</div>}
-        <EntityChips entities={d.entities} onEntityClick={onOpenEntityTimeline} />
+        <EntityChips
+          entities={d.entities}
+          onEntityClick={onOpenEntityTimeline}
+          watchlistedIds={d.watchlisted_entities?.length ? new Set(d.watchlisted_entities.map(w => w.entity_id?.toLowerCase())) : undefined}
+        />
         {(d.mitre_techniques ?? []).length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {(d.mitre_techniques ?? []).slice(0, 3).map((t) => (
@@ -1402,6 +1414,23 @@ export default function AzureSecurityAgentPage() {
     staleTime: 60_000,
   });
 
+  const watchlistQuery = useQuery({
+    queryKey: ["defender-agent-watchlist"],
+    queryFn: () => api.listWatchlist(),
+    staleTime: 60_000,
+  });
+
+  const addWatchlistMutation = useMutation({
+    mutationFn: (body: { entity_type: string; entity_id: string; entity_name: string; reason: string; boost_tier: boolean }) =>
+      api.addWatchlistEntry(body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-watchlist"] }),
+  });
+
+  const removeWatchlistMutation = useMutation({
+    mutationFn: (id: string) => api.removeWatchlistEntry(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-watchlist"] }),
+  });
+
   const createSuppressionMutation = useMutation({
     mutationFn: (body: { suppression_type: DefenderSuppressionType; value: string; reason: string; expires_at?: string | null }) =>
       api.createDefenderAgentSuppression(body),
@@ -1426,6 +1455,7 @@ export default function AzureSecurityAgentPage() {
   const runs = runsQuery.data ?? [];
   const indicators = indicatorsQuery.data?.indicators ?? [];
   const suppressions = suppressionsQuery.data?.suppressions ?? [];
+  const watchlistEntries = watchlistQuery.data?.entries ?? [];
 
   const [suppressionForm, setSuppressionForm] = useState<{
     suppression_type: DefenderSuppressionType;
@@ -1433,6 +1463,14 @@ export default function AzureSecurityAgentPage() {
     reason: string;
     expires_at: string;
   }>({ suppression_type: "entity_user", value: "", reason: "", expires_at: "" });
+
+  const [watchlistForm, setWatchlistForm] = useState({
+    entity_type: "user" as "user" | "device",
+    entity_id: "",
+    entity_name: "",
+    reason: "",
+    boost_tier: false,
+  });
 
   const isAdmin = me?.is_admin ?? false;
 
@@ -1802,6 +1840,141 @@ export default function AzureSecurityAgentPage() {
             </div>
           );
         })()}
+      </div>
+
+      {/* Watchlist panel (admin write, all read) */}
+      <div className="rounded-lg bg-white shadow">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+          <h2 className="text-lg font-semibold text-gray-900">
+            Entity Watchlist
+            {watchlistEntries.length > 0 && (
+              <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                {watchlistEntries.length} active
+              </span>
+            )}
+          </h2>
+          <span className="text-xs text-gray-400">Watchlisted entities get visual callouts; boost_tier escalates decisions one tier</span>
+        </div>
+
+        {/* Add form (admin only) */}
+        {isAdmin && (
+          <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
+            <div className="flex flex-wrap gap-2 items-end">
+              <label className="block">
+                <span className="text-xs text-gray-500">Type</span>
+                <select
+                  value={watchlistForm.entity_type}
+                  onChange={(e) => setWatchlistForm((p) => ({ ...p, entity_type: e.target.value as "user" | "device" }))}
+                  className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                >
+                  <option value="user">User</option>
+                  <option value="device">Device</option>
+                </select>
+              </label>
+              <label className="block flex-1 min-w-[160px]">
+                <span className="text-xs text-gray-500">Entity ID / UPN</span>
+                <input
+                  type="text"
+                  placeholder="e.g. alice@contoso.com"
+                  value={watchlistForm.entity_id}
+                  onChange={(e) => setWatchlistForm((p) => ({ ...p, entity_id: e.target.value }))}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="block flex-1 min-w-[120px]">
+                <span className="text-xs text-gray-500">Display name (optional)</span>
+                <input
+                  type="text"
+                  placeholder="Alice Smith"
+                  value={watchlistForm.entity_name}
+                  onChange={(e) => setWatchlistForm((p) => ({ ...p, entity_name: e.target.value }))}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="block flex-1 min-w-[120px]">
+                <span className="text-xs text-gray-500">Reason</span>
+                <input
+                  type="text"
+                  placeholder="VIP / Privileged account"
+                  value={watchlistForm.reason}
+                  onChange={(e) => setWatchlistForm((p) => ({ ...p, reason: e.target.value }))}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer self-end pb-1.5">
+                <input
+                  type="checkbox"
+                  checked={watchlistForm.boost_tier}
+                  onChange={(e) => setWatchlistForm((p) => ({ ...p, boost_tier: e.target.checked }))}
+                  className="h-4 w-4 rounded border-gray-300 text-amber-600"
+                />
+                Boost tier
+              </label>
+              <button
+                onClick={() => {
+                  if (!watchlistForm.entity_id.trim()) return;
+                  addWatchlistMutation.mutate(watchlistForm, {
+                    onSuccess: () => setWatchlistForm({ entity_type: "user", entity_id: "", entity_name: "", reason: "", boost_tier: false }),
+                  });
+                }}
+                disabled={!watchlistForm.entity_id.trim() || addWatchlistMutation.isPending}
+                className="self-end rounded-md bg-amber-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-40"
+              >
+                {addWatchlistMutation.isPending ? "Adding…" : "Add"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Watchlist table */}
+        {watchlistEntries.length === 0 ? (
+          <p className="py-6 text-center text-sm text-gray-400">No watchlisted entities.</p>
+        ) : (
+          <table className="min-w-full divide-y divide-gray-100 text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                {["Type", "Entity", "Reason", "Boost tier", "Added by", ""].map((h) => (
+                  <th key={h} className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white">
+              {watchlistEntries.map((w: DefenderAgentWatchlistEntry) => (
+                <tr key={w.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-2 text-xs capitalize text-gray-600">{w.entity_type}</td>
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-1.5">
+                      <svg className="h-3.5 w-3.5 text-amber-500 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 1l1.8 3.6L14 5.3l-3 2.9.7 4.1L8 10.2l-3.7 2.1.7-4.1-3-2.9 4.2-.7L8 1Z"/>
+                      </svg>
+                      <span className="font-medium text-gray-800">{w.entity_name || w.entity_id}</span>
+                    </div>
+                    {w.entity_name && <div className="text-xs text-gray-400 pl-5">{w.entity_id}</div>}
+                  </td>
+                  <td className="px-4 py-2 text-xs text-gray-500">{w.reason || "—"}</td>
+                  <td className="px-4 py-2 text-center">
+                    {w.boost_tier ? (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">Yes</span>
+                    ) : (
+                      <span className="text-gray-400 text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-xs text-gray-400">{w.created_by || "—"}</td>
+                  <td className="px-4 py-2 text-right">
+                    {isAdmin && (
+                      <button
+                        onClick={() => { if (confirm(`Remove ${w.entity_id} from watchlist?`)) removeWatchlistMutation.mutate(w.id); }}
+                        className="text-xs text-red-500 hover:text-red-700"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {/* Suppression rules panel (admin-only) */}
