@@ -19,10 +19,10 @@ router = APIRouter(prefix="/api/azure/security/copilot")
 
 
 def _ensure_azure_site() -> None:
-    if get_current_site_scope() != "azure":
+    if get_current_site_scope() not in ("azure", "security"):
         raise HTTPException(
             status_code=404,
-            detail="Azure security copilot APIs are only available on azure.movedocs.com",
+            detail="Azure security copilot APIs are only available on azure.movedocs.com or security.movedocs.com",
         )
 
 

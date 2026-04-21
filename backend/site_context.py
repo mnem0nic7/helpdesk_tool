@@ -7,10 +7,10 @@ from typing import Any, Literal
 
 from fastapi import Request
 
-from config import AZURE_APP_HOST, OASISDEV_APP_HOST, PRIMARY_APP_HOST
+from config import AZURE_APP_HOST, OASISDEV_APP_HOST, PRIMARY_APP_HOST, SECURITY_APP_HOST
 from jira_client import JiraClient
 
-SiteScope = Literal["primary", "oasisdev", "azure"]
+SiteScope = Literal["primary", "oasisdev", "azure", "security"]
 
 _site_scope_var: ContextVar[SiteScope] = ContextVar("site_scope", default="primary")
 
@@ -39,6 +39,14 @@ _SITE_PROFILES: dict[SiteScope, dict[str, str]] = {
         "alert_prefix": "Azure",
         "report_prefix": "Azure",
     },
+    "security": {
+        "scope": "security",
+        "host": SECURITY_APP_HOST,
+        "app_name": "Security Portal",
+        "dashboard_name": "Security Portal",
+        "alert_prefix": "Security",
+        "report_prefix": "Security",
+    },
 }
 
 
@@ -57,6 +65,8 @@ def get_site_scope_for_host(host: str | None) -> SiteScope:
     normalized = normalize_host(host)
     if normalized == normalize_host(AZURE_APP_HOST):
         return "azure"
+    if normalized == normalize_host(SECURITY_APP_HOST):
+        return "security"
     if normalized == normalize_host(OASISDEV_APP_HOST):
         return "oasisdev"
     return "primary"
@@ -93,7 +103,7 @@ def get_site_profile(scope: SiteScope | None = None) -> dict[str, str]:
 
 def issue_matches_scope(issue: dict[str, Any], scope: SiteScope) -> bool:
     """Return True when an issue belongs on the given site."""
-    if scope == "azure":
+    if scope in ("azure", "security"):
         return False
     if not JiraClient.is_tracked_issue(issue):
         return False
@@ -123,7 +133,7 @@ def get_scoped_issues(*, include_excluded_on_primary: bool = False) -> list[dict
 
     all_issues = cache.get_all_issues()
     scope = get_current_site_scope()
-    if scope == "azure":
+    if scope in ("azure", "security"):
         return []
     if scope == "primary" and include_excluded_on_primary:
         return [issue for issue in all_issues if JiraClient.is_tracked_issue(issue)]

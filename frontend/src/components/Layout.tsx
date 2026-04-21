@@ -50,6 +50,21 @@ const azureNavItems: NavItem[] = [
   { to: "/alerts", label: "Alerts", icon: "alerts" },
 ];
 
+const securityNavItems: NavItem[] = [
+  { to: "/security", label: "Overview", icon: "security" },
+  { to: "/security/agent", label: "Defender", icon: "defender" },
+  { to: "/security/user-review", label: "Users", icon: "users" },
+  { to: "/security/identity-review", label: "Identity", icon: "identity" },
+  { to: "/security/access-review", label: "Access", icon: "account-health" },
+  { to: "/security/guest-access-review", label: "Guests", icon: "users" },
+  { to: "/security/device-compliance", label: "Devices", icon: "vms" },
+  { to: "/security/app-hygiene", label: "Apps", icon: "resources" },
+  { to: "/security/conditional-access-tracker", label: "Policies", icon: "alerts" },
+  { to: "/security/directory-role-review", label: "Roles", icon: "identity" },
+  { to: "/security/break-glass-validation", label: "Break-glass", icon: "account-health" },
+  { to: "/security/copilot", label: "Copilot", icon: "copilot" },
+];
+
 const azureBreadcrumbLabels: Record<string, string> = {
   "": "Overview",
   vms: "VMs",
@@ -126,7 +141,7 @@ function AzureSidebarIcon({ icon }: { icon: string }) {
 
 export default function Layout() {
   const branding = getSiteBranding();
-  const navItems = branding.scope === "azure" ? azureNavItems : helpdeskNavItems;
+  const navItems = branding.scope === "security" ? securityNavItems : branding.scope === "azure" ? azureNavItems : helpdeskNavItems;
   const location = useLocation();
   const versionCheckInFlight = useRef(false);
   const lastVersionCheckAt = useRef(0);
@@ -173,7 +188,7 @@ export default function Layout() {
   }, [location.key]);
 
   const azureBreadcrumbs = useMemo(() => {
-    if (branding.scope !== "azure") return [];
+    if (branding.scope !== "azure" && branding.scope !== "security") return [];
     const path = location.pathname.replace(/^\/+/, "");
     const [segment, subsegment] = path.split("/");
     const currentLabel = azureBreadcrumbLabels[segment || ""] || "Azure";
@@ -248,7 +263,7 @@ export default function Layout() {
                   ].join(" ")
                 }
               >
-                {branding.scope === "azure" ? (
+                {(branding.scope === "azure" || branding.scope === "security") ? (
                   <span className="flex h-5 w-5 items-center justify-center text-current">
                     <AzureSidebarIcon icon={icon} />
                   </span>
@@ -285,7 +300,7 @@ export default function Layout() {
 
       {/* Main content */}
       <main className="flex-1 overflow-y-auto bg-gray-50 p-6">
-        {branding.scope === "azure" ? (
+        {(branding.scope === "azure" || branding.scope === "security") ? (
           <>
             <AzureStatusBar isAdmin={!!user?.is_admin} />
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -297,7 +312,7 @@ export default function Layout() {
                   </div>
                 ))}
               </div>
-              <AzureQuickJump />
+              {branding.scope === "azure" && <AzureQuickJump />}
             </div>
           </>
         ) : (

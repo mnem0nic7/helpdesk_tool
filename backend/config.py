@@ -131,9 +131,11 @@ STORAGE_DUAL_WRITE_SQLITE: bool = os.getenv("STORAGE_DUAL_WRITE_SQLITE", "1").st
 PRIMARY_APP_HOST: str = os.getenv("PRIMARY_APP_HOST", "it-app.movedocs.com")
 OASISDEV_APP_HOST: str = os.getenv("OASISDEV_APP_HOST", "oasisdev.movedocs.com")
 AZURE_APP_HOST: str = os.getenv("AZURE_APP_HOST", "azure.movedocs.com")
+SECURITY_APP_HOST: str = os.getenv("SECURITY_APP_HOST", "security.movedocs.com")
 PRIMARY_AUTH_PROVIDER: str = _env_auth_provider("PRIMARY_AUTH_PROVIDER", "atlassian")
 OASISDEV_AUTH_PROVIDER: str = _env_auth_provider("OASISDEV_AUTH_PROVIDER", "atlassian")
 AZURE_AUTH_PROVIDER: str = _env_auth_provider("AZURE_AUTH_PROVIDER", "entra")
+SECURITY_AUTH_PROVIDER: str = _env_auth_provider("SECURITY_AUTH_PROVIDER", "entra")
 
 # AI provider API keys
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
@@ -228,6 +230,8 @@ def get_auth_provider_for_scope(scope: str) -> AuthProvider:
     normalized = (scope or "").strip().lower()
     if normalized == "azure":
         return AZURE_AUTH_PROVIDER  # type: ignore[return-value]
+    if normalized == "security":
+        return SECURITY_AUTH_PROVIDER  # type: ignore[return-value]
     if normalized == "oasisdev":
         return OASISDEV_AUTH_PROVIDER  # type: ignore[return-value]
     return PRIMARY_AUTH_PROVIDER  # type: ignore[return-value]

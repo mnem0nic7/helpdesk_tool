@@ -37,10 +37,10 @@ router = APIRouter(prefix="/api/azure/security/defender-agent")
 
 
 def _ensure_azure_site() -> None:
-    if get_current_site_scope() != "azure":
+    if get_current_site_scope() not in ("azure", "security"):
         raise HTTPException(
             status_code=404,
-            detail="Defender agent APIs are only available on azure.movedocs.com",
+            detail="Defender agent APIs are only available on azure.movedocs.com or security.movedocs.com",
         )
 
 

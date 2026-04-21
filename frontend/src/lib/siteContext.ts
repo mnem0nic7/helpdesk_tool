@@ -1,5 +1,5 @@
 export interface SiteBranding {
-  scope: "primary" | "oasisdev" | "azure";
+  scope: "primary" | "oasisdev" | "azure" | "security";
   appName: string;
   dashboardName: string;
   alertPrefix: string;
@@ -15,6 +15,11 @@ function isAzureHost(hostname: string): boolean {
   return host === "azure.movedocs.com" || host.startsWith("azure.");
 }
 
+function isSecurityHost(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase();
+  return host === "security.movedocs.com" || host.startsWith("security.");
+}
+
 function getCurrentHostname(): string {
   if (typeof document !== "undefined") {
     const testHost = document.documentElement.dataset.siteHostname;
@@ -28,6 +33,15 @@ function getCurrentHostname(): string {
 
 export function getSiteBranding(): SiteBranding {
   const hostname = getCurrentHostname();
+
+  if (isSecurityHost(hostname)) {
+    return {
+      scope: "security",
+      appName: "Security Portal",
+      dashboardName: "Security Portal",
+      alertPrefix: "Security",
+    };
+  }
 
   if (isAzureHost(hostname)) {
     return {

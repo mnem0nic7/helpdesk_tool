@@ -59,33 +59,47 @@ function PageFallback() {
 export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
   const branding = getSiteBranding();
   const isAzureSite = branding.scope === "azure";
+  const isSecuritySite = branding.scope === "security";
+
+  const securityRoutes = (
+    <>
+      <Route path="security" element={<AzureSecurityPage />} />
+      <Route path="security/access-review" element={<AzureSecurityAccessReviewPage />} />
+      <Route path="security/break-glass-validation" element={<AzureSecurityBreakGlassValidationPage />} />
+      <Route path="security/conditional-access-tracker" element={<AzureSecurityConditionalAccessTrackerPage />} />
+      <Route path="security/device-compliance" element={<AzureSecurityDeviceCompliancePage />} />
+      <Route path="security/directory-role-review" element={<AzureSecurityDirectoryRoleReviewPage />} />
+      <Route path="security/identity-review" element={<AzureSecurityIdentityReviewPage />} />
+      <Route path="security/guest-access-review" element={<AzureSecurityGuestAccessReviewPage />} />
+      <Route path="security/dlp-review" element={<AzureSecurityDlpReviewPage />} />
+      <Route path="security/app-hygiene" element={<AzureSecurityAppHygienePage />} />
+      <Route path="security/user-review" element={<AzureSecurityUserReviewPage />} />
+      <Route path="security/copilot" element={<AzureSecurityCopilotPage />} />
+      <Route path="security/agent" element={<AzureSecurityAgentPage />} />
+      <Route path="security/account-health" element={<AzureAccountHealthPage />} />
+    </>
+  );
 
   return (
     <BrowserRouter>
       <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route element={<Layout />}>
-            {isAzureSite ? (
+            {isSecuritySite ? (
+              <>
+                <Route index element={<Navigate to="/security" replace />} />
+                {securityRoutes}
+                <Route path="account-health" element={<Navigate to="/security/account-health" replace />} />
+                <Route path="*" element={<Navigate to="/security" replace />} />
+              </>
+            ) : isAzureSite ? (
               <>
                 <Route index element={<AzureOverviewPage />} />
                 <Route path="vms" element={<AzureVMsPage />} />
                 <Route path="virtual-desktops" element={<AzureVirtualDesktopsPage />} />
                 <Route path="resources" element={<AzureResourcesPage />} />
                 <Route path="identity" element={<AzureIdentityPage />} />
-                <Route path="security" element={<AzureSecurityPage />} />
-                <Route path="security/access-review" element={<AzureSecurityAccessReviewPage />} />
-                <Route path="security/break-glass-validation" element={<AzureSecurityBreakGlassValidationPage />} />
-                <Route path="security/conditional-access-tracker" element={<AzureSecurityConditionalAccessTrackerPage />} />
-                <Route path="security/device-compliance" element={<AzureSecurityDeviceCompliancePage />} />
-                <Route path="security/directory-role-review" element={<AzureSecurityDirectoryRoleReviewPage />} />
-                <Route path="security/identity-review" element={<AzureSecurityIdentityReviewPage />} />
-                <Route path="security/guest-access-review" element={<AzureSecurityGuestAccessReviewPage />} />
-                <Route path="security/dlp-review" element={<AzureSecurityDlpReviewPage />} />
-                <Route path="security/app-hygiene" element={<AzureSecurityAppHygienePage />} />
-                <Route path="security/user-review" element={<AzureSecurityUserReviewPage />} />
-                <Route path="security/copilot" element={<AzureSecurityCopilotPage />} />
-                <Route path="security/agent" element={<AzureSecurityAgentPage />} />
-                <Route path="security/account-health" element={<AzureAccountHealthPage />} />
+                {securityRoutes}
                 <Route path="users" element={<AzureUsersPage />} />
                 <Route path="tools" element={<ToolsPage />} />
                 <Route path="cost" element={<AzureCostPage />} />
