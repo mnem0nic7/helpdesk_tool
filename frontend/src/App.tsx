@@ -87,10 +87,11 @@ export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
           <Route element={<Layout />}>
             {isSecuritySite ? (
               <>
-                <Route index element={<Navigate to="/security" replace />} />
+                <Route index element={<Navigate to="/security/agent" replace />} />
                 {securityRoutes}
+                <Route path="tools" element={<ToolsPage />} />
                 <Route path="account-health" element={<Navigate to="/security/account-health" replace />} />
-                <Route path="*" element={<Navigate to="/security" replace />} />
+                <Route path="*" element={<Navigate to="/security/agent" replace />} />
               </>
             ) : isAzureSite ? (
               <>

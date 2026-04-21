@@ -13,6 +13,7 @@ import {
   type SecurityCopilotSourceResult,
 } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
+import { getSiteBranding } from "../lib/siteContext.ts";
 
 type SecurityCopilotPageMode = "general" | "dlp";
 
@@ -402,7 +403,7 @@ export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: 
   const starterPrompts = isDlpMode ? dlpStarterPrompts : generalStarterPrompts;
   const defaultIncident = buildEmptyIncident(isDlpMode ? "dlp_finding" : "unknown");
   const [draft, setDraft] = useState("");
-  const [model, setModel] = useState("");
+  const [model, setModel] = useState(getSiteBranding().scope === "security" ? "gemma4:31b" : "");
   const [turns, setTurns] = useState<SecurityTurn[]>([]);
   const [latestResponse, setLatestResponse] = useState<SecurityCopilotChatResponse | null>(null);
   const [pendingUserMessage, setPendingUserMessage] = useState("");

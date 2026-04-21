@@ -14,6 +14,7 @@ interface NavItem {
   label: string;
   icon: string;
   primaryOnly?: boolean;
+  end?: boolean;
 }
 
 const helpdeskNavItems: NavItem[] = [
@@ -49,18 +50,21 @@ const azureNavItems: NavItem[] = [
 ];
 
 const securityNavItems: NavItem[] = [
-  { to: "/security", label: "Overview", icon: "security" },
   { to: "/security/agent", label: "Defender", icon: "defender" },
-  { to: "/security/user-review", label: "Users", icon: "users" },
-  { to: "/security/identity-review", label: "Identity", icon: "identity" },
-  { to: "/security/access-review", label: "Access", icon: "account-health" },
-  { to: "/security/guest-access-review", label: "Guests", icon: "users" },
-  { to: "/security/device-compliance", label: "Devices", icon: "vms" },
-  { to: "/security/app-hygiene", label: "Apps", icon: "resources" },
-  { to: "/security/conditional-access-tracker", label: "Policies", icon: "alerts" },
-  { to: "/security/directory-role-review", label: "Roles", icon: "identity" },
-  { to: "/security/break-glass-validation", label: "Break-glass", icon: "account-health" },
+  { to: "/security", label: "Overview", icon: "security", end: true },
   { to: "/security/copilot", label: "Copilot", icon: "copilot" },
+  { to: "/tools", label: "Tools", icon: "tools" },
+  { to: "/security/access-review", label: "Access", icon: "account-health" },
+  { to: "/security/identity-review", label: "Identity", icon: "identity" },
+  { to: "/security/user-review", label: "Users", icon: "users" },
+  { to: "/security/guest-access-review", label: "Guests", icon: "users" },
+  { to: "/security/app-hygiene", label: "Apps", icon: "resources" },
+  { to: "/security/device-compliance", label: "Devices", icon: "vms" },
+  { to: "/security/account-health", label: "Account Health", icon: "account-health" },
+  { to: "/security/dlp-review", label: "DLP", icon: "alerts" },
+  { to: "/security/conditional-access-tracker", label: "Policies", icon: "alerts" },
+  { to: "/security/break-glass-validation", label: "Break-glass", icon: "account-health" },
+  { to: "/security/directory-role-review", label: "Roles", icon: "identity" },
 ];
 
 const azureBreadcrumbLabels: Record<string, string> = {
@@ -247,11 +251,11 @@ export default function Layout() {
         <nav className="flex-1 space-y-1 px-3 py-4">
           {navItems
             .filter((item) => (!item.primaryOnly || branding.scope === "primary"))
-            .map(({ to, label, icon }) => (
+            .map(({ to, label, icon, end }) => (
               <NavLink
                 key={to}
                 to={to}
-                end={to === "/"}
+                end={end ?? to === "/"}
                 className={({ isActive }) =>
                   [
                     "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
