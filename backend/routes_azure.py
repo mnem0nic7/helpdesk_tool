@@ -73,8 +73,8 @@ _HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center")
 
 
 def _ensure_azure_site() -> None:
-    if get_current_site_scope() != "azure":
-        raise HTTPException(status_code=404, detail="Azure portal APIs are only available on azure.movedocs.com")
+    if get_current_site_scope() not in {"azure", "security"}:
+        raise HTTPException(status_code=404, detail="Azure portal APIs are only available on azure.movedocs.com or security.movedocs.com")
 
 
 def _ensure_azure_or_primary_site() -> None:

@@ -50,6 +50,10 @@ tmp/
 # Claude Code project state
 .claude/
 
+# Agent / skills runtime state
+.agents/
+skills-lock.json
+
 # One-off scripts with hardcoded credentials
 pull_all_fields.py
 scripts/syncUsers/customerData.json
