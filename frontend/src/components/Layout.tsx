@@ -39,8 +39,6 @@ const azureNavItems: NavItem[] = [
   { to: "/compute", label: "Compute", icon: "compute" },
   { to: "/resources", label: "Resources", icon: "resources" },
   { to: "/storage", label: "Storage", icon: "storage" },
-  { to: "/security", label: "Security", icon: "security" },
-  { to: "/security/agent", label: "Defender", icon: "defender" },
   { to: "/tools", label: "Tools", icon: "tools" },
   { to: "/cost", label: "Cost", icon: "cost" },
   { to: "/allocations", label: "Allocation", icon: "allocation" },
