@@ -36,8 +36,8 @@ router = APIRouter(prefix="/api/tools")
 
 def _ensure_tools_site() -> str:
     scope = get_current_site_scope()
-    if scope not in {"primary", "azure"}:
-        raise HTTPException(status_code=404, detail="Tools are only available on it-app.movedocs.com and azure.movedocs.com")
+    if scope not in {"primary", "azure", "security"}:
+        raise HTTPException(status_code=404, detail="Tools are only available on it-app.movedocs.com, azure.movedocs.com, and security.movedocs.com")
     return scope
 
 

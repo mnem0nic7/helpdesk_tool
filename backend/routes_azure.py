@@ -78,10 +78,10 @@ def _ensure_azure_site() -> None:
 
 
 def _ensure_azure_or_primary_site() -> None:
-    if get_current_site_scope() not in {"azure", "primary"}:
+    if get_current_site_scope() not in {"azure", "primary", "security"}:
         raise HTTPException(
             status_code=404,
-            detail="Azure directory user APIs are only available on azure.movedocs.com and it-app.movedocs.com",
+            detail="Azure directory user APIs are only available on azure.movedocs.com, security.movedocs.com, and it-app.movedocs.com",
         )
 
 
