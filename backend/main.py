@@ -63,6 +63,7 @@ from user_admin_jobs import user_admin_jobs
 from user_exit_workflows import user_exit_workflows
 from knowledge_base import kb_store
 from runtime_control import runtime_role_manager
+import security_digest_service as _security_digest_service
 from site_context import (
     get_current_site_scope,
     get_site_scope_from_request,
@@ -127,6 +128,7 @@ async def _start_deferred_services(app: FastAPI) -> None:
         ("User exit workflow worker", user_exit_workflows.start_worker),
         ("Azure alert loop", start_azure_alert_loop),
         ("Defender autonomous agent worker", _defender_agent.start_worker),
+        ("Security digest service", _security_digest_service.start_worker),
     )
 
     # Start deactivation schedule background runner (uses asyncio task internally)
@@ -180,6 +182,7 @@ async def _stop_leader_services(app: FastAPI) -> None:
     await cache.stop_background_refresh()
     _deactivation_schedule_store.stop_background_runner()
     await _defender_agent.stop_worker()
+    await _security_digest_service.stop_worker()
     app.state.leader_services_running = False
 
 

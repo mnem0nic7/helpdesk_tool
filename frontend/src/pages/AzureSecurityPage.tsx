@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import AzureSourceBadge from "../components/AzureSourceBadge.tsx";
 import {
@@ -539,6 +539,77 @@ function SupportCard({ card }: { card: SupportCardDefinition }) {
   );
 }
 
+function AdminModelPicker() {
+  const queryClient = useQueryClient();
+  const modelsQuery = useQuery({
+    queryKey: ["azure", "security", "copilot-models"],
+    queryFn: () => api.getAzureSecurityCopilotModels(),
+    staleTime: 60_000,
+  });
+  const configQuery = useQuery({
+    queryKey: ["azure", "security", "runtime-config"],
+    queryFn: () => api.getSecurityRuntimeConfig(),
+    staleTime: 60_000,
+  });
+  const saveMutation = useMutation({
+    mutationFn: (model: string) => api.setSecurityRuntimeConfig({ ollama_model: model }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["azure", "security", "runtime-config"] });
+    },
+  });
+
+  const models = modelsQuery.data ?? [];
+  const currentModel = configQuery.data?.ollama_model ?? "";
+  const [selected, setSelected] = useState("");
+
+  useEffect(() => {
+    if (currentModel && !selected) setSelected(currentModel);
+  }, [currentModel, selected]);
+
+  const isDirty = selected && selected !== currentModel;
+  const isBusy = saveMutation.isPending || configQuery.isLoading;
+
+  return (
+    <section className="rounded-2xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-violet-600">Admin — AI Runtime</div>
+          <h2 className="mt-1 text-sm font-semibold text-slate-900">Security Copilot Model</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Default model used by Security Copilot and Defender Agent AI features across all sessions.
+            {currentModel ? <> Currently: <span className="font-mono text-slate-700">{currentModel}</span></> : " No model configured — using server default."}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            disabled={isBusy || models.length === 0}
+            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 disabled:opacity-60"
+          >
+            {!selected && <option value="">— select model —</option>}
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>{m.name || m.id}</option>
+            ))}
+            {models.length === 0 && <option value="" disabled>Loading models…</option>}
+          </select>
+          <button
+            type="button"
+            disabled={!isDirty || isBusy}
+            onClick={() => { if (selected) saveMutation.mutate(selected); }}
+            className="rounded-xl border border-violet-400 bg-violet-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-40"
+          >
+            {saveMutation.isPending ? "Saving…" : saveMutation.isSuccess && !isDirty ? "Saved ✓" : "Save"}
+          </button>
+        </div>
+      </div>
+      {saveMutation.isError ? (
+        <div className="mt-2 text-xs text-rose-700">Failed to save — {saveMutation.error instanceof Error ? saveMutation.error.message : "unknown error"}</div>
+      ) : null}
+    </section>
+  );
+}
+
 export default function AzureSecurityPage() {
   const initialWorkspaceView = useMemo(() => readPersistedWorkspaceView(), []);
   const [search, setSearch] = useState(initialWorkspaceView.search);
@@ -549,6 +620,13 @@ export default function AzureSecurityPage() {
   const deferredSearch = useDeferredValue(search);
   const normalizedSearch = search.trim();
   const normalizedDeferredSearch = deferredSearch.trim();
+
+  const meQuery = useQuery({
+    queryKey: ["me"],
+    queryFn: () => api.getMe(),
+    staleTime: 5 * 60_000,
+  });
+  const isAdmin = !!meQuery.data?.is_admin;
 
   const overviewQuery = useQuery({
     queryKey: ["azure", "overview"],
@@ -897,6 +975,9 @@ export default function AzureSecurityPage() {
           ))}
         </div>
       </section>
+
+      {/* Admin: AI runtime model picker */}
+      {isAdmin ? <AdminModelPicker /> : null}
     </div>
   );
 }

@@ -219,7 +219,8 @@ class KnowledgeBaseStore:
                     imported_from_seed INTEGER NOT NULL DEFAULT 0,
                     ai_generated INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    category TEXT NOT NULL DEFAULT ''
                 )"""
             )
             conn.execute(
@@ -245,6 +246,7 @@ class KnowledgeBaseStore:
                 ai_generated=bool(row["ai_generated"]),
                 created_at=str(row["created_at"]),
                 updated_at=str(row["updated_at"]),
+                category=str(row.get("category") or ""),
             )
         return KnowledgeBaseArticle(
             id=row[0],
@@ -260,6 +262,7 @@ class KnowledgeBaseStore:
             ai_generated=bool(row[10]),
             created_at=row[11],
             updated_at=row[12],
+            category=str(row[13]) if len(row) > 13 else "",
         )
 
     def count_articles(self) -> int:
@@ -295,10 +298,12 @@ class KnowledgeBaseStore:
         *,
         search: str = "",
         request_type: str = "",
+        category: str = "",
     ) -> list[KnowledgeBaseArticle]:
         sql = (
             "SELECT id, slug, code, title, request_type, summary, content, "
-            "source_filename, source_ticket_key, imported_from_seed, ai_generated, created_at, updated_at "
+            "source_filename, source_ticket_key, imported_from_seed, ai_generated, created_at, updated_at, "
+            "COALESCE(category, '') AS category "
             "FROM kb_articles"
         )
         clauses: list[str] = []
@@ -306,6 +311,9 @@ class KnowledgeBaseStore:
         if request_type:
             clauses.append(f"request_type = {self._placeholder()}")
             params.append(request_type)
+        if category:
+            clauses.append(f"LOWER(COALESCE(category, '')) = {self._placeholder()}")
+            params.append(category.lower())
         if search:
             term = f"%{search.lower()}%"
             clauses.append(
@@ -324,7 +332,8 @@ class KnowledgeBaseStore:
         with self._conn() as conn:
             row = conn.execute(
                 f"SELECT id, slug, code, title, request_type, summary, content, "
-                f"source_filename, source_ticket_key, imported_from_seed, ai_generated, created_at, updated_at "
+                f"source_filename, source_ticket_key, imported_from_seed, ai_generated, created_at, updated_at, "
+                f"COALESCE(category, '') AS category "
                 f"FROM kb_articles WHERE id = {self._placeholder()}",
                 (article_id,),
             ).fetchone()
@@ -441,8 +450,9 @@ class KnowledgeBaseStore:
         request_type: str = "",
         query_text: str = "",
         limit: int = 3,
+        category: str = "",
     ) -> list[KnowledgeBaseArticle]:
-        articles = self.list_articles()
+        articles = self.list_articles(category=category)
         if not articles:
             return []
 

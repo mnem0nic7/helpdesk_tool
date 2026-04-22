@@ -503,6 +503,15 @@ class DefenderAgentStore:
             conn.commit()
         return self.get_decision(decision_id)
 
+    def set_decision_narrative(self, decision_id: str, narrative: str) -> None:
+        p = self._placeholder()
+        with self._conn() as conn:
+            conn.execute(
+                f"UPDATE defender_agent_decisions SET ai_narrative = {p}, ai_narrative_generated_at = {p} WHERE decision_id = {p}",
+                (narrative, _now(), decision_id),
+            )
+            conn.commit()
+
     def get_decision(self, decision_id: str) -> dict[str, Any] | None:
         p = self._placeholder()
         with self._conn() as conn:
@@ -862,6 +871,8 @@ class DefenderAgentStore:
         d["watchlisted_entities"] = json.loads(raw_wl)
         raw_tags = d.pop("tags_json", "[]") or "[]"
         d["tags"] = json.loads(raw_tags)
+        d.setdefault("ai_narrative", None)
+        d.setdefault("ai_narrative_generated_at", None)
         return d
 
 
@@ -1472,6 +1483,37 @@ class DefenderAgentStore:
                 if t:
                     tag_set.add(str(t))
         return sorted(tag_set)
+
+
+    # -------------------------------------------------------------------------
+    # Security runtime config (AI-05: site-wide model picker)
+    # -------------------------------------------------------------------------
+
+    def get_security_runtime_config(self) -> dict[str, Any]:
+        """Return the current security site runtime config overrides."""
+        try:
+            with self._conn() as conn:
+                rows = conn.execute("SELECT key, value FROM security_runtime_config").fetchall()
+            return {row["key"]: row["value"] for row in rows}
+        except Exception:
+            return {}
+
+    def set_security_runtime_config(self, key: str, value: str) -> None:
+        """Upsert a security runtime config key."""
+        p = self._placeholder()
+        with self._conn() as conn:
+            if self._use_postgres:
+                conn.execute(
+                    f"INSERT INTO security_runtime_config (key, value) VALUES ({p}, {p})"
+                    f" ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                    (key, value),
+                )
+            else:
+                conn.execute(
+                    f"INSERT OR REPLACE INTO security_runtime_config (key, value) VALUES ({p}, {p})",
+                    (key, value),
+                )
+            conn.commit()
 
 
 defender_agent_store = DefenderAgentStore()

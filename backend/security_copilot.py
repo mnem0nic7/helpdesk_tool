@@ -1648,9 +1648,11 @@ def _run_kb_source(
     articles = []
     if search_terms:
         for term in search_terms[:3]:
-            articles.extend(kb_store.list_articles(search=term))
+            # Prefer security-tagged articles; fall back to all if none found
+            sec_articles = kb_store.list_articles(search=term, category="security")
+            articles.extend(sec_articles if sec_articles else kb_store.list_articles(search=term))
     else:
-        articles = kb_store.list_articles(request_type="Security Alert")
+        articles = kb_store.list_articles(category="security") or kb_store.list_articles(request_type="Security Alert")
     unique_articles: list[dict[str, Any]] = []
     seen: set[int] = set()
     for article in articles:

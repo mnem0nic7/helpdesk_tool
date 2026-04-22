@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   api,
@@ -408,6 +408,18 @@ export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: 
   const [latestResponse, setLatestResponse] = useState<SecurityCopilotChatResponse | null>(null);
   const [pendingUserMessage, setPendingUserMessage] = useState("");
   const [exportNotice, setExportNotice] = useState("");
+  const [saveToDecisionStatus, setSaveToDecisionStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+
+  // Defender Agent handoff — read ?decisionId= and auto-submit
+  const [searchParams] = useSearchParams();
+  const handoffDecisionId = searchParams.get("decisionId") || null;
+  const handoffSubmittedRef = useRef(false);
+  const { data: handoffDecision } = useQuery({
+    queryKey: ["defender-agent-decision-handoff", handoffDecisionId],
+    queryFn: () => api.getDefenderAgentDecision(handoffDecisionId!),
+    enabled: !!handoffDecisionId && !isDlpMode,
+    staleTime: Infinity,
+  });
 
   const { data: models = [] } = useQuery({
     queryKey: ["azure", "ai", "models", "security-copilot"],
@@ -484,6 +496,39 @@ export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: 
       jobs: activeJobs,
       model: model || undefined,
     });
+  };
+
+  // Auto-submit when opened from Defender Agent (AI-01)
+  useEffect(() => {
+    if (!handoffDecision || handoffSubmittedRef.current || isDlpMode) return;
+    handoffSubmittedRef.current = true;
+    const d = handoffDecision;
+    const entities = (d.entities ?? [])
+      .slice(0, 4)
+      .map((e: { type?: string; name?: string; id?: string }) => `${e.type ?? "entity"} ${e.name ?? e.id ?? ""}`.trim())
+      .filter(Boolean)
+      .join(", ");
+    const mitre = (d.mitre_techniques ?? []).slice(0, 3).join(", ");
+    const prompt = [
+      `Investigate Defender alert: ${d.alert_title}`,
+      `Severity: ${d.alert_severity} | Category: ${d.alert_category}`,
+      entities ? `Entities: ${entities}` : null,
+      mitre ? `MITRE: ${mitre}` : null,
+      d.reason ? `Agent reason: ${d.reason}` : null,
+    ].filter(Boolean).join("\n");
+    submitInvestigationMessage(prompt);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handoffDecision]);
+
+  const saveInvestigationToDecision = async () => {
+    if (!handoffDecisionId || !latestResponse) return;
+    setSaveToDecisionStatus("saving");
+    try {
+      await api.addDecisionNote(handoffDecisionId, investigationMarkdown.slice(0, 8000));
+      setSaveToDecisionStatus("saved");
+    } catch {
+      setSaveToDecisionStatus("error");
+    }
   };
 
   const copyMarkdownExport = async () => {
@@ -838,6 +883,16 @@ export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: 
             >
               Download JSON
             </button>
+            {handoffDecisionId && (
+              <button
+                type="button"
+                onClick={saveInvestigationToDecision}
+                disabled={saveToDecisionStatus === "saving" || saveToDecisionStatus === "saved"}
+                className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50"
+              >
+                {saveToDecisionStatus === "saving" ? "Saving…" : saveToDecisionStatus === "saved" ? "Saved ✓" : saveToDecisionStatus === "error" ? "Save failed — retry" : "Save to Decision"}
+              </button>
+            )}
           </div>
           <div className="mt-4 rounded-xl bg-slate-50 px-4 py-4 text-sm text-slate-700">
             <div className="font-semibold text-slate-900">Export bundle</div>

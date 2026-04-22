@@ -4,9 +4,11 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
+from ai_client import generate_defender_narrative
 from auth import require_admin, require_authenticated_user
+from config import OLLAMA_SECURITY_MODEL
 from defender_agent_store import defender_agent_store
 from models import (
     DefenderAgentBuiltinRule,
@@ -186,12 +188,18 @@ def export_decisions(
 @router.get("/decisions/{decision_id}", response_model=DefenderAgentDecisionItem)
 def get_decision(
     decision_id: str,
+    background_tasks: BackgroundTasks,
     _session: dict = Depends(require_authenticated_user),
 ) -> dict:
     _ensure_azure_site()
     row = defender_agent_store.get_decision(decision_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Decision not found")
+    # Auto-generate narrative for action-recommended decisions on first view
+    if row.get("decision") != "skip" and not row.get("ai_narrative"):
+        config = defender_agent_store.get_security_runtime_config()
+        model_id = config.get("ollama_model") or OLLAMA_SECURITY_MODEL
+        background_tasks.add_task(_generate_and_store_narrative, decision_id, row, model_id)
     return row
 
 
@@ -596,6 +604,33 @@ def add_investigation_note(
     if result is None:
         raise HTTPException(status_code=404, detail="Decision not found")
     return result
+
+
+# ---------------------------------------------------------------------------
+# AI narrative (AI-03)
+# ---------------------------------------------------------------------------
+
+def _generate_and_store_narrative(decision_id: str, decision: dict, model_id: str) -> None:
+    narrative = generate_defender_narrative(decision, model_id)
+    if narrative:
+        defender_agent_store.set_decision_narrative(decision_id, narrative)
+
+
+@router.post("/decisions/{decision_id}/narrative", response_model=DefenderAgentDecisionItem)
+def generate_narrative(
+    decision_id: str,
+    background_tasks: BackgroundTasks,
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    """Manually trigger AI narrative generation for any decision."""
+    _ensure_azure_site()
+    decision = defender_agent_store.get_decision(decision_id)
+    if decision is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    config = defender_agent_store.get_security_runtime_config()
+    model_id = config.get("ollama_model") or OLLAMA_SECURITY_MODEL
+    background_tasks.add_task(_generate_and_store_narrative, decision_id, decision, model_id)
+    return decision
 
 
 # ---------------------------------------------------------------------------

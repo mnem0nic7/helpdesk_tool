@@ -30,6 +30,7 @@ from config import (
     DEFENDER_AGENT_TEAMS_NOTIFY_T1,
     DEFENDER_AGENT_TEAMS_NOTIFY_T2,
     DEFENDER_AGENT_TEAMS_WEBHOOK_URL,
+    OLLAMA_SECURITY_MODEL,
 )
 from azure_cache import azure_cache
 
@@ -745,6 +746,60 @@ def _classify_alert(
     return None, "skip", [], "Alert category/title did not match any decision rule.", 0
 
 
+_AI_FALLBACK_PROMPT = """You are a Microsoft Defender alert classifier.
+Given an alert, suggest the safest remediation tier and a single action.
+
+Rules:
+- Return only JSON, no prose.
+- tier: 1 (immediate auto-execute), 2 (delayed queue, operator can cancel), or 3 (recommend only, human must approve).
+- When uncertain, always prefer tier 3.
+- action must be one of: revoke_sessions, disable_sign_in, device_sync, start_investigation, run_av_scan, collect_investigation_package.
+- reasoning: one concise sentence explaining why this tier.
+
+Return exactly:
+{"tier": 3, "action": "start_investigation", "reasoning": "..."}
+"""
+
+
+def _ai_classify_alert_fallback(
+    alert: dict[str, Any],
+) -> tuple[int | None, str, list[str], str, int] | None:
+    """Ask gemma4:31b to classify an alert that matched no built-in or custom rule.
+
+    Returns the same tuple shape as _classify_alert or None on failure.
+    Always logs as T3/recommend regardless of what the model suggests for T1/T2,
+    to preserve the human-in-the-loop safety model for AI-classified alerts.
+    """
+    try:
+        from ai_client import invoke_model_text
+        user_msg = (
+            f"Title: {alert.get('title', '')}\n"
+            f"Category: {alert.get('category', '')}\n"
+            f"Severity: {alert.get('severity', '')}\n"
+            f"Service: {alert.get('serviceSource', '')}\n"
+            f"Description: {str(alert.get('description', ''))[:500]}"
+        )
+        raw = invoke_model_text(
+            OLLAMA_SECURITY_MODEL,
+            _AI_FALLBACK_PROMPT,
+            user_msg,
+            feature_surface="defender_agent_fallback",
+            app_surface="defender_agent",
+            json_output=True,
+            max_output_tokens=150,
+            queue_label="defender_agent_fallback",
+        )
+        import json as _json
+        data = _json.loads(raw)
+        action = str(data.get("action") or "start_investigation")
+        reasoning = str(data.get("reasoning") or "AI fallback classification")
+        # Always cap at T3 for safety — AI-classified alerts are never auto-executed
+        return 3, "recommend", [action], f"[AI fallback — {OLLAMA_SECURITY_MODEL}] {reasoning}", 40
+    except Exception as exc:
+        logger.warning("Defender agent AI fallback classification failed: %s", exc)
+        return None
+
+
 def _apply_custom_rules(
     alert: dict[str, Any],
     custom_rules: list[dict[str, Any]],
@@ -1347,6 +1402,11 @@ def _run_agent_cycle() -> None:
                 cr_result = _apply_custom_rules(alert, custom_rules)
                 if cr_result is not None:
                     tier, decision_type, action_types, reason, confidence_score = cr_result
+            # If still a skip after custom rules, try AI fallback classification
+            if decision_type == "skip":
+                ai_result = _ai_classify_alert_fallback(alert)
+                if ai_result is not None:
+                    tier, decision_type, action_types, reason, confidence_score = ai_result
             # Primary action_type is first in list (for display / backward compat)
             action_type = action_types[0] if action_types else ""
 

@@ -98,6 +98,9 @@ _OLLAMA_MAX_CONCURRENT_REQUESTS = 1
 _DEFAULT_OLLAMA_REQUEST_PRIORITY = 50
 _OLLAMA_REQUEST_PRIORITY_BY_FEATURE = {
     "azure_security_copilot": 0,
+    "defender_agent_narrative": 10,
+    "defender_agent_fallback": 15,
+    "security_digest": 18,
     "azure_cost_copilot": 20,
     "azure_alert_rule_parse": 25,
     "ticket_auto_triage": 40,
@@ -2111,6 +2114,81 @@ def score_closed_ticket(
                 model_id,
                 reason=str(retry_exc or exc),
             )
+
+
+_DEFENDER_NARRATIVE_PROMPT = (
+    "You are a concise security analyst writing a one-sentence alert summary for an operator dashboard. "
+    "Given a Defender alert, write exactly one sentence (max 25 words) that captures who/what is affected, "
+    "what happened, and why it matters. No preamble, no markdown, plain text only."
+)
+
+_SECURITY_DIGEST_PROMPT = (
+    "You are a security operations manager writing a brief daily digest for leadership. "
+    "Summarize the provided 24-hour Defender Agent activity in 3-5 bullet points. "
+    "Be concise, factual, and highlight anything that needs attention. "
+    "No preamble, use plain text bullets starting with -."
+)
+
+
+def generate_defender_narrative(decision: dict[str, Any], model_id: str) -> str:
+    """Generate a one-sentence AI narrative for a Defender Agent decision.
+
+    Returns the narrative string, or an empty string on failure.
+    """
+    title = decision.get("alert_title", "")
+    severity = decision.get("alert_severity", "")
+    category = decision.get("alert_category", "")
+    entities = decision.get("entities", [])
+    reason = decision.get("reason", "")
+    entity_summary = ", ".join(
+        f"{e.get('type', 'entity')} {e.get('name') or e.get('id', '')}"
+        for e in entities[:3]
+        if e.get("name") or e.get("id")
+    )
+    user_msg = (
+        f"Alert: {title}\nSeverity: {severity}\nCategory: {category}\n"
+        f"Entities: {entity_summary or 'none'}\nReason: {reason}"
+    )
+    try:
+        return invoke_model_text(
+            model_id,
+            _DEFENDER_NARRATIVE_PROMPT,
+            user_msg,
+            feature_surface="defender_agent_narrative",
+            app_surface="defender_agent",
+            max_output_tokens=60,
+            queue_label="defender_agent_narrative",
+        ).strip()
+    except Exception:
+        return ""
+
+
+def generate_security_digest(stats: dict[str, Any], model_id: str) -> str:
+    """Generate a daily digest narrative from aggregated Defender Agent stats."""
+    user_msg = (
+        f"Period: last 24 hours\n"
+        f"Total decisions: {stats.get('total', 0)}\n"
+        f"T1 (immediate): {stats.get('t1', 0)}\n"
+        f"T2 (queued): {stats.get('t2', 0)}\n"
+        f"T3 (recommend/pending approval): {stats.get('t3', 0)}\n"
+        f"Skipped: {stats.get('skips', 0)}\n"
+        f"AI fallback classifications: {stats.get('ai_fallback', 0)}\n"
+        f"Unresolved T3 decisions: {stats.get('unresolved_t3', 0)}\n"
+        f"Top alert categories: {', '.join(stats.get('top_categories', []))}\n"
+        f"Top affected entities: {', '.join(stats.get('top_entities', []))}"
+    )
+    try:
+        return invoke_model_text(
+            model_id,
+            _SECURITY_DIGEST_PROMPT,
+            user_msg,
+            feature_surface="security_digest",
+            app_surface="security_portal",
+            max_output_tokens=300,
+            queue_label="security_digest",
+        ).strip()
+    except Exception:
+        return ""
 
 
 def draft_kb_article(

@@ -497,6 +497,7 @@ class KnowledgeBaseArticle(BaseModel):
     ai_generated: bool = False
     created_at: str
     updated_at: str
+    category: str = ""
 
 
 class KnowledgeBaseArticleUpsertRequest(BaseModel):

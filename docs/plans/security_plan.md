@@ -65,91 +65,38 @@ Tracks what is built, what is agreed, and what is deferred for the dedicated sec
 
 ---
 
-## Planned — AI Integration
+## Implemented — AI Integration
+
+| # | Feature | Status | Key Files |
+|---|---|---|---|
+| AI-01 | Investigate with Copilot (Defender → Copilot handoff) | ✅ Implemented | `AzureSecurityAgentPage.tsx`, `AzureSecurityCopilotPage.tsx` |
+| AI-02 | AI Fallback Classification for Defender Agent | ✅ Implemented | `defender_agent.py`, `ai_client.py` |
+| AI-03 | AI Narrative on Defender Decisions | ✅ Implemented | `defender_agent_store.py`, `routes_defender_agent.py`, `ai_client.py`, `AzureSecurityAgentPage.tsx` |
+| AI-04 | Save Copilot Investigation to Decision | ✅ Implemented | `AzureSecurityCopilotPage.tsx` |
+| AI-05 | Site-wide Model Picker (Admin) | ✅ Implemented | `routes_azure_security.py`, `defender_agent_store.py`, `AzureSecurityPage.tsx` |
+| AI-06 | Security Knowledge Base Category | ✅ Implemented | `knowledge_base.py`, `security_copilot.py`, `models.py`, migration 0018 |
+| AI-07 | Daily Security Digest to Teams | ✅ Implemented | `security_digest_service.py`, `main.py`, `config.py`, `.env` |
 
 ### AI-01: Investigate with Copilot (Defender → Copilot handoff)
-**What**: "Investigate with Copilot" button on each Defender Agent decision row (and detail drawer). Opens the Copilot pre-seeded with alert title, entities, severity, MITRE techniques, and `decision_id`. Auto-submits immediately — no manual re-click.
-
-**How**: URL navigation to `/security/copilot?decisionId=<id>`. Copilot page reads the query param on mount, fetches the decision, builds a structured prompt, and fires the first investigation turn automatically.
-
-**Files to change**:
-- `frontend/src/pages/AzureSecurityAgentPage.tsx` — add "Investigate" button
-- `frontend/src/pages/AzureSecurityCopilotPage.tsx` — read `?decisionId=` param, auto-submit on mount
-- `backend/routes_defender_agent.py` — `GET /api/azure/security/defender-agent/decisions/{id}` already exists ✓
-
----
+**How it works**: "Investigate with Copilot" button on each Defender decision row and detail drawer. Navigates to `/security/copilot?decisionId=<id>`. Copilot reads the param on mount, fetches the decision, builds a prompt from alert title/entities/severity/MITRE/reason, and auto-submits immediately via `useRef` one-shot pattern. A "Save to Decision" button appears when launched from a decision and posts the investigation markdown back to the decision notes.
 
 ### AI-02: AI Fallback Classification for Defender Agent
-**What**: When no built-in or custom rule matches a Defender alert, send the alert title, description, category, and severity to gemma4:31b. Ask it to suggest a tier (1/2/3) and action. Log result as a `recommend` (T3) decision with `reason: "AI fallback — <model>"`. **Never auto-execute AI-classified alerts.**
-
-**How**: In `defender_agent.py`, after the rule-matching loop returns no match, call `invoke_model_text()` with `feature_surface="defender_agent_fallback"`. Route to security Ollama runtime. Parse structured JSON response (tier, action, reasoning). Fallback to `skip` if model returns invalid JSON.
-
-**Files to change**:
-- `backend/defender_agent.py` — add `_ai_classify_alert()` function, call after rule miss
-- `backend/ai_client.py` — add `defender_agent_fallback` priority queue entry
-
----
+**How it works**: After built-in rules and custom rules both miss, `_ai_classify_alert_fallback()` calls `invoke_model_text()` with the security Ollama runtime. **Always caps at T3/recommend** regardless of model suggestion — AI-classified alerts are never auto-executed. Falls back to `skip` on model failure.
 
 ### AI-03: AI Narrative on Defender Decisions
-**What**: Each Defender decision (where `decision != "skip"`) gets a one-line AI-generated narrative stored in the decision record. Generated lazily on first view of the decision, then cached. Skip decisions can be manually triggered to generate a narrative via a button.
-
-**How**: New field `ai_narrative` on `defender_agent_decisions` table (Postgres migration required). On `GET /api/azure/security/defender-agent/decisions/{id}`, if `ai_narrative` is null and `decision != "skip"`, generate it asynchronously (or on-demand). New endpoint `POST /api/azure/security/defender-agent/decisions/{id}/narrative` for manual trigger.
-
-**Files to change**:
-- `backend/storage_migrations/` — add migration for `ai_narrative` column
-- `backend/defender_agent_store.py` — `set_decision_narrative()` 
-- `backend/routes_defender_agent.py` — trigger on fetch if null; add `/narrative` endpoint
-- `backend/ai_client.py` — narrative prompt for `defender_agent_narrative` surface
-- `frontend/src/pages/AzureSecurityAgentPage.tsx` — display narrative in feed row + detail drawer; add "Generate" button for skips
-
----
+**How it works**: `ai_narrative` and `ai_narrative_generated_at` columns on `defender_agent_decisions` (migration 0018). Generated lazily via background task when a non-skip decision is fetched for the first time. Manual trigger via `POST /decisions/{id}/narrative`. Displayed as blue italic text below the action type in the feed row. Agents with `decision == "skip"` require manual trigger.
 
 ### AI-04: Save Copilot Investigation to Decision
-**What**: When the Copilot is launched from a Defender decision (via AI-01), a "Save to decision" button appears alongside the existing export. Posts the investigation markdown to the decision's investigation notes.
-
-**How**: Pass `decision_id` through the Copilot session state (from the `?decisionId=` URL param). The "Save to decision" button calls `POST /api/azure/security/defender-agent/decisions/{id}/notes` (already exists as investigation notes endpoint — check). Display a toast confirming the save.
-
-**Files to change**:
-- `frontend/src/pages/AzureSecurityCopilotPage.tsx` — persist `decisionId` in state, show "Save to decision" button when set
-- `backend/routes_defender_agent.py` — verify `/notes` endpoint exists or add it
-
----
+**How it works**: When Copilot is opened with `?decisionId=`, a "Save to Decision" button appears in the export section. POSTs the full investigation markdown to `POST /api/azure/security/defender-agent/decisions/{id}/notes` (existing endpoint). Button shows saving/saved/error states.
 
 ### AI-05: Site-wide Model Picker (Admin)
-**What**: Admin-only control in the Security Overview page to change the active Ollama model site-wide. Stores the selection in the backend as a runtime config override (no `.env` edit, no restart required). All subsequent Copilot sessions and AI fallback calls use the new model.
-
-**How**: New `security_runtime_config` key in a lightweight backend settings store (or extend the existing defender agent config pattern). New endpoint `GET/PUT /api/azure/security/runtime-config` (admin-only). Security Overview page shows a model picker dropdown loaded from `/api/azure/security/copilot/models`.
-
-**Files to change**:
-- `backend/routes_azure_security.py` — add runtime config endpoints
-- `backend/security_workspace_summary.py` (or new `security_runtime_config.py`) — store/retrieve config
-- `backend/ai_client.py` — check runtime config before falling back to `OLLAMA_SECURITY_MODEL`
-- `frontend/src/pages/AzureSecurityPage.tsx` — admin model picker UI
-
----
+**How it works**: `security_runtime_config` table in Postgres (migration 0018). `GET/PUT /api/azure/security/runtime-config` endpoints (admin-gated PUT). `AzureSecurityPage.tsx` shows a violet admin panel at the bottom for admins only, with a dropdown of available models from `/api/azure/security/copilot/models` and a Save button.
 
 ### AI-06: Security Knowledge Base Category
-**What**: KB articles tagged with `category: security` are queried by the Security Copilot. Helpdesk KB queries exclude this category. Seed with IR playbooks, break-glass procedures, escalation contacts.
-
-**How**: Add optional `category` field to KB article schema. Security Copilot source builder passes `category_filter="security"` when querying KB. Existing KB admin interface (if any) gets a category field. No new DB tables.
-
-**Files to change**:
-- `backend/knowledge_base.py` — add `category` filter to search
-- `backend/security_copilot.py` — pass `category_filter="security"` in KB source
-- `backend/storage_migrations/` — `ADD COLUMN IF NOT EXISTS category TEXT` on KB table
-
----
+**How it works**: `category TEXT DEFAULT ''` column on `kb_articles` (migration 0018 + SQLite CREATE TABLE updated). `list_articles()` accepts `category=` filter. Security Copilot KB source prefers `category="security"` articles, falling back to all articles if none tagged. `KnowledgeBaseArticle` model has `category: str = ""`.
 
 ### AI-07: Daily Security Digest to Teams
-**What**: Once-daily Teams message (configurable time, default 8 AM local) summarizing the prior 24h of Defender activity: decisions by tier, unresolved T3s, top 3 alert categories, any AI fallback classifications. Written by gemma4:31b. Sent to a configurable Teams webhook URL.
-
-**How**: New background service `security_digest_service.py` started as leader-only at startup. Reads aggregated decision data from `defender_agent_store`. Builds a summary dict, calls `invoke_model_text()` with `feature_surface="security_digest"`, POSTs to Teams webhook. Webhook URL stored in backend config (env var `SECURITY_DIGEST_TEAMS_WEBHOOK`).
-
-**Files to change**:
-- `backend/security_digest_service.py` — new file
-- `backend/main.py` — start as leader-only background service
-- `backend/.env` — add `SECURITY_DIGEST_TEAMS_WEBHOOK` and `SECURITY_DIGEST_HOUR` vars
-- `frontend/src/pages/AzureSecurityPage.tsx` — (future) admin UI to configure webhook
+**How it works**: `security_digest_service.py` leader-only background service. Fires at `SECURITY_DIGEST_HOUR` UTC (default 8). Queries last 1000 decisions for 24h stats (t1/t2/t3/skips/ai_fallback/unresolved_t3/top_categories/top_entities). Calls `generate_security_digest()` with gemma4:31b. Posts Teams Adaptive Card to `SECURITY_DIGEST_TEAMS_WEBHOOK`. No-ops if webhook is unconfigured.
 
 ---
 
@@ -160,15 +107,4 @@ Tracks what is built, what is agreed, and what is deferred for the dedicated sec
 | **Copilot remediation actions** (Q4) | Safety/audit complexity; Defender Agent is the single action executor. Revisit when audit trail for dual-path mutations is designed. |
 | **External threat intelligence** (Q6) — VirusTotal, MITRE ATT&CK API | API key management, latency, cost. Internal sources sufficient for now. |
 | **AI risk score on feed** (Q9) | Redundant with Defender severity + AI narrative; creates competing signals. |
-| **External TI in Copilot** | Same as above. |
-
----
-
-## Implementation Order (suggested)
-
-1. **AI-01 + AI-04** — Copilot handoff + save-back (highest analyst value, low backend cost)
-2. **AI-03** — AI narratives on decisions (makes the feed self-explanatory)
-3. **AI-02** — AI fallback classification (extends rule coverage)
-4. **AI-06** — Security KB category (seeds Copilot with runbooks)
-5. **AI-05** — Admin model picker (operational convenience)
-6. **AI-07** — Daily digest (leadership visibility)
+| **Teams webhook admin UI** | AI-07 webhook configured via env var for now; admin UI in AzureSecurityPage.tsx deferred. |

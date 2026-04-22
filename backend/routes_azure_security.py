@@ -6,8 +6,9 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from auth import require_authenticated_user, session_can_manage_users
+from auth import require_admin, require_authenticated_user, session_can_manage_users
 from azure_cache import azure_cache
+from defender_agent_store import defender_agent_store
 from models import (
     SecurityAccessReviewResponse,
     SecurityAppHygieneResponse,
@@ -318,3 +319,28 @@ def get_security_device_action_batch_results(
     if not batch:
         raise HTTPException(status_code=404, detail="Device action batch not found.")
     return [SecurityDeviceActionBatchResult.model_validate(item) for item in security_device_jobs.get_batch_results(batch_id)]
+
+
+# ---------------------------------------------------------------------------
+# Security runtime config — site-wide model picker (AI-05)
+# ---------------------------------------------------------------------------
+
+@router.get("/runtime-config")
+def get_runtime_config(
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    _ensure_azure_site()
+    return defender_agent_store.get_security_runtime_config()
+
+
+@router.put("/runtime-config")
+def set_runtime_config(
+    body: dict,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    allowed_keys = {"ollama_model"}
+    for key, value in body.items():
+        if key in allowed_keys:
+            defender_agent_store.set_security_runtime_config(key, str(value))
+    return defender_agent_store.get_security_runtime_config()
