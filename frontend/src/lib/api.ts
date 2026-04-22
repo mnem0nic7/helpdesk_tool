@@ -1605,6 +1605,8 @@ export interface DefenderAgentDecision {
   resolved: boolean;
   resolved_at: string | null;
   resolved_by: string;
+  ai_narrative: string | null;
+  ai_narrative_generated_at: string | null;
 }
 
 export interface DefenderAgentWatchlistEntry {
@@ -2795,6 +2797,8 @@ export interface SecurityBreakGlassValidationAccount {
   is_licensed: boolean | null;
   license_count: number;
   on_prem_sync: boolean;
+  mfa_enrolled: boolean | null;
+  mfa_methods: string[];
   status: "critical" | "warning" | "healthy";
   flags: string[];
 }
@@ -3952,6 +3956,26 @@ export const api = {
       `/api/azure/security/defender-agent/decisions/${decisionId}/notes`,
       { text }
     );
+  },
+  generateDefenderNarrative(decisionId: string): Promise<DefenderAgentDecision> {
+    return postJSON<DefenderAgentDecision>(
+      `/api/azure/security/defender-agent/decisions/${decisionId}/narrative`,
+      {}
+    );
+  },
+  getSecurityRuntimeConfig(): Promise<Record<string, string>> {
+    return fetchJSON<Record<string, string>>("/api/azure/security/runtime-config");
+  },
+  setSecurityRuntimeConfig(config: Record<string, string>): Promise<Record<string, string>> {
+    return fetch("/api/azure/security/runtime-config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    }).then(async res => {
+      if (res.status === 401) { window.location.href = "/api/auth/login"; throw new Error("Not authenticated"); }
+      if (!res.ok) throw new Error(await res.text());
+      return res.json() as Promise<Record<string, string>>;
+    });
   },
   listWatchlist(includeInactive = false): Promise<{ entries: DefenderAgentWatchlistEntry[]; total: number }> {
     return fetchJSON(`/api/azure/security/defender-agent/watchlist?include_inactive=${includeInactive}`);

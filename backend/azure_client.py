@@ -1276,6 +1276,49 @@ Resources
 
         return owners_by_application
 
+    def get_authentication_methods_batch(self, user_ids: list[str]) -> dict[str, list[str]]:
+        """Return a map of user_id → list of registered non-password auth method type labels."""
+        results: dict[str, list[str]] = {}
+        if not user_ids:
+            return results
+        _PASSWORD_TYPE = "#microsoft.graph.passwordauthenticationmethod"
+        _METHOD_LABELS: dict[str, str] = {
+            "#microsoft.graph.microsoftauthenticatorauthenticationmethod": "Microsoft Authenticator",
+            "#microsoft.graph.phoneauthenticationmethod": "Phone / SMS",
+            "#microsoft.graph.fido2authenticationmethod": "FIDO2 security key",
+            "#microsoft.graph.windowshelloforbusinessauthenticationmethod": "Windows Hello for Business",
+            "#microsoft.graph.softwareoathauthenticationmethod": "TOTP authenticator app",
+            "#microsoft.graph.emailauthenticationmethod": "Email OTP",
+            "#microsoft.graph.temporaryaccesspassauthenticationmethod": "Temporary Access Pass",
+        }
+        for start in range(0, len(user_ids), 20):
+            chunk = user_ids[start : start + 20]
+            requests_payload = [
+                {"id": str(i), "method": "GET", "url": f"/users/{uid}/authentication/methods"}
+                for i, uid in enumerate(chunk, start=1)
+            ]
+            try:
+                payload = self.graph_batch_request(requests_payload)
+            except AzureApiError as exc:
+                logger.warning("MFA batch lookup failed: %s", exc)
+                return results
+            responses = payload.get("responses") or []
+            id_to_uid = {str(i): uid for i, uid in enumerate(chunk, start=1)}
+            for resp in responses:
+                if not isinstance(resp, dict):
+                    continue
+                uid = id_to_uid.get(str(resp.get("id") or ""))
+                if not uid or int(resp.get("status") or 0) != 200:
+                    continue
+                value = (resp.get("body") or {}).get("value") or []
+                methods = [
+                    _METHOD_LABELS.get(str(m.get("@odata.type") or "").lower(), str(m.get("@odata.type") or ""))
+                    for m in value
+                    if str(m.get("@odata.type") or "").lower() != _PASSWORD_TYPE
+                ]
+                results[uid] = methods
+        return results
+
     def list_directory_roles(self) -> list[dict[str, Any]]:
         # Graph directoryRoles rejects custom page sizes, so omit $top.
         return self.list_graph_collection_custom(

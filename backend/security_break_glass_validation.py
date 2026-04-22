@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import logging
+
 from azure_cache import azure_cache
+from azure_client import AzureApiError, AzureClient
 from models import (
     SecurityAccessReviewMetric,
     SecurityBreakGlassValidationAccount,
@@ -18,6 +21,8 @@ from security_access_review import (
     _parse_datetime,
     _utc_now,
 )
+
+logger = logging.getLogger(__name__)
 
 _STALE_SIGNIN_DAYS = 90
 _STALE_PASSWORD_DAYS = 180
@@ -100,10 +105,13 @@ def _candidate_status(
     on_prem_sync: bool,
     account_class: str,
     days_since_password_change: int | None,
+    mfa_enrolled: bool | None,
 ) -> str:
     if enabled is not True:
         return "critical"
     if sign_in_state == "none":
+        return "critical"
+    if mfa_enrolled is False:
         return "critical"
     if has_privileged_access and sign_in_state == "stale":
         return "critical"
@@ -120,6 +128,18 @@ def _candidate_status(
     return "healthy"
 
 
+def _fetch_mfa_methods(user_ids: list[str]) -> tuple[dict[str, list[str]], bool]:
+    """Return (methods_by_user_id, lookup_succeeded)."""
+    if not user_ids:
+        return {}, True
+    try:
+        client = AzureClient()
+        return client.get_authentication_methods_batch(user_ids), True
+    except AzureApiError as exc:
+        logger.warning("MFA method lookup failed for break-glass validation: %s", exc)
+        return {}, False
+
+
 def build_security_break_glass_validation() -> SecurityBreakGlassValidationResponse:
     status = azure_cache.status()
     inventory_last_refresh = _dataset_last_refresh(status, "inventory")
@@ -130,19 +150,28 @@ def build_security_break_glass_validation() -> SecurityBreakGlassValidationRespo
         warnings.append("Azure inventory cache data is older than 4 hours, so privileged-assignment counts may be stale.")
     if _dataset_is_stale(directory_last_refresh):
         warnings.append("Azure directory cache data is older than 4 hours, so sign-in and account-health flags may be stale.")
-    warnings.append(
-        "MFA registration posture is not cached in this workspace yet, so this lane cannot confirm MFA enrollment or method strength today."
-    )
 
     privileged_assignment_counts = _privileged_assignment_counts()
-    accounts: list[SecurityBreakGlassValidationAccount] = []
 
+    # Collect break-glass candidate IDs first so we can batch-fetch MFA data.
+    candidate_rows: list[dict] = []
     for row in azure_cache._snapshot("users") or []:
         display_name = str(row.get("display_name") or "")
         principal_name = str(row.get("principal_name") or row.get("mail") or "")
+        if _break_glass_matches(display_name, principal_name):
+            candidate_rows.append(row)
+
+    candidate_ids = [str(row.get("id") or "") for row in candidate_rows if row.get("id")]
+    mfa_methods_by_id, mfa_lookup_ok = _fetch_mfa_methods(candidate_ids)
+    if not mfa_lookup_ok:
+        warnings.append("MFA method lookup failed; MFA enrollment status is not shown for this run.")
+
+    accounts: list[SecurityBreakGlassValidationAccount] = []
+
+    for row in candidate_rows:
+        display_name = str(row.get("display_name") or "")
+        principal_name = str(row.get("principal_name") or row.get("mail") or "")
         matched_terms = _break_glass_matches(display_name, principal_name)
-        if not matched_terms:
-            continue
 
         extra = row.get("extra") if isinstance(row.get("extra"), dict) else {}
         enabled = row.get("enabled")
@@ -164,6 +193,12 @@ def build_security_break_glass_validation() -> SecurityBreakGlassValidationRespo
             days_since_password_change=days_since_password_change,
         )
 
+        mfa_methods: list[str] = []
+        mfa_enrolled: bool | None = None
+        if mfa_lookup_ok and user_id in mfa_methods_by_id:
+            mfa_methods = mfa_methods_by_id[user_id]
+            mfa_enrolled = len(mfa_methods) > 0
+
         flags: list[str] = []
         if has_privileged_access:
             assignment_label = "assignment" if privileged_assignment_count == 1 else "assignments"
@@ -172,6 +207,10 @@ def build_security_break_glass_validation() -> SecurityBreakGlassValidationRespo
             flags.append(sign_in_flag)
         if enabled is not True:
             flags.append("Account is disabled and would not be usable during an emergency.")
+        if mfa_enrolled is False:
+            flags.append("No MFA method is registered — this account cannot complete multi-factor authentication during an emergency.")
+        elif mfa_enrolled is True:
+            flags.append(f"MFA enrolled: {', '.join(mfa_methods)}.")
         if on_prem_sync:
             flags.append("Account is synced from on-premises AD, so emergency access depends on the source directory.")
         if account_class == "shared_or_service":
@@ -189,6 +228,7 @@ def build_security_break_glass_validation() -> SecurityBreakGlassValidationRespo
             on_prem_sync=on_prem_sync,
             account_class=account_class,
             days_since_password_change=days_since_password_change,
+            mfa_enrolled=mfa_enrolled,
         )
 
         accounts.append(
@@ -209,6 +249,8 @@ def build_security_break_glass_validation() -> SecurityBreakGlassValidationRespo
                 is_licensed=is_licensed,
                 license_count=license_count,
                 on_prem_sync=on_prem_sync,
+                mfa_enrolled=mfa_enrolled,
+                mfa_methods=mfa_methods,
                 status=candidate_status,  # type: ignore[arg-type]
                 flags=flags,
             )

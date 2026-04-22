@@ -1390,6 +1390,8 @@ class SecurityBreakGlassValidationAccount(BaseModel):
     is_licensed: Optional[bool] = None
     license_count: int = 0
     on_prem_sync: bool = False
+    mfa_enrolled: Optional[bool] = None
+    mfa_methods: list[str] = Field(default_factory=list)
     status: Literal["critical", "warning", "healthy"] = "healthy"
     flags: list[str] = Field(default_factory=list)
 
