@@ -696,9 +696,19 @@ def get_default_copilot_model_id(available: list[AIModel]) -> str | None:
 def get_default_security_copilot_model_id(available: list[AIModel]) -> str | None:
     if not available:
         return None
+    # DB runtime config overrides the env-var default so operators can change
+    # the model without a restart (FIX-01).
+    preferred = OLLAMA_SECURITY_MODEL
+    try:
+        from defender_agent_store import defender_agent_store as _das
+        db_model = _das.get_security_runtime_config().get("ollama_model") or ""
+        if db_model:
+            preferred = db_model
+    except Exception:
+        pass
     default_ollama = select_available_ollama_model(
         available,
-        preferred_model_id=OLLAMA_SECURITY_MODEL,
+        preferred_model_id=preferred,
         fallback_model_id=OLLAMA_MODEL,
         runtime="security",
     )

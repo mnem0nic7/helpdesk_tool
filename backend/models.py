@@ -508,6 +508,7 @@ class KnowledgeBaseArticleUpsertRequest(BaseModel):
     summary: str = ""
     content: str
     source_ticket_key: str = ""
+    category: str = ""
 
 
 class KnowledgeBaseDraftRequest(BaseModel):

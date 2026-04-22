@@ -763,8 +763,9 @@ Return exactly:
 
 def _ai_classify_alert_fallback(
     alert: dict[str, Any],
+    model_id: str = OLLAMA_SECURITY_MODEL,
 ) -> tuple[int | None, str, list[str], str, int] | None:
-    """Ask gemma4:31b to classify an alert that matched no built-in or custom rule.
+    """Ask the security LLM to classify an alert that matched no built-in or custom rule.
 
     Returns the same tuple shape as _classify_alert or None on failure.
     Always logs as T3/recommend regardless of what the model suggests for T1/T2,
@@ -780,7 +781,7 @@ def _ai_classify_alert_fallback(
             f"Description: {str(alert.get('description', ''))[:500]}"
         )
         raw = invoke_model_text(
-            OLLAMA_SECURITY_MODEL,
+            model_id,
             _AI_FALLBACK_PROMPT,
             user_msg,
             feature_surface="defender_agent_fallback",
@@ -794,7 +795,7 @@ def _ai_classify_alert_fallback(
         action = str(data.get("action") or "start_investigation")
         reasoning = str(data.get("reasoning") or "AI fallback classification")
         # Always cap at T3 for safety — AI-classified alerts are never auto-executed
-        return 3, "recommend", [action], f"[AI fallback — {OLLAMA_SECURITY_MODEL}] {reasoning}", 40
+        return 3, "recommend", [action], f"[AI fallback — {model_id}] {reasoning}", 40
     except Exception as exc:
         logger.warning("Defender agent AI fallback classification failed: %s", exc)
         return None
@@ -1331,6 +1332,10 @@ def _run_agent_cycle() -> None:
         tier2_delay = int(config.get("tier2_delay_minutes") or 15)
         min_confidence = int(config.get("min_confidence") or 0)
         jobs_dispatched = 0
+        # FIX-02: resolve the AI model from runtime config so the agent cycle
+        # uses the same model as the Copilot and narrative generator.
+        runtime_config = defender_agent_store.get_security_runtime_config()
+        ai_fallback_model = runtime_config.get("ollama_model") or OLLAMA_SECURITY_MODEL
 
         active_suppressions = defender_agent_store.get_active_suppressions()
         cooldown_hours = int(config.get("entity_cooldown_hours") or 24)
@@ -1404,7 +1409,7 @@ def _run_agent_cycle() -> None:
                     tier, decision_type, action_types, reason, confidence_score = cr_result
             # If still a skip after custom rules, try AI fallback classification
             if decision_type == "skip":
-                ai_result = _ai_classify_alert_fallback(alert)
+                ai_result = _ai_classify_alert_fallback(alert, model_id=ai_fallback_model)
                 if ai_result is not None:
                     tier, decision_type, action_types, reason, confidence_score = ai_result
             # Primary action_type is first in list (for display / backward compat)

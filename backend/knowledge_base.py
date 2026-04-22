@@ -362,6 +362,7 @@ class KnowledgeBaseStore:
             source_ticket_key=(source_ticket_key or body.source_ticket_key or "").strip(),
             imported_from_seed=imported_from_seed,
             ai_generated=ai_generated,
+            category=(body.category or "").strip(),
             created_at=now,
             updated_at=now,
         )
@@ -378,6 +379,7 @@ class KnowledgeBaseStore:
                 article.source_ticket_key,
                 int(article.imported_from_seed),
                 int(article.ai_generated),
+                article.category,
                 article.created_at,
                 article.updated_at,
             )
@@ -385,8 +387,8 @@ class KnowledgeBaseStore:
                 row = conn.execute(
                     """INSERT INTO kb_articles
                     (slug, code, title, request_type, summary, content, source_filename, source_ticket_key,
-                     imported_from_seed, ai_generated, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     imported_from_seed, ai_generated, category, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id""",
                     params,
                 ).fetchone()
@@ -395,8 +397,8 @@ class KnowledgeBaseStore:
                 cur = conn.execute(
                     """INSERT INTO kb_articles
                     (slug, code, title, request_type, summary, content, source_filename, source_ticket_key,
-                     imported_from_seed, ai_generated, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     imported_from_seed, ai_generated, category, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     params,
                 )
                 article.id = int(cur.lastrowid)
@@ -424,11 +426,13 @@ class KnowledgeBaseStore:
             else (body.source_ticket_key or existing.source_ticket_key).strip()
         )
 
+        merged_category = (body.category or existing.category or "").strip()
+
         with self._conn() as conn:
             conn.execute(
                 """UPDATE kb_articles
                 SET slug = {p}, title = {p}, request_type = {p}, summary = {p}, content = {p},
-                    source_ticket_key = {p}, ai_generated = {p}, updated_at = {p}
+                    source_ticket_key = {p}, ai_generated = {p}, category = {p}, updated_at = {p}
                 WHERE id = {p}""".format(p=self._placeholder()),
                 (
                     slug,
@@ -438,6 +442,7 @@ class KnowledgeBaseStore:
                     (body.content or "").strip(),
                     merged_ticket_key,
                     int(merged_ai_generated),
+                    merged_category,
                     updated,
                     article_id,
                 ),
@@ -519,11 +524,14 @@ class KnowledgeBaseStore:
                 request_type = _REQUEST_TYPE_BY_CODE[code]
                 summary = _extract_summary(lines)
                 content = _render_content(lines)
+                # Auto-tag KB-SEC-* articles with the "security" category (FIX-03)
+                auto_category = "security" if code.startswith("KB-SEC-") else ""
                 article = KnowledgeBaseArticleUpsertRequest(
                     title=title,
                     request_type=request_type,
                     summary=summary,
                     content=content,
+                    category=auto_category,
                 )
                 self.create_article(
                     article,

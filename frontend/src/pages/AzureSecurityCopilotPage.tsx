@@ -403,7 +403,8 @@ export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: 
   const starterPrompts = isDlpMode ? dlpStarterPrompts : generalStarterPrompts;
   const defaultIncident = buildEmptyIncident(isDlpMode ? "dlp_finding" : "unknown");
   const [draft, setDraft] = useState("");
-  const [model, setModel] = useState(getSiteBranding().scope === "security" ? "gemma4:31b" : "");
+  const isSecurityScope = getSiteBranding().scope === "security";
+  const [model, setModel] = useState(isSecurityScope ? "gemma4:31b" : "");
   const [turns, setTurns] = useState<SecurityTurn[]>([]);
   const [latestResponse, setLatestResponse] = useState<SecurityCopilotChatResponse | null>(null);
   const [pendingUserMessage, setPendingUserMessage] = useState("");
@@ -413,7 +414,7 @@ export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: 
   // Defender Agent handoff — read ?decisionId= and auto-submit
   const [searchParams] = useSearchParams();
   const handoffDecisionId = searchParams.get("decisionId") || null;
-  const handoffSubmittedRef = useRef(false);
+  const handoffSubmittedRef = useRef<string | null>(null);
   const { data: handoffDecision } = useQuery({
     queryKey: ["defender-agent-decision-handoff", handoffDecisionId],
     queryFn: () => api.getDefenderAgentDecision(handoffDecisionId!),
@@ -426,6 +427,19 @@ export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: 
     queryFn: () => api.getAzureSecurityCopilotModels(),
     staleTime: 5 * 60 * 1000,
   });
+
+  // FIX-06: Fetch runtime config to seed the initial model from the DB override.
+  const { data: runtimeConfig } = useQuery({
+    queryKey: ["azure", "security", "runtime-config"],
+    queryFn: () => api.getSecurityRuntimeConfig(),
+    staleTime: 60_000,
+    enabled: isSecurityScope,
+  });
+  useEffect(() => {
+    if (runtimeConfig?.ollama_model) {
+      setModel(runtimeConfig.ollama_model);
+    }
+  }, [runtimeConfig?.ollama_model]);
   const statusQuery = useQuery({
     queryKey: ["azure", "status"],
     queryFn: () => api.getAzureStatus(),
@@ -500,8 +514,8 @@ export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: 
 
   // Auto-submit when opened from Defender Agent (AI-01)
   useEffect(() => {
-    if (!handoffDecision || handoffSubmittedRef.current || isDlpMode) return;
-    handoffSubmittedRef.current = true;
+    if (!handoffDecision || handoffSubmittedRef.current === handoffDecisionId || isDlpMode) return;
+    handoffSubmittedRef.current = handoffDecisionId;
     const d = handoffDecision;
     const entities = (d.entities ?? [])
       .slice(0, 4)
@@ -693,18 +707,21 @@ export default function AzureSecurityCopilotPage({ mode = "general" }: { mode?: 
             placeholder={starterPrompts[0]}
             className="w-full rounded-xl border border-slate-300 px-3 py-3 text-sm outline-none transition focus:border-sky-500"
           />
-          <select
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-            className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
-          >
-            <option value="">Default Ollama model</option>
-            {models.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name === item.id ? item.id : `${item.name} (${item.id})`}
-              </option>
-            ))}
-          </select>
+          {/* FIX-07: hide per-session model picker on security scope — model is set by admin only */}
+          {!isSecurityScope && (
+            <select
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="">Default Ollama model</option>
+              {models.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name === item.id ? item.id : `${item.name} (${item.id})`}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             type="button"
             onClick={() => submitInvestigationMessage()}
