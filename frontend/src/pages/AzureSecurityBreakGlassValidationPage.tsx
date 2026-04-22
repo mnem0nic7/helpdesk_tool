@@ -2,7 +2,7 @@ import { useDeferredValue, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
-import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses } from "../components/AzureSecurityLane.tsx";
+import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses, LaneSummaryPanel } from "../components/AzureSecurityLane.tsx";
 import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import { api, type SecurityBreakGlassValidationAccount } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
@@ -215,6 +215,8 @@ export default function AzureSecurityBreakGlassValidationPage() {
           { label: "Open Security Copilot", to: "/security/copilot", tone: "secondary" },
         ]}
       />
+
+      <LaneSummaryPanel laneKey="break-glass-validation" />
 
       <section className="grid gap-4 xl:grid-cols-3 md:grid-cols-2">
         {query.data.metrics.map((metric) => (

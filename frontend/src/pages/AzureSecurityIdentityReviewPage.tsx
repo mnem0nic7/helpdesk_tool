@@ -2,7 +2,7 @@ import { useDeferredValue, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
-import { AzureSecurityLaneHero, AzureSecurityMetricCard } from "../components/AzureSecurityLane.tsx";
+import { AzureSecurityLaneHero, AzureSecurityMetricCard, LaneSummaryPanel } from "../components/AzureSecurityLane.tsx";
 import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import { api, type AzureDirectoryObject } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
@@ -267,6 +267,8 @@ export default function AzureSecurityIdentityReviewPage() {
           { label: "Open raw identity inventory", to: "/identity", tone: "secondary" },
         ]}
       />
+
+      <LaneSummaryPanel laneKey="identity-review" />
 
       <section className="grid gap-4 xl:grid-cols-3 md:grid-cols-2">
         <AzureSecurityMetricCard

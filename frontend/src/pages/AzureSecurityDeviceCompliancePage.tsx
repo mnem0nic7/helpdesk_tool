@@ -2,7 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } fro
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
-import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses } from "../components/AzureSecurityLane.tsx";
+import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses, LaneSummaryPanel } from "../components/AzureSecurityLane.tsx";
 import {
   api,
   type AzureDirectoryObject,
@@ -757,6 +757,8 @@ export default function AzureSecurityDeviceCompliancePage() {
           { label: "Open Security Copilot", to: "/security/copilot", tone: "secondary" },
         ]}
       />
+
+      <LaneSummaryPanel laneKey="device-compliance" />
 
       <section className="grid gap-4 xl:grid-cols-4 md:grid-cols-2">
         {query.data.metrics.map((metric) => (

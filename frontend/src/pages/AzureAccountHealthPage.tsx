@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type AzureDirectoryObject } from "../lib/api.ts";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
-import { AzureSecurityLaneHero } from "../components/AzureSecurityLane.tsx";
+import { AzureSecurityLaneHero, LaneSummaryPanel } from "../components/AzureSecurityLane.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { SortHeader, sortRows, useTableSort } from "../lib/tableSort.tsx";
@@ -532,6 +532,8 @@ export default function AzureAccountHealthPage() {
           { label: "Open raw user inventory", to: "/users", tone: "secondary" },
         ]}
       />
+
+      <LaneSummaryPanel laneKey="account-health" />
 
       {exceptionsQuery.isError ? (
         <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">

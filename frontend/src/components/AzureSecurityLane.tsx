@@ -1,5 +1,7 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, type SecurityLaneAISummary } from "../lib/api.ts";
 
 export type AzureSecurityLaneTone = "slate" | "sky" | "emerald" | "amber" | "rose" | "violet";
 
@@ -98,6 +100,99 @@ export function AzureSecurityLaneHero({
           <div className="mt-1 text-sm font-medium text-slate-900">{refreshValue}</div>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function formatRelativeTime(isoString: string): string {
+  if (!isoString) return "";
+  try {
+    const diffMs = Date.now() - new Date(isoString).getTime();
+    const diffMin = Math.round(diffMs / 60_000);
+    if (diffMin < 2) return "just now";
+    if (diffMin < 60) return `${diffMin} min ago`;
+    const diffH = Math.round(diffMin / 60);
+    if (diffH < 24) return `${diffH}h ago`;
+    return `${Math.round(diffH / 24)}d ago`;
+  } catch {
+    return isoString;
+  }
+}
+
+export function LaneSummaryPanel({ laneKey }: { laneKey: string }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(true);
+
+  const summaryQuery = useQuery({
+    queryKey: ["azure", "security", "lane-summaries"],
+    queryFn: () => api.getLaneSummaries(),
+    staleTime: 5 * 60_000,
+  });
+
+  const regenMut = useMutation({
+    mutationFn: () => api.regenerateLaneSummary(laneKey),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["azure", "security", "lane-summaries"] });
+    },
+  });
+
+  const summary: SecurityLaneAISummary | undefined = summaryQuery.data?.find(
+    (s) => s.lane_key === laneKey
+  );
+
+  if (summaryQuery.isLoading) return null;
+
+  return (
+    <section className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex items-center gap-2 text-sm font-semibold text-indigo-800 hover:text-indigo-900"
+        >
+          <span className="text-xs">{open ? "▾" : "▸"}</span>
+          AI Triage Summary
+        </button>
+        <div className="flex items-center gap-3">
+          {summary?.generated_at && (
+            <span className="text-xs text-indigo-500">
+              Generated {formatRelativeTime(summary.generated_at)}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => regenMut.mutate()}
+            disabled={regenMut.isPending}
+            className="rounded-md border border-indigo-300 bg-white px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+          >
+            {regenMut.isPending ? "Queued…" : "Regenerate"}
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="mt-3">
+          {summary ? (
+            <>
+              <p className="text-sm leading-relaxed text-indigo-900">{summary.narrative}</p>
+              {summary.bullets.length > 0 && (
+                <ul className="mt-3 space-y-1.5">
+                  {summary.bullets.map((b, i) => (
+                    <li key={i} className="flex gap-2 text-sm text-indigo-800">
+                      <span className="mt-0.5 text-indigo-400">•</span>
+                      <span>{b}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-indigo-600 italic">
+              AI summary generates hourly — not yet available.
+            </p>
+          )}
+        </div>
+      )}
     </section>
   );
 }

@@ -2,7 +2,7 @@ import { useDeferredValue, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
-import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses } from "../components/AzureSecurityLane.tsx";
+import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses, LaneSummaryPanel } from "../components/AzureSecurityLane.tsx";
 import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import { api, type SecurityConditionalAccessChange, type SecurityConditionalAccessPolicy } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
@@ -263,6 +263,8 @@ export default function AzureSecurityConditionalAccessTrackerPage() {
           { label: "Open Identity Review", to: "/security/identity-review", tone: "secondary" },
         ]}
       />
+
+      <LaneSummaryPanel laneKey="conditional-access-tracker" />
 
       {!query.data.access_available ? (
         <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">

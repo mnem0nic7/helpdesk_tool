@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from auth import require_admin, require_authenticated_user, session_can_manage_users
 from azure_cache import azure_cache
@@ -37,6 +37,11 @@ from security_device_jobs import SecurityDeviceJobError, security_device_jobs
 from security_directory_role_review import build_security_directory_role_review
 from security_finding_exception_store import security_finding_exception_store
 from security_workspace_summary import build_security_workspace_summary
+from security_lane_summary_service import (
+    generate_lane_summary_sync,
+    get_all_lane_summaries,
+    _LANES as _LANE_DEFS,
+)
 from site_context import get_current_site_scope
 
 router = APIRouter(prefix="/api/azure/security")
@@ -344,3 +349,32 @@ def set_runtime_config(
         if key in allowed_keys:
             defender_agent_store.set_security_runtime_config(key, str(value))
     return defender_agent_store.get_security_runtime_config()
+
+
+# ---------------------------------------------------------------------------
+# AI lane summaries (AI-08)
+# ---------------------------------------------------------------------------
+
+@router.get("/lane-summaries")
+def list_lane_summaries(
+    _session: dict = Depends(require_authenticated_user),
+) -> list[dict]:
+    """Return all cached AI lane summaries. Available on both azure and security scopes."""
+    return get_all_lane_summaries()
+
+
+@router.post("/lane-summaries/{lane_key}/regenerate")
+def regenerate_lane_summary(
+    lane_key: str,
+    background_tasks: BackgroundTasks,
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    """Enqueue a background AI summary regeneration for one lane."""
+    lane = next((la for la in _LANE_DEFS if la["key"] == lane_key), None)
+    if lane is None:
+        raise HTTPException(status_code=404, detail=f"Unknown lane key: {lane_key}")
+    config = defender_agent_store.get_security_runtime_config()
+    from config import OLLAMA_SECURITY_MODEL
+    model_id = config.get("ollama_model") or OLLAMA_SECURITY_MODEL
+    background_tasks.add_task(generate_lane_summary_sync, lane, model_id)
+    return {"status": "queued", "lane_key": lane_key}

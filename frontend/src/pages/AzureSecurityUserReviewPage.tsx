@@ -2,7 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
-import { AzureSecurityLaneHero, AzureSecurityMetricCard } from "../components/AzureSecurityLane.tsx";
+import { AzureSecurityLaneHero, AzureSecurityMetricCard, LaneSummaryPanel } from "../components/AzureSecurityLane.tsx";
 import {
   api,
   type AzureDirectoryObject,
@@ -463,6 +463,8 @@ export default function AzureSecurityUserReviewPage() {
           { label: "Open raw user inventory", to: "/users", tone: "secondary" },
         ]}
       />
+
+      <LaneSummaryPanel laneKey="user-review" />
 
       {exceptionsQuery.isError ? (
         <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm">

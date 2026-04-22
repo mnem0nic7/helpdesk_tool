@@ -2,7 +2,7 @@ import { useDeferredValue, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
-import { AzureSecurityLaneHero, AzureSecurityMetricCard } from "../components/AzureSecurityLane.tsx";
+import { AzureSecurityLaneHero, AzureSecurityMetricCard, LaneSummaryPanel } from "../components/AzureSecurityLane.tsx";
 import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import {
   api,
@@ -205,6 +205,8 @@ export default function AzureSecurityAppHygienePage() {
           { label: "Open app inventory", to: "/identity?tab=app-registrations", tone: "secondary" },
         ]}
       />
+
+      <LaneSummaryPanel laneKey="app-hygiene" />
 
       <section className="grid gap-4 xl:grid-cols-3 md:grid-cols-2">
         {query.data.metrics.map((metric) => (

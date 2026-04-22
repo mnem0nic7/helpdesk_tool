@@ -2173,6 +2173,67 @@ def generate_defender_narrative(decision: dict[str, Any], model_id: str) -> str:
         return ""
 
 
+_LANE_SUMMARY_SYSTEM_PROMPT = """You are a concise Azure security analyst. You will receive a JSON payload describing one security review lane.
+
+Respond with valid JSON only, using this exact schema:
+{
+  "teaser": "<one sentence, ≤20 words, describing the most urgent finding>",
+  "narrative": "<one paragraph, ≤50 words, describing overall posture and top issues>",
+  "bullets": ["<actionable bullet 1>", "<actionable bullet 2>", "<actionable bullet 3>"]
+}
+
+Rules:
+- Reference specific counts or entity names — do not use filler phrases like "there are some issues"
+- bullets must have 3–5 items
+- If status is healthy/info and attention_count is 0, reflect that positively
+- Output only the JSON object, nothing else"""
+
+
+def generate_lane_summary(
+    lane_key: str,
+    lane_label: str,
+    status: str,
+    attention_count: int,
+    attention_label: str,
+    top_items: list[dict[str, Any]],
+    model_id: str,
+) -> dict[str, Any]:
+    """Generate AI teaser, narrative, and bullets for one security lane.
+
+    Returns a dict with keys: teaser, narrative, bullets (list[str]).
+    Returns {} on failure.
+    """
+    import json as _json
+    payload = {
+        "lane": lane_label,
+        "status": status,
+        "attention_count": attention_count,
+        "attention_label": attention_label,
+        "top_items": top_items[:10],
+    }
+    user_msg = _json.dumps(payload, ensure_ascii=False)
+    try:
+        raw = invoke_model_text(
+            model_id,
+            _LANE_SUMMARY_SYSTEM_PROMPT,
+            user_msg,
+            feature_surface="security_lane_summary",
+            app_surface="security_portal",
+            json_output=True,
+            max_output_tokens=300,
+            queue_label=f"lane_summary:{lane_key}",
+        )
+        data = _json.loads(raw)
+        return {
+            "teaser": str(data.get("teaser") or "").strip(),
+            "narrative": str(data.get("narrative") or "").strip(),
+            "bullets": [str(b).strip() for b in (data.get("bullets") or []) if b],
+        }
+    except Exception as exc:
+        logger.warning("generate_lane_summary(%s) failed: %s", lane_key, exc)
+        return {}
+
+
 def generate_security_digest(stats: dict[str, Any], model_id: str) -> str:
     """Generate a daily digest narrative from aggregated Defender Agent stats."""
     user_msg = (

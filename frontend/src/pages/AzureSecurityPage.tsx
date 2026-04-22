@@ -8,7 +8,7 @@ import {
   type AzureSecurityLaneAction,
   type AzureSecurityLaneTone,
 } from "../components/AzureSecurityLane.tsx";
-import { api, type SecurityWorkspaceLaneSummary } from "../lib/api.ts";
+import { api, type SecurityLaneAISummary, type SecurityWorkspaceLaneSummary } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 type LaneGroup = "respond-now" | "identity-app-control" | "accounts-external-access" | "devices-posture";
@@ -430,9 +430,11 @@ function LaneStatusPill({ summary }: { summary: SecurityWorkspaceLaneSummary }) 
 function LaneCard({
   item,
   summary,
+  aiSummary,
 }: {
   item: LaneCatalogItem;
   summary: SecurityWorkspaceLaneSummary;
+  aiSummary?: SecurityLaneAISummary;
 }) {
   const tone = toneForStatus(summary.status);
 
@@ -457,6 +459,9 @@ function LaneCard({
               <div className="text-sm font-semibold text-slate-900">{summary.attention_label}</div>
             </div>
             <p className="mt-2 text-sm leading-6 text-slate-600">{summary.secondary_label}</p>
+            {aiSummary?.teaser && (
+              <p className="mt-2 text-xs italic text-indigo-700 leading-relaxed">{aiSummary.teaser}</p>
+            )}
             {summary.access_available ? null : (
               <div className="mt-3 rounded-xl bg-white/80 px-3 py-2 text-sm text-amber-900">{summary.access_message}</div>
             )}
@@ -486,9 +491,11 @@ function LaneCard({
 function PriorityLaneCard({
   item,
   summary,
+  aiSummary,
 }: {
   item: LaneCatalogItem;
   summary: SecurityWorkspaceLaneSummary;
+  aiSummary?: SecurityLaneAISummary;
 }) {
   const tone = toneForStatus(summary.status);
   const backgroundClass =
@@ -512,6 +519,9 @@ function PriorityLaneCard({
         <div className="pb-1 text-sm font-medium text-slate-700">{summary.attention_label}</div>
       </div>
       <p className="mt-3 text-sm leading-6 text-slate-600">{summary.secondary_label}</p>
+      {aiSummary?.teaser && (
+        <p className="mt-2 text-xs italic text-indigo-700 leading-relaxed">{aiSummary.teaser}</p>
+      )}
       {summary.access_available ? null : (
         <div className="mt-3 rounded-xl border border-amber-200 bg-white/85 px-3 py-2 text-sm text-amber-900">{summary.access_message}</div>
       )}
@@ -643,6 +653,12 @@ export default function AzureSecurityPage() {
     queryFn: () => api.getAzureSecurityWorkspaceSummary(),
     ...getPollingQueryOptions("slow_5m"),
   });
+  const laneSummariesQuery = useQuery({
+    queryKey: ["azure", "security", "lane-summaries"],
+    queryFn: () => api.getLaneSummaries(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const aiSummaryMap = new Map((laneSummariesQuery.data ?? []).map((s) => [s.lane_key, s]));
 
   const overview = overviewQuery.data;
   const status = statusQuery.data;
@@ -839,7 +855,7 @@ export default function AzureSecurityPage() {
           <h2 className="text-base font-semibold text-slate-900">Needs Attention Now</h2>
           <div className="mt-4 grid gap-4 xl:grid-cols-2">
             {priorityLanes.map(({ item, summary }) => (
-              <PriorityLaneCard key={`priority-${item.key}`} item={item} summary={summary} />
+              <PriorityLaneCard key={`priority-${item.key}`} item={item} summary={summary} aiSummary={aiSummaryMap.get(item.key)} />
             ))}
           </div>
         </section>
@@ -953,7 +969,7 @@ export default function AzureSecurityPage() {
                       {collapsed ? null : (
                         <div id={`security-group-${group.key}`} className="grid gap-4 xl:grid-cols-2">
                           {group.items.map(({ item, summary }) => (
-                            <LaneCard key={item.key} item={item} summary={summary} />
+                            <LaneCard key={item.key} item={item} summary={summary} aiSummary={aiSummaryMap.get(item.key)} />
                           ))}
                         </div>
                       )}

@@ -3977,6 +3977,12 @@ export const api = {
       return res.json() as Promise<Record<string, string>>;
     });
   },
+  getLaneSummaries(): Promise<SecurityLaneAISummary[]> {
+    return fetchJSON<SecurityLaneAISummary[]>("/api/azure/security/lane-summaries");
+  },
+  regenerateLaneSummary(laneKey: string): Promise<{ status: string; lane_key: string }> {
+    return postJSON(`/api/azure/security/lane-summaries/${laneKey}/regenerate`, {});
+  },
   listWatchlist(includeInactive = false): Promise<{ entries: DefenderAgentWatchlistEntry[]; total: number }> {
     return fetchJSON(`/api/azure/security/defender-agent/watchlist?include_inactive=${includeInactive}`);
   },
@@ -5083,5 +5089,15 @@ export interface CreateDeactivationJobRequest {
   ad_sam?: string;
   run_at: string;
   timezone_label: string;
+}
+
+export interface SecurityLaneAISummary {
+  lane_key: string;
+  narrative: string;
+  teaser: string;
+  bullets: string[];
+  bullets_json: string;
+  generated_at: string;
+  model_used: string;
 }
 

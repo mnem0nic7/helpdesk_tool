@@ -2,7 +2,7 @@ import { useDeferredValue, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
-import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses } from "../components/AzureSecurityLane.tsx";
+import { AzureSecurityLaneHero, AzureSecurityMetricCard, azureSecurityToneClasses, LaneSummaryPanel } from "../components/AzureSecurityLane.tsx";
 import SecurityReviewPagination, { sliceSecurityReviewPage, useSecurityReviewPagination } from "../components/SecurityReviewPagination.tsx";
 import { api, type AzureDirectoryObject } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
@@ -399,6 +399,8 @@ export default function AzureSecurityGuestAccessReviewPage() {
           { label: "Open raw user inventory", to: "/users", tone: "secondary" },
         ]}
       />
+
+      <LaneSummaryPanel laneKey="guest-access-review" />
 
       <section className="rounded-2xl border border-sky-200 bg-sky-50 p-5 shadow-sm">
         <h2 className="text-lg font-semibold text-sky-900">Coverage note</h2>
