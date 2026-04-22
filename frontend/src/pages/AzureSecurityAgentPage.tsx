@@ -1435,6 +1435,21 @@ function AlertDetailDrawer({
               )}
             </div>
           )}
+          {/* Investigate with Copilot — always available for non-skip decisions */}
+          {d.decision !== "skip" && (
+            <div className="mt-2 flex justify-start">
+              <a
+                href={`/security/copilot?decisionId=${d.decision_id}`}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 hover:bg-sky-100"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 3 6.5 6.2v6.6L12 16l5.5-3.2V6.2L12 3Z" />
+                  <path d="M12 8.2 9.2 9.8v3.4L12 14.8l2.8-1.6V9.8L12 8.2Z" />
+                </svg>
+                Investigate with Copilot
+              </a>
+            </div>
+          )}
         </div>
       )}
     </>
@@ -1499,6 +1514,9 @@ function DecisionRow({
           <div className="text-sm font-medium text-gray-800 truncate" title={d.alert_title}>
             {d.alert_title || d.alert_id}
           </div>
+          {d.ai_narrative && (
+            <div className="text-xs text-blue-600 italic truncate mt-0.5" title={d.ai_narrative}>{d.ai_narrative}</div>
+          )}
           {d.reason && <div className="text-xs text-gray-400 truncate" title={d.reason}>{d.reason}</div>}
           <EntityChips
             entities={d.entities}
@@ -1672,8 +1690,17 @@ function DecisionRow({
                 <span className="text-xs text-gray-400 italic">No actions available for this decision</span>
               )}
 
-              {/* Spacer + details link */}
-              <span className="ml-auto">
+              {/* Spacer + details/investigate links */}
+              <span className="ml-auto flex items-center gap-2">
+                {d.decision !== "skip" && (
+                  <a
+                    href={`/security/copilot?decisionId=${d.decision_id}`}
+                    onClick={(e) => { e.stopPropagation(); setExpanded(false); }}
+                    className="rounded border border-sky-300 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100"
+                  >
+                    🔬 Investigate
+                  </a>
+                )}
                 <button
                   onClick={() => { setExpanded(false); onOpenDetail(d.decision_id); }}
                   className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
