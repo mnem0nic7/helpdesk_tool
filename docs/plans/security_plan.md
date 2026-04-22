@@ -8,9 +8,9 @@ Tracks what is built, what is agreed, and what is deferred for the dedicated sec
 
 | Component | What it does | AI |
 |---|---|---|
-| **Defender Agent** | Polls Microsoft Defender alerts every 2 min; auto-remediates T1, queues T2, surfaces T3 for approval | 47 built-in rules + custom rules + AI fallback classifier (gemma4:31b, always T3-capped) |
+| **Defender Agent** | Polls Microsoft Defender alerts every 2 min; auto-remediates T1, queues T2, surfaces T3 for approval | 47 built-in rules + custom rules + AI fallback classifier (gemma4:31b or runtime-config model, always T3-capped) |
 | **Security Copilot** | On-demand investigation workbench; queries 16 internal sources, synthesizes with Ollama | gemma4:31b by default (admin-configurable via AI-05 runtime config); isolated security Ollama runtime |
-| **Security Review Lanes** | 11 periodic-audit surfaces (Access, Identity, Users, Guests, Apps, Devices, Account Health, DLP, CA Tracker, Break-glass, Directory Roles) | AI-08 lane summaries planned — 9 lanes, 60-min generation cycle |
+| **Security Review Lanes** | 11 periodic-audit surfaces (Access, Identity, Users, Guests, Apps, Devices, Account Health, DLP, CA Tracker, Break-glass, Directory Roles) | AI-08 lane summaries implemented — 9 lanes, 60-min leader-only service; LaneSummaryPanel on all 9 lane pages; hub card teasers on Security Overview; regenerate endpoint for on-demand refresh |
 | **Tools** | Login audit, mailbox delegate lookup, OneDrive copy | None |
 | **Daily Digest** | Leader-only background service generating a 24h Defender activity summary | gemma4:31b via security Ollama runtime; Teams Adaptive Card webhook |
 
@@ -93,7 +93,7 @@ Both sites share the same backend routes (guards accept both `azure` and `securi
 ### Proactive — morning hygiene pass
 
 1. **Teams digest** arrives at the configured hour (default 8 AM UTC). Review the 24h summary: decision counts by tier, unresolved T3s, top alert categories.
-2. **Security Overview hub cards** show AI teasers for each review lane (once AI-08 is live). Cards ranked by attention score — highest-severity lanes appear in "Needs Attention Now."
+2. **Security Overview hub cards** show AI teasers for each review lane. Cards ranked by attention score — highest-severity lanes appear in "Needs Attention Now."
 3. Open flagged lanes and read the AI triage summary panel at the top of each lane page for specific findings. Work down the priority list.
 4. Use **Copilot** for deeper investigation on specific accounts, devices, or apps surfaced by the lane review. DLP Review starts in Copilot's `dlp_finding` mode for pasted Purview findings.
 
@@ -170,63 +170,59 @@ Rule-based Defender Agent classification (T1/T2 auto-remediation) continues unaf
 | # | Feature | Status | Key Files |
 |---|---|---|---|
 | AI-01 | Investigate with Copilot (Defender → Copilot handoff) | ✅ Implemented | `AzureSecurityAgentPage.tsx`, `AzureSecurityCopilotPage.tsx` |
-| AI-02 | AI Fallback Classification for Defender Agent | ✅ Implemented | `defender_agent.py`, `ai_client.py` |
-| AI-03 | AI Narrative on Defender Decisions | ✅ Implemented | `defender_agent_store.py`, `routes_defender_agent.py`, `ai_client.py`, `AzureSecurityAgentPage.tsx` |
+| AI-02 | AI Fallback Classification for Defender Agent | ✅ Implemented | `defender_agent.py`, `ai_client.py` (FIX-02 applied) |
+| AI-03 | AI Narrative on Defender Decisions | ✅ Implemented | `defender_agent_store.py`, `routes_defender_agent.py`, `ai_client.py`, `AzureSecurityAgentPage.tsx` (FIX-04 applied) |
 | AI-04 | Save Copilot Investigation to Decision | ✅ Implemented | `AzureSecurityCopilotPage.tsx` |
-| AI-05 | Site-wide Model Picker (Admin) | ✅ Implemented | `routes_azure_security.py`, `defender_agent_store.py`, `AzureSecurityPage.tsx` |
-| AI-06 | Security Knowledge Base Category | ✅ Implemented | `knowledge_base.py`, `security_copilot.py`, `models.py`, migration 0018 |
+| AI-05 | Site-wide Model Picker (Admin) | ✅ Implemented | `routes_azure_security.py`, `defender_agent_store.py`, `AzureSecurityPage.tsx`, `ai_client.py` (FIX-01, FIX-06, FIX-07 applied) |
+| AI-06 | Security Knowledge Base Category | ✅ Implemented | `knowledge_base.py`, `security_copilot.py`, `models.py`, migration 0018 (FIX-03 applied) |
 | AI-07 | Daily Security Digest to Teams | ✅ Implemented | `security_digest_service.py`, `main.py`, `config.py`, `.env` |
+| AI-08 | Security Lane AI Summaries | ✅ Implemented | `security_lane_summary_service.py`, `routes_azure_security.py`, `AzureSecurityLane.tsx`, `AzureSecurityPage.tsx`, migration 0019 |
 
 ### AI-01: Investigate with Copilot (Defender → Copilot handoff)
-**How it works**: "Investigate with Copilot" button on each Defender decision row and detail drawer. Navigates to `/security/copilot?decisionId=<id>`. Copilot reads the param on mount, fetches the decision, builds a prompt from alert title/entities/severity/MITRE/reason, and auto-submits immediately via `useRef` one-shot pattern. A "Save to Decision" button appears when launched from a decision and posts the investigation markdown back to the decision notes.
+**How it works**: "Investigate with Copilot" button on each Defender decision row and detail drawer. Navigates to `/security/copilot?decisionId=<id>`. Copilot reads the param on mount, fetches the decision, builds a prompt from alert title/entities/severity/MITRE/reason, and auto-submits immediately via a `useRef` one-shot pattern that tracks the submitted decision ID (not a boolean) to prevent double-submit on re-render. A "Save to Decision" button appears when launched from a decision and posts the investigation markdown back to the decision notes.
 
 ### AI-02: AI Fallback Classification for Defender Agent
-**How it works**: After built-in rules and custom rules both miss, `_ai_classify_alert_fallback()` calls `invoke_model_text()` with the security Ollama runtime. **Always caps at T3/recommend** regardless of model suggestion — AI-classified alerts are never auto-executed. Falls back to `skip` on model failure.
+**How it works**: After built-in rules and custom rules both miss, `_ai_classify_alert_fallback()` calls `invoke_model_text()` with the security Ollama runtime. **Always caps at T3/recommend** regardless of model suggestion — AI-classified alerts are never auto-executed. Falls back to `skip` on model failure. The model used is resolved from `security_runtime_config` once per agent cycle (FIX-02), so the fallback classifier uses the same model as Copilot and the narrative generator.
 
 ### AI-03: AI Narrative on Defender Decisions
-**How it works**: `ai_narrative` and `ai_narrative_generated_at` columns on `defender_agent_decisions` (migration 0018). Generated lazily via background task when a non-skip decision is fetched for the first time. Manual trigger via `POST /decisions/{id}/narrative`. Displayed as blue italic text below the action type in the feed row. Skip decisions require manual trigger.
+**How it works**: `ai_narrative` and `ai_narrative_generated_at` columns on `defender_agent_decisions` (migration 0018). Generated lazily via background task when a non-skip decision is fetched for the first time. Manual trigger via `POST /decisions/{id}/narrative`. The detail drawer shows the narrative in a blue block when present, or a "Generate AI summary" button when `ai_narrative` is null — available for all decision types including skip (FIX-04). Displayed as blue italic text below the action type in the feed row.
 
 ### AI-04: Save Copilot Investigation to Decision
 **How it works**: When Copilot is opened with `?decisionId=`, a "Save to Decision" button appears in the export section. POSTs the full investigation markdown (truncated at 8 000 chars) to `POST /api/azure/security/defender-agent/decisions/{id}/notes`. Button shows saving/saved/error states.
 
 ### AI-05: Site-wide Model Picker (Admin)
-**How it works**: `security_runtime_config` table in Postgres (migration 0018). `GET/PUT /api/azure/security/runtime-config` endpoints (admin-gated PUT). `AzureSecurityPage.tsx` shows a violet admin panel at the bottom for admins only, with a dropdown of available models from `/api/azure/security/copilot/models` and a Save button.
+**How it works**: `security_runtime_config` table in Postgres (migration 0018). `GET/PUT /api/azure/security/runtime-config` endpoints (admin-gated PUT). `AzureSecurityPage.tsx` shows a violet admin panel at the bottom for admins only, with a dropdown of available models from `/api/azure/security/copilot/models` and a Save button. The DB override is now wired into `get_default_security_copilot_model_id()` in `ai_client.py` (FIX-01), the Copilot page initial model state (FIX-06), and the lane summary service — so all AI features use the same runtime-resolved model without restart. The per-session model picker `<select>` is hidden on the security scope; only the admin panel may change the model there (FIX-07).
 
 ### AI-06: Security Knowledge Base Category
-**How it works**: `category TEXT DEFAULT ''` column on `kb_articles` (migration 0018 + SQLite CREATE TABLE updated). `list_articles()` accepts `category=` filter. Security Copilot KB source prefers `category="security"` articles, falling back to all articles if none tagged. `KnowledgeBaseArticle` model has `category: str = ""`.
+**How it works**: `category TEXT DEFAULT ''` column on `kb_articles` (migration 0018 + SQLite CREATE TABLE updated). `list_articles()` accepts `category=` filter. Security Copilot KB source prefers `category="security"` articles, falling back to all articles if none tagged. `KnowledgeBaseArticle` and `KnowledgeBaseArticleUpsertRequest` both have `category: str = ""` (FIX-03). `create_article()` and `update_article()` persist the category field. Seed import auto-tags `KB-SEC-*` articles as `category="security"` on first import.
 
 ### AI-07: Daily Security Digest to Teams
-**How it works**: `security_digest_service.py` leader-only background service. Fires at `SECURITY_DIGEST_HOUR` UTC (default 8). Queries last 1 000 decisions for 24h stats (t1/t2/t3/skips/ai_fallback/unresolved_t3/top_categories/top_entities). Calls `generate_security_digest()` with gemma4:31b. Posts Teams Adaptive Card to `SECURITY_DIGEST_TEAMS_WEBHOOK`. No-ops if webhook is unconfigured.
+**How it works**: `security_digest_service.py` leader-only background service. Fires at `SECURITY_DIGEST_HOUR` UTC (default 8). Queries last 1 000 decisions for 24h stats (t1/t2/t3/skips/ai_fallback/unresolved_t3/top_categories/top_entities). Calls `generate_security_digest()` with the runtime-config-resolved model. Posts Teams Adaptive Card to `SECURITY_DIGEST_TEAMS_WEBHOOK`. No-ops if webhook is unconfigured.
+
+### AI-08: Security Lane AI Summaries
+**How it works**: `security_lane_summary_service.py` — leader-only background service that fires immediately on first start, then repeats on a configurable interval (default 60 minutes via `SECURITY_LANE_SUMMARY_INTERVAL_MINUTES`). Covers 9 data-rich review lanes: `access-review`, `conditional-access-tracker`, `break-glass-validation`, `identity-review`, `app-hygiene`, `user-review`, `guest-access-review`, `account-health`, `device-compliance`. Directory Role Review and DLP Review are excluded — directory roles has sparse enough data that a generic count summary adds little signal; DLP Review is Copilot-native (`dlp_finding` mode) and already gets AI output inline from the Copilot engine rather than a separate background job.
+
+Per-lane data extraction: the 5 lanes with dedicated builders (`access-review`, `conditional-access-tracker`, `break-glass-validation`, `app-hygiene`, `device-compliance`) call their builders directly with a synthetic Entra system session for session-gated builders. The 4 workspace-summary lanes (`identity-review`, `user-review`, `guest-access-review`, `account-health`) call `build_security_workspace_summary()` once and extract per-lane attention data.
+
+`generate_lane_summary()` in `ai_client.py` sends lane name + status + attention count + top 10 items as JSON to the security Ollama runtime with a JSON-only system prompt. Output shape: `{teaser, narrative, bullets}`. Results are persisted to `security_lane_ai_summaries` (migration 0019: `lane_key TEXT PRIMARY KEY, narrative, teaser, bullets_json, generated_at, model_used`).
+
+Two endpoints: `GET /api/azure/security/lane-summaries` (all rows, both scopes) and `POST /api/azure/security/lane-summaries/{lane_key}/regenerate` (any authenticated user, enqueues background task). On the frontend, a shared `useQuery(["azure", "security", "lane-summaries"])` with 5-minute stale time is used by the `LaneSummaryPanel` component in `AzureSecurityLane.tsx`. The panel is collapsible, shows narrative + bulleted list, displays a relative timestamp ("Generated N min ago"), and has a Regenerate button. A quiet placeholder ("AI summary generates hourly — not yet available") is shown when no row exists yet. Hub cards on `AzureSecurityPage.tsx` show the `teaser` field in italic below the secondary label for both `LaneCard` and `PriorityLaneCard`.
 
 ---
 
-## Implementation Order
+## Delivery Log
 
-### Phase 1 — FIX batch (prerequisite for Phase 2)
-*Scope: ~7 focused changes in existing files — single commit batch.*
+All three phases complete as of 2026-04-22.
 
-FIX-01 through FIX-07 must land first because they establish the runtime config as the canonical model source. AI-08 lane summaries must use the same model resolution path.
-
-### Phase 2 — AI-08 backend
-*Scope: new service file, migration, config, 2 new API endpoints.*
-
-- Storage migration 0019
-- `security_lane_summary_service.py` and `main.py` wiring
-- `GET /api/azure/security/lane-summaries` + `POST /lane-summaries/{key}/regenerate`
-- `ai_client.py` `generate_lane_summary()` function and priority queue entry
-
-### Phase 3 — AI-08 frontend
-*Scope: shared query hook, hub card teasers, 9 lane page panels.*
-
-- `api.ts` types and API calls
-- Hub card teasers in `AzureSecurityPage.tsx`
-- Collapsible AI summary panel in each of the 9 lane pages
+- **Phase 1 — FIX-01–07** (2026-04-22): Runtime config wired into all AI model resolution paths; KB category field threaded end-to-end; AI narrative "Generate" button in decision drawer; handoff ref guard bug fixed; per-session model picker hidden on security scope. Single commit batch.
+- **Phase 2 — AI-08 backend** (2026-04-22): `security_lane_summary_service.py`, migration 0019, `generate_lane_summary()` in `ai_client.py`, `GET/POST /lane-summaries` routes, `SECURITY_LANE_SUMMARY_INTERVAL_MINUTES` config.
+- **Phase 3 — AI-08 frontend** (2026-04-22): `SecurityLaneAISummary` type + API calls in `api.ts`; `LaneSummaryPanel` component in `AzureSecurityLane.tsx`; hub card teasers in `AzureSecurityPage.tsx`; panel added to all 9 lane pages.
 
 ---
 
-## Planned — AI Gap Fixes (Phase 1)
+## ✅ Complete — AI Gap Fixes (Phase 1)
 
-These gaps were identified in the post-implementation review. All are agreed. Implement as a single commit batch.
+Gaps identified in the post-implementation review. All implemented as a single commit batch (2026-04-22).
 
 | # | Gap | Fix |
 |---|---|---|
@@ -240,7 +236,7 @@ These gaps were identified in the post-implementation review. All are agreed. Im
 
 ---
 
-## Planned — AI-08: Security Lane AI Summaries (Phases 2–3)
+## ✅ Complete — AI-08: Security Lane AI Summaries (Phases 2–3)
 
 **What**: Each of the 9 data-rich review lanes gets an AI-generated triage summary: a 1-sentence teaser shown on the Security Overview hub card, and a full narrative + 3–5 actionable bullet points shown in a collapsible panel at the top of each lane page.
 
@@ -248,9 +244,9 @@ These gaps were identified in the post-implementation review. All are agreed. Im
 `access-review`, `conditional-access-tracker`, `break-glass-validation`, `identity-review`, `app-hygiene`, `user-review`, `guest-access-review`, `account-health`, `device-compliance`
 
 **Architecture**:
-- New `backend/security_lane_summary_service.py` — leader-only background service on a 60-minute fixed loop (configurable via `SECURITY_LANE_SUMMARY_INTERVAL_MINUTES`, default 60)
+- New `backend/security_lane_summary_service.py` — leader-only background service on a 60-minute fixed loop (configurable via `SECURITY_LANE_SUMMARY_INTERVAL_MINUTES`, default 60); fires immediately on first start
 - Uses a synthetic system session `{"auth_provider": "entra", "is_admin": True}` for session-gated builders (`device_compliance`, `conditional_access_tracker`)
-- For `identity-review`, `user-review`, `guest-access-review`, `account-health`: calls `build_security_workspace_summary(system_session)` once and extracts attention data; supplements with `azure_cache._snapshot()` for top items
+- For `identity-review`, `user-review`, `guest-access-review`, `account-health`: calls `build_security_workspace_summary(system_session)` once and extracts attention data
 - For the 5 lanes with dedicated builders: calls each builder directly
 - Generic prompt template: lane name + status + attention count + top 10 items as JSON → one paragraph (50 words max) + 3–5 bullets
 - All calls use security Ollama runtime (gemma4:31b or runtime config model)
@@ -265,29 +261,9 @@ These gaps were identified in the post-implementation review. All are agreed. Im
 
 **Storage migration**: `backend/storage_migrations/0019_security_lane_ai_summaries.sql`
 
-**Files to create/modify**:
-- `backend/security_lane_summary_service.py` — new
-- `backend/storage_migrations/0019_security_lane_ai_summaries.sql` — new
-- `backend/main.py` — start service as leader-only
-- `backend/config.py` — `SECURITY_LANE_SUMMARY_INTERVAL_MINUTES`
-- `backend/.env` — add config var
-- `backend/ai_client.py` — add `generate_lane_summary()` function and priority queue entry
-- `backend/routes_azure_security.py` — GET /lane-summaries + POST /lane-summaries/{key}/regenerate
-- `frontend/src/lib/api.ts` — `SecurityLaneAISummary` type + `getLaneSummaries()` + `regenerateLaneSummary()`
-- `frontend/src/pages/AzureSecurityPage.tsx` — teaser in hub cards
-- `frontend/src/pages/AzureSecurityAccessReviewPage.tsx` — AI summary panel
-- `frontend/src/pages/AzureSecurityConditionalAccessTrackerPage.tsx` — AI summary panel
-- `frontend/src/pages/AzureSecurityBreakGlassValidationPage.tsx` — AI summary panel
-- `frontend/src/pages/AzureSecurityIdentityReviewPage.tsx` — AI summary panel
-- `frontend/src/pages/AzureSecurityAppHygienePage.tsx` — AI summary panel
-- `frontend/src/pages/AzureSecurityUserReviewPage.tsx` — AI summary panel
-- `frontend/src/pages/AzureSecurityGuestAccessReviewPage.tsx` — AI summary panel
-- `frontend/src/pages/AzureAccountHealthPage.tsx` — AI summary panel
-- `frontend/src/pages/AzureSecurityDeviceCompliancePage.tsx` — AI summary panel
-
 ### Acceptance Criteria
 
-**Functional**:
+**Functional** ✅:
 - All 9 lanes produce summaries within 60 minutes of first service start
 - Hub card teasers appear on the Security Overview for lanes with summaries
 - Regenerate endpoint enqueues a background task and returns immediately
@@ -297,7 +273,7 @@ These gaps were identified in the post-implementation review. All are agreed. Im
 - Each narrative references at least one specific count or entity name (not generic filler like "there are some issues")
 - Evaluate on first real tenant run; if output is too vague, promote per-lane payload shaping from Deferred to active work
 
-**Degraded**:
+**Degraded** ✅:
 - Stale `generated_at` timestamp visible in panel so operators know data age
 - When runtime is down, last cached summary remains readable; no panel crash or blank screen
 
@@ -311,5 +287,5 @@ These gaps were identified in the post-implementation review. All are agreed. Im
 | **External threat intelligence** — VirusTotal, MITRE ATT&CK API | API key management, latency, cost. Internal sources sufficient for now. |
 | **AI risk score on feed** | Redundant with Defender severity + AI narrative; creates competing signals. |
 | **Teams webhook admin UI** | AI-07 webhook configured via env var for now; admin UI in AzureSecurityPage.tsx deferred. |
-| **Per-lane AI summary prompt tuning** | Start generic; add lane-specific payload shaping only if output proves too vague after real use. |
+| **Per-lane AI summary prompt tuning** | Start generic; add lane-specific payload shaping only if output proves too vague after real use. Promote to active if narratives consistently lack specific counts or entity names — the first signal is the lane summary panel on a real tenant. Entry point: `generate_lane_summary()` in `ai_client.py` and the `_get_lane_data()` extractors in `security_lane_summary_service.py`. |
 | **S-10: Per-session Copilot model override** | Removed on security.movedocs.com by FIX-07 — all Copilot requests use the admin-configured security runtime model. Per-session override remains available on azure.movedocs.com. |
