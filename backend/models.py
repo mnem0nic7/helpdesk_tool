@@ -2688,7 +2688,7 @@ class DefenderAgentPlaybookCreate(BaseModel):
 class DefenderAgentPlaybookUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
-    actions: list[str] | None = None
+    actions: list[str] | None = Field(default=None, min_length=1)
     enabled: bool | None = None
 
 
