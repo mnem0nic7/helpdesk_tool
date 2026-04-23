@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import CacheStatusBar from "./CacheStatusBar.tsx";
 import AzureStatusBar from "./AzureStatusBar.tsx";
 import AzureQuickJump from "./AzureQuickJump.tsx";
@@ -49,23 +49,122 @@ const azureNavItems: NavItem[] = [
   { to: "/alerts", label: "Alerts", icon: "alerts" },
 ];
 
-const securityNavItems: NavItem[] = [
-  { to: "/security/agent", label: "Defender", icon: "defender" },
-  { to: "/security", label: "Overview", icon: "security", end: true },
-  { to: "/security/copilot", label: "Copilot", icon: "copilot" },
-  { to: "/tools", label: "Tools", icon: "tools" },
-  { to: "/security/access-review", label: "Access", icon: "account-health" },
-  { to: "/security/identity-review", label: "Identity", icon: "identity" },
-  { to: "/security/user-review", label: "Users", icon: "users" },
-  { to: "/security/guest-access-review", label: "Guests", icon: "users" },
-  { to: "/security/app-hygiene", label: "Apps", icon: "resources" },
-  { to: "/security/device-compliance", label: "Devices", icon: "vms" },
-  { to: "/security/account-health", label: "Account Health", icon: "account-health" },
-  { to: "/security/dlp-review", label: "DLP", icon: "alerts" },
-  { to: "/security/conditional-access-tracker", label: "Policies", icon: "alerts" },
-  { to: "/security/break-glass-validation", label: "Break-glass", icon: "account-health" },
-  { to: "/security/directory-role-review", label: "Roles", icon: "identity" },
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+const securityNavGroups: NavGroup[] = [
+  {
+    label: "Agent",
+    items: [
+      { to: "/security/agent", label: "Defender", icon: "defender" },
+      { to: "/security/playbooks", label: "Playbooks", icon: "playbooks" },
+    ],
+  },
+  {
+    label: "Workspace",
+    items: [
+      { to: "/security", label: "Overview", icon: "security", end: true },
+      { to: "/security/copilot", label: "Copilot", icon: "copilot" },
+      { to: "/tools", label: "Tools", icon: "tools" },
+    ],
+  },
+  {
+    label: "Review Lanes",
+    items: [
+      { to: "/security/access-review", label: "Access", icon: "account-health" },
+      { to: "/security/identity-review", label: "Identity", icon: "identity" },
+      { to: "/security/user-review", label: "Users", icon: "users" },
+      { to: "/security/guest-access-review", label: "Guests", icon: "users" },
+      { to: "/security/app-hygiene", label: "Apps", icon: "resources" },
+      { to: "/security/device-compliance", label: "Devices", icon: "vms" },
+      { to: "/security/account-health", label: "Account Health", icon: "account-health" },
+      { to: "/security/dlp-review", label: "DLP", icon: "alerts" },
+      { to: "/security/conditional-access-tracker", label: "Policies", icon: "alerts" },
+      { to: "/security/break-glass-validation", label: "Break-glass", icon: "account-health" },
+      { to: "/security/directory-role-review", label: "Roles", icon: "identity" },
+    ],
+  },
 ];
+
+const _NAV_GROUP_STORAGE_KEY = "security_nav_collapsed";
+
+function SecurityGroupedNav({ pathname }: { pathname: string }) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(_NAV_GROUP_STORAGE_KEY) || "{}");
+    } catch {
+      return {};
+    }
+  });
+
+  function toggle(label: string) {
+    setCollapsed(prev => {
+      const next = { ...prev, [label]: !prev[label] };
+      try { localStorage.setItem(_NAV_GROUP_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }
+
+  return (
+    <nav className="flex-1 space-y-3 px-3 py-4 overflow-y-auto">
+      {securityNavGroups.map(group => {
+        const isActiveGroup = group.items.some(item =>
+          item.end ? pathname === item.to : pathname.startsWith(item.to)
+        );
+        const isCollapsed = collapsed[group.label] && !isActiveGroup;
+
+        return (
+          <div key={group.label}>
+            <button
+              onClick={() => toggle(group.label)}
+              className="flex w-full items-center justify-between px-2 py-1 text-xs font-semibold uppercase tracking-wider text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              <span>{group.label}</span>
+              <svg
+                aria-hidden="true"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                className={`transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
+              >
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            {!isCollapsed && (
+              <div className="mt-1 space-y-1">
+                {group.items.map(({ to, label, icon, end }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={end ?? to === "/"}
+                    className={({ isActive }) =>
+                      [
+                        "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                        isActive
+                          ? "bg-slate-700 text-white"
+                          : "text-slate-300 hover:bg-slate-800 hover:text-white",
+                      ].join(" ")
+                    }
+                  >
+                    <span className="flex h-5 w-5 items-center justify-center text-current">
+                      <AzureSidebarIcon icon={icon} />
+                    </span>
+                    {label}
+                  </NavLink>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </nav>
+  );
+}
 
 const azureBreadcrumbLabels: Record<string, string> = {
   "": "Overview",
@@ -136,6 +235,8 @@ function AzureSidebarIcon({ icon }: { icon: string }) {
       return <svg aria-hidden="true" {...common}><path d="M12 20s-6.5-3.8-6.5-9.2V5.8L12 3l6.5 2.8v5c0 5.4-6.5 9.2-6.5 9.2Z" /><path d="m9.5 11.5 1.7 1.7 3.6-3.6" /></svg>;
     case "defender":
       return <svg aria-hidden="true" {...common}><path d="M12 3 5.5 5.8v5c0 5.4 6.5 9.2 6.5 9.2s6.5-3.8 6.5-9.2v-5L12 3Z" /><path d="M9 12l2 2 4-4" /></svg>;
+    case "playbooks":
+      return <svg aria-hidden="true" {...common}><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M8 9h8" /><path d="M8 13h5" /><circle cx="16" cy="14" r="2" /></svg>;
     default:
       return <span className="text-base leading-none">{icon}</span>;
   }
@@ -143,7 +244,7 @@ function AzureSidebarIcon({ icon }: { icon: string }) {
 
 export default function Layout() {
   const branding = getSiteBranding();
-  const navItems = branding.scope === "security" ? securityNavItems : branding.scope === "azure" ? azureNavItems : helpdeskNavItems;
+  const navItems = branding.scope === "azure" ? azureNavItems : helpdeskNavItems;
   const location = useLocation();
   const versionCheckInFlight = useRef(false);
   const lastVersionCheckAt = useRef(0);
@@ -209,6 +310,7 @@ export default function Layout() {
     if (segment === "security" && subsegment === "copilot") detailLabel = "Security Copilot";
     if (segment === "security" && subsegment === "account-health") detailLabel = "Account Health";
     if (segment === "security" && subsegment === "agent") detailLabel = "Defender Agent";
+    if (segment === "security" && subsegment === "playbooks") detailLabel = "Defender Playbooks";
     if (segment === "vms" && params.get("vmId")) detailLabel = "VM Detail";
     if (segment === "virtual-desktops" && params.get("desktopId")) detailLabel = "Desktop Detail";
     if (segment === "resources" && params.get("resourceId")) detailLabel = "Resource Detail";
@@ -248,34 +350,38 @@ export default function Layout() {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 space-y-1 px-3 py-4">
-          {navItems
-            .filter((item) => (!item.primaryOnly || branding.scope === "primary"))
-            .map(({ to, label, icon, end }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={end ?? to === "/"}
-                className={({ isActive }) =>
-                  [
-                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                    isActive
-                      ? "bg-slate-700 text-white"
-                      : "text-slate-300 hover:bg-slate-800 hover:text-white",
-                  ].join(" ")
-                }
-              >
-                {(branding.scope === "azure" || branding.scope === "security") ? (
-                  <span className="flex h-5 w-5 items-center justify-center text-current">
-                    <AzureSidebarIcon icon={icon} />
-                  </span>
-                ) : (
-                  <span className="text-base leading-none">{icon}</span>
-                )}
-                {label}
-              </NavLink>
-            ))}
-        </nav>
+        {branding.scope === "security" ? (
+          <SecurityGroupedNav pathname={location.pathname} />
+        ) : (
+          <nav className="flex-1 space-y-1 px-3 py-4">
+            {navItems
+              .filter((item) => (!item.primaryOnly || branding.scope === "primary"))
+              .map(({ to, label, icon, end }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={end ?? to === "/"}
+                  className={({ isActive }) =>
+                    [
+                      "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                      isActive
+                        ? "bg-slate-700 text-white"
+                        : "text-slate-300 hover:bg-slate-800 hover:text-white",
+                    ].join(" ")
+                  }
+                >
+                  {branding.scope === "azure" ? (
+                    <span className="flex h-5 w-5 items-center justify-center text-current">
+                      <AzureSidebarIcon icon={icon} />
+                    </span>
+                  ) : (
+                    <span className="text-base leading-none">{icon}</span>
+                  )}
+                  {label}
+                </NavLink>
+              ))}
+          </nav>
+        )}
 
         {/* Footer — user info or version */}
         <div className="border-t border-slate-700 px-4 py-3">
