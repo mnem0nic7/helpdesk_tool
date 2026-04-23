@@ -188,7 +188,7 @@ function Tooltip({ text, children }: { text: string; children: React.ReactNode }
   return (
     <span className="group relative inline-flex">
       {children}
-      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-72 -translate-x-1/2 rounded bg-slate-900 px-3 py-2 text-xs text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+      <span className="pointer-events-none absolute bottom-full left-1/2 z-[100] mb-2 w-72 -translate-x-1/2 rounded bg-slate-900 px-3 py-2 text-xs text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
         {text}
         <span className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
       </span>
@@ -435,15 +435,15 @@ function ActionReferencePanel() {
                   const desc = ACTION_DESCRIPTIONS[a];
                   return (
                     <div key={a} className="rounded border border-slate-100 bg-slate-50 px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs font-medium text-slate-700">{a}</span>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="font-mono text-xs font-medium text-slate-700 break-all">{a}</span>
                         {tier && (
                           <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${TIER_COLOR[tier] || ""}`}>{tier}</span>
                         )}
-                        <span className="ml-auto text-xs text-slate-500">{ACTION_LABELS[a]}</span>
+                        <span className="text-xs text-slate-500">{ACTION_LABELS[a]}</span>
                       </div>
                       {desc && (
-                        <p className="mt-1 text-xs text-slate-500 leading-relaxed">{desc.detail}</p>
+                        <p className="mt-1 text-xs text-slate-500 leading-relaxed break-words">{desc.detail}</p>
                       )}
                     </div>
                   );
