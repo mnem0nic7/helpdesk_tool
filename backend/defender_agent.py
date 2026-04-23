@@ -891,7 +891,15 @@ def _apply_custom_rules(
             reason = f"[Custom rule: {rule_label}] matched {match_field}={match_value!r}"
             # Resolve playbook actions if assigned
             pb_id = cr.get("playbook_id")
-            if pb_id and playbook_actions and pb_id in playbook_actions:
+            if pb_id:
+                # Playbook-based rule: skip if playbook is disabled/missing
+                if not playbook_actions or pb_id not in playbook_actions:
+                    logger.info(
+                        "Defender agent: custom rule %r has playbook_id=%r but playbook "
+                        "is disabled or missing — skipping rule, continuing table scan",
+                        rule_label, pb_id,
+                    )
+                    continue
                 ats = playbook_actions[pb_id] or ["start_investigation"]
                 reason += f" [playbook: {rule_label}]"
             else:
@@ -2009,7 +2017,7 @@ def _dispatch_action(
             logger.info("Defender agent: %s — no user entities, skipping", action_type)
             return []
         try:
-            from ad_client import ad_client as _ad
+            import ad_client as _ad
         except Exception as exc:
             logger.warning("Defender agent: %s — ad_client unavailable: %s", action_type, exc)
             return []
@@ -2028,17 +2036,14 @@ def _dispatch_action(
                 if action_type == "disable_ad_account":
                     _ad.disable_user(sam)
                     logger.info("Defender agent: disabled AD account for %s", sam)
-                    job_ids.append(f"ad-disable-{sam}")
                 elif action_type == "reset_ad_password":
                     alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
                     new_pw = "".join(secrets.choice(alphabet) for _ in range(20))
                     _ad.reset_password(sam, new_pw)
                     logger.info("Defender agent: reset AD password for %s", sam)
-                    job_ids.append(f"ad-pwreset-{sam}")
                 elif action_type == "unlock_ad_account":
                     _ad.unlock_user(sam)
                     logger.info("Defender agent: unlocked AD account for %s", sam)
-                    job_ids.append(f"ad-unlock-{sam}")
             except Exception as exc:
                 logger.warning(
                     "Defender agent: %s for %s failed: %s", action_type, sam, exc

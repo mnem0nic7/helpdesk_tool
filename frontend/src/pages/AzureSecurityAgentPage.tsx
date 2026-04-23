@@ -1980,7 +1980,15 @@ function CustomRulesPanel() {
                 <span className="text-xs text-gray-500">Response type</span>
                 <select
                   value={responseType}
-                  onChange={e => { setResponseType(e.target.value as "single" | "playbook"); setForm(f => ({ ...f, playbook_id: null })); }}
+                  onChange={e => {
+                    const t = e.target.value as "single" | "playbook";
+                    setResponseType(t);
+                    setForm(f => ({
+                      ...f,
+                      action_type: t === "playbook" ? "" : "start_investigation",
+                      playbook_id: t === "single" ? null : f.playbook_id,
+                    }));
+                  }}
                   className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm"
                 >
                   <option value="single">Single action</option>

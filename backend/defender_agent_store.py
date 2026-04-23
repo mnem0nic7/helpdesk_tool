@@ -241,6 +241,8 @@ class DefenderAgentStore:
                     updated_at   TEXT NOT NULL DEFAULT ''
                 )""",
             "ALTER TABLE defender_agent_custom_rules ADD COLUMN playbook_id TEXT",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN ai_narrative TEXT",
+            "ALTER TABLE defender_agent_decisions ADD COLUMN ai_narrative_generated_at TEXT",
         ):
             try:
                 with self._conn() as _mc:

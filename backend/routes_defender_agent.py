@@ -856,14 +856,15 @@ def create_custom_rule(
     _session: dict = Depends(require_admin),
 ) -> dict:
     _ensure_azure_site()
-    # If a playbook is assigned, look up its name for the response
+    # Normalize: playbook-based rules don't need a standalone action_type
+    effective_action_type = "" if body.playbook_id else body.action_type
     rule = defender_agent_store.create_custom_rule(
         name=body.name,
         match_field=body.match_field,
         match_value=body.match_value.strip(),
         match_mode=body.match_mode,
         tier=body.tier,
-        action_type=body.action_type,
+        action_type=effective_action_type,
         confidence_score=body.confidence_score,
         created_by=str(_session.get("email") or ""),
         playbook_id=body.playbook_id,
