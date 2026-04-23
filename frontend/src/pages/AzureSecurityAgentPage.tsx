@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { DefenderAgentConfig, DefenderAgentCustomRule, DefenderAgentDecision, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType } from "../lib/api.ts";
+import type { DefenderAgentConfig, DefenderAgentCustomRule, DefenderAgentPlaybook, DefenderAgentDecision, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { DEFENDER_FAQ } from "../lib/defenderFaq.ts";
 
@@ -1846,6 +1847,7 @@ function RulesPanel() {
 function CustomRulesPanel() {
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(false);
+  const [responseType, setResponseType] = useState<"single" | "playbook">("single");
   const [form, setForm] = useState<Partial<DefenderAgentCustomRule>>({
     name: "",
     match_field: "title",
@@ -1854,6 +1856,7 @@ function CustomRulesPanel() {
     tier: 3,
     action_type: "start_investigation",
     confidence_score: 50,
+    playbook_id: null,
   });
 
   const rulesQuery = useQuery({
@@ -1861,12 +1864,19 @@ function CustomRulesPanel() {
     queryFn: () => api.listDefenderAgentCustomRules(),
     enabled: expanded,
   });
+  const playbooksQuery = useQuery<DefenderAgentPlaybook[]>({
+    queryKey: ["defender-playbooks"],
+    queryFn: () => api.listDefenderAgentPlaybooks(),
+    enabled: expanded,
+    staleTime: 30_000,
+  });
   const createMut = useMutation({
-    mutationFn: (body: Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at">) =>
+    mutationFn: (body: Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at" | "playbook_name">) =>
       api.createDefenderAgentCustomRule(body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["defender-agent-custom-rules"] });
-      setForm({ name: "", match_field: "title", match_value: "", match_mode: "contains", tier: 3, action_type: "start_investigation", confidence_score: 50 });
+      setForm({ name: "", match_field: "title", match_value: "", match_mode: "contains", tier: 3, action_type: "start_investigation", confidence_score: 50, playbook_id: null });
+      setResponseType("single");
     },
   });
   const deleteMut = useMutation({
@@ -1890,7 +1900,16 @@ function CustomRulesPanel() {
           </svg>
           Custom Detection Rules
         </h2>
-        <span className="text-xs text-gray-400">Add keyword / field matching rules beyond the built-in ruleset</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-400">Add keyword / field matching rules beyond the built-in ruleset</span>
+          <Link
+            to="/security/playbooks"
+            onClick={e => e.stopPropagation()}
+            className="rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+          >
+            Manage Playbooks →
+          </Link>
+        </div>
       </button>
       {expanded && (
         <div>
@@ -1947,15 +1966,45 @@ function CustomRulesPanel() {
                 </select>
               </label>
               <label className="block">
-                <span className="text-xs text-gray-500">Action type</span>
-                <input
-                  type="text"
-                  value={form.action_type}
-                  onChange={(e) => setForm((f) => ({ ...f, action_type: e.target.value }))}
-                  className="mt-1 block w-40 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                  placeholder="start_investigation"
-                />
+                <span className="text-xs text-gray-500">Response type</span>
+                <select
+                  value={responseType}
+                  onChange={e => { setResponseType(e.target.value as "single" | "playbook"); setForm(f => ({ ...f, playbook_id: null })); }}
+                  className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                >
+                  <option value="single">Single action</option>
+                  <option value="playbook">Playbook</option>
+                </select>
               </label>
+              {responseType === "single" ? (
+                <label className="block">
+                  <span className="text-xs text-gray-500">Action type</span>
+                  <input
+                    type="text"
+                    value={form.action_type}
+                    onChange={(e) => setForm((f) => ({ ...f, action_type: e.target.value }))}
+                    className="mt-1 block w-40 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                    placeholder="start_investigation"
+                  />
+                </label>
+              ) : (
+                <label className="block">
+                  <span className="text-xs text-gray-500">Playbook</span>
+                  <select
+                    value={form.playbook_id ?? ""}
+                    onChange={e => setForm(f => ({ ...f, playbook_id: e.target.value || null }))}
+                    className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                  >
+                    <option value="">— select —</option>
+                    {(playbooksQuery.data ?? []).filter(p => p.enabled).map(p => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.actions.length} actions)</option>
+                    ))}
+                  </select>
+                  {(playbooksQuery.data ?? []).filter(p => p.enabled).length === 0 && (
+                    <p className="mt-1 text-xs text-amber-600">No enabled playbooks — <Link to="/security/playbooks" className="underline">create one first</Link>.</p>
+                  )}
+                </label>
+              )}
               <label className="block">
                 <span className="text-xs text-gray-500">Confidence</span>
                 <input type="number" min={0} max={100} value={form.confidence_score}
@@ -1965,9 +2014,10 @@ function CustomRulesPanel() {
               <button
                 onClick={() => {
                   if (!form.match_value?.trim()) return;
-                  createMut.mutate(form as Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at">);
+                  if (responseType === "playbook" && !form.playbook_id) return;
+                  createMut.mutate(form as Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at" | "playbook_name">);
                 }}
-                disabled={!form.match_value?.trim() || createMut.isPending}
+                disabled={!form.match_value?.trim() || (responseType === "playbook" && !form.playbook_id) || createMut.isPending}
                 className="self-end rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
               >
                 {createMut.isPending ? "Adding…" : "Add rule"}
@@ -2007,7 +2057,14 @@ function CustomRulesPanel() {
                           T{cr.tier}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-gray-600">{cr.action_type}</td>
+                      <td className="px-3 py-2 text-gray-600">
+                        {cr.playbook_id ? (
+                          <span className="inline-flex items-center gap-1">
+                            <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-xs font-medium text-indigo-700">playbook</span>
+                            <Link to="/security/playbooks" className="text-indigo-600 hover:underline">{cr.playbook_name || cr.playbook_id}</Link>
+                          </span>
+                        ) : cr.action_type}
+                      </td>
                       <td className="px-3 py-2 text-gray-600">{cr.confidence_score}%</td>
                       <td className="px-3 py-2">
                         {cr.enabled

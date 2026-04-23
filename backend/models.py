@@ -2668,6 +2668,30 @@ class DefenderAgentRuleUpdate(BaseModel):
 # Defender Agent — Phase 18: Custom detection rules
 # ---------------------------------------------------------------------------
 
+class DefenderAgentPlaybook(BaseModel):
+    id: str
+    name: str = ""
+    description: str = ""
+    actions: list[str] = []
+    enabled: bool = True
+    created_by: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class DefenderAgentPlaybookCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1000)
+    actions: list[str] = Field(..., min_length=1)
+
+
+class DefenderAgentPlaybookUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    actions: list[str] | None = None
+    enabled: bool | None = None
+
+
 class DefenderAgentCustomRule(BaseModel):
     id: str
     name: str = ""
@@ -2680,6 +2704,8 @@ class DefenderAgentCustomRule(BaseModel):
     enabled: bool = True
     created_by: str = ""
     created_at: str = ""
+    playbook_id: str | None = None
+    playbook_name: str | None = None
 
 
 class DefenderAgentCustomRuleCreate(BaseModel):
@@ -2690,3 +2716,4 @@ class DefenderAgentCustomRuleCreate(BaseModel):
     tier: int = Field(default=3, ge=1, le=3)
     action_type: str = Field(default="start_investigation", max_length=100)
     confidence_score: int = Field(default=50, ge=0, le=100)
+    playbook_id: str | None = None

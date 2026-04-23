@@ -848,6 +848,7 @@ def _ai_classify_alert_fallback(
 def _apply_custom_rules(
     alert: dict[str, Any],
     custom_rules: list[dict[str, Any]],
+    playbook_actions: dict[str, list[str]] | None = None,
 ) -> tuple[int | None, str, list[str], str, int] | None:
     """Check alert against custom detection rules; return classification or None if no match.
 
@@ -884,11 +885,18 @@ def _apply_custom_rules(
             matched = match_value in haystack
         if matched:
             tier = int(cr.get("tier") or 3)
-            action_type = str(cr.get("action_type") or "start_investigation")
             confidence = int(cr.get("confidence_score") or 50)
             decision = "execute" if tier == 1 else ("queue" if tier == 2 else "recommend")
-            reason = f"[Custom rule: {cr.get('name', cr.get('id', '?'))}] matched {match_field}={match_value!r}"
-            return tier, decision, [action_type], reason, confidence
+            rule_label = cr.get("name") or cr.get("id", "?")
+            reason = f"[Custom rule: {rule_label}] matched {match_field}={match_value!r}"
+            # Resolve playbook actions if assigned
+            pb_id = cr.get("playbook_id")
+            if pb_id and playbook_actions and pb_id in playbook_actions:
+                ats = playbook_actions[pb_id] or ["start_investigation"]
+                reason += f" [playbook: {rule_label}]"
+            else:
+                ats = [str(cr.get("action_type") or "start_investigation")]
+            return tier, decision, ats, reason, confidence
 
     return None
 
@@ -1402,8 +1410,9 @@ def _run_agent_cycle() -> None:
         # Build rule overrides map once per cycle: rule_id → override dict
         rule_overrides = defender_agent_store.get_rule_overrides()
 
-        # Load custom detection rules once per cycle
+        # Load custom detection rules and playbook action maps once per cycle
         custom_rules = defender_agent_store.list_custom_rules(enabled_only=True)
+        playbook_actions = defender_agent_store.get_playbook_actions_map()
 
         for alert in new_alerts:
             alert_id = alert.get("id", uuid.uuid4().hex)
@@ -1448,7 +1457,7 @@ def _run_agent_cycle() -> None:
             )
             # If built-in rules produced a skip, check custom rules for a match
             if decision_type == "skip" and custom_rules:
-                cr_result = _apply_custom_rules(alert, custom_rules)
+                cr_result = _apply_custom_rules(alert, custom_rules, playbook_actions)
                 if cr_result is not None:
                     tier, decision_type, action_types, reason, confidence_score = cr_result
             # If still a skip after custom rules, try AI fallback classification

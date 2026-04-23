@@ -16,6 +16,9 @@ from models import (
     DefenderAgentConfigUpdate,
     DefenderAgentCustomRule,
     DefenderAgentCustomRuleCreate,
+    DefenderAgentPlaybook,
+    DefenderAgentPlaybookCreate,
+    DefenderAgentPlaybookUpdate,
     DefenderAgentDecisionItem,
     DefenderAgentDecisionsResponse,
     DefenderAgentDispositionStats,
@@ -838,7 +841,13 @@ def list_custom_rules(
     _session: dict = Depends(require_authenticated_user),
 ) -> list[dict]:
     _ensure_azure_site()
-    return defender_agent_store.list_custom_rules(enabled_only=enabled_only)
+    rules = defender_agent_store.list_custom_rules(enabled_only=enabled_only)
+    # Enrich with playbook names for display
+    pb_map = {p["id"]: p["name"] for p in defender_agent_store.list_playbooks()}
+    for r in rules:
+        if r.get("playbook_id"):
+            r["playbook_name"] = pb_map.get(r["playbook_id"])
+    return rules
 
 
 @router.post("/custom-rules", response_model=DefenderAgentCustomRule)
@@ -847,7 +856,8 @@ def create_custom_rule(
     _session: dict = Depends(require_admin),
 ) -> dict:
     _ensure_azure_site()
-    return defender_agent_store.create_custom_rule(
+    # If a playbook is assigned, look up its name for the response
+    rule = defender_agent_store.create_custom_rule(
         name=body.name,
         match_field=body.match_field,
         match_value=body.match_value.strip(),
@@ -856,7 +866,13 @@ def create_custom_rule(
         action_type=body.action_type,
         confidence_score=body.confidence_score,
         created_by=str(_session.get("email") or ""),
+        playbook_id=body.playbook_id,
     )
+    if body.playbook_id:
+        pb = defender_agent_store.get_playbook(body.playbook_id)
+        if pb:
+            rule["playbook_name"] = pb["name"]
+    return rule
 
 
 @router.delete("/custom-rules/{rule_id}")
@@ -882,6 +898,79 @@ def toggle_custom_rule(
     if result is None:
         raise HTTPException(status_code=404, detail="Custom rule not found")
     return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 20: Playbooks
+# ---------------------------------------------------------------------------
+
+@router.get("/playbooks", response_model=list[DefenderAgentPlaybook])
+def list_playbooks(
+    _session: dict = Depends(require_authenticated_user),
+) -> list[dict]:
+    _ensure_azure_site()
+    return defender_agent_store.list_playbooks()
+
+
+@router.post("/playbooks", response_model=DefenderAgentPlaybook)
+def create_playbook(
+    body: DefenderAgentPlaybookCreate,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    return defender_agent_store.create_playbook(
+        name=body.name,
+        description=body.description,
+        actions=body.actions,
+        created_by=str(_session.get("email") or ""),
+    )
+
+
+@router.put("/playbooks/{playbook_id}", response_model=DefenderAgentPlaybook)
+def update_playbook(
+    playbook_id: str,
+    body: DefenderAgentPlaybookUpdate,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    result = defender_agent_store.update_playbook(
+        playbook_id,
+        name=body.name,
+        description=body.description,
+        actions=body.actions,
+        enabled=body.enabled,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Playbook not found")
+    return result
+
+
+@router.delete("/playbooks/{playbook_id}")
+def delete_playbook(
+    playbook_id: str,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    # Reject if any custom rules still reference this playbook
+    rules = defender_agent_store.list_rules_for_playbook(playbook_id)
+    if rules:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Playbook is used by {len(rules)} custom rule(s); remove those rules first.",
+        )
+    found = defender_agent_store.delete_playbook(playbook_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Playbook not found")
+    return {"deleted": True, "id": playbook_id}
+
+
+@router.get("/playbooks/{playbook_id}/rules", response_model=list[DefenderAgentCustomRule])
+def list_playbook_rules(
+    playbook_id: str,
+    _session: dict = Depends(require_authenticated_user),
+) -> list[dict]:
+    _ensure_azure_site()
+    return defender_agent_store.list_rules_for_playbook(playbook_id)
 
 
 # ---------------------------------------------------------------------------

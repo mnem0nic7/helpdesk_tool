@@ -1524,6 +1524,17 @@ export interface DefenderAgentBuiltinRule {
   updated_by: string;
 }
 
+export interface DefenderAgentPlaybook {
+  id: string;
+  name: string;
+  description: string;
+  actions: string[];
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DefenderAgentCustomRule {
   id: string;
   name: string;
@@ -1536,6 +1547,8 @@ export interface DefenderAgentCustomRule {
   enabled: boolean;
   created_by: string;
   created_at: string;
+  playbook_id?: string | null;
+  playbook_name?: string | null;
 }
 
 export interface DefenderAgentRun {
@@ -4039,8 +4052,28 @@ export const api = {
   listDefenderAgentCustomRules(enabledOnly = false): Promise<DefenderAgentCustomRule[]> {
     return fetchJSON<DefenderAgentCustomRule[]>(`/api/azure/security/defender-agent/custom-rules?enabled_only=${enabledOnly}`);
   },
-  createDefenderAgentCustomRule(body: Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at">): Promise<DefenderAgentCustomRule> {
+  createDefenderAgentCustomRule(body: Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at" | "playbook_name">): Promise<DefenderAgentCustomRule> {
     return postJSON<DefenderAgentCustomRule>("/api/azure/security/defender-agent/custom-rules", body);
+  },
+  listDefenderAgentPlaybooks(): Promise<DefenderAgentPlaybook[]> {
+    return fetchJSON<DefenderAgentPlaybook[]>("/api/azure/security/defender-agent/playbooks");
+  },
+  createDefenderAgentPlaybook(body: { name: string; description: string; actions: string[] }): Promise<DefenderAgentPlaybook> {
+    return postJSON<DefenderAgentPlaybook>("/api/azure/security/defender-agent/playbooks", body);
+  },
+  updateDefenderAgentPlaybook(playbookId: string, body: { name?: string; description?: string; actions?: string[]; enabled?: boolean }): Promise<DefenderAgentPlaybook> {
+    return putJSON<DefenderAgentPlaybook>(`/api/azure/security/defender-agent/playbooks/${encodeURIComponent(playbookId)}`, body);
+  },
+  deleteDefenderAgentPlaybook(playbookId: string): Promise<{ deleted: boolean; id: string }> {
+    const url = `/api/azure/security/defender-agent/playbooks/${encodeURIComponent(playbookId)}`;
+    return fetch(url, { method: "DELETE" }).then(async res => {
+      if (res.status === 401) { window.location.href = "/api/auth/login"; throw new Error("Not authenticated"); }
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as { detail?: string }).detail || `DELETE ${url} failed: ${res.status}`); }
+      return res.json() as Promise<{ deleted: boolean; id: string }>;
+    });
+  },
+  listPlaybookRules(playbookId: string): Promise<DefenderAgentCustomRule[]> {
+    return fetchJSON<DefenderAgentCustomRule[]>(`/api/azure/security/defender-agent/playbooks/${encodeURIComponent(playbookId)}/rules`);
   },
   deleteDefenderAgentCustomRule(ruleId: string): Promise<{ deleted: boolean; id: string }> {
     const url = `/api/azure/security/defender-agent/custom-rules/${encodeURIComponent(ruleId)}`;

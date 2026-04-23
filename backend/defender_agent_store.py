@@ -230,6 +230,17 @@ class DefenderAgentStore:
             "ALTER TABLE defender_agent_decisions ADD COLUMN resolved INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE defender_agent_decisions ADD COLUMN resolved_at TEXT",
             "ALTER TABLE defender_agent_decisions ADD COLUMN resolved_by TEXT NOT NULL DEFAULT ''",
+            """CREATE TABLE IF NOT EXISTS defender_agent_playbooks (
+                    id           TEXT PRIMARY KEY,
+                    name         TEXT NOT NULL DEFAULT '',
+                    description  TEXT NOT NULL DEFAULT '',
+                    actions_json TEXT NOT NULL DEFAULT '[]',
+                    enabled      INTEGER NOT NULL DEFAULT 1,
+                    created_by   TEXT NOT NULL DEFAULT '',
+                    created_at   TEXT NOT NULL DEFAULT '',
+                    updated_at   TEXT NOT NULL DEFAULT ''
+                )""",
+            "ALTER TABLE defender_agent_custom_rules ADD COLUMN playbook_id TEXT",
         ):
             try:
                 with self._conn() as _mc:
@@ -1374,6 +1385,7 @@ class DefenderAgentStore:
         action_type: str = "start_investigation",
         confidence_score: int = 50,
         created_by: str = "",
+        playbook_id: str | None = None,
     ) -> dict[str, Any]:
         rid = str(uuid.uuid4())
         p = self._placeholder()
@@ -1383,11 +1395,11 @@ class DefenderAgentStore:
                 f"""
                 INSERT INTO defender_agent_custom_rules
                     (id, name, match_field, match_value, match_mode, tier, action_type,
-                     confidence_score, enabled, created_by, created_at)
-                VALUES ({p},{p},{p},{p},{p},{p},{p},{p},1,{p},{p})
+                     confidence_score, enabled, created_by, created_at, playbook_id)
+                VALUES ({p},{p},{p},{p},{p},{p},{p},{p},1,{p},{p},{p})
                 """,
                 (rid, name, match_field, match_value, match_mode, tier, action_type,
-                 confidence_score, created_by, now),
+                 confidence_score, created_by, now, playbook_id),
             )
             conn.commit()
         with self._conn() as conn:
@@ -1424,6 +1436,132 @@ class DefenderAgentStore:
     def _row_to_custom_rule(d: dict[str, Any]) -> dict[str, Any]:
         d["enabled"] = bool(d.get("enabled", 1))
         return d
+
+    # -------------------------------------------------------------------------
+    # Playbooks (Phase 20)
+    # -------------------------------------------------------------------------
+
+    def list_playbooks(self, *, enabled_only: bool = False) -> list[dict[str, Any]]:
+        import json as _json
+        p = self._placeholder()
+        with self._conn() as conn:
+            if enabled_only:
+                rows = conn.execute(
+                    "SELECT * FROM defender_agent_playbooks WHERE enabled = 1 ORDER BY created_at"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM defender_agent_playbooks ORDER BY created_at"
+                ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["enabled"] = bool(d.get("enabled", 1))
+            try:
+                d["actions"] = _json.loads(d.get("actions_json") or "[]")
+            except Exception:
+                d["actions"] = []
+            result.append(d)
+        return result
+
+    def get_playbook(self, playbook_id: str) -> dict[str, Any] | None:
+        import json as _json
+        p = self._placeholder()
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT * FROM defender_agent_playbooks WHERE id = {p}", (playbook_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["enabled"] = bool(d.get("enabled", 1))
+        try:
+            d["actions"] = _json.loads(d.get("actions_json") or "[]")
+        except Exception:
+            d["actions"] = []
+        return d
+
+    def create_playbook(
+        self,
+        *,
+        name: str,
+        description: str = "",
+        actions: list[str],
+        created_by: str = "",
+    ) -> dict[str, Any]:
+        import json as _json
+        pid = str(uuid.uuid4())
+        p = self._placeholder()
+        now = _now()
+        actions_json = _json.dumps(actions)
+        with self._conn() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO defender_agent_playbooks
+                    (id, name, description, actions_json, enabled, created_by, created_at, updated_at)
+                VALUES ({p},{p},{p},{p},1,{p},{p},{p})
+                """,
+                (pid, name, description, actions_json, created_by, now, now),
+            )
+            conn.commit()
+        return self.get_playbook(pid)  # type: ignore[return-value]
+
+    def update_playbook(
+        self,
+        playbook_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        actions: list[str] | None = None,
+        enabled: bool | None = None,
+    ) -> dict[str, Any] | None:
+        import json as _json
+        p = self._placeholder()
+        now = _now()
+        sets: list[str] = [f"updated_at = {p}"]
+        vals: list[Any] = [now]
+        if name is not None:
+            sets.append(f"name = {p}")
+            vals.append(name)
+        if description is not None:
+            sets.append(f"description = {p}")
+            vals.append(description)
+        if actions is not None:
+            sets.append(f"actions_json = {p}")
+            vals.append(_json.dumps(actions))
+        if enabled is not None:
+            sets.append(f"enabled = {p}")
+            vals.append(int(enabled))
+        vals.append(playbook_id)
+        with self._conn() as conn:
+            conn.execute(
+                f"UPDATE defender_agent_playbooks SET {', '.join(sets)} WHERE id = {p}",
+                vals,
+            )
+            conn.commit()
+        return self.get_playbook(playbook_id)
+
+    def delete_playbook(self, playbook_id: str) -> bool:
+        p = self._placeholder()
+        with self._conn() as conn:
+            cur = conn.execute(
+                f"DELETE FROM defender_agent_playbooks WHERE id = {p}", (playbook_id,)
+            )
+            conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    def get_playbook_actions_map(self) -> dict[str, list[str]]:
+        """Return {playbook_id: [action_type, ...]} for all enabled playbooks."""
+        return {p["id"]: p["actions"] for p in self.list_playbooks(enabled_only=True)}
+
+    def list_rules_for_playbook(self, playbook_id: str) -> list[dict[str, Any]]:
+        p = self._placeholder()
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM defender_agent_custom_rules WHERE playbook_id = {p} ORDER BY created_at",
+                (playbook_id,),
+            ).fetchall()
+        return [self._row_to_custom_rule(dict(r)) for r in rows]
 
     # -------------------------------------------------------------------------
     # Alert tagging (Phase 19)
