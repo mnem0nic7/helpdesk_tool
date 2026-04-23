@@ -65,6 +65,10 @@ const ACTION_LABELS: Record<string, string> = {
   unrestrict_app_execution:      "Remove App Restriction",
   reset_password:                "Reset Password",
   account_lockout:               "Account Lockout",
+  // Active Directory (on-prem)
+  disable_ad_account:            "Disable AD Account",
+  reset_ad_password:             "Reset AD Password",
+  unlock_ad_account:             "Unlock AD Account",
 };
 
 const ACTION_COLORS: Record<string, string> = {
@@ -85,6 +89,10 @@ const ACTION_COLORS: Record<string, string> = {
   unrestrict_app_execution:      "bg-emerald-100 text-emerald-800",
   reset_password:                "bg-rose-100 text-rose-800",
   account_lockout:               "bg-red-200 text-red-900",
+  // Active Directory (on-prem)
+  disable_ad_account:            "bg-red-100 text-red-800",
+  reset_ad_password:             "bg-rose-100 text-rose-800",
+  unlock_ad_account:             "bg-emerald-100 text-emerald-800",
 };
 
 const SERVICE_SOURCE_MAP: Record<string, { label: string; color: string }> = {
@@ -661,6 +669,9 @@ const ACTION_LABELS_SHORT: Record<string, string> = {
   unrestrict_app_execution: "Remove Restriction",
   reset_password: "Reset Password",
   account_lockout: "Account Lockout",
+  disable_ad_account: "Disable AD",
+  reset_ad_password: "Reset AD Pw",
+  unlock_ad_account: "Unlock AD",
 };
 
 function MetricsDashboard({ metrics }: { metrics: DefenderAgentMetrics }) {

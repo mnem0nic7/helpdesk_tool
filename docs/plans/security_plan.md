@@ -232,12 +232,29 @@ Real-time per-decision Teams pings — distinct from the daily digest.
 
 All action types the Defender Agent dispatches. Tier safety column shows the lowest tier at which the action may be auto-executed (T1 = automatic; T2 = queued with cancellation window; T3 = human approval required).
 
+**Entra ID / Identity**
+
 | Action | What it does | Min auto tier | Composite? |
 |---|---|---|---|
 | `revoke_sessions` | Invalidates all active Entra sessions for matched user(s) | T1 | No |
 | `disable_sign_in` | Blocks sign-in for matched user(s) in Entra | T2 | No |
 | `account_lockout` | Revoke sessions **and** disable sign-in together | T2 | Yes — `revoke_sessions` + `disable_sign_in` |
 | `reset_password` | Queues Entra random password reset via `user_admin_jobs` | T3 (approval) | No |
+
+**Active Directory (on-prem)**
+
+Dispatched directly via `ad_client` over LDAPS. Requires `on_prem_sam_account_name` in the enriched entity (sourced from `onPremisesSamAccountName` in the Azure cache). Silently skipped if the field is missing or `AD_SERVER` is not configured.
+
+| Action | What it does | Min auto tier | Composite? |
+|---|---|---|---|
+| `disable_ad_account` | Disables the on-prem AD account (sets userAccountControl) | T2 | No |
+| `reset_ad_password` | Resets on-prem AD password to a random 20-character secret | T2 | No |
+| `unlock_ad_account` | Clears AD lockout without changing the password | T2 | No |
+
+**Intune Device**
+
+| Action | What it does | Min auto tier | Composite? |
+|---|---|---|---|
 | `device_sync` | Forces Intune policy sync on matched device | T1 | No |
 | `run_av_scan` | Triggers full AV scan on matched device via MDE | T1 | No |
 | `isolate_device` | Network-isolates device in MDE (preserves forensic state) | T2 | No |
@@ -246,6 +263,11 @@ All action types the Defender Agent dispatches. Tier safety column shows the low
 | `device_retire` | Retire device from Intune (softer than wipe) | T3 (approval) | No |
 | `restrict_app_execution` | Blocks non-Microsoft binaries from running on device | T3 (approval) | No |
 | `unrestrict_app_execution` | Releases app execution restriction | T2 | No |
+
+**MDE / Investigation**
+
+| Action | What it does | Min auto tier | Composite? |
+|---|---|---|---|
 | `start_investigation` | Triggers MDE automated investigation on device | T1 | No |
 | `collect_investigation_package` | Collects forensic package from device via MDE | T2 | No |
 | `stop_and_quarantine_file` | Stops process and quarantines malicious file on device | T1 | No |

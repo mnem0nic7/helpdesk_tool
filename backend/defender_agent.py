@@ -1139,11 +1139,12 @@ def _enrich_entities(
     """Return entities with additional context fields from the Azure cache.
 
     Fields added for user entities:
-      enabled       (bool)   — accountEnabled
-      job_title     (str)    — from extra.job_title
-      department    (str)    — from extra.department
-      priority_band (str)    — account risk tier (P0–P3 or unknown)
-      last_sign_in  (str)    — last_interactive_utc from signInActivity
+      enabled               (bool)   — accountEnabled
+      job_title             (str)    — from extra.job_title
+      department            (str)    — from extra.department
+      priority_band         (str)    — account risk tier (P0–P3 or unknown)
+      last_sign_in          (str)    — last_interactive_utc from signInActivity
+      on_prem_sam_account_name (str) — from azure_cache (onPremisesSamAccountName)
 
     Fields added for device entities:
       compliance_state (str) — compliant / noncompliant / unknown / …
@@ -1169,6 +1170,9 @@ def _enrich_entities(
                     e["last_sign_in"] = str(
                         extra.get("last_interactive_utc") or
                         extra.get("last_successful_utc") or ""
+                    )
+                    e["on_prem_sam_account_name"] = str(
+                        rec.get("on_prem_sam_account_name") or ""
                     )
             elif e.get("type") == "device":
                 key = (str(e.get("id") or "").lower() or
@@ -1996,6 +2000,49 @@ def _dispatch_action(
                 )
             except Exception as exc:
                 logger.warning("Defender agent: create_block_indicator dispatch failed: %s", exc)
+
+    elif action_type in ("disable_ad_account", "reset_ad_password", "unlock_ad_account"):
+        # On-prem Active Directory actions via ad_client (LDAPS required for password reset).
+        # Requires on_prem_sam_account_name in enriched entity; skips silently when missing.
+        user_entities = [e for e in entities if e.get("type") in ("user", "account")]
+        if not user_entities:
+            logger.info("Defender agent: %s — no user entities, skipping", action_type)
+            return []
+        try:
+            from ad_client import ad_client as _ad
+        except Exception as exc:
+            logger.warning("Defender agent: %s — ad_client unavailable: %s", action_type, exc)
+            return []
+        import secrets
+        import string
+
+        for ent in user_entities:
+            sam = str(ent.get("on_prem_sam_account_name") or "").strip()
+            if not sam:
+                logger.info(
+                    "Defender agent: %s — entity %r has no on_prem_sam_account_name, skipping",
+                    action_type, ent.get("id") or ent.get("name"),
+                )
+                continue
+            try:
+                if action_type == "disable_ad_account":
+                    _ad.disable_user(sam)
+                    logger.info("Defender agent: disabled AD account for %s", sam)
+                    job_ids.append(f"ad-disable-{sam}")
+                elif action_type == "reset_ad_password":
+                    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+                    new_pw = "".join(secrets.choice(alphabet) for _ in range(20))
+                    _ad.reset_password(sam, new_pw)
+                    logger.info("Defender agent: reset AD password for %s", sam)
+                    job_ids.append(f"ad-pwreset-{sam}")
+                elif action_type == "unlock_ad_account":
+                    _ad.unlock_user(sam)
+                    logger.info("Defender agent: unlocked AD account for %s", sam)
+                    job_ids.append(f"ad-unlock-{sam}")
+            except Exception as exc:
+                logger.warning(
+                    "Defender agent: %s for %s failed: %s", action_type, sam, exc
+                )
 
     else:
         if action_type:
