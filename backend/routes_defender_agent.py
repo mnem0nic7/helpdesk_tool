@@ -729,8 +729,8 @@ def delete_suppression(
 def list_indicators(_session: dict = Depends(require_authenticated_user)) -> dict:
     """List all tenant-wide block indicators (requires Ti.ReadWrite.All on the app registration)."""
     _ensure_azure_site()
-    from azure_client import azure_client
-    items = azure_client.list_indicators()
+    from azure_client import AzureClient
+    items = AzureClient().list_indicators()
     return {"indicators": items, "total": len(items)}
 
 
@@ -741,8 +741,8 @@ def delete_indicator(
 ) -> dict:
     """Remove a tenant-wide block indicator (admin only)."""
     _ensure_azure_site()
-    from azure_client import azure_client
-    ok = azure_client.delete_indicator(indicator_id)
+    from azure_client import AzureClient
+    ok = AzureClient().delete_indicator(indicator_id)
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to delete indicator from MDE")
     return {"deleted": True, "indicator_id": indicator_id}
