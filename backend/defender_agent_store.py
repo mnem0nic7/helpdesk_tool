@@ -243,6 +243,7 @@ class DefenderAgentStore:
             "ALTER TABLE defender_agent_custom_rules ADD COLUMN playbook_id TEXT",
             "ALTER TABLE defender_agent_decisions ADD COLUMN ai_narrative TEXT",
             "ALTER TABLE defender_agent_decisions ADD COLUMN ai_narrative_generated_at TEXT",
+            "ALTER TABLE defender_agent_custom_rules ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 with self._conn() as _mc:
@@ -1397,11 +1398,11 @@ class DefenderAgentStore:
                 f"""
                 INSERT INTO defender_agent_custom_rules
                     (id, name, match_field, match_value, match_mode, tier, action_type,
-                     confidence_score, enabled, created_by, created_at, playbook_id)
-                VALUES ({p},{p},{p},{p},{p},{p},{p},{p},1,{p},{p},{p})
+                     confidence_score, enabled, created_by, created_at, updated_at, playbook_id)
+                VALUES ({p},{p},{p},{p},{p},{p},{p},{p},1,{p},{p},{p},{p})
                 """,
                 (rid, name, match_field, match_value, match_mode, tier, action_type,
-                 confidence_score, created_by, now, playbook_id),
+                 confidence_score, created_by, now, now, playbook_id),
             )
             conn.commit()
         with self._conn() as conn:
@@ -1421,10 +1422,11 @@ class DefenderAgentStore:
 
     def toggle_custom_rule(self, rule_id: str, *, enabled: bool) -> dict[str, Any] | None:
         p = self._placeholder()
+        now = _now()
         with self._conn() as conn:
             conn.execute(
-                f"UPDATE defender_agent_custom_rules SET enabled = {p} WHERE id = {p}",
-                (int(enabled), rule_id),
+                f"UPDATE defender_agent_custom_rules SET enabled = {p}, updated_at = {p} WHERE id = {p}",
+                (int(enabled), now, rule_id),
             )
             conn.commit()
             row = conn.execute(
@@ -1438,14 +1440,15 @@ class DefenderAgentStore:
         _allowed = {"name", "match_field", "match_value", "match_mode", "tier",
                     "action_type", "confidence_score", "playbook_id"}
         p = self._placeholder()
-        sets: list[str] = []
-        vals: list[Any] = []
+        now = _now()
+        sets: list[str] = [f"updated_at = {p}"]
+        vals: list[Any] = [now]
         for key, value in kwargs.items():
             if key not in _allowed:
                 continue
             sets.append(f"{key} = {p}")
             vals.append(value)
-        if not sets:
+        if len(sets) == 1:  # only updated_at — no real changes
             with self._conn() as conn:
                 row = conn.execute(
                     f"SELECT * FROM defender_agent_custom_rules WHERE id = {p}", (rule_id,)

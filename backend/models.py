@@ -2704,6 +2704,7 @@ class DefenderAgentCustomRule(BaseModel):
     enabled: bool = True
     created_by: str = ""
     created_at: str = ""
+    updated_at: str = ""
     playbook_id: str | None = None
     playbook_name: str | None = None
 

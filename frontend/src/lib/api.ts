@@ -1547,6 +1547,7 @@ export interface DefenderAgentCustomRule {
   enabled: boolean;
   created_by: string;
   created_at: string;
+  updated_at: string;
   playbook_id?: string | null;
   playbook_name?: string | null;
 }
