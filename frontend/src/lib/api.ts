@@ -4086,6 +4086,9 @@ export const api = {
   toggleDefenderAgentCustomRule(ruleId: string, enabled: boolean): Promise<DefenderAgentCustomRule> {
     return putJSON<DefenderAgentCustomRule>(`/api/azure/security/defender-agent/custom-rules/${encodeURIComponent(ruleId)}/toggle?enabled=${enabled}`, {});
   },
+  updateDefenderAgentCustomRule(ruleId: string, body: Partial<Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at" | "playbook_name">>): Promise<DefenderAgentCustomRule> {
+    return putJSON<DefenderAgentCustomRule>(`/api/azure/security/defender-agent/custom-rules/${encodeURIComponent(ruleId)}`, body);
+  },
   listDefenderAgentKnownTags(): Promise<{ tags: string[] }> {
     return fetchJSON<{ tags: string[] }>("/api/azure/security/defender-agent/tags");
   },

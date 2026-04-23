@@ -1855,20 +1855,33 @@ function RulesPanel() {
 // Phase 18: Custom detection rules panel
 // ---------------------------------------------------------------------------
 
+const BLANK_RULE_FORM = {
+  name: "", match_field: "title" as const, match_value: "", match_mode: "contains" as const,
+  tier: 3, action_type: "start_investigation", confidence_score: 50, playbook_id: null as string | null,
+};
+
 function CustomRulesPanel() {
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(false);
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [responseType, setResponseType] = useState<"single" | "playbook">("single");
-  const [form, setForm] = useState<Partial<DefenderAgentCustomRule>>({
-    name: "",
-    match_field: "title",
-    match_value: "",
-    match_mode: "contains",
-    tier: 3,
-    action_type: "start_investigation",
-    confidence_score: 50,
-    playbook_id: null,
-  });
+  const [form, setForm] = useState<Partial<DefenderAgentCustomRule>>(BLANK_RULE_FORM);
+
+  function resetForm() {
+    setForm(BLANK_RULE_FORM);
+    setResponseType("single");
+    setEditingRuleId(null);
+  }
+
+  function startEdit(cr: DefenderAgentCustomRule) {
+    setEditingRuleId(cr.id);
+    setForm({
+      name: cr.name, match_field: cr.match_field, match_value: cr.match_value,
+      match_mode: cr.match_mode, tier: cr.tier, action_type: cr.action_type,
+      confidence_score: cr.confidence_score, playbook_id: cr.playbook_id ?? null,
+    });
+    setResponseType(cr.playbook_id ? "playbook" : "single");
+  }
 
   const rulesQuery = useQuery({
     queryKey: ["defender-agent-custom-rules"],
@@ -1884,15 +1897,16 @@ function CustomRulesPanel() {
   const createMut = useMutation({
     mutationFn: (body: Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at" | "playbook_name">) =>
       api.createDefenderAgentCustomRule(body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["defender-agent-custom-rules"] });
-      setForm({ name: "", match_field: "title", match_value: "", match_mode: "contains", tier: 3, action_type: "start_investigation", confidence_score: 50, playbook_id: null });
-      setResponseType("single");
-    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["defender-agent-custom-rules"] }); resetForm(); },
+  });
+  const updateMut = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Partial<Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at" | "playbook_name">> }) =>
+      api.updateDefenderAgentCustomRule(id, body),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["defender-agent-custom-rules"] }); resetForm(); },
   });
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.deleteDefenderAgentCustomRule(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-custom-rules"] }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["defender-agent-custom-rules"] }); if (editingRuleId) resetForm(); },
   });
   const toggleMut = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => api.toggleDefenderAgentCustomRule(id, enabled),
@@ -1926,7 +1940,16 @@ function CustomRulesPanel() {
         <div>
           {/* Add form */}
           <div className="border-b border-gray-100 bg-gray-50 px-5 py-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">New custom rule</p>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                {editingRuleId ? "Edit rule" : "New custom rule"}
+              </p>
+              {editingRuleId && (
+                <button onClick={resetForm} className="text-xs text-gray-400 hover:text-gray-600">
+                  Cancel edit
+                </button>
+              )}
+            </div>
             <div className="flex flex-wrap gap-3 items-end">
               <label className="block">
                 <span className="text-xs text-gray-500">Name (optional)</span>
@@ -2034,12 +2057,17 @@ function CustomRulesPanel() {
                 onClick={() => {
                   if (!form.match_value?.trim()) return;
                   if (responseType === "playbook" && !form.playbook_id) return;
-                  createMut.mutate(form as Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at" | "playbook_name">);
+                  const body = form as Omit<DefenderAgentCustomRule, "id" | "enabled" | "created_by" | "created_at" | "playbook_name">;
+                  if (editingRuleId) {
+                    updateMut.mutate({ id: editingRuleId, body });
+                  } else {
+                    createMut.mutate(body);
+                  }
                 }}
-                disabled={!form.match_value?.trim() || (responseType === "playbook" && !form.playbook_id) || createMut.isPending}
+                disabled={!form.match_value?.trim() || (responseType === "playbook" && !form.playbook_id) || createMut.isPending || updateMut.isPending}
                 className="self-end rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
               >
-                {createMut.isPending ? "Adding…" : "Add rule"}
+                {(createMut.isPending || updateMut.isPending) ? "Saving…" : editingRuleId ? "Save changes" : "Add rule"}
               </button>
             </div>
           </div>
@@ -2055,7 +2083,7 @@ function CustomRulesPanel() {
               <table className="min-w-full text-xs">
                 <thead className="bg-gray-50">
                   <tr>
-                    {["Name", "Match", "Tier", "Action", "Confidence", "Status", ""].map((h) => (
+                    {["Name", "Match", "Tier", "Action", "Confidence", "Status", "Actions"].map((h) => (
                       <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -2092,6 +2120,12 @@ function CustomRulesPanel() {
                         }
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => editingRuleId === cr.id ? resetForm() : startEdit(cr)}
+                          className={`mr-2 text-xs rounded px-2 py-1 ${editingRuleId === cr.id ? "bg-blue-100 text-blue-700 ring-1 ring-blue-300" : "bg-gray-50 text-gray-600 hover:bg-gray-100"}`}
+                        >
+                          {editingRuleId === cr.id ? "Editing…" : "Edit"}
+                        </button>
                         <button
                           onClick={() => toggleMut.mutate({ id: cr.id, enabled: !cr.enabled })}
                           disabled={toggleMut.isPending}

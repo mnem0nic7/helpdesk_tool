@@ -1434,6 +1434,35 @@ class DefenderAgentStore:
             return None
         return self._row_to_custom_rule(dict(row))
 
+    def update_custom_rule(self, rule_id: str, **kwargs: Any) -> dict[str, Any] | None:
+        _allowed = {"name", "match_field", "match_value", "match_mode", "tier",
+                    "action_type", "confidence_score", "playbook_id"}
+        p = self._placeholder()
+        sets: list[str] = []
+        vals: list[Any] = []
+        for key, value in kwargs.items():
+            if key not in _allowed:
+                continue
+            sets.append(f"{key} = {p}")
+            vals.append(value)
+        if not sets:
+            with self._conn() as conn:
+                row = conn.execute(
+                    f"SELECT * FROM defender_agent_custom_rules WHERE id = {p}", (rule_id,)
+                ).fetchone()
+            return self._row_to_custom_rule(dict(row)) if row else None
+        vals.append(rule_id)
+        sql = f"UPDATE defender_agent_custom_rules SET {', '.join(sets)} WHERE id = {p}"
+        with self._conn() as conn:
+            conn.execute(sql, vals)
+            conn.commit()
+            row = conn.execute(
+                f"SELECT * FROM defender_agent_custom_rules WHERE id = {p}", (rule_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_custom_rule(dict(row))
+
     @staticmethod
     def _row_to_custom_rule(d: dict[str, Any]) -> dict[str, Any]:
         d["enabled"] = bool(d.get("enabled", 1))

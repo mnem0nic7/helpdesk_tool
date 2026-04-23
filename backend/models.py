@@ -2717,3 +2717,14 @@ class DefenderAgentCustomRuleCreate(BaseModel):
     action_type: str = Field(default="start_investigation", max_length=100)
     confidence_score: int = Field(default=50, ge=0, le=100)
     playbook_id: str | None = None
+
+
+class DefenderAgentCustomRuleUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    match_field: Literal["title", "category", "service_source", "severity"] | None = None
+    match_value: str | None = Field(default=None, min_length=1, max_length=500)
+    match_mode: Literal["contains", "exact", "startswith"] | None = None
+    tier: int | None = Field(default=None, ge=1, le=3)
+    action_type: str | None = Field(default=None, max_length=100)
+    confidence_score: int | None = Field(default=None, ge=0, le=100)
+    playbook_id: str | None = None

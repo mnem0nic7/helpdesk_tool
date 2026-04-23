@@ -16,6 +16,7 @@ from models import (
     DefenderAgentConfigUpdate,
     DefenderAgentCustomRule,
     DefenderAgentCustomRuleCreate,
+    DefenderAgentCustomRuleUpdate,
     DefenderAgentPlaybook,
     DefenderAgentPlaybookCreate,
     DefenderAgentPlaybookUpdate,
@@ -874,6 +875,27 @@ def create_custom_rule(
         if pb:
             rule["playbook_name"] = pb["name"]
     return rule
+
+
+@router.put("/custom-rules/{rule_id}", response_model=DefenderAgentCustomRule)
+def update_custom_rule(
+    rule_id: str,
+    body: DefenderAgentCustomRuleUpdate,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    _ensure_azure_site()
+    update_data = body.model_dump(exclude_unset=True)
+    # Normalize: playbook-based rules don't need a standalone action_type
+    if update_data.get("playbook_id") is not None and "playbook_id" in update_data:
+        update_data["action_type"] = ""
+    result = defender_agent_store.update_custom_rule(rule_id, **update_data)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Custom rule not found")
+    if result.get("playbook_id"):
+        pb = defender_agent_store.get_playbook(result["playbook_id"])
+        if pb:
+            result["playbook_name"] = pb["name"]
+    return result
 
 
 @router.delete("/custom-rules/{rule_id}")
