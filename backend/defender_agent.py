@@ -662,6 +662,50 @@ _RULES: list[dict[str, Any]] = [
         "confidence_score": 82,
         "reason": "Known threat actor family (RC-17) detected on endpoint; isolating device to contain spread.",
     },
+    # T2 — Kerberoasting / AS-REP Roasting → collect investigation package (RC parity)
+    {
+        "title_keywords": (
+            "kerberoasting", "as-rep roasting", "asrep roasting",
+            "kerberos ticket abuse", "kerberos brute force", "kerberos hash crack",
+            "tgs ticket request anomaly",
+        ),
+        "min_severity": "medium",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "collect_investigation_package",
+        "confidence_score": 80,
+        "reason": "Kerberoasting/AS-REP roasting credential attack detected; collecting investigation package for analysis.",
+    },
+    # T2 — PRT / Primary Refresh Token theft → revoke sessions (RC parity; escalates T1 off-hours)
+    {
+        "title_keywords": (
+            "primary refresh token", "prt theft", "prt stolen",
+            "hybrid join token", "device prt abuse", "seamless sso token abuse",
+        ),
+        "min_severity": "high",
+        "tier": 2,
+        "decision": "queue",
+        "action_type": "revoke_sessions",
+        "off_hours_escalate": True,
+        "confidence_score": 82,
+        "reason": "Primary Refresh Token theft detected; revoking active sessions to invalidate stolen token.",
+    },
+    # T1 — defense evasion / security tool tampering → trigger investigation (RC parity)
+    # Attacker is blinding endpoint defenses; investigate immediately before AV is fully disabled.
+    {
+        "title_keywords": (
+            "amsi bypass", "etw tampering", "antivirus disabled",
+            "security tool killed", "defender disabled", "tamper protection disabled",
+            "security product interference", "endpoint protection disabled",
+            "av disabled", "edr disabled",
+        ),
+        "min_severity": "high",
+        "tier": 1,
+        "decision": "execute",
+        "action_type": "start_investigation",
+        "confidence_score": 80,
+        "reason": "Defense evasion / security tool tampering detected; triggering automated investigation — attacker may be blinding endpoint defenses.",
+    },
     # --- Catch-all (MUST remain last) ---
     # No title_keywords / category_keywords = universal match for any alert that
     # didn't match a specific rule above. T3 recommend so a human reviews it.

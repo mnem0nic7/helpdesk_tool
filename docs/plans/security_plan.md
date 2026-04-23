@@ -8,7 +8,7 @@ Tracks what is built, what is agreed, and what is deferred for the dedicated sec
 
 | Component | What it does | AI |
 |---|---|---|
-| **Defender Agent** | Polls Microsoft Defender alerts every 2 min; auto-remediates T1, queues T2, surfaces T3 for approval | 47 built-in rules + custom rules + AI fallback classifier (gemma4:31b or runtime-config model, always T3-capped) |
+| **Defender Agent** | Polls Microsoft Defender alerts every 2 min; auto-remediates T1, queues T2, surfaces T3 for approval | 50 built-in rules + custom rules + AI fallback classifier (gemma4:31b or runtime-config model, always T3-capped) |
 | **Security Copilot** | On-demand investigation workbench; queries 16 internal sources, synthesizes with Ollama | gemma4:31b by default (admin-configurable via AI-05 runtime config); isolated security Ollama runtime |
 | **Security Review Lanes** | 11 periodic-audit surfaces (Access, Identity, Users, Guests, Apps, Devices, Account Health, DLP, CA Tracker, Break-glass, Directory Roles) | AI-08 lane summaries implemented — 9 lanes, 60-min leader-only service; LaneSummaryPanel on all 9 lane pages; hub card teasers on Security Overview; regenerate endpoint for on-demand refresh |
 | **Tools** | Login audit, mailbox delegate lookup, OneDrive copy | None |
@@ -38,17 +38,88 @@ The model receives no credentials, no raw passwords, and no full email body cont
 
 ---
 
+## Defender Agent — Rule Table
+
+### Rule Category Summary
+
+50 built-in rules evaluated top-to-bottom; first match wins. The catch-all always runs last.
+
+| Category | Rules | Tiers in play | `off_hours_escalate` rules |
+|---|---|---|---|
+| **Identity & Session** — signin attacks, session/token hijacking, MFA abuse, OAuth, MCAS anomalies | 13 | T1–T3 | Password spray/brute force, MFA fatigue, AiTM, anomalous token (medium) — 4 rules |
+| **Endpoint & Malware** — AV/device sync, malware signatures, process injection, C2, ransomware, named CVEs, persistence, recon | 21 | T1–T3 | None |
+| **Email & Collaboration** — inbox rules, BEC, phishing delivery, MDO malicious-click upgrade | 6 | T1–T2 | Inbox rule manipulation (medium), BEC — 2 rules |
+| **Red Canary Parity** — named RC playbooks, composites, threat families, IOC blocking, Kerberos attacks, PRT theft, defense evasion | 9 | T1–T2 | PRT theft — 1 rule |
+| **Catch-all** — unmatched high/critical → human review | 1 | T3 | None |
+
+Total rules with `off_hours_escalate`: **7** (all are identity-targeting T2s that auto-escalate to T1 execute when no operator is available to cancel).
+
+### Custom Rules and Overrides
+
+Built-in rules are evaluated top-to-bottom; first match wins. Custom rules are appended after all built-in rules, before the catch-all. The catch-all T3 always runs last regardless of custom rule count.
+
+Per-rule overrides (disable a rule or adjust its confidence score) are applied per `rule_id` without code changes — operators can suppress a noisy built-in rule from the admin UI. Custom rules support the same keyword, severity, tier, and action_type fields as built-in rules. Entry points: `_RULES` list and `_classify_alert()` in `backend/defender_agent.py`; override storage in `defender_agent_store`.
+
+### MITRE ATT&CK Technique Extraction
+
+`_extract_mitre_techniques()` in `defender_agent.py` parses ATT&CK technique IDs (`T1055`, `T1078`, etc.) from Graph Security alert evidence fields and attaches them to the stored decision record. **The rule classifier does not yet use these IDs as match conditions** — rules currently match on alert title keywords and category strings only. MITRE technique-ID matching is deferred (see Deferred table).
+
+### Red Canary Parity Coverage
+
+#### Covered
+
+| RC Playbook | Rule in table | Tier | Action |
+|---|---|---|---|
+| RC-6: MDO confirmed malicious URL click | `clicked malicious url`, `url detonation` (MDO service source) | T1 | `revoke_sessions` |
+| RC-7: Anomalous token activity | `anomalous token`, `token issuer anomaly` | T1 (high) / T2 (medium) | `revoke_sessions` / `disable_sign_in` |
+| RC-8: MCAS/Defender for Cloud Apps behavioral anomaly | `cloud app anomaly`, `mass download`, `ransomware activity in cloud` (MCAS service source) | T2 | `account_lockout` |
+| RC-17: Known threat actor families | `qbot`, `qakbot`, `socgholish`, `impacket`, `raspberry robin`, and 6 others | T2 | `isolate_device` |
+| RC-20: Inbox manipulation (HIGH severity upgrade) | `inbox rule`, `mailbox forwarding`, `suspicious forwarding` | T1 (high) / T2 (medium) | `revoke_sessions` / `disable_sign_in` |
+| RC Containment: active attacker on endpoint + identity | `hands-on-keyboard`, `interactive attacker`, `human operated attack` | T2 composite | `isolate_device` + `revoke_sessions` |
+| RC Full Containment: critical active exploitation | `ransomware encryption in progress`, `critical active exploitation` | T2 composite | `isolate_device` + `revoke_sessions` + `disable_sign_in` |
+| Kerberoasting / AS-REP Roasting | `kerberoasting`, `asrep roasting`, `kerberos ticket abuse` | T2 | `collect_investigation_package` |
+| PRT / Primary Refresh Token theft | `primary refresh token`, `prt theft`, `hybrid join token` | T2 (`off_hours_escalate`) | `revoke_sessions` |
+| Defense evasion / security tool tampering | `amsi bypass`, `etw tampering`, `defender disabled`, `tamper protection disabled` | T1 | `start_investigation` |
+
+#### Not Yet Covered (deferred)
+
+| RC Category | Gap | Reason deferred |
+|---|---|---|
+| NTLM relay / SMB relay | No keyword rule; title varies by source | Needs MITRE technique-ID matching (T1557) — defer until technique-ID rules are implemented |
+| Kerberos delegation abuse | Unconstrained/constrained delegation exploitation | Low prevalence in tenant; add when MITRE T1134.001/T1558.003 matching is available |
+| Azure AD Connect sync abuse | AAD Connect service account compromise patterns | Specialist attack; revisit if/when AAD Connect is in scope |
+
+### Off-Hours Escalation
+
+**7 T2 rules auto-promote to T1 execute** when no operator is available to cancel. Business hours are defined as **Monday–Friday 08:00–17:00 US/Pacific (DST-aware)** — weekends and outside those hours are off-hours. Entry point: `_is_off_hours_pt()` in `backend/defender_agent.py`.
+
+Rules with `off_hours_escalate=True`:
+1. Password spray / brute force → `disable_sign_in`
+2. MFA fatigue → `disable_sign_in`
+3. AiTM / session hijacking → `revoke_sessions`
+4. Anomalous token (medium severity) → `disable_sign_in`
+5. Inbox rule manipulation (medium severity) → `disable_sign_in`
+6. BEC / email impersonation → `disable_sign_in`
+7. PRT / Primary Refresh Token theft → `revoke_sessions`
+
+**Operator note**: if working outside Pacific business hours and you want to review before action, cancel any queued T2 decisions immediately on arriving at the feed — off-hours T2s promote automatically and there is no second window.
+
+---
+
 ## Site Scope
 
-- **URL**: `security.movedocs.com`
+`security.movedocs.com` is the **4th site scope** in this repo, alongside `primary` (it-app.movedocs.com), `oasisdev` (oasisdev.movedocs.com), and `azure` (azure.movedocs.com). It is a dedicated security-ops surface with Entra-only auth — `AZURE_AUTH_PROVIDER=entra` is required, not a config option.
+
 - **Auth**: Entra-only (no Atlassian/Jira login)
 - **All authenticated users are operators** — no in-app RBAC tier; access is gated at the Entra level
 - **No Jira integration** — pure security-ops surface
 - **No reporting page, no Knowledge Base in nav**
 
+**Backend scope guard**: all security backend routes accept both `azure` and `security` scopes (guards call `_ensure_azure_site()` or equivalent). New routes targeting the security surface must include both scopes in their guard. The `security` scope enforces Entra-only auth as a hard constraint — do not add Atlassian auth fallback to security-scoped routes.
+
 ### Site Relationship — security.movedocs.com vs. azure.movedocs.com
 
-Both sites share the same backend routes (guards accept both `azure` and `security` scopes) and all 11 review lanes. The distinction is surface and audience:
+Both sites share the same backend routes and all 11 review lanes. The distinction is surface and audience:
 
 | | security.movedocs.com | azure.movedocs.com |
 |---|---|---|
@@ -123,11 +194,21 @@ Rule-based Defender Agent classification (T1/T2 auto-remediation) continues unaf
 | `OLLAMA_SECURITY_BASE_URL` | `http://10.76.1.180:11434` | Security Ollama host | Yes |
 | `OLLAMA_SECURITY_MODEL` | `gemma4:31b` | Startup model default (overridden by DB config at runtime) | Yes |
 
+### Defender Agent Notifications
+
+Real-time per-decision Teams pings — distinct from the daily digest.
+
+| Variable | Default | What it controls | Required |
+|---|---|---|---|
+| `DEFENDER_AGENT_TEAMS_WEBHOOK_URL` | _(empty)_ | Teams webhook for per-decision alerts; agent skips Teams if empty | No |
+| `DEFENDER_AGENT_TEAMS_NOTIFY_T1` | `true` | Send Teams ping on T1 auto-execute decisions | No |
+| `DEFENDER_AGENT_TEAMS_NOTIFY_T2` | `true` | Send Teams ping on T2 queued decisions | No |
+
 ### Digest Service
 
 | Variable | Default | What it controls | Required |
 |---|---|---|---|
-| `SECURITY_DIGEST_TEAMS_WEBHOOK` | _(empty)_ | Teams webhook URL; service no-ops if empty | No |
+| `SECURITY_DIGEST_TEAMS_WEBHOOK` | _(empty)_ | Teams webhook URL for daily digest; service no-ops if empty | No |
 | `SECURITY_DIGEST_HOUR` | `8` | UTC hour to fire daily digest | No |
 
 ### Lane Summary Service (AI-08)
@@ -146,6 +227,29 @@ Rule-based Defender Agent classification (T1/T2 auto-remediation) continues unaf
 | `ENTRA_CLIENT_SECRET` | — | App registration client secret | Yes |
 
 **Runtime model override (AI-05)**: after startup, an admin can change the active Ollama model via `PUT /api/azure/security/runtime-config` with `{"ollama_model": "model-id"}`. This writes to the `security_runtime_config` Postgres table and takes effect on the next AI call — no restart required. To revert to the env-var default, delete the DB row or set the key to an empty string.
+
+### Action Types Reference
+
+All action types the Defender Agent dispatches. Tier safety column shows the lowest tier at which the action may be auto-executed (T1 = automatic; T2 = queued with cancellation window; T3 = human approval required).
+
+| Action | What it does | Min auto tier | Composite? |
+|---|---|---|---|
+| `revoke_sessions` | Invalidates all active Entra sessions for matched user(s) | T1 | No |
+| `disable_sign_in` | Blocks sign-in for matched user(s) in Entra | T2 | No |
+| `account_lockout` | Revoke sessions **and** disable sign-in together | T2 | Yes — `revoke_sessions` + `disable_sign_in` |
+| `reset_password` | Queues Entra random password reset via `user_admin_jobs` | T3 (approval) | No |
+| `device_sync` | Forces Intune policy sync on matched device | T1 | No |
+| `run_av_scan` | Triggers full AV scan on matched device via MDE | T1 | No |
+| `isolate_device` | Network-isolates device in MDE (preserves forensic state) | T2 | No |
+| `unisolate_device` | Releases MDE network isolation | T2 | No |
+| `device_wipe` | Full device wipe via Intune | T3 (approval) | No |
+| `device_retire` | Retire device from Intune (softer than wipe) | T3 (approval) | No |
+| `restrict_app_execution` | Blocks non-Microsoft binaries from running on device | T3 (approval) | No |
+| `unrestrict_app_execution` | Releases app execution restriction | T2 | No |
+| `start_investigation` | Triggers MDE automated investigation on device | T1 | No |
+| `collect_investigation_package` | Collects forensic package from device via MDE | T2 | No |
+| `stop_and_quarantine_file` | Stops process and quarantines malicious file on device | T1 | No |
+| `create_block_indicator` | Creates tenant-wide IOC block (IP, domain, or file hash) in MDE | T2 | No |
 
 ---
 
@@ -212,11 +316,12 @@ Two endpoints: `GET /api/azure/security/lane-summaries` (all rows, both scopes) 
 
 ## Delivery Log
 
-All three phases complete as of 2026-04-22.
+All three phases complete as of 2026-04-22. RC parity rules expanded 2026-04-23.
 
 - **Phase 1 — FIX-01–07** (2026-04-22): Runtime config wired into all AI model resolution paths; KB category field threaded end-to-end; AI narrative "Generate" button in decision drawer; handoff ref guard bug fixed; per-session model picker hidden on security scope. Single commit batch.
 - **Phase 2 — AI-08 backend** (2026-04-22): `security_lane_summary_service.py`, migration 0019, `generate_lane_summary()` in `ai_client.py`, `GET/POST /lane-summaries` routes, `SECURITY_LANE_SUMMARY_INTERVAL_MINUTES` config.
 - **Phase 3 — AI-08 frontend** (2026-04-22): `SecurityLaneAISummary` type + API calls in `api.ts`; `LaneSummaryPanel` component in `AzureSecurityLane.tsx`; hub card teasers in `AzureSecurityPage.tsx`; panel added to all 9 lane pages.
+- **Phase 4 — RC parity expansion** (2026-04-23): 3 new rules added (Kerberoasting T2, PRT theft T2 with off_hours_escalate, defense evasion T1). Rule count 47 → 50. Plan updated with rule-category table, action types reference, RC parity coverage tables, off-hours escalation list, MITRE technique extraction gap, custom rules/overrides note, Defender Agent notification config, 4th-scope context, backend scope guard note.
 
 ---
 
@@ -289,3 +394,6 @@ Gaps identified in the post-implementation review. All implemented as a single c
 | **Teams webhook admin UI** | AI-07 webhook configured via env var for now; admin UI in AzureSecurityPage.tsx deferred. |
 | **Per-lane AI summary prompt tuning** | Start generic; add lane-specific payload shaping only if output proves too vague after real use. Promote to active if narratives consistently lack specific counts or entity names — the first signal is the lane summary panel on a real tenant. Entry point: `generate_lane_summary()` in `ai_client.py` and the `_get_lane_data()` extractors in `security_lane_summary_service.py`. |
 | **S-10: Per-session Copilot model override** | Removed on security.movedocs.com by FIX-07 — all Copilot requests use the admin-configured security runtime model. Per-session override remains available on azure.movedocs.com. |
+| **MITRE technique-ID rule matching** | `_extract_mitre_techniques()` in `defender_agent.py` already parses ATT&CK IDs from alert evidence and stores them on decisions, but the rule classifier uses only title/category keywords. Add a `technique_ids` field to the rule schema; classifier tests extracted IDs as an OR-condition alongside title keywords. Promotes NTLM relay and Kerberos delegation abuse rules from "not yet covered" to implementable. Entry point: `_classify_alert()` and `_extract_mitre_techniques()` in `backend/defender_agent.py`. |
+| **NTLM relay / SMB relay rule** | Title keywords too inconsistent across alert sources. Implement once MITRE technique-ID matching (T1557) is available. |
+| **Kerberos delegation abuse rule** | Low prevalence; implement once MITRE T1134.001/T1558.003 matching is available. |
