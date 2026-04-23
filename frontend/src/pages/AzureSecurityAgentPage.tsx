@@ -1906,7 +1906,10 @@ function CustomRulesPanel() {
   });
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.deleteDefenderAgentCustomRule(id),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["defender-agent-custom-rules"] }); if (editingRuleId) resetForm(); },
+    onSuccess: (_, deletedId) => {
+      queryClient.invalidateQueries({ queryKey: ["defender-agent-custom-rules"] });
+      if (editingRuleId === deletedId) resetForm();
+    },
   });
   const toggleMut = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => api.toggleDefenderAgentCustomRule(id, enabled),
