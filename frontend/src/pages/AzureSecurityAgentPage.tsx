@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, useCallback, memo, type ReactNode
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
-import type { DefenderAgentConfig, DefenderAgentCustomRule, DefenderAgentPlaybook, DefenderAgentDecision, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType } from "../lib/api.ts";
+import type { DefenderAgentConfig, DefenderAgentCustomRule, DefenderAgentPlaybook, DefenderAgentDecision, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType, DefenderAgentDispositionStats } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 import { DEFENDER_FAQ } from "../lib/defenderFaq.ts";
 
@@ -2164,6 +2164,237 @@ function CustomRulesPanel() {
 }
 
 // ---------------------------------------------------------------------------
+// Decision feed — isolated in its own memo'd component so that summary/runs
+// polls (which only update unrelated sections) don't cascade into this tree.
+// ---------------------------------------------------------------------------
+
+type DecisionFeedProps = {
+  decisions: DefenderAgentDecision[];
+  decisionsTotal: number;
+  isLoading: boolean;
+  enabled: boolean;
+  decisionFilter: string;
+  setDecisionFilter: (v: string) => void;
+  mitreFilter: string;
+  setMitreFilter: (v: string) => void;
+  decisionLimit: number;
+  setDecisionLimit: (fn: (prev: number) => number) => void;
+  dispositionStats: DefenderAgentDispositionStats | undefined;
+  isAdmin: boolean;
+  onCancel: (id: string) => void;
+  onApprove: (id: string) => void;
+  onResolve: (id: string) => void;
+  onUnisolate: (id: string) => void;
+  onUnrestrict: (id: string) => void;
+  onForceInvestigate: (id: string) => void;
+  onExecuteNow: (id: string) => void;
+  onEnableSignIn: (id: string) => void;
+  onOpenDetail: (id: string) => void;
+  onOpenEntityTimeline: (id: string, name: string) => void;
+  exportUrl: string;
+  headingRef: React.RefObject<HTMLDivElement | null>;
+};
+
+const DecisionFeed = memo(function DecisionFeed({
+  decisions,
+  decisionsTotal,
+  isLoading,
+  enabled,
+  decisionFilter,
+  setDecisionFilter,
+  mitreFilter,
+  setMitreFilter,
+  decisionLimit,
+  setDecisionLimit,
+  dispositionStats,
+  isAdmin,
+  onCancel,
+  onApprove,
+  onResolve,
+  onUnisolate,
+  onUnrestrict,
+  onForceInvestigate,
+  onExecuteNow,
+  onEnableSignIn,
+  onOpenDetail,
+  onOpenEntityTimeline,
+  exportUrl,
+  headingRef,
+}: DecisionFeedProps) {
+  const [visibleFilteredCount, setVisibleFilteredCount] = useState(25);
+
+  const allMitreTechniques = useMemo(() => {
+    const seen = new Set<string>();
+    for (const d of decisions) {
+      for (const t of (d.mitre_techniques ?? [])) seen.add(t);
+    }
+    return Array.from(seen).sort();
+  }, [decisions]);
+
+  const filteredDecisions = useMemo(() => {
+    let result = decisions;
+    if (decisionFilter === "action_recommended") {
+      result = result.filter((d) => d.decision !== "skip");
+    } else if (decisionFilter) {
+      result = result.filter((d) => d.decision === decisionFilter);
+    }
+    if (mitreFilter) {
+      result = result.filter((d) => (d.mitre_techniques ?? []).includes(mitreFilter));
+    }
+    return result;
+  }, [decisions, decisionFilter, mitreFilter]);
+
+  useEffect(() => {
+    setVisibleFilteredCount(25);
+  }, [decisionFilter, mitreFilter]);
+
+  const visibleFilteredDecisions = useMemo(
+    () => filteredDecisions.slice(0, visibleFilteredCount),
+    [filteredDecisions, visibleFilteredCount],
+  );
+
+  return (
+    <div className="rounded-lg bg-white shadow" ref={headingRef}>
+      <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
+        <h2 className="text-lg font-semibold text-gray-900">Decision Feed</h2>
+        <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
+          {filteredDecisions.length}{(decisionFilter || mitreFilter) ? ` of ${decisions.length}` : ""}
+        </span>
+        <div className="ml-auto flex items-center gap-2 flex-wrap">
+          <a
+            href={exportUrl}
+            download
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+            title="Export last 30 days of decisions as CSV"
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M10 3a.75.75 0 0 1 .75.75v6.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V3.75A.75.75 0 0 1 10 3Zm-5.25 12a.75.75 0 0 1 0-1.5h10.5a.75.75 0 0 1 0 1.5H4.75Z" clipRule="evenodd"/>
+            </svg>
+            Export CSV
+          </a>
+          {allMitreTechniques.length > 0 && (
+            <select
+              value={mitreFilter}
+              onChange={(e) => setMitreFilter(e.target.value)}
+              className="rounded-md border border-gray-300 px-2 py-1 text-xs"
+              title="Filter by MITRE ATT&CK technique"
+            >
+              <option value="">All techniques</option>
+              {allMitreTechniques.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          )}
+          <select
+            value={decisionFilter}
+            onChange={(e) => setDecisionFilter(e.target.value)}
+            className="rounded-md border border-gray-300 px-2 py-1 text-xs"
+          >
+            <option value="">All decisions</option>
+            <option value="action_recommended">Action Recommended</option>
+            <option value="execute">T1 Immediate</option>
+            <option value="queue">T2 Queued</option>
+            <option value="recommend">T3 Recommend</option>
+            <option value="skip">Skipped</option>
+          </select>
+        </div>
+      </div>
+
+      {dispositionStats && dispositionStats.reviewed > 0 && (
+        <div className="border-b border-gray-100 bg-gray-50 px-5 py-2 flex flex-wrap items-center gap-4 text-xs">
+          <span className="font-medium text-gray-600">Analyst coverage:</span>
+          <span className="text-gray-500">{dispositionStats.reviewed}/{dispositionStats.total_actioned} reviewed</span>
+          <span className="inline-flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            <span className="text-emerald-700 font-medium">{dispositionStats.true_positive} TP</span>
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full bg-red-500" />
+            <span className="text-red-700 font-medium">{dispositionStats.false_positive} FP</span>
+            {dispositionStats.false_positive_rate > 0 && (
+              <span className="text-gray-400">({(dispositionStats.false_positive_rate * 100).toFixed(0)}%)</span>
+            )}
+          </span>
+          {dispositionStats.inconclusive > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-yellow-400" />
+              <span className="text-yellow-700 font-medium">{dispositionStats.inconclusive} Inconclusive</span>
+            </span>
+          )}
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <div className="h-6 w-6 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+        </div>
+      ) : filteredDecisions.length === 0 ? (
+        <p className="py-8 text-center text-sm text-gray-500">
+          {enabled ? "No decisions yet — agent will log all alert classifications here." : "Enable the agent to start monitoring Defender alerts."}
+        </p>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-100 text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  {["Time", "Alert", "Source", "Severity", "Tier", "Action", "Status", ""].map((h) => (
+                    <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 bg-white">
+                {visibleFilteredDecisions.map((d) => (
+                  <DecisionRow
+                    key={d.decision_id}
+                    d={d}
+                    isAdmin={isAdmin}
+                    onCancel={onCancel}
+                    onApprove={onApprove}
+                    onResolve={onResolve}
+                    onUnisolate={onUnisolate}
+                    onUnrestrict={onUnrestrict}
+                    onForceInvestigate={onForceInvestigate}
+                    onExecuteNow={onExecuteNow}
+                    onEnableSignIn={onEnableSignIn}
+                    onOpenDetail={onOpenDetail}
+                    onOpenEntityTimeline={onOpenEntityTimeline}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {(decisionFilter || mitreFilter) && filteredDecisions.length > visibleFilteredCount && (
+            <div className="border-t border-gray-100 px-5 py-3 flex items-center justify-between text-xs text-gray-500">
+              <span>Showing {visibleFilteredCount} of {filteredDecisions.length} filtered</span>
+              <button
+                onClick={() => setVisibleFilteredCount((c) => c + 25)}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Show more ({filteredDecisions.length - visibleFilteredCount} remaining)
+              </button>
+            </div>
+          )}
+          {!decisionFilter && !mitreFilter && decisions.length < decisionsTotal && (
+            <div className="border-t border-gray-100 px-5 py-3 flex items-center justify-between text-xs text-gray-500">
+              <span>Showing {decisions.length} of {decisionsTotal}</span>
+              <button
+                onClick={() => setDecisionLimit((l) => l + 25)}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Load more ({decisionsTotal - decisions.length} remaining)
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -2174,7 +2405,6 @@ export default function AzureSecurityAgentPage() {
   const [savingConfig, setSavingConfig] = useState(false);
   const [decisionFilter, setDecisionFilter] = useState<string>("");
   const [mitreFilter, setMitreFilter] = useState<string>("");
-  const [visibleFilteredCount, setVisibleFilteredCount] = useState(25);
   const [runningNow, setRunningNow] = useState(false);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<{ id: string; name: string } | null>(null);
@@ -2191,7 +2421,7 @@ export default function AzureSecurityAgentPage() {
   const summaryQuery = useQuery({
     queryKey: ["defender-agent-summary"],
     queryFn: () => api.getDefenderAgentSummary(),
-    ...getPollingQueryOptions("live_30s"),
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const decisionsQuery = useQuery({
@@ -2203,7 +2433,7 @@ export default function AzureSecurityAgentPage() {
   const runsQuery = useQuery({
     queryKey: ["defender-agent-runs"],
     queryFn: () => api.listDefenderAgentRuns(10),
-    ...getPollingQueryOptions("live_60s"),
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const dispositionStatsQuery = useQuery({
@@ -2376,36 +2606,6 @@ export default function AzureSecurityAgentPage() {
     }
   }
 
-  const allMitreTechniques = useMemo(() => {
-    const seen = new Set<string>();
-    for (const d of decisions) {
-      for (const t of (d.mitre_techniques ?? [])) seen.add(t);
-    }
-    return Array.from(seen).sort();
-  }, [decisions]);
-
-  const filteredDecisions = useMemo(() => {
-    let result = decisions;
-    if (decisionFilter === "action_recommended") {
-      result = result.filter((d) => d.decision !== "skip");
-    } else if (decisionFilter) {
-      result = result.filter((d) => d.decision === decisionFilter);
-    }
-    if (mitreFilter) {
-      result = result.filter((d) => (d.mitre_techniques ?? []).includes(mitreFilter));
-    }
-    return result;
-  }, [decisions, decisionFilter, mitreFilter]);
-
-  useEffect(() => {
-    setVisibleFilteredCount(25);
-  }, [decisionFilter, mitreFilter]);
-
-  const visibleFilteredDecisions = useMemo(
-    () => filteredDecisions.slice(0, visibleFilteredCount),
-    [filteredDecisions, visibleFilteredCount],
-  );
-
   function filterAndScrollToDecisions(filter: string) {
     setDecisionFilter(filter);
     setTimeout(() => decisionsHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
@@ -2515,144 +2715,32 @@ export default function AzureSecurityAgentPage() {
       )}
 
       {/* Decision feed */}
-      <div className="rounded-lg bg-white shadow" ref={decisionsHeadingRef}>
-        <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
-          <h2 className="text-lg font-semibold text-gray-900">Decision Feed</h2>
-          <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
-            {filteredDecisions.length}{(decisionFilter || mitreFilter) ? ` of ${decisions.length}` : ""}
-          </span>
-          <div className="ml-auto flex items-center gap-2 flex-wrap">
-            <a
-              href={api.exportDefenderAgentDecisions(30)}
-              download
-              className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
-              title="Export last 30 days of decisions as CSV"
-            >
-              <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 3a.75.75 0 0 1 .75.75v6.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V3.75A.75.75 0 0 1 10 3Zm-5.25 12a.75.75 0 0 1 0-1.5h10.5a.75.75 0 0 1 0 1.5H4.75Z" clipRule="evenodd"/>
-              </svg>
-              Export CSV
-            </a>
-            {allMitreTechniques.length > 0 && (
-              <select
-                value={mitreFilter}
-                onChange={(e) => setMitreFilter(e.target.value)}
-                className="rounded-md border border-gray-300 px-2 py-1 text-xs"
-                title="Filter by MITRE ATT&CK technique"
-              >
-                <option value="">All techniques</option>
-                {allMitreTechniques.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            )}
-            <select
-              value={decisionFilter}
-              onChange={(e) => setDecisionFilter(e.target.value)}
-              className="rounded-md border border-gray-300 px-2 py-1 text-xs"
-            >
-              <option value="">All decisions</option>
-              <option value="action_recommended">Action Recommended</option>
-              <option value="execute">T1 Immediate</option>
-              <option value="queue">T2 Queued</option>
-              <option value="recommend">T3 Recommend</option>
-              <option value="skip">Skipped</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Disposition stats strip */}
-        {dispositionStatsQuery.data && dispositionStatsQuery.data.reviewed > 0 && (
-          <div className="border-b border-gray-100 bg-gray-50 px-5 py-2 flex flex-wrap items-center gap-4 text-xs">
-            <span className="font-medium text-gray-600">Analyst coverage:</span>
-            <span className="text-gray-500">{dispositionStatsQuery.data.reviewed}/{dispositionStatsQuery.data.total_actioned} reviewed</span>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              <span className="text-emerald-700 font-medium">{dispositionStatsQuery.data.true_positive} TP</span>
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-red-500" />
-              <span className="text-red-700 font-medium">{dispositionStatsQuery.data.false_positive} FP</span>
-              {dispositionStatsQuery.data.false_positive_rate > 0 && (
-                <span className="text-gray-400">({(dispositionStatsQuery.data.false_positive_rate * 100).toFixed(0)}%)</span>
-              )}
-            </span>
-            {dispositionStatsQuery.data.inconclusive > 0 && (
-              <span className="inline-flex items-center gap-1">
-                <span className="h-2 w-2 rounded-full bg-yellow-400" />
-                <span className="text-yellow-700 font-medium">{dispositionStatsQuery.data.inconclusive} Inconclusive</span>
-              </span>
-            )}
-          </div>
-        )}
-
-        {decisionsQuery.isLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="h-6 w-6 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
-          </div>
-        ) : filteredDecisions.length === 0 ? (
-          <p className="py-8 text-center text-sm text-gray-500">
-            {enabled ? "No decisions yet — agent will log all alert classifications here." : "Enable the agent to start monitoring Defender alerts."}
-          </p>
-        ) : (
-          <>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-100 text-sm">
-                <thead className="bg-gray-50">
-                  <tr>
-                    {["Time", "Alert", "Source", "Severity", "Tier", "Action", "Status", ""].map((h) => (
-                      <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 bg-white">
-                  {visibleFilteredDecisions.map((d) => (
-                    <DecisionRow
-                      key={d.decision_id}
-                      d={d}
-                      isAdmin={isAdmin}
-                      onCancel={handleCancel}
-                      onApprove={handleApprove}
-                      onResolve={handleResolve}
-                      onUnisolate={handleUnisolate}
-                      onUnrestrict={handleUnrestrict}
-                      onForceInvestigate={handleForceInvestigate}
-                      onExecuteNow={handleExecuteNow}
-                      onEnableSignIn={handleEnableSignIn}
-                      onOpenDetail={setSelectedDecisionId}
-                      onOpenEntityTimeline={handleOpenEntityTimeline}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {(decisionFilter || mitreFilter) && filteredDecisions.length > visibleFilteredCount && (
-              <div className="border-t border-gray-100 px-5 py-3 flex items-center justify-between text-xs text-gray-500">
-                <span>Showing {visibleFilteredCount} of {filteredDecisions.length} filtered</span>
-                <button
-                  onClick={() => setVisibleFilteredCount((c) => c + 25)}
-                  className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                >
-                  Show more ({filteredDecisions.length - visibleFilteredCount} remaining)
-                </button>
-              </div>
-            )}
-            {!decisionFilter && !mitreFilter && decisions.length < decisionsTotal && (
-              <div className="border-t border-gray-100 px-5 py-3 flex items-center justify-between text-xs text-gray-500">
-                <span>Showing {decisions.length} of {decisionsTotal}</span>
-                <button
-                  onClick={() => setDecisionLimit((l) => l + 25)}
-                  className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                >
-                  Load more ({decisionsTotal - decisions.length} remaining)
-                </button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+      <DecisionFeed
+        decisions={decisions}
+        decisionsTotal={decisionsTotal}
+        isLoading={decisionsQuery.isLoading}
+        enabled={enabled}
+        decisionFilter={decisionFilter}
+        setDecisionFilter={setDecisionFilter}
+        mitreFilter={mitreFilter}
+        setMitreFilter={setMitreFilter}
+        decisionLimit={decisionLimit}
+        setDecisionLimit={setDecisionLimit}
+        dispositionStats={dispositionStatsQuery.data}
+        isAdmin={isAdmin}
+        onCancel={handleCancel}
+        onApprove={handleApprove}
+        onResolve={handleResolve}
+        onUnisolate={handleUnisolate}
+        onUnrestrict={handleUnrestrict}
+        onForceInvestigate={handleForceInvestigate}
+        onExecuteNow={handleExecuteNow}
+        onEnableSignIn={handleEnableSignIn}
+        onOpenDetail={setSelectedDecisionId}
+        onOpenEntityTimeline={handleOpenEntityTimeline}
+        exportUrl={api.exportDefenderAgentDecisions(30)}
+        headingRef={decisionsHeadingRef}
+      />
 
       {/* Metrics dashboard */}
       <div className="rounded-lg bg-white shadow">
