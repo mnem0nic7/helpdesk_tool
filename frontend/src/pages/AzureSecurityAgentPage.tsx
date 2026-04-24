@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, memo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
@@ -1497,7 +1497,7 @@ function AlertDetailDrawer({
 // Decision feed row
 // ---------------------------------------------------------------------------
 
-function DecisionRow({
+const DecisionRow = memo(function DecisionRow({
   d,
   isAdmin,
   onCancel,
@@ -1540,6 +1540,13 @@ function DecisionRow({
 
   const hasAnyAction = canCancel || canApprove || canResolve || canExecuteNow || canForceInvestigate || canUnisolate || canUnrestrict || canEnableSignIn;
 
+  const watchlistedIds = useMemo(
+    () => d.watchlisted_entities?.length
+      ? new Set(d.watchlisted_entities.map(w => (w.entity_id ?? "").toLowerCase()))
+      : undefined,
+    [d.watchlisted_entities],
+  );
+
   return (
     <>
       <tr
@@ -1558,7 +1565,7 @@ function DecisionRow({
           <EntityChips
             entities={d.entities}
             onEntityClick={onOpenEntityTimeline}
-            watchlistedIds={d.watchlisted_entities?.length ? new Set(d.watchlisted_entities.map(w => w.entity_id?.toLowerCase())) : undefined}
+            watchlistedIds={watchlistedIds}
           />
           {(d.mitre_techniques ?? []).length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
@@ -1751,7 +1758,7 @@ function DecisionRow({
       )}
     </>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Phase 17: Built-in rule management panel
@@ -2172,7 +2179,7 @@ export default function AzureSecurityAgentPage() {
   const [selectedEntity, setSelectedEntity] = useState<{ id: string; name: string } | null>(null);
   const [showFindingsOnly, setShowFindingsOnly] = useState(false);
   const [expandedError, setExpandedError] = useState<string | null>(null);
-  const [decisionLimit, setDecisionLimit] = useState(100);
+  const [decisionLimit, setDecisionLimit] = useState(25);
   const decisionsHeadingRef = useRef<HTMLDivElement>(null);
 
   const configQuery = useQuery({
@@ -2189,13 +2196,13 @@ export default function AzureSecurityAgentPage() {
   const decisionsQuery = useQuery({
     queryKey: ["defender-agent-decisions", decisionLimit],
     queryFn: () => api.listDefenderAgentDecisions({ limit: decisionLimit }),
-    ...getPollingQueryOptions("live_30s"),
+    ...getPollingQueryOptions("live_60s"),
   });
 
   const runsQuery = useQuery({
     queryKey: ["defender-agent-runs"],
     queryFn: () => api.listDefenderAgentRuns(10),
-    ...getPollingQueryOptions("live_30s"),
+    ...getPollingQueryOptions("live_60s"),
   });
 
   const dispositionStatsQuery = useQuery({
@@ -2394,6 +2401,19 @@ export default function AzureSecurityAgentPage() {
     setTimeout(() => decisionsHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   }
 
+  // Stable callbacks for DecisionRow memo — recreated only when the underlying
+  // mutation object changes, which is only when TanStack Query's mutate reference
+  // changes (effectively never during normal usage).
+  const handleCancel           = useCallback((id: string) => cancelMutation.mutate(id),           [cancelMutation.mutate]);
+  const handleApprove          = useCallback((id: string) => approveMutation.mutate(id),          [approveMutation.mutate]);
+  const handleResolve          = useCallback((id: string) => resolveMutation.mutate(id),          [resolveMutation.mutate]);
+  const handleUnisolate        = useCallback((id: string) => unisolateMutation.mutate(id),        [unisolateMutation.mutate]);
+  const handleUnrestrict       = useCallback((id: string) => unrestrictMutation.mutate(id),       [unrestrictMutation.mutate]);
+  const handleForceInvestigate = useCallback((id: string) => forceInvestigateMutation.mutate(id), [forceInvestigateMutation.mutate]);
+  const handleExecuteNow       = useCallback((id: string) => executeNowMutation.mutate(id),       [executeNowMutation.mutate]);
+  const handleEnableSignIn     = useCallback((id: string) => enableSignInMutation.mutate(id),     [enableSignInMutation.mutate]);
+  const handleOpenEntityTimeline = useCallback((id: string, name: string) => setSelectedEntity({ id, name }), []);
+
   const enabled = config?.enabled ?? false;
   const dryRun = config?.dry_run ?? false;
 
@@ -2583,16 +2603,16 @@ export default function AzureSecurityAgentPage() {
                       key={d.decision_id}
                       d={d}
                       isAdmin={isAdmin}
-                      onCancel={(id) => cancelMutation.mutate(id)}
-                      onApprove={(id) => approveMutation.mutate(id)}
-                      onResolve={(id) => resolveMutation.mutate(id)}
-                      onUnisolate={(id) => unisolateMutation.mutate(id)}
-                      onUnrestrict={(id) => unrestrictMutation.mutate(id)}
-                      onForceInvestigate={(id) => forceInvestigateMutation.mutate(id)}
-                      onExecuteNow={(id) => executeNowMutation.mutate(id)}
-                      onEnableSignIn={(id) => enableSignInMutation.mutate(id)}
+                      onCancel={handleCancel}
+                      onApprove={handleApprove}
+                      onResolve={handleResolve}
+                      onUnisolate={handleUnisolate}
+                      onUnrestrict={handleUnrestrict}
+                      onForceInvestigate={handleForceInvestigate}
+                      onExecuteNow={handleExecuteNow}
+                      onEnableSignIn={handleEnableSignIn}
                       onOpenDetail={setSelectedDecisionId}
-                      onOpenEntityTimeline={(id, name) => setSelectedEntity({ id, name })}
+                      onOpenEntityTimeline={handleOpenEntityTimeline}
                     />
                   ))}
                 </tbody>
@@ -2602,7 +2622,7 @@ export default function AzureSecurityAgentPage() {
               <div className="border-t border-gray-100 px-5 py-3 flex items-center justify-between text-xs text-gray-500">
                 <span>Showing {decisions.length} of {decisionsTotal}</span>
                 <button
-                  onClick={() => setDecisionLimit((l) => l + 100)}
+                  onClick={() => setDecisionLimit((l) => l + 25)}
                   className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                 >
                   Load more ({decisionsTotal - decisions.length} remaining)
