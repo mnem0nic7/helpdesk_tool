@@ -5,6 +5,15 @@ import { api, type AzureDirectoryObject } from "../lib/api.ts";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
 import useInfiniteScrollCount from "../hooks/useInfiniteScrollCount.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
+
+// Inactive tabs: fetched once, never polled until the user switches back.
+const INACTIVE_DIRECTORY_OPTIONS = {
+  staleTime: 5 * 60_000,
+  refetchInterval: false as const,
+  refetchIntervalInBackground: false as const,
+  refetchOnWindowFocus: false as const,
+  refetchOnReconnect: false as const,
+};
 import { sortRows, useTableSort } from "../lib/tableSort.tsx";
 
 type IdentityTab = "users" | "groups" | "enterprise-apps" | "app-registrations" | "roles";
@@ -187,27 +196,27 @@ export default function AzureIdentityPage() {
   const users = useQuery({
     queryKey: ["azure", "users", { search }],
     queryFn: () => api.getAzureUsers(search),
-    ...getPollingQueryOptions("slow_5m"),
+    ...(activeTab === "users" ? getPollingQueryOptions("slow_5m") : INACTIVE_DIRECTORY_OPTIONS),
   });
   const groups = useQuery({
     queryKey: ["azure", "groups", { search }],
     queryFn: () => api.getAzureGroups(search),
-    ...getPollingQueryOptions("slow_5m"),
+    ...(activeTab === "groups" ? getPollingQueryOptions("slow_5m") : INACTIVE_DIRECTORY_OPTIONS),
   });
   const enterpriseApps = useQuery({
     queryKey: ["azure", "enterprise-apps", { search }],
     queryFn: () => api.getAzureEnterpriseApps(search),
-    ...getPollingQueryOptions("slow_5m"),
+    ...(activeTab === "enterprise-apps" ? getPollingQueryOptions("slow_5m") : INACTIVE_DIRECTORY_OPTIONS),
   });
   const appRegistrations = useQuery({
     queryKey: ["azure", "app-registrations", { search }],
     queryFn: () => api.getAzureAppRegistrations(search),
-    ...getPollingQueryOptions("slow_5m"),
+    ...(activeTab === "app-registrations" ? getPollingQueryOptions("slow_5m") : INACTIVE_DIRECTORY_OPTIONS),
   });
   const roles = useQuery({
     queryKey: ["azure", "directory-roles", { search }],
     queryFn: () => api.getAzureDirectoryRoles(search),
-    ...getPollingQueryOptions("slow_5m"),
+    ...(activeTab === "roles" ? getPollingQueryOptions("slow_5m") : INACTIVE_DIRECTORY_OPTIONS),
   });
 
   const loading = [users, groups, enterpriseApps, appRegistrations, roles].some((query) => query.isLoading);
