@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -953,10 +953,22 @@ export default function AzureSavingsPage() {
   const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sortedActionableRows.length, 20, scrollKey);
   const visibleRows = sortedActionableRows.slice(0, visibleCount);
 
-  const categoryOptions = (summary?.by_category ?? []).map((item) => item.label);
-  const opportunityTypeOptions = Array.from(new Set(opportunities.map((item) => item.opportunity_type))).sort();
-  const subscriptionOptions = Array.from(new Set(opportunities.map((item) => item.subscription_name || item.subscription_id).filter(Boolean))).sort();
-  const resourceGroupOptions = Array.from(new Set(opportunities.map((item) => item.resource_group).filter(Boolean))).sort();
+  const categoryOptions = useMemo(
+    () => (summary?.by_category ?? []).map((item) => item.label),
+    [summary?.by_category],
+  );
+  const opportunityTypeOptions = useMemo(
+    () => Array.from(new Set(opportunities.map((item) => item.opportunity_type))).sort(),
+    [opportunities],
+  );
+  const subscriptionOptions = useMemo(
+    () => Array.from(new Set(opportunities.map((item) => item.subscription_name || item.subscription_id).filter(Boolean))).sort(),
+    [opportunities],
+  );
+  const resourceGroupOptions = useMemo(
+    () => Array.from(new Set(opportunities.map((item) => item.resource_group).filter(Boolean))).sort(),
+    [opportunities],
+  );
   const costContext = summary?.cost_context;
   const coverageWindow = formatCoverageWindow(costContext?.window_start, costContext?.window_end);
 
