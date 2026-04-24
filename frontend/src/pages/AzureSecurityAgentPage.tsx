@@ -2177,7 +2177,6 @@ type DecisionFeedProps = {
   setDecisionFilter: (v: string) => void;
   mitreFilter: string;
   setMitreFilter: (v: string) => void;
-  decisionLimit: number;
   setDecisionLimit: (fn: (prev: number) => number) => void;
   dispositionStats: DefenderAgentDispositionStats | undefined;
   isAdmin: boolean;
@@ -2204,7 +2203,6 @@ const DecisionFeed = memo(function DecisionFeed({
   setDecisionFilter,
   mitreFilter,
   setMitreFilter,
-  decisionLimit,
   setDecisionLimit,
   dispositionStats,
   isAdmin,
@@ -2724,7 +2722,6 @@ export default function AzureSecurityAgentPage() {
         setDecisionFilter={setDecisionFilter}
         mitreFilter={mitreFilter}
         setMitreFilter={setMitreFilter}
-        decisionLimit={decisionLimit}
         setDecisionLimit={setDecisionLimit}
         dispositionStats={dispositionStatsQuery.data}
         isAdmin={isAdmin}
