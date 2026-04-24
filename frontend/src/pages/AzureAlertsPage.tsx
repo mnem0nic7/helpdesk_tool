@@ -521,7 +521,7 @@ export default function AzureAlertsPage() {
   const rulesQuery = useQuery({
     queryKey: ["azure", "alerts", "rules"],
     queryFn: () => api.getAzureAlertRules(),
-    ...getPollingQueryOptions("live_30s"),
+    ...getPollingQueryOptions("slow_5m"),
   });
 
   const historyQuery = useQuery({
