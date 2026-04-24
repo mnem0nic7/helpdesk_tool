@@ -347,42 +347,44 @@ export default function AzureSecurityUserReviewPage() {
     [exceptionIndex],
   );
 
-  const disabledLicensedCount = useMemo(
-    () => users.filter((user) => user.enabled === false && isLicensedUser(user) && !hasFindingException(user.id, "disabled-licensed")).length,
-    [hasFindingException, users],
-  );
-  const staleSignInCount = useMemo(
-    () => users.filter((user) => hasNoSuccessfulSignIn(user) && !hasFindingException(user.id, "stale-signin")).length,
-    [hasFindingException, users],
-  );
-  const guestCount = useMemo(
-    () => users.filter((user) => user.extra.user_type === "Guest" && !hasFindingException(user.id, "guest-user")).length,
-    [hasFindingException, users],
-  );
-  const onPremCount = useMemo(
-    () => users.filter((user) => isOnPremSynced(user) && !hasFindingException(user.id, "on-prem-synced")).length,
-    [hasFindingException, users],
-  );
-  const sharedServiceCount = useMemo(
-    () => users.filter((user) => isSharedOrService(user) && !hasFindingException(user.id, "shared-service")).length,
-    [hasFindingException, users],
-  );
+  // Single pass: compute all counts + priority queue, with a score cache reused
+  // by filteredUsers to avoid calling priorityScore O(n log n) times in the sort.
+  const { disabledLicensedCount, staleSignInCount, guestCount, onPremCount, sharedServiceCount, priorityQueue, scoreCache } = useMemo(() => {
+    const scoreCache = new Map<string, number>();
+    const score = (user: AzureDirectoryObject) => {
+      let s = scoreCache.get(user.id);
+      if (s === undefined) { s = priorityScore(user); scoreCache.set(user.id, s); }
+      return s;
+    };
 
-  const priorityQueue = useMemo(
-    () =>
-      [...users]
-        .filter((user) => priorityScore(user) >= 60 && !hasFindingException(user.id, "priority-user"))
-        .sort((left, right) => priorityScore(right) - priorityScore(left) || left.display_name.localeCompare(right.display_name))
-        .slice(0, 8),
-    [hasFindingException, users],
-  );
+    let disabledLicensedCount = 0;
+    let staleSignInCount = 0;
+    let guestCount = 0;
+    let onPremCount = 0;
+    let sharedServiceCount = 0;
+    const priorityCandidates: AzureDirectoryObject[] = [];
+
+    for (const user of users) {
+      if (user.enabled === false && isLicensedUser(user) && !hasFindingException(user.id, "disabled-licensed")) disabledLicensedCount++;
+      if (hasNoSuccessfulSignIn(user) && !hasFindingException(user.id, "stale-signin")) staleSignInCount++;
+      if (user.extra.user_type === "Guest" && !hasFindingException(user.id, "guest-user")) guestCount++;
+      if (isOnPremSynced(user) && !hasFindingException(user.id, "on-prem-synced")) onPremCount++;
+      if (isSharedOrService(user) && !hasFindingException(user.id, "shared-service")) sharedServiceCount++;
+      if (score(user) >= 60 && !hasFindingException(user.id, "priority-user")) priorityCandidates.push(user);
+    }
+
+    priorityCandidates.sort((a, b) => score(b) - score(a) || a.display_name.localeCompare(b.display_name));
+
+    return { disabledLicensedCount, staleSignInCount, guestCount, onPremCount, sharedServiceCount, priorityQueue: priorityCandidates.slice(0, 8), scoreCache };
+  }, [hasFindingException, users]);
 
   const filteredUsers = useMemo(() => {
+    const score = (user: AzureDirectoryObject) => scoreCache.get(user.id) ?? priorityScore(user);
     const sorted = [...users].sort(
-      (left, right) => priorityScore(right) - priorityScore(left) || left.display_name.localeCompare(right.display_name),
+      (left, right) => score(right) - score(left) || left.display_name.localeCompare(right.display_name),
     );
     return sorted.filter((user) => {
-      if (focus === "priority" && (priorityScore(user) < 60 || hasFindingException(user.id, "priority-user"))) return false;
+      if (focus === "priority" && (score(user) < 60 || hasFindingException(user.id, "priority-user"))) return false;
       if (focus === "stale" && (!hasNoSuccessfulSignIn(user) || hasFindingException(user.id, "stale-signin"))) return false;
       if (
         focus === "disabled-licensed" &&
@@ -407,7 +409,7 @@ export default function AzureSecurityUserReviewPage() {
         deferredSearch,
       );
     });
-  }, [deferredSearch, focus, hasFindingException, users]);
+  }, [deferredSearch, focus, hasFindingException, scoreCache, users]);
   const reviewPagination = useSecurityReviewPagination(
     `${deferredSearch}|${focus}|${filteredUsers.length}`,
     filteredUsers.length,
