@@ -2174,6 +2174,7 @@ export default function AzureSecurityAgentPage() {
   const [savingConfig, setSavingConfig] = useState(false);
   const [decisionFilter, setDecisionFilter] = useState<string>("");
   const [mitreFilter, setMitreFilter] = useState<string>("");
+  const [visibleFilteredCount, setVisibleFilteredCount] = useState(25);
   const [runningNow, setRunningNow] = useState(false);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<{ id: string; name: string } | null>(null);
@@ -2396,6 +2397,15 @@ export default function AzureSecurityAgentPage() {
     return result;
   }, [decisions, decisionFilter, mitreFilter]);
 
+  useEffect(() => {
+    setVisibleFilteredCount(25);
+  }, [decisionFilter, mitreFilter]);
+
+  const visibleFilteredDecisions = useMemo(
+    () => filteredDecisions.slice(0, visibleFilteredCount),
+    [filteredDecisions, visibleFilteredCount],
+  );
+
   function filterAndScrollToDecisions(filter: string) {
     setDecisionFilter(filter);
     setTimeout(() => decisionsHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
@@ -2598,7 +2608,7 @@ export default function AzureSecurityAgentPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 bg-white">
-                  {filteredDecisions.map((d) => (
+                  {visibleFilteredDecisions.map((d) => (
                     <DecisionRow
                       key={d.decision_id}
                       d={d}
@@ -2618,7 +2628,18 @@ export default function AzureSecurityAgentPage() {
                 </tbody>
               </table>
             </div>
-            {!decisionFilter && decisions.length < decisionsTotal && (
+            {(decisionFilter || mitreFilter) && filteredDecisions.length > visibleFilteredCount && (
+              <div className="border-t border-gray-100 px-5 py-3 flex items-center justify-between text-xs text-gray-500">
+                <span>Showing {visibleFilteredCount} of {filteredDecisions.length} filtered</span>
+                <button
+                  onClick={() => setVisibleFilteredCount((c) => c + 25)}
+                  className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Show more ({filteredDecisions.length - visibleFilteredCount} remaining)
+                </button>
+              </div>
+            )}
+            {!decisionFilter && !mitreFilter && decisions.length < decisionsTotal && (
               <div className="border-t border-gray-100 px-5 py-3 flex items-center justify-between text-xs text-gray-500">
                 <span>Showing {decisions.length} of {decisionsTotal}</span>
                 <button
