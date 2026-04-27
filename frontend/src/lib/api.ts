@@ -3909,9 +3909,14 @@ export const api = {
   listDefenderAgentRuns(limit = 20): Promise<DefenderAgentRun[]> {
     return fetchJSON<DefenderAgentRun[]>(`/api/azure/security/defender-agent/runs?limit=${limit}`);
   },
-  listDefenderAgentDecisions(params?: { limit?: number; offset?: number }): Promise<DefenderAgentDecisionsResponse> {
+  listDefenderAgentDecisions(params?: { limit?: number; offset?: number; decision?: string; mitre_technique?: string }): Promise<DefenderAgentDecisionsResponse> {
     return fetchJSON<DefenderAgentDecisionsResponse>(
-      `/api/azure/security/defender-agent/decisions${buildQuery({ limit: params?.limit ?? 100, offset: params?.offset ?? 0 })}`
+      `/api/azure/security/defender-agent/decisions${buildQuery({
+        limit: params?.limit ?? 100,
+        offset: params?.offset ?? 0,
+        ...(params?.decision ? { decision: params.decision } : {}),
+        ...(params?.mitre_technique ? { mitre_technique: params.mitre_technique } : {}),
+      })}`
     );
   },
   getDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {

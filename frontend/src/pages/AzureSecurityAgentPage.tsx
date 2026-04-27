@@ -2169,15 +2169,11 @@ function CustomRulesPanel() {
 // ---------------------------------------------------------------------------
 
 type DecisionFeedProps = {
-  decisions: DefenderAgentDecision[];
-  decisionsTotal: number;
-  isLoading: boolean;
   enabled: boolean;
   decisionFilter: string;
   setDecisionFilter: (v: string) => void;
   mitreFilter: string;
   setMitreFilter: (v: string) => void;
-  setDecisionLimit: (fn: (prev: number) => number) => void;
   dispositionStats: DefenderAgentDispositionStats | undefined;
   isAdmin: boolean;
   onCancel: (id: string) => void;
@@ -2195,15 +2191,11 @@ type DecisionFeedProps = {
 };
 
 const DecisionFeed = memo(function DecisionFeed({
-  decisions,
-  decisionsTotal,
-  isLoading,
   enabled,
   decisionFilter,
   setDecisionFilter,
   mitreFilter,
   setMitreFilter,
-  setDecisionLimit,
   dispositionStats,
   isAdmin,
   onCancel,
@@ -2219,7 +2211,25 @@ const DecisionFeed = memo(function DecisionFeed({
   exportUrl,
   headingRef,
 }: DecisionFeedProps) {
-  const [visibleFilteredCount, setVisibleFilteredCount] = useState(25);
+  const [decisionLimit, setDecisionLimit] = useState(25);
+
+  // Reset page size whenever the filter changes so we don't over-fetch.
+  useEffect(() => {
+    setDecisionLimit(25);
+  }, [decisionFilter, mitreFilter]);
+
+  const query = useQuery({
+    queryKey: ["defender-agent-decisions", decisionLimit, decisionFilter, mitreFilter],
+    queryFn: () => api.listDefenderAgentDecisions({
+      limit: decisionLimit,
+      ...(decisionFilter ? { decision: decisionFilter } : {}),
+      ...(mitreFilter ? { mitre_technique: mitreFilter } : {}),
+    }),
+    ...getPollingQueryOptions("live_60s"),
+  });
+
+  const decisions = query.data?.decisions ?? [];
+  const decisionsTotal = query.data?.total ?? 0;
 
   const allMitreTechniques = useMemo(() => {
     const seen = new Set<string>();
@@ -2229,34 +2239,12 @@ const DecisionFeed = memo(function DecisionFeed({
     return Array.from(seen).sort();
   }, [decisions]);
 
-  const filteredDecisions = useMemo(() => {
-    let result = decisions;
-    if (decisionFilter === "action_recommended") {
-      result = result.filter((d) => d.decision !== "skip");
-    } else if (decisionFilter) {
-      result = result.filter((d) => d.decision === decisionFilter);
-    }
-    if (mitreFilter) {
-      result = result.filter((d) => (d.mitre_techniques ?? []).includes(mitreFilter));
-    }
-    return result;
-  }, [decisions, decisionFilter, mitreFilter]);
-
-  useEffect(() => {
-    setVisibleFilteredCount(25);
-  }, [decisionFilter, mitreFilter]);
-
-  const visibleFilteredDecisions = useMemo(
-    () => filteredDecisions.slice(0, visibleFilteredCount),
-    [filteredDecisions, visibleFilteredCount],
-  );
-
   return (
     <div className="rounded-lg bg-white shadow" ref={headingRef}>
       <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
         <h2 className="text-lg font-semibold text-gray-900">Decision Feed</h2>
         <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
-          {filteredDecisions.length}{(decisionFilter || mitreFilter) ? ` of ${decisions.length}` : ""}
+          {decisions.length}{(decisionFilter || mitreFilter) ? ` of ${decisionsTotal}` : ""}
         </span>
         <div className="ml-auto flex items-center gap-2 flex-wrap">
           <a
@@ -2322,11 +2310,11 @@ const DecisionFeed = memo(function DecisionFeed({
         </div>
       )}
 
-      {isLoading ? (
+      {query.isLoading ? (
         <div className="flex items-center justify-center py-12">
           <div className="h-6 w-6 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
         </div>
-      ) : filteredDecisions.length === 0 ? (
+      ) : decisions.length === 0 ? (
         <p className="py-8 text-center text-sm text-gray-500">
           {enabled ? "No decisions yet — agent will log all alert classifications here." : "Enable the agent to start monitoring Defender alerts."}
         </p>
@@ -2344,7 +2332,7 @@ const DecisionFeed = memo(function DecisionFeed({
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
-                {visibleFilteredDecisions.map((d) => (
+                {decisions.map((d) => (
                   <DecisionRow
                     key={d.decision_id}
                     d={d}
@@ -2364,18 +2352,7 @@ const DecisionFeed = memo(function DecisionFeed({
               </tbody>
             </table>
           </div>
-          {(decisionFilter || mitreFilter) && filteredDecisions.length > visibleFilteredCount && (
-            <div className="border-t border-gray-100 px-5 py-3 flex items-center justify-between text-xs text-gray-500">
-              <span>Showing {visibleFilteredCount} of {filteredDecisions.length} filtered</span>
-              <button
-                onClick={() => setVisibleFilteredCount((c) => c + 25)}
-                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Show more ({filteredDecisions.length - visibleFilteredCount} remaining)
-              </button>
-            </div>
-          )}
-          {!decisionFilter && !mitreFilter && decisions.length < decisionsTotal && (
+          {decisions.length < decisionsTotal && (
             <div className="border-t border-gray-100 px-5 py-3 flex items-center justify-between text-xs text-gray-500">
               <span>Showing {decisions.length} of {decisionsTotal}</span>
               <button
@@ -2408,7 +2385,6 @@ export default function AzureSecurityAgentPage() {
   const [selectedEntity, setSelectedEntity] = useState<{ id: string; name: string } | null>(null);
   const [showFindingsOnly, setShowFindingsOnly] = useState(false);
   const [expandedError, setExpandedError] = useState<string | null>(null);
-  const [decisionLimit, setDecisionLimit] = useState(25);
   const decisionsHeadingRef = useRef<HTMLDivElement>(null);
 
   const configQuery = useQuery({
@@ -2420,12 +2396,6 @@ export default function AzureSecurityAgentPage() {
     queryKey: ["defender-agent-summary"],
     queryFn: () => api.getDefenderAgentSummary(),
     ...getPollingQueryOptions("slow_5m"),
-  });
-
-  const decisionsQuery = useQuery({
-    queryKey: ["defender-agent-decisions", decisionLimit],
-    queryFn: () => api.listDefenderAgentDecisions({ limit: decisionLimit }),
-    ...getPollingQueryOptions("live_60s"),
   });
 
   const runsQuery = useQuery({
@@ -2548,8 +2518,6 @@ export default function AzureSecurityAgentPage() {
 
   const config = configQuery.data;
   const summary = summaryQuery.data;
-  const decisions = decisionsQuery.data?.decisions ?? [];
-  const decisionsTotal = decisionsQuery.data?.total ?? 0;
   const runs = runsQuery.data ?? [];
   const indicators = indicatorsQuery.data?.indicators ?? [];
   const suppressions = suppressionsQuery.data?.suppressions ?? [];
@@ -2714,15 +2682,11 @@ export default function AzureSecurityAgentPage() {
 
       {/* Decision feed */}
       <DecisionFeed
-        decisions={decisions}
-        decisionsTotal={decisionsTotal}
-        isLoading={decisionsQuery.isLoading}
         enabled={enabled}
         decisionFilter={decisionFilter}
         setDecisionFilter={setDecisionFilter}
         mitreFilter={mitreFilter}
         setMitreFilter={setMitreFilter}
-        setDecisionLimit={setDecisionLimit}
         dispositionStats={dispositionStatsQuery.data}
         isAdmin={isAdmin}
         onCancel={handleCancel}

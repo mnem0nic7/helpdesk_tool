@@ -537,18 +537,41 @@ class DefenderAgentStore:
             return None
         return self._row_to_decision(dict(row), include_raw=True)
 
-    def list_decisions(self, limit: int = 100, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+    def list_decisions(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        decision_filter: str | None = None,
+        mitre_technique: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
         p = self._placeholder()
+        where_clauses: list[str] = []
+        params: list[object] = []
+
+        if decision_filter == "action_recommended":
+            where_clauses.append(f"decision != {p}")
+            params.append("skip")
+        elif decision_filter:
+            where_clauses.append(f"decision = {p}")
+            params.append(decision_filter)
+
+        if mitre_technique:
+            where_clauses.append(f"mitre_techniques_json LIKE {p}")
+            params.append(f"%{mitre_technique}%")
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
         with self._conn() as conn:
-            total_row = conn.execute("SELECT COUNT(*) AS c FROM defender_agent_decisions").fetchone()
+            total_row = conn.execute(f"SELECT COUNT(*) AS c FROM defender_agent_decisions {where_sql}", params).fetchone()
             total = int(total_row["c"]) if total_row else 0
             rows = conn.execute(
                 f"""
                 SELECT * FROM defender_agent_decisions
+                 {where_sql}
                  ORDER BY executed_at DESC
                  LIMIT {p} OFFSET {p}
                 """,
-                (limit, offset),
+                [*params, limit, offset],
             ).fetchall()
         return [self._row_to_decision(dict(r), include_raw=False) for r in rows], total
 

@@ -103,10 +103,17 @@ def list_runs(
 def list_decisions(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    decision: str | None = Query(None),
+    mitre_technique: str | None = Query(None),
     _session: dict = Depends(require_authenticated_user),
 ) -> dict:
     _ensure_azure_site()
-    decisions, total = defender_agent_store.list_decisions(limit=limit, offset=offset)
+    decisions, total = defender_agent_store.list_decisions(
+        limit=limit,
+        offset=offset,
+        decision_filter=decision,
+        mitre_technique=mitre_technique,
+    )
     return {"decisions": decisions, "total": total}
 
 
