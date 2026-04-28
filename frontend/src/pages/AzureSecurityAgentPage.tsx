@@ -2221,11 +2221,6 @@ const DecisionFeed = memo(function DecisionFeed({
     },
   }), []);
 
-  // Reset page size whenever the filter changes so we don't over-fetch.
-  useEffect(() => {
-    setDecisionLimit(25);
-  }, [decisionFilter, mitreFilter]);
-
   const query = useQuery({
     queryKey: ["defender-agent-decisions", decisionLimit, decisionFilter, mitreFilter],
     queryFn: () => api.listDefenderAgentDecisions({
@@ -2269,7 +2264,7 @@ const DecisionFeed = memo(function DecisionFeed({
           {allMitreTechniques.length > 0 && (
             <select
               value={mitreFilter}
-              onChange={(e) => setMitreFilter(e.target.value)}
+              onChange={(e) => { setMitreFilter(e.target.value); setDecisionLimit(25); }}
               className="rounded-md border border-gray-300 px-2 py-1 text-xs"
               title="Filter by MITRE ATT&CK technique"
             >
@@ -2281,7 +2276,7 @@ const DecisionFeed = memo(function DecisionFeed({
           )}
           <select
             value={decisionFilter}
-            onChange={(e) => setDecisionFilter(e.target.value)}
+            onChange={(e) => { setDecisionFilter(e.target.value); setDecisionLimit(25); }}
             className="rounded-md border border-gray-300 px-2 py-1 text-xs"
           >
             <option value="">All decisions</option>

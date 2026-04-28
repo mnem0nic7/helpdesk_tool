@@ -107,6 +107,8 @@ class DefenderAgentStore:
                     ON defender_agent_decisions (executed_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_defender_decisions_run_id
                     ON defender_agent_decisions (run_id, executed_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_defender_decisions_decision
+                    ON defender_agent_decisions (decision, executed_at DESC);
 
                 CREATE TABLE IF NOT EXISTS defender_agent_suppressions (
                     id                TEXT PRIMARY KEY,
@@ -549,8 +551,9 @@ class DefenderAgentStore:
         params: list[object] = []
 
         if decision_filter == "action_recommended":
-            where_clauses.append(f"decision != {p}")
-            params.append("skip")
+            # Use IN instead of != so the decision index can be used for both
+            # the COUNT and the SELECT (negation filters can't use a B-tree index).
+            where_clauses.append(f"decision IN ('execute', 'queue', 'recommend')")
         elif decision_filter:
             where_clauses.append(f"decision = {p}")
             params.append(decision_filter)
