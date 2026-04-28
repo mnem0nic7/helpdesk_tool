@@ -3919,6 +3919,9 @@ export const api = {
       })}`
     );
   },
+  listDefenderMitreTechniques(): Promise<{ techniques: string[] }> {
+    return fetchJSON<{ techniques: string[] }>("/api/azure/security/defender-agent/decisions/mitre-techniques");
+  },
   getDefenderAgentDecision(decisionId: string): Promise<DefenderAgentDecision> {
     return fetchJSON<DefenderAgentDecision>(`/api/azure/security/defender-agent/decisions/${decisionId}`);
   },

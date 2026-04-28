@@ -196,6 +196,12 @@ def export_decisions(
     )
 
 
+@router.get("/decisions/mitre-techniques")
+def list_mitre_techniques(_session: dict = Depends(require_authenticated_user)) -> dict:
+    _ensure_azure_site()
+    return {"techniques": defender_agent_store.list_mitre_techniques()}
+
+
 @router.get("/decisions/{decision_id}", response_model=DefenderAgentDecisionItem)
 def get_decision(
     decision_id: str,

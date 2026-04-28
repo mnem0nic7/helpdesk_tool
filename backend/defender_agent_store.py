@@ -578,6 +578,23 @@ class DefenderAgentStore:
             ).fetchall()
         return [self._row_to_decision(dict(r), include_raw=False) for r in rows], total
 
+    def list_mitre_techniques(self) -> list[str]:
+        """Return sorted distinct MITRE ATT&CK technique IDs across all decisions."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT mitre_techniques_json FROM defender_agent_decisions"
+                " WHERE mitre_techniques_json IS NOT NULL AND mitre_techniques_json != '[]'"
+            ).fetchall()
+        techniques: set[str] = set()
+        for row in rows:
+            try:
+                for t in json.loads(row["mitre_techniques_json"] or "[]"):
+                    if t:
+                        techniques.add(t)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return sorted(techniques)
+
     def get_seen_alert_ids(self, since_hours: int = 168) -> set[str]:
         """Return all alert IDs seen in the last N hours (default 7 days)."""
         since = (datetime.now(timezone.utc) - timedelta(hours=since_hours)).isoformat()

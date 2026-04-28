@@ -2234,13 +2234,12 @@ const DecisionFeed = memo(function DecisionFeed({
   const decisions = query.data?.decisions ?? [];
   const decisionsTotal = query.data?.total ?? 0;
 
-  const allMitreTechniques = useMemo(() => {
-    const seen = new Set<string>();
-    for (const d of decisions) {
-      for (const t of (d.mitre_techniques ?? [])) seen.add(t);
-    }
-    return Array.from(seen).sort();
-  }, [decisions]);
+  const mitreTechniquesQuery = useQuery({
+    queryKey: ["defender-agent-mitre-techniques"],
+    queryFn: () => api.listDefenderMitreTechniques(),
+    staleTime: 5 * 60_000,
+  });
+  const allMitreTechniques = mitreTechniquesQuery.data?.techniques ?? [];
 
   return (
     <div className="rounded-lg bg-white shadow" ref={headingRef}>
