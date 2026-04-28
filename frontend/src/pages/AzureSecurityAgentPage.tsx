@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback, memo, type ReactNode } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, memo, useImperativeHandle, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
@@ -2168,12 +2168,12 @@ function CustomRulesPanel() {
 // polls (which only update unrelated sections) don't cascade into this tree.
 // ---------------------------------------------------------------------------
 
+type DecisionFeedHandle = {
+  setFilter: (decisionFilter: string) => void;
+};
+
 type DecisionFeedProps = {
   enabled: boolean;
-  decisionFilter: string;
-  setDecisionFilter: (v: string) => void;
-  mitreFilter: string;
-  setMitreFilter: (v: string) => void;
   dispositionStats: DefenderAgentDispositionStats | undefined;
   isAdmin: boolean;
   onCancel: (id: string) => void;
@@ -2188,14 +2188,12 @@ type DecisionFeedProps = {
   onOpenEntityTimeline: (id: string, name: string) => void;
   exportUrl: string;
   headingRef: React.RefObject<HTMLDivElement | null>;
+  ref?: React.Ref<DecisionFeedHandle>;
 };
 
 const DecisionFeed = memo(function DecisionFeed({
+  ref,
   enabled,
-  decisionFilter,
-  setDecisionFilter,
-  mitreFilter,
-  setMitreFilter,
   dispositionStats,
   isAdmin,
   onCancel,
@@ -2211,7 +2209,17 @@ const DecisionFeed = memo(function DecisionFeed({
   exportUrl,
   headingRef,
 }: DecisionFeedProps) {
+  const [decisionFilter, setDecisionFilter] = useState("");
+  const [mitreFilter, setMitreFilter] = useState("");
   const [decisionLimit, setDecisionLimit] = useState(25);
+
+  useImperativeHandle(ref, () => ({
+    setFilter(filter: string) {
+      setDecisionFilter(filter);
+      setMitreFilter("");
+      setDecisionLimit(25);
+    },
+  }), []);
 
   // Reset page size whenever the filter changes so we don't over-fetch.
   useEffect(() => {
@@ -2378,14 +2386,13 @@ export default function AzureSecurityAgentPage() {
   const [showConfig, setShowConfig] = useState(false);
   const [showFaq, setShowFaq] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
-  const [decisionFilter, setDecisionFilter] = useState<string>("");
-  const [mitreFilter, setMitreFilter] = useState<string>("");
   const [runningNow, setRunningNow] = useState(false);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<{ id: string; name: string } | null>(null);
   const [showFindingsOnly, setShowFindingsOnly] = useState(false);
   const [expandedError, setExpandedError] = useState<string | null>(null);
   const decisionsHeadingRef = useRef<HTMLDivElement>(null);
+  const feedRef = useRef<DecisionFeedHandle>(null);
 
   const configQuery = useQuery({
     queryKey: ["defender-agent-config"],
@@ -2573,7 +2580,7 @@ export default function AzureSecurityAgentPage() {
   }
 
   function filterAndScrollToDecisions(filter: string) {
-    setDecisionFilter(filter);
+    feedRef.current?.setFilter(filter);
     setTimeout(() => decisionsHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   }
 
@@ -2682,11 +2689,8 @@ export default function AzureSecurityAgentPage() {
 
       {/* Decision feed */}
       <DecisionFeed
+        ref={feedRef}
         enabled={enabled}
-        decisionFilter={decisionFilter}
-        setDecisionFilter={setDecisionFilter}
-        mitreFilter={mitreFilter}
-        setMitreFilter={setMitreFilter}
         dispositionStats={dispositionStatsQuery.data}
         isAdmin={isAdmin}
         onCancel={handleCancel}
