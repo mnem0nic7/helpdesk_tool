@@ -1,5 +1,5 @@
 from azure_client import AzureApiError
-from user_admin_providers import MailboxAdminProvider
+from user_admin_providers import EntraAdminProvider, MailboxAdminProvider, UserAdminProviderError
 
 
 class FakeMailboxRulesClient:
@@ -390,3 +390,94 @@ def test_list_delegate_mailboxes_for_user_returns_partial_results_when_full_acce
         "full_access": 0,
     }
     assert "Full Access matches are not fully included" in result["note"]
+
+
+# ---------------------------------------------------------------------------
+# EntraAdminProvider.validate_cloud_group_removal
+# ---------------------------------------------------------------------------
+
+class FakeEntraClientForValidation:
+    configured = True
+
+    def __init__(self, groups: list[dict]) -> None:
+        self._groups = groups
+
+    def graph_paged_get(self, path: str, **kwargs):
+        return self._groups
+
+
+def test_validate_cloud_group_removal_returns_ok_when_all_groups_gone():
+    groups_after = []  # user has no groups left
+    client = FakeEntraClientForValidation(groups_after)
+    provider = EntraAdminProvider(client=client)
+
+    result = provider.validate_cloud_group_removal(
+        "user-1",
+        expected_removed=["GroupA", "GroupB"],
+    )
+
+    assert result["ok"] is True
+    assert result["still_present_count"] == 0
+    assert result["remaining_groups"] == []
+
+
+def test_validate_cloud_group_removal_detects_still_present_group():
+    groups_after = [
+        {"@odata.type": "#microsoft.graph.group", "displayName": "GroupA", "id": "g1"},
+    ]
+    client = FakeEntraClientForValidation(groups_after)
+    provider = EntraAdminProvider(client=client)
+
+    result = provider.validate_cloud_group_removal(
+        "user-1",
+        expected_removed=["GroupA", "GroupB"],
+    )
+
+    assert result["ok"] is False
+    assert result["still_present_count"] == 1
+    assert "GroupA" in result["remaining_groups"]
+
+
+def test_validate_cloud_group_removal_ignores_directory_roles():
+    groups_after = [
+        {"@odata.type": "#microsoft.graph.directoryRole", "displayName": "GroupA", "id": "r1"},
+    ]
+    client = FakeEntraClientForValidation(groups_after)
+    provider = EntraAdminProvider(client=client)
+
+    result = provider.validate_cloud_group_removal(
+        "user-1",
+        expected_removed=["GroupA"],
+    )
+
+    # directoryRole objects should be filtered out
+    assert result["ok"] is True
+    assert result["still_present_count"] == 0
+
+
+def test_validate_cloud_group_removal_fast_path_for_empty_expected():
+    client = FakeEntraClientForValidation([])
+    provider = EntraAdminProvider(client=client)
+
+    result = provider.validate_cloud_group_removal("user-1", expected_removed=[])
+
+    assert result["ok"] is True
+    assert result["still_present_count"] == 0
+
+
+def test_validate_cloud_group_removal_returns_error_dict_on_api_failure():
+    from azure_client import AzureApiError
+
+    class FailingClient:
+        configured = True
+
+        def graph_paged_get(self, path: str, **kwargs):
+            raise AzureApiError("Graph API unavailable", status_code=503)
+
+    provider = EntraAdminProvider(client=FailingClient())
+
+    result = provider.validate_cloud_group_removal("user-1", expected_removed=["GroupA"])
+
+    assert result["ok"] is False
+    # still_present_count should be -1 to signal a lookup failure
+    assert result.get("still_present_count") == -1 or "error" in result
