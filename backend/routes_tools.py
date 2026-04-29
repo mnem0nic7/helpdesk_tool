@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import uuid
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import ad_client as ad
@@ -27,9 +30,11 @@ from models import (
     SetAutoReplyRequest,
 )
 from mailbox_delegate_scan_jobs import mailbox_delegate_scan_jobs
+from offboarding_runs import OffboardingLane, _LANE_ORDER, offboarding_runs, run_offboarding
 from onedrive_copy_jobs import onedrive_copy_jobs
 from site_context import get_current_site_scope
 from user_admin_providers import UserAdminProviderError, user_admin_providers
+from user_exit_workflows import UserExitWorkflowError, user_exit_workflows
 
 router = APIRouter(prefix="/api/tools")
 
@@ -381,52 +386,141 @@ def run_emailgistics_helper(
     )
 
 
-class DeactivateUserToolRequest(BaseModel):
+class OffboardingRunRequest(BaseModel):
     entra_user_id: str = ""
     ad_sam: str = ""
     display_name: str = ""
+    lanes: list[str]
 
 
-class DeactivateUserToolStepResult(BaseModel):
-    ok: bool
-    message: str
+class RetryLaneRequest(BaseModel):
+    lane: str
 
 
-class DeactivateUserToolResponse(BaseModel):
+class LaunchExitWorkflowRequest(BaseModel):
+    entra_user_id: str
     display_name: str = ""
-    entra: DeactivateUserToolStepResult | None = None
-    ad: DeactivateUserToolStepResult | None = None
 
 
-@router.post("/deactivate-user", response_model=DeactivateUserToolResponse)
-def deactivate_user_tool(
-    body: DeactivateUserToolRequest,
+@router.get("/offboarding-runs")
+def list_offboarding_runs(
+    limit: int = Query(default=20, ge=1, le=100),
     _session: dict[str, Any] = Depends(_require_admin_tools_session),
-) -> DeactivateUserToolResponse:
-    """Disable a user in Entra (sign-in disabled) and/or on-prem AD."""
-    entra_result: DeactivateUserToolStepResult | None = None
-    ad_result: DeactivateUserToolStepResult | None = None
+):
+    return offboarding_runs.list_runs(limit=limit)
 
-    if body.entra_user_id.strip():
-        try:
-            user_admin_providers.execute("disable_sign_in", body.entra_user_id.strip(), {})
-            entra_result = DeactivateUserToolStepResult(ok=True, message="Sign-in disabled")
-        except UserAdminProviderError as exc:
-            entra_result = DeactivateUserToolStepResult(ok=False, message=str(exc))
-        except Exception as exc:
-            entra_result = DeactivateUserToolStepResult(ok=False, message=str(exc))
 
-    if body.ad_sam.strip():
-        try:
-            ad.disable_user(body.ad_sam.strip())
-            ad_result = DeactivateUserToolStepResult(ok=True, message=f"AD account disabled")
-        except ad.ADError as exc:
-            ad_result = DeactivateUserToolStepResult(ok=False, message=str(exc))
-        except Exception as exc:
-            ad_result = DeactivateUserToolStepResult(ok=False, message=str(exc))
+@router.post("/offboarding-runs/launch-exit-workflow")
+def launch_exit_workflow_from_tools(
+    body: LaunchExitWorkflowRequest,
+    session: dict[str, Any] = Depends(_require_admin_tools_session),
+):
+    """Create an Exit Workflow record for a user and return its ID and deep link."""
+    try:
+        workflow = user_exit_workflows.create_workflow(
+            user_id=body.entra_user_id.strip(),
+            typed_upn_confirmation=body.entra_user_id.strip(),  # skip UPN confirmation gate
+            on_prem_sam_account_name_override=None,
+            requested_by_email=str(session.get("email") or ""),
+            requested_by_name=str(session.get("name") or ""),
+        )
+        workflow_id = str(workflow.get("workflow_id") or workflow.get("id") or "")
+        return {
+            "workflow_id": workflow_id,
+            "deep_link": f"/users?workflow={workflow_id}",
+        }
+    except UserExitWorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UserAdminProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    return DeactivateUserToolResponse(
-        display_name=body.display_name,
-        entra=entra_result,
-        ad=ad_result,
+
+@router.post("/offboarding-runs", status_code=202)
+def create_offboarding_run(
+    body: OffboardingRunRequest,
+    background_tasks: BackgroundTasks,
+    session: dict[str, Any] = Depends(_require_admin_tools_session),
+):
+    """Start a new offboarding run as a background task."""
+    for lane in body.lanes:
+        if lane not in _LANE_ORDER:
+            raise HTTPException(status_code=400, detail=f"Unknown lane: {lane}")
+    if any(lane.startswith("entra_") for lane in body.lanes) and not body.entra_user_id.strip():
+        raise HTTPException(status_code=400, detail="Entra lanes require entra_user_id")
+    if any(lane.startswith("ad_") for lane in body.lanes) and not body.ad_sam.strip():
+        raise HTTPException(status_code=400, detail="AD lanes require ad_sam")
+    if not body.lanes:
+        raise HTTPException(status_code=400, detail="At least one lane is required")
+
+    run_id = uuid.uuid4().hex
+    offboarding_runs.create_run(
+        run_id=run_id,
+        entra_user_id=body.entra_user_id.strip(),
+        ad_sam=body.ad_sam.strip(),
+        display_name=body.display_name.strip(),
+        actor_email=str(session.get("email") or ""),
+        lanes=body.lanes,
     )
+    background_tasks.add_task(
+        run_offboarding,
+        run_id=run_id,
+        entra_user_id=body.entra_user_id.strip(),
+        ad_sam=body.ad_sam.strip(),
+        display_name=body.display_name.strip(),
+        lanes=body.lanes,
+        store=offboarding_runs,
+    )
+    return {"run_id": run_id, "status": "queued"}
+
+
+@router.get("/offboarding-runs/{run_id}")
+def get_offboarding_run(
+    run_id: str,
+    _session: dict[str, Any] = Depends(_require_admin_tools_session),
+):
+    run = offboarding_runs.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+@router.get("/offboarding-runs/{run_id}/csv")
+def get_offboarding_run_csv(
+    run_id: str,
+    _session: dict[str, Any] = Depends(_require_admin_tools_session),
+):
+    run = offboarding_runs.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    display_name = (run.get("display_name") or run_id).replace(" ", "_")
+    csv_content = offboarding_runs.render_csv(run_id)
+    return StreamingResponse(
+        iter([csv_content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="offboarding_{display_name}_{run_id[:8]}.csv"'},
+    )
+
+
+@router.post("/offboarding-runs/{run_id}/retry-lane")
+def retry_offboarding_lane(
+    run_id: str,
+    body: RetryLaneRequest,
+    background_tasks: BackgroundTasks,
+    session: dict[str, Any] = Depends(_require_admin_tools_session),
+):
+    run = offboarding_runs.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if body.lane not in _LANE_ORDER:
+        raise HTTPException(status_code=400, detail=f"Unknown lane: {body.lane}")
+    # Re-run just this one lane using the run's stored identifiers
+    background_tasks.add_task(
+        run_offboarding,
+        run_id=run_id,
+        entra_user_id=str(run.get("entra_user_id") or ""),
+        ad_sam=str(run.get("ad_sam") or ""),
+        display_name=str(run.get("display_name") or ""),
+        lanes=[body.lane],
+        store=offboarding_runs,
+    )
+    return {"run_id": run_id, "status": "requeued", "lane": body.lane}
