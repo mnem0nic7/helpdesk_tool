@@ -1811,21 +1811,66 @@ export interface EmailgisticsHelperStatus {
   steps: EmailgisticsHelperStep[];
 }
 
-export interface DeactivateUserToolRequest {
+export const OFFBOARDING_LANES = [
+  "entra_disable",
+  "entra_revoke",
+  "entra_reset_pw",
+  "entra_group_cleanup",
+  "entra_group_validate",
+  "entra_license_cleanup",
+  "ad_disable",
+  "ad_reset_pw",
+  "ad_group_cleanup",
+  "ad_attribute_cleanup",
+  "ad_move_ou",
+] as const;
+
+export type OffboardingLane = (typeof OFFBOARDING_LANES)[number];
+
+export interface OffboardingRunStep {
+  step_id: string;
+  run_id: string;
+  lane: string;
+  sequence: number;
+  status: string;
+  message: string;
+  detail: Record<string, unknown> | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface OffboardingRun {
+  run_id: string;
+  entra_user_id: string;
+  ad_sam: string;
+  display_name: string;
+  actor_email: string;
+  lanes_requested: string[];
+  status: string;
+  has_errors: boolean;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  steps: OffboardingRunStep[];
+}
+
+export type OffboardingRunSummary = Omit<OffboardingRun, "steps">;
+
+export interface CreateOffboardingRunRequest {
   entra_user_id?: string;
   ad_sam?: string;
   display_name?: string;
+  lanes: OffboardingLane[];
 }
 
-export interface DeactivateUserToolStepResult {
-  ok: boolean;
-  message: string;
+export interface LaunchExitWorkflowRequest {
+  entra_user_id: string;
+  display_name?: string;
 }
 
-export interface DeactivateUserToolResult {
-  display_name: string;
-  entra: DeactivateUserToolStepResult | null;
-  ad: DeactivateUserToolStepResult | null;
+export interface LaunchExitWorkflowResult {
+  workflow_id: string;
+  deep_link: string;
 }
 
 export interface OneDriveCopyJobStatus {
@@ -4140,8 +4185,31 @@ export const api = {
     return postJSON<EmailgisticsHelperStatus>("/api/tools/emailgistics-helper", body);
   },
 
-  deactivateUser(body: DeactivateUserToolRequest): Promise<DeactivateUserToolResult> {
-    return postJSON<DeactivateUserToolResult>("/api/tools/deactivate-user", body);
+  createOffboardingRun(body: CreateOffboardingRunRequest): Promise<{ run_id: string; status: string }> {
+    return postJSON<{ run_id: string; status: string }>("/api/tools/offboarding-runs", body);
+  },
+
+  getOffboardingRun(run_id: string): Promise<OffboardingRun> {
+    return fetchJSON<OffboardingRun>(`/api/tools/offboarding-runs/${encodeURIComponent(run_id)}`);
+  },
+
+  listOffboardingRuns(limit = 20): Promise<OffboardingRunSummary[]> {
+    return fetchJSON<OffboardingRunSummary[]>(`/api/tools/offboarding-runs${buildQuery({ limit })}`);
+  },
+
+  retryOffboardingLane(run_id: string, lane: OffboardingLane): Promise<{ run_id: string; status: string; lane: string }> {
+    return postJSON<{ run_id: string; status: string; lane: string }>(
+      `/api/tools/offboarding-runs/${encodeURIComponent(run_id)}/retry-lane`,
+      { lane },
+    );
+  },
+
+  launchExitWorkflowFromTools(body: LaunchExitWorkflowRequest): Promise<LaunchExitWorkflowResult> {
+    return postJSON<LaunchExitWorkflowResult>("/api/tools/offboarding-runs/launch-exit-workflow", body);
+  },
+
+  offboardingRunCsvUrl(run_id: string): string {
+    return `/api/tools/offboarding-runs/${encodeURIComponent(run_id)}/csv`;
   },
 
   getDelegateMailboxJob(job_id: string): Promise<DelegateMailboxJobStatus> {

@@ -755,6 +755,28 @@ class EntraAdminProvider:
             },
         }
 
+    def validate_cloud_group_removal(self, user_id: str, expected_removed: list[str]) -> dict[str, Any]:
+        """Re-query the user's group memberships and verify expected_removed groups are gone."""
+        if not expected_removed:
+            return {"remaining_groups": [], "ok": True, "still_present_count": 0}
+        expected_set = set(expected_removed)
+        try:
+            remaining: list[str] = []
+            for item in self._member_of(user_id):
+                if not str(item.get("@odata.type") or "").endswith("group"):
+                    continue
+                name = str(item.get("displayName") or "")
+                if name in expected_set:
+                    remaining.append(name)
+            ok = len(remaining) == 0
+            return {
+                "remaining_groups": remaining,
+                "ok": ok,
+                "still_present_count": len(remaining),
+            }
+        except UserAdminProviderError as exc:
+            return {"ok": False, "still_present_count": -1, "error": str(exc)}
+
     def remove_all_direct_licenses(self, user_id: str) -> dict[str, Any]:
         direct_licenses = [item for item in self.list_licenses(user_id) if not item.get("assigned_by_group")]
         removed: list[str] = []
