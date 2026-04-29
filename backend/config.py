@@ -406,3 +406,4 @@ AD_USE_SSL: bool = os.getenv("AD_USE_SSL", "").strip().lower() in {"1", "true", 
 AD_BASE_DN: str = os.getenv("AD_BASE_DN", "").strip()        # e.g. DC=corp,DC=local
 AD_BIND_DN: str = os.getenv("AD_BIND_DN", "").strip()        # e.g. CN=svc_account,OU=Service Accounts,DC=corp,DC=local
 AD_BIND_PASSWORD: str = os.getenv("AD_BIND_PASSWORD", "").strip()
+DISABLED_USERS_OU_DN: str = os.getenv("DISABLED_USERS_OU_DN", "OU=Disabled Users,OU=Oasis Legal Users and Computers,DC=oasislegal,DC=com").strip()
