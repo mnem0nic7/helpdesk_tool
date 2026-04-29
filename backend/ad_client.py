@@ -10,12 +10,15 @@ LDAPS (SSL) or StartTLS; they will raise ADError if SSL is not configured.
 from __future__ import annotations
 
 import logging
+import secrets
+import string
 from datetime import datetime, timezone
 from typing import Any
 
 import ldap3
 from ldap3 import (
     ALL_ATTRIBUTES,
+    BASE,
     Connection,
     MODIFY_REPLACE,
     MODIFY_ADD,
@@ -28,7 +31,7 @@ from ldap3 import (
 )
 from ldap3.core.exceptions import LDAPException
 
-from config import AD_BASE_DN, AD_BIND_DN, AD_BIND_PASSWORD, AD_PORT, AD_SERVER, AD_USE_SSL
+from config import AD_BASE_DN, AD_BIND_DN, AD_BIND_PASSWORD, AD_PORT, AD_SERVER, AD_USE_SSL, DISABLED_USERS_OU_DN
 
 logger = logging.getLogger(__name__)
 
@@ -529,6 +532,116 @@ def move_object(dn: str, new_ou_dn: str) -> None:
         raise ADError(f"Move failed: {exc}") from exc
     finally:
         conn.unbind()
+
+
+def _group_sam_from_dn(group_dn: str) -> str:
+    """Look up sAMAccountName for a group DN. Returns empty string if not found."""
+    conn = _get_connection()
+    try:
+        conn.search(group_dn, "(objectClass=group)", BASE, attributes=["sAMAccountName"])
+        if conn.entries:
+            attrs = conn.entries[0].entry_attributes_as_dict
+            values = attrs.get("sAMAccountName") or []
+            if values:
+                return str(values[0])
+        return ""
+    except LDAPException:
+        return ""
+    finally:
+        conn.unbind()
+
+
+def remove_from_all_groups_except_domain_users(sam: str) -> dict[str, list[str]]:
+    """Remove user from all groups except Domain Users. Returns removed/skipped/failures."""
+    user = get_user(sam)
+    member_of: list[str] = user.get("member_of") or []
+    user_dn: str = user["dn"]
+
+    removed: list[str] = []
+    skipped: list[str] = []
+    failures: list[str] = []
+
+    for group_dn in member_of:
+        if group_dn.lower().startswith("cn=domain users,"):
+            skipped.append("Domain Users")
+            continue
+
+        group_cn = group_dn.split(",")[0].removeprefix("CN=")
+        group_sam = _group_sam_from_dn(group_dn)
+        if not group_sam:
+            failures.append(group_dn)
+            continue
+
+        try:
+            remove_group_member(group_sam, user_dn)
+            removed.append(group_cn)
+        except ADError as exc:
+            failures.append(f"{group_cn}: {exc}")
+
+    return {"removed": removed, "skipped": skipped, "failures": failures}
+
+
+def update_termination_attributes(sam: str) -> dict[str, str]:
+    """Apply termination attributes: clear phone/manager/dept, stamp disable markers."""
+    user = get_user(sam)
+    conn = _get_connection()
+    try:
+        termination_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        changes = {
+            "telephoneNumber": [(MODIFY_REPLACE, [])],
+            "mailNickname": [(MODIFY_REPLACE, [sam])],
+            "physicalDeliveryOfficeName": [(MODIFY_REPLACE, ["DISABLED"])],
+            "msExchAssistantName": [(MODIFY_REPLACE, ["HideFromGAL"])],
+            "terminationDate": [(MODIFY_REPLACE, [termination_date])],
+            "msExchHideFromAddressLists": [(MODIFY_REPLACE, ["TRUE"])],
+            "msDS-cloudExtensionAttribute1": [(MODIFY_REPLACE, [])],
+            "manager": [(MODIFY_REPLACE, [])],
+            "department": [(MODIFY_REPLACE, [])],
+        }
+        conn.modify(user["dn"], changes)
+        if conn.result["result"] != 0:
+            raise ADError(f"Termination attributes update failed: {conn.result.get('description', conn.result)}")
+    except LDAPException as exc:
+        raise ADError(f"Termination attributes update failed: {exc}") from exc
+    finally:
+        conn.unbind()
+
+    return {
+        "telephoneNumber": "",
+        "mailNickname": sam,
+        "physicalDeliveryOfficeName": "DISABLED",
+        "msExchAssistantName": "HideFromGAL",
+        "terminationDate": termination_date,
+        "msExchHideFromAddressLists": "TRUE",
+        "msDS-cloudExtensionAttribute1": "",
+        "manager": "",
+        "department": "",
+    }
+
+
+def move_to_disabled_users_ou(sam: str) -> str:
+    """Move user to the DISABLED_USERS_OU_DN. Returns the new DN."""
+    if not DISABLED_USERS_OU_DN:
+        raise ADError("DISABLED_USERS_OU_DN is not configured")
+    user = get_user(sam)
+    move_object(user["dn"], DISABLED_USERS_OU_DN)
+    return user["dn"].split(",")[0] + "," + DISABLED_USERS_OU_DN
+
+
+def reset_password_random(sam: str) -> str:
+    """Reset AD password to a 20-char random complex password. Returns the generated password."""
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    random_pw = "".join(secrets.choice(alphabet) for _ in range(20))
+    # Ensure complexity: uppercase, lowercase, digit, special
+    random_pw = (
+        secrets.choice(string.ascii_uppercase)
+        + secrets.choice(string.ascii_lowercase)
+        + secrets.choice(string.digits)
+        + secrets.choice("!@#$%^&*")
+        + random_pw[4:]
+    )
+    reset_password(sam, random_pw, must_change=False)
+    return random_pw
 
 
 # ---------------------------------------------------------------------------
