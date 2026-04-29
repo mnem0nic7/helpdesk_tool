@@ -375,23 +375,16 @@ def run_offboarding(
                     detail = result.get("after_summary")
 
                 elif lane == "entra_group_validate":
-                    # Validate by re-fetching current memberships and checking removed groups are gone
-                    current_groups = _uap.entra.list_groups(entra_user_id)
-                    current_names = {g.get("display_name", "") for g in current_groups}
-                    still_present = [g for g in removed_cloud_groups if g in current_names]
-                    still_present_count = len(still_present)
-                    ok = still_present_count == 0
+                    result = _uap.entra.validate_cloud_group_removal(entra_user_id, removed_cloud_groups)
+                    ok = result.get("ok", True)
+                    message = (
+                        "All cloud group removals confirmed"
+                        if ok
+                        else f"{result.get('still_present_count', 0)} group(s) still present"
+                    )
+                    detail = result
                     if not ok:
-                        has_errors = True  # validation failure — error but don't stop
-                        message = f"{still_present_count} group(s) still present"
-                    else:
-                        message = "All cloud group removals confirmed"
-                    detail = {
-                        "ok": ok,
-                        "still_present": still_present,
-                        "still_present_count": still_present_count,
-                        "checked_groups": removed_cloud_groups,
-                    }
+                        has_errors = True
 
                 elif lane == "entra_license_cleanup":
                     result = _uap.entra.remove_all_direct_licenses(entra_user_id)
