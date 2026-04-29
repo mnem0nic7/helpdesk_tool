@@ -755,6 +755,38 @@ class EntraAdminProvider:
             },
         }
 
+    def validate_cloud_group_removal(self, user_id: str, expected_removed: list[str]) -> dict[str, Any]:
+        """Re-query user's group memberships to verify removal. Mirrors the PS1 validation pass."""
+        if not expected_removed:
+            return {"remaining_groups": [], "ok": True, "still_present_count": 0}
+
+        try:
+            current_groups = self._member_of(user_id)
+        except UserAdminProviderError as exc:
+            return {
+                "remaining_groups": [],
+                "ok": False,
+                "still_present_count": -1,
+                "error": str(exc),
+            }
+
+        # Filter for groups only (same filter as remove_direct_cloud_group_memberships)
+        group_names = [
+            str(item.get("displayName") or "").strip()
+            for item in current_groups
+            if str(item.get("@odata.type") or "").endswith("group")
+            and str(item.get("displayName") or "").strip()
+        ]
+
+        # Find groups that were supposed to be removed but are still present
+        remaining_from_expected = [name for name in expected_removed if name in group_names]
+
+        return {
+            "remaining_groups": remaining_from_expected,
+            "ok": len(remaining_from_expected) == 0,
+            "still_present_count": len(remaining_from_expected),
+        }
+
     def remove_all_direct_licenses(self, user_id: str) -> dict[str, Any]:
         direct_licenses = [item for item in self.list_licenses(user_id) if not item.get("assigned_by_group")]
         removed: list[str] = []
