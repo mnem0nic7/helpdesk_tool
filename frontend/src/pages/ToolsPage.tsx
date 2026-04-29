@@ -1,20 +1,24 @@
 import { useEffect, useState, useDeferredValue } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type AppLoginAuditEvent,
   type AutoReplyStatus,
-  type DeactivateUserToolResult,
   type DelegateMailboxJobStatus,
   type EmailgisticsHelperStatus,
   type MailboxDelegatesStatus,
   type MailboxRulesStatus,
+  type OffboardingLane,
+  type OffboardingRun,
+  OFFBOARDING_LANES,
   type OneDriveCopyJobStatus,
   type OneDriveCopyUserOption,
   type SetAutoReplyRequest,
 } from "../lib/api.ts";
 import {
   getPollingQueryOptions,
+  isDocumentVisibleForPolling,
   resolvePollingIntervalMs,
 } from "../lib/queryPolling.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
@@ -31,6 +35,26 @@ const EXCLUDED_ROOT_FOLDERS = [
 const UPN_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const DELEGATE_PERMISSION_TYPES = ["send_on_behalf", "send_as", "full_access"] as const;
 type JobStatusTone = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+const OFFBOARDING_LANE_LABELS: Record<OffboardingLane, string> = {
+  entra_disable: "Entra: disable sign-in",
+  entra_revoke: "Entra: revoke sessions",
+  entra_reset_pw: "Entra: reset password (random)",
+  entra_group_cleanup: "Entra: remove from cloud groups",
+  entra_group_validate: "Entra: re-query to validate cleanup",
+  entra_license_cleanup: "Entra: remove direct licenses",
+  ad_disable: "AD: disable account",
+  ad_reset_pw: "AD: reset password (random)",
+  ad_group_cleanup: "AD: remove from groups except Domain Users",
+  ad_attribute_cleanup: "AD: clear/stamp termination attributes",
+  ad_move_ou: "AD: move to Disabled Users OU",
+};
+
+const AD_LANES = new Set<OffboardingLane>([
+  "ad_disable", "ad_reset_pw", "ad_group_cleanup", "ad_attribute_cleanup", "ad_move_ou",
+]);
+
+const OFFBOARDING_TERMINAL_STATUSES = new Set(["completed", "completed_with_errors", "failed"]);
 
 type PickerOptionSource = OneDriveCopyUserOption["source"] | "manual";
 
@@ -1064,8 +1088,9 @@ export default function ToolsPage() {
   const [emailgisticsHelperResult, setEmailgisticsHelperResult] = useState<EmailgisticsHelperStatus | undefined>(undefined);
   const [deactivateUserInput, setDeactivateUserInput] = useState("");
   const [selectedDeactivateUser, setSelectedDeactivateUser] = useState<ToolUserPickerOption | null>(null);
-  const [deactivateResult, setDeactivateResult] = useState<DeactivateUserToolResult | null>(null);
-  const [deactivateFormError, setDeactivateFormError] = useState("");
+  const [activeLanes, setActiveLanes] = useState<Set<OffboardingLane>>(new Set(OFFBOARDING_LANES));
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [offboardingFormError, setOffboardingFormError] = useState("");
   const deferredDeactivateSearch = useDeferredValue(deactivateUserInput);
   const deferredSourceSearch = useDeferredValue(sourceUpnInput);
   const deferredDestinationSearch = useDeferredValue(destinationUpnInput);
@@ -1075,6 +1100,8 @@ export default function ToolsPage() {
   const deferredOofMailboxSearch = useDeferredValue(oofMailboxInput);
   const deferredEmailgisticsUserSearch = useDeferredValue(emailgisticsUserInput);
   const deferredEmailgisticsSharedMailboxSearch = useDeferredValue(emailgisticsSharedMailboxInput);
+
+  const navigate = useNavigate();
 
   const meQuery = useQuery({
     queryKey: ["auth", "me"],
@@ -1146,6 +1173,20 @@ export default function ToolsPage() {
     queryFn: () => api.searchOneDriveCopyUsers(deferredDeactivateSearch.trim(), 8),
     enabled: hasSignedInUser && !!meQuery.data?.is_admin,
     staleTime: 30_000,
+  });
+  const offboardingRunQuery = useQuery<OffboardingRun>({
+    queryKey: ["offboarding-run", activeRunId],
+    queryFn: () => api.getOffboardingRun(activeRunId!),
+    enabled: !!activeRunId,
+    staleTime: 0,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (!activeRunId || (status && OFFBOARDING_TERMINAL_STATUSES.has(status))) return false;
+      return isDocumentVisibleForPolling() ? 1500 : false;
+    },
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const emailgisticsSharedMailboxSearchQuery = useQuery({
     queryKey: ["emailgistics-helper", "shared-mailbox", deferredEmailgisticsSharedMailboxSearch],
@@ -1366,24 +1407,44 @@ export default function ToolsPage() {
       setEmailgisticsHelperResult(undefined);
     },
   });
-  const deactivateUserMutation = useMutation({
-    mutationFn: () =>
-      api.deactivateUser({
+  const createOffboardingRunMutation = useMutation({
+    mutationFn: () => {
+      const lanes = [...activeLanes].filter((l) =>
+        !AD_LANES.has(l) || !!selectedDeactivateUser?.on_prem_sam,
+      ) as OffboardingLane[];
+      return api.createOffboardingRun({
         entra_user_id: selectedDeactivateUser?.id.trim() || "",
         ad_sam: selectedDeactivateUser?.on_prem_sam?.trim() || "",
         display_name: selectedDeactivateUser?.display_name || deactivateUserInput.trim(),
-      }),
+        lanes,
+      });
+    },
     onMutate: () => {
-      setDeactivateFormError("");
-      setDeactivateResult(null);
+      setOffboardingFormError("");
+      setActiveRunId(null);
     },
     onSuccess: (result) => {
-      setDeactivateFormError("");
-      setDeactivateResult(result);
+      setActiveRunId(result.run_id);
     },
     onError: (error) => {
-      setDeactivateFormError(error instanceof Error ? error.message : "Deactivation failed.");
-      setDeactivateResult(null);
+      setOffboardingFormError(error instanceof Error ? error.message : "Failed to start offboarding run.");
+    },
+  });
+  const retryOffboardingLaneMutation = useMutation({
+    mutationFn: ({ lane }: { lane: OffboardingLane }) =>
+      api.retryOffboardingLane(activeRunId!, lane),
+  });
+  const launchExitWorkflowMutation = useMutation({
+    mutationFn: () =>
+      api.launchExitWorkflowFromTools({
+        entra_user_id: selectedDeactivateUser?.id.trim() || "",
+        display_name: selectedDeactivateUser?.display_name || deactivateUserInput.trim(),
+      }),
+    onSuccess: (result) => {
+      void navigate(result.deep_link);
+    },
+    onError: (error) => {
+      setOffboardingFormError(error instanceof Error ? error.message : "Failed to launch Exit Workflow.");
     },
   });
   const canQueueJob =
@@ -1863,9 +1924,9 @@ export default function ToolsPage() {
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">User Lifecycle</div>
-                  <h2 className="mt-1 text-2xl font-semibold text-slate-900">Deactivate user</h2>
+                  <h2 className="mt-1 text-2xl font-semibold text-slate-900">Offboard user</h2>
                   <p className="mt-2 text-sm text-slate-600">
-                    Disable a user&apos;s Entra sign-in and/or their on-prem Active Directory account. Select a user from the directory for Entra and optionally enter their AD SAM account name.
+                    Run a full offboarding sequence against Entra ID and on-prem Active Directory. Select the user and choose which lanes to execute.
                   </p>
                 </div>
                 <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-red-700">
@@ -1874,66 +1935,190 @@ export default function ToolsPage() {
               </div>
 
               <DirectoryComboboxField
-                label="User to deactivate"
+                label="User to offboard"
                 value={deactivateUserInput}
-                onInputChange={(v) => { setDeactivateUserInput(v); setSelectedDeactivateUser(null); setDeactivateResult(null); }}
-                onSelect={(opt) => { setSelectedDeactivateUser(opt); setDeactivateUserInput(opt.display_name || opt.canonical_upn); setDeactivateResult(null); }}
+                onInputChange={(v) => { setDeactivateUserInput(v); setSelectedDeactivateUser(null); setActiveRunId(null); setOffboardingFormError(""); }}
+                onSelect={(opt) => { setSelectedDeactivateUser(opt); setDeactivateUserInput(opt.display_name || opt.canonical_upn); setActiveRunId(null); setOffboardingFormError(""); }}
                 selected={selectedDeactivateUser}
                 loading={deactivateUserSearchQuery.isLoading}
                 options={deactivateUserOptions}
                 placeholder="Search by name or email..."
                 emptyMessage="No Entra directory matches found."
               />
+
               {selectedDeactivateUser ? (
                 <div className="flex flex-wrap gap-2 text-xs">
-                  <span className="rounded-full bg-sky-50 px-2.5 py-1 font-medium text-sky-700">Entra: sign-in will be disabled</span>
+                  <span className="rounded-full bg-sky-50 px-2.5 py-1 font-medium text-sky-700">Entra ID</span>
                   {selectedDeactivateUser.on_prem_sam ? (
                     <span className="rounded-full bg-violet-50 px-2.5 py-1 font-medium text-violet-700">AD: {selectedDeactivateUser.on_prem_sam}</span>
                   ) : (
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-500">AD: no on-prem account linked</span>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-500">AD: no on-prem account linked — AD lanes hidden</span>
                   )}
                 </div>
               ) : null}
 
-              {deactivateFormError ? (
-                <p className="rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700">{deactivateFormError}</p>
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Lanes to execute</span>
+                  <div className="flex gap-2 text-xs">
+                    <button
+                      type="button"
+                      className="text-sky-600 hover:underline"
+                      onClick={() => setActiveLanes(new Set(OFFBOARDING_LANES.filter((l) => !AD_LANES.has(l) || !!selectedDeactivateUser?.on_prem_sam)))}
+                    >
+                      Select all
+                    </button>
+                    <span className="text-slate-300">|</span>
+                    <button
+                      type="button"
+                      className="text-sky-600 hover:underline"
+                      onClick={() => setActiveLanes(new Set())}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div className="grid gap-1">
+                  {OFFBOARDING_LANES.map((lane) => {
+                    const isAd = AD_LANES.has(lane);
+                    const hidden = isAd && !selectedDeactivateUser?.on_prem_sam;
+                    if (hidden) return null;
+                    return (
+                      <label key={lane} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-100">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded accent-sky-600"
+                          checked={activeLanes.has(lane)}
+                          onChange={(e) => {
+                            setActiveLanes((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(lane);
+                              else next.delete(lane);
+                              return next;
+                            });
+                          }}
+                        />
+                        <span className={`text-sm ${isAd ? "text-violet-700" : "text-sky-700"}`}>
+                          {OFFBOARDING_LANE_LABELS[lane]}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {offboardingFormError ? (
+                <p className="rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700">{offboardingFormError}</p>
               ) : null}
 
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  disabled={!selectedDeactivateUser || deactivateUserMutation.isPending}
+                  disabled={!selectedDeactivateUser || activeLanes.size === 0 || createOffboardingRunMutation.isPending}
                   onClick={() => {
                     if (!selectedDeactivateUser) {
-                      setDeactivateFormError("Select a user from the directory first.");
+                      setOffboardingFormError("Select a user from the directory first.");
                       return;
                     }
-                    setDeactivateFormError("");
-                    deactivateUserMutation.mutate();
+                    if (activeLanes.size === 0) {
+                      setOffboardingFormError("Select at least one lane to execute.");
+                      return;
+                    }
+                    setOffboardingFormError("");
+                    createOffboardingRunMutation.mutate();
                   }}
-                  className={buttonClass("primary", !selectedDeactivateUser || deactivateUserMutation.isPending)}
+                  className={buttonClass("primary", !selectedDeactivateUser || activeLanes.size === 0 || createOffboardingRunMutation.isPending)}
                 >
-                  {deactivateUserMutation.isPending ? "Deactivating..." : "Deactivate user"}
+                  {createOffboardingRunMutation.isPending ? "Starting..." : "Run offboarding"}
+                </button>
+                <button
+                  type="button"
+                  disabled={!selectedDeactivateUser || launchExitWorkflowMutation.isPending}
+                  onClick={() => {
+                    if (!selectedDeactivateUser) {
+                      setOffboardingFormError("Select a user from the directory first.");
+                      return;
+                    }
+                    setOffboardingFormError("");
+                    launchExitWorkflowMutation.mutate();
+                  }}
+                  className={buttonClass("secondary", !selectedDeactivateUser || launchExitWorkflowMutation.isPending)}
+                >
+                  {launchExitWorkflowMutation.isPending ? "Launching..." : "Launch full Exit Workflow"}
                 </button>
               </div>
 
-              {deactivateResult ? (
-                <div className="space-y-2 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                  {deactivateResult.display_name ? (
-                    <p className="text-sm font-semibold text-slate-800">{deactivateResult.display_name}</p>
-                  ) : null}
-                  {deactivateResult.entra ? (
-                    <div className={`flex items-start gap-2 rounded-xl px-3 py-2 text-sm ${deactivateResult.entra.ok ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>
-                      <span className="mt-0.5 shrink-0">{deactivateResult.entra.ok ? "✓" : "✗"}</span>
-                      <span><strong>Entra:</strong> {deactivateResult.entra.message}</span>
+              {activeRunId && offboardingRunQuery.data ? (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-slate-700">
+                      {offboardingRunQuery.data.display_name || "Offboarding run"}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const s = offboardingRunQuery.data.status;
+                        if (s === "queued") return <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">Queued</span>;
+                        if (s === "running") return <span className="rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-medium text-sky-700 animate-pulse">Running…</span>;
+                        if (s === "completed") return <span className="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">Completed</span>;
+                        if (s === "completed_with_errors") return <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700">Completed with errors</span>;
+                        return <span className="rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700">Failed</span>;
+                      })()}
+                      {OFFBOARDING_TERMINAL_STATUSES.has(offboardingRunQuery.data.status) ? (
+                        <a
+                          href={api.offboardingRunCsvUrl(activeRunId)}
+                          className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          download
+                        >
+                          Download CSV
+                        </a>
+                      ) : null}
                     </div>
-                  ) : null}
-                  {deactivateResult.ad ? (
-                    <div className={`flex items-start gap-2 rounded-xl px-3 py-2 text-sm ${deactivateResult.ad.ok ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>
-                      <span className="mt-0.5 shrink-0">{deactivateResult.ad.ok ? "✓" : "✗"}</span>
-                      <span><strong>AD:</strong> {deactivateResult.ad.message}</span>
-                    </div>
-                  ) : null}
+                  </div>
+
+                  {offboardingRunQuery.data.steps.map((step) => {
+                    const isOk = step.status === "ok";
+                    const isFailed = step.status === "failed";
+                    const isRunning = step.status === "running";
+                    const isQueued = step.status === "queued";
+                    return (
+                      <div key={step.step_id} className="rounded-xl border border-slate-200 bg-white p-3">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {isOk ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">ok</span>
+                                : isFailed ? <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">failed</span>
+                                : isRunning ? <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700 animate-pulse">running</span>
+                                : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">queued</span>}
+                              <span className={`text-sm font-medium ${AD_LANES.has(step.lane as OffboardingLane) ? "text-violet-700" : "text-sky-700"}`}>
+                                {OFFBOARDING_LANE_LABELS[step.lane as OffboardingLane] ?? step.lane}
+                              </span>
+                            </div>
+                            {step.message && !isQueued ? (
+                              <p className={`mt-1 text-xs ${isFailed ? "text-red-700" : "text-slate-500"}`}>{step.message}</p>
+                            ) : null}
+                            {step.detail ? (
+                              <details className="mt-1">
+                                <summary className="cursor-pointer text-xs text-slate-400 hover:text-slate-600">Details</summary>
+                                <pre className="mt-1 overflow-x-auto rounded bg-slate-50 p-2 text-xs text-slate-600">
+                                  {JSON.stringify(step.detail, null, 2)}
+                                </pre>
+                              </details>
+                            ) : null}
+                          </div>
+                          {isFailed ? (
+                            <button
+                              type="button"
+                              disabled={retryOffboardingLaneMutation.isPending}
+                              onClick={() => retryOffboardingLaneMutation.mutate({ lane: step.lane as OffboardingLane })}
+                              className={buttonClass("secondary", retryOffboardingLaneMutation.isPending)}
+                            >
+                              Retry
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : null}
             </section>
