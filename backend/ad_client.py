@@ -545,7 +545,8 @@ def _group_sam_from_dn(group_dn: str) -> str:
             if values:
                 return str(values[0])
         return ""
-    except LDAPException:
+    except LDAPException as exc:
+        logger.warning("Could not resolve sAMAccountName for group DN %s: %s", group_dn, exc)
         return ""
     finally:
         conn.unbind()
@@ -629,17 +630,20 @@ def move_to_disabled_users_ou(sam: str) -> str:
 
 
 def reset_password_random(sam: str) -> str:
-    """Reset AD password to a 20-char random complex password. Returns the generated password."""
+    """Reset AD password to a random 20-char complex password. Returns generated password."""
+    if not AD_USE_SSL:
+        raise ADError("Password reset requires LDAPS (SSL). Set AD_USE_SSL=true.")
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-    random_pw = "".join(secrets.choice(alphabet) for _ in range(20))
-    # Ensure complexity: uppercase, lowercase, digit, special
-    random_pw = (
-        secrets.choice(string.ascii_uppercase)
-        + secrets.choice(string.ascii_lowercase)
-        + secrets.choice(string.digits)
-        + secrets.choice("!@#$%^&*")
-        + random_pw[4:]
+    chars = (
+        [secrets.choice(string.ascii_uppercase),
+         secrets.choice(string.ascii_lowercase),
+         secrets.choice(string.digits),
+         secrets.choice("!@#$%^&*")]
+        + [secrets.choice(alphabet) for _ in range(16)]
     )
+    sysrand = secrets.SystemRandom()
+    sysrand.shuffle(chars)
+    random_pw = "".join(chars)
     reset_password(sam, random_pw, must_change=False)
     return random_pw
 
