@@ -108,6 +108,11 @@ def _normalize_user_option(row: dict[str, Any], *, source: str) -> dict[str, Any
     normalized_upn = _normalized_upn(principal_name or mail)
     if not normalized_upn:
         return None
+    on_prem_sam = str(row.get("on_prem_sam_account_name") or "").strip()
+    if not on_prem_sam:
+        ad_user = ad.find_user_by_upn_or_email(principal_name or mail)
+        if ad_user:
+            on_prem_sam = ad_user.get("sam_account_name") or ""
     return {
         "id": str(row.get("id") or (f"{source}:{normalized_upn}")),
         "display_name": str(row.get("display_name") or "").strip(),
@@ -115,7 +120,7 @@ def _normalize_user_option(row: dict[str, Any], *, source: str) -> dict[str, Any
         "mail": mail,
         "enabled": row.get("enabled"),
         "source": "entra" if source == "entra" else "saved",
-        "on_prem_sam": str(row.get("on_prem_sam_account_name") or "").strip(),
+        "on_prem_sam": on_prem_sam,
     }
 
 

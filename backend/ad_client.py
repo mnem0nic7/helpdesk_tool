@@ -356,6 +356,30 @@ def get_user(sam: str) -> dict[str, Any]:
         conn.unbind()
 
 
+def find_user_by_upn_or_email(identifier: str) -> dict[str, Any] | None:
+    """Look up an AD user by UPN or mail. Returns None if not found or AD not configured."""
+    if not ad_configured() or not identifier:
+        return None
+    escaped = ldap3.utils.conv.escape_filter_chars(identifier)
+    search_filter = (
+        f"(&(objectClass=user)(objectCategory=person)"
+        f"(|(userPrincipalName={escaped})(mail={escaped})))"
+    )
+    try:
+        conn = _get_connection()
+    except (ADError, ADNotConfigured):
+        return None
+    try:
+        conn.search(AD_BASE_DN, search_filter, SUBTREE, attributes=_USER_ATTRS)
+        if not conn.entries:
+            return None
+        return _entry_to_user(conn.entries[0])
+    except LDAPException:
+        return None
+    finally:
+        conn.unbind()
+
+
 def create_user(
     *,
     sam: str,
