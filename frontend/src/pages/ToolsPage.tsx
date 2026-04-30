@@ -1,5 +1,4 @@
 import { useEffect, useState, useDeferredValue } from "react";
-import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
@@ -40,9 +39,11 @@ const OFFBOARDING_LANE_LABELS: Record<OffboardingLane, string> = {
   entra_disable: "Entra: disable sign-in",
   entra_revoke: "Entra: revoke sessions",
   entra_reset_pw: "Entra: reset password (random)",
+  entra_reset_mfa: "Entra: reset MFA registrations",
   entra_group_cleanup: "Entra: remove from cloud groups",
   entra_group_validate: "Entra: re-query to validate cleanup",
   entra_license_cleanup: "Entra: remove direct licenses",
+  mailbox_convert_shared: "Exchange: convert mailbox to shared",
   ad_disable: "AD: disable account",
   ad_reset_pw: "AD: reset password (random)",
   ad_group_cleanup: "AD: remove from groups except Domain Users",
@@ -1101,8 +1102,6 @@ export default function ToolsPage() {
   const deferredEmailgisticsUserSearch = useDeferredValue(emailgisticsUserInput);
   const deferredEmailgisticsSharedMailboxSearch = useDeferredValue(emailgisticsSharedMailboxInput);
 
-  const navigate = useNavigate();
-
   const meQuery = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => api.getMe(),
@@ -1433,19 +1432,6 @@ export default function ToolsPage() {
   const retryOffboardingLaneMutation = useMutation({
     mutationFn: ({ lane }: { lane: OffboardingLane }) =>
       api.retryOffboardingLane(activeRunId!, lane),
-  });
-  const launchExitWorkflowMutation = useMutation({
-    mutationFn: () =>
-      api.launchExitWorkflowFromTools({
-        entra_user_id: selectedDeactivateUser?.id.trim() || "",
-        display_name: selectedDeactivateUser?.display_name || deactivateUserInput.trim(),
-      }),
-    onSuccess: (result) => {
-      void navigate(result.deep_link);
-    },
-    onError: (error) => {
-      setOffboardingFormError(error instanceof Error ? error.message : "Failed to launch Exit Workflow.");
-    },
   });
   const canQueueJob =
     !!selectedSource &&
@@ -2030,21 +2016,6 @@ export default function ToolsPage() {
                   className={buttonClass("primary", !selectedDeactivateUser || activeLanes.size === 0 || createOffboardingRunMutation.isPending)}
                 >
                   {createOffboardingRunMutation.isPending ? "Starting..." : "Run offboarding"}
-                </button>
-                <button
-                  type="button"
-                  disabled={!selectedDeactivateUser || launchExitWorkflowMutation.isPending}
-                  onClick={() => {
-                    if (!selectedDeactivateUser) {
-                      setOffboardingFormError("Select a user from the directory first.");
-                      return;
-                    }
-                    setOffboardingFormError("");
-                    launchExitWorkflowMutation.mutate();
-                  }}
-                  className={buttonClass("secondary", !selectedDeactivateUser || launchExitWorkflowMutation.isPending)}
-                >
-                  {launchExitWorkflowMutation.isPending ? "Launching..." : "Launch full Exit Workflow"}
                 </button>
               </div>
 

@@ -1815,9 +1815,11 @@ export const OFFBOARDING_LANES = [
   "entra_disable",
   "entra_revoke",
   "entra_reset_pw",
+  "entra_reset_mfa",
   "entra_group_cleanup",
   "entra_group_validate",
   "entra_license_cleanup",
+  "mailbox_convert_shared",
   "ad_disable",
   "ad_reset_pw",
   "ad_group_cleanup",
@@ -1860,16 +1862,6 @@ export interface CreateOffboardingRunRequest {
   ad_sam?: string;
   display_name?: string;
   lanes: OffboardingLane[];
-}
-
-export interface LaunchExitWorkflowRequest {
-  entra_user_id: string;
-  display_name?: string;
-}
-
-export interface LaunchExitWorkflowResult {
-  workflow_id: string;
-  deep_link: string;
 }
 
 export interface OneDriveCopyJobStatus {
@@ -4201,10 +4193,6 @@ export const api = {
       `/api/tools/offboarding-runs/${encodeURIComponent(runId)}/retry-lane`,
       { lane },
     );
-  },
-
-  launchExitWorkflowFromTools(body: LaunchExitWorkflowRequest): Promise<LaunchExitWorkflowResult> {
-    return postJSON<LaunchExitWorkflowResult>("/api/tools/offboarding-runs/launch-exit-workflow", body);
   },
 
   offboardingRunCsvUrl(runId: string): string {

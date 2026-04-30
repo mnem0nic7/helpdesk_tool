@@ -34,7 +34,6 @@ from offboarding_runs import OffboardingLane, _LANE_ORDER, offboarding_runs, run
 from onedrive_copy_jobs import onedrive_copy_jobs
 from site_context import get_current_site_scope
 from user_admin_providers import UserAdminProviderError, user_admin_providers
-from user_exit_workflows import UserExitWorkflowError, user_exit_workflows
 
 router = APIRouter(prefix="/api/tools")
 
@@ -402,42 +401,12 @@ class RetryLaneRequest(BaseModel):
     lane: str
 
 
-class LaunchExitWorkflowRequest(BaseModel):
-    entra_user_id: str
-    display_name: str = ""
-
-
 @router.get("/offboarding-runs")
 def list_offboarding_runs(
     limit: int = Query(default=20, ge=1, le=100),
     _session: dict[str, Any] = Depends(_require_admin_tools_session),
 ):
     return offboarding_runs.list_runs(limit=limit)
-
-
-@router.post("/offboarding-runs/launch-exit-workflow")
-def launch_exit_workflow_from_tools(
-    body: LaunchExitWorkflowRequest,
-    session: dict[str, Any] = Depends(_require_admin_tools_session),
-):
-    """Create an Exit Workflow record for a user and return its ID and deep link."""
-    try:
-        workflow = user_exit_workflows.create_workflow(
-            user_id=body.entra_user_id.strip(),
-            typed_upn_confirmation=body.entra_user_id.strip(),  # skip UPN confirmation gate
-            on_prem_sam_account_name_override=None,
-            requested_by_email=str(session.get("email") or ""),
-            requested_by_name=str(session.get("name") or ""),
-        )
-        workflow_id = str(workflow.get("workflow_id") or workflow.get("id") or "")
-        return {
-            "workflow_id": workflow_id,
-            "deep_link": f"/users?workflow={workflow_id}",
-        }
-    except UserExitWorkflowError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except UserAdminProviderError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/offboarding-runs", status_code=202)

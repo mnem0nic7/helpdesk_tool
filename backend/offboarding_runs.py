@@ -24,9 +24,11 @@ OffboardingLane = Literal[
     "entra_disable",
     "entra_revoke",
     "entra_reset_pw",
+    "entra_reset_mfa",
     "entra_group_cleanup",
     "entra_group_validate",
     "entra_license_cleanup",
+    "mailbox_convert_shared",
     "ad_disable",
     "ad_reset_pw",
     "ad_group_cleanup",
@@ -39,9 +41,11 @@ _LANE_ORDER: list[str] = [
     "entra_disable",
     "entra_revoke",
     "entra_reset_pw",
+    "entra_reset_mfa",
     "entra_group_cleanup",
     "entra_group_validate",
     "entra_license_cleanup",
+    "mailbox_convert_shared",
     "ad_disable",
     "ad_reset_pw",
     "ad_group_cleanup",
@@ -368,6 +372,11 @@ def run_offboarding(
                     result = _uap.entra.execute("reset_password", entra_user_id, {"force_change_on_next_login": False})
                     message = result.get("summary", "Password reset")
 
+                elif lane == "entra_reset_mfa":
+                    result = _uap.entra.execute("reset_mfa", entra_user_id, {})
+                    message = result.get("summary", "MFA methods reset")
+                    detail = result.get("after_summary")
+
                 elif lane == "entra_group_cleanup":
                     result = _uap.entra.remove_direct_cloud_group_memberships(entra_user_id)
                     removed_cloud_groups = result.get("after_summary", {}).get("removed_groups", [])
@@ -390,6 +399,21 @@ def run_offboarding(
                     result = _uap.entra.remove_all_direct_licenses(entra_user_id)
                     message = result.get("summary", "Licenses removed")
                     detail = result.get("after_summary")
+
+                elif lane == "mailbox_convert_shared":
+                    mail = display_name  # fallback; entra_user_id is the authoritative id
+                    # Resolve primary email from Graph if possible
+                    try:
+                        graph_user = _uap.entra.client.graph_request(
+                            "GET", f"users/{entra_user_id}",
+                            params={"$select": "mail,userPrincipalName"},
+                        )
+                        mail = str(graph_user.get("mail") or graph_user.get("userPrincipalName") or "").strip()
+                    except Exception:
+                        pass
+                    result = _uap.mailbox.exchange_powershell.convert_mailbox_to_shared(mail)
+                    message = f"Mailbox converted to shared ({result.get('recipient_type', '')})"
+                    detail = result
 
                 elif lane == "ad_disable":
                     ad.disable_user(ad_sam)

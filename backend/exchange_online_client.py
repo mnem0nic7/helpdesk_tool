@@ -557,3 +557,25 @@ if ($unexpectedFullAccessErrors.Count -gt 0) {
             "mailbox_count_scanned": int(payload.get("mailbox_count_scanned") or 0) if isinstance(payload, dict) else 0,
             "mailboxes": [*(send_as_mailboxes or []), *(full_access_mailboxes or [])],
         }
+
+    def convert_mailbox_to_shared(self, mail: str) -> dict[str, Any]:
+        """Convert a user mailbox to a shared mailbox and hide it from address lists."""
+        mailbox = str(mail or "").strip()
+        if not mailbox:
+            raise ExchangeOnlinePowerShellError("mail is required")
+        script = """
+$mailboxIdentity = $env:MAILBOX_IDENTITY
+Set-Mailbox -Identity $mailboxIdentity -Type Shared -HiddenFromAddressListsEnabled $true -Confirm:$false
+$result = Get-Mailbox -Identity $mailboxIdentity | Select-Object RecipientTypeDetails, HiddenFromAddressListsEnabled
+@{
+  mailbox = $mailboxIdentity
+  recipient_type = $result.RecipientTypeDetails.ToString()
+  hidden_from_address_lists = $result.HiddenFromAddressListsEnabled
+} | ConvertTo-Json -Depth 4 -Compress
+"""
+        payload = self._run_script(script.strip(), extra_env={"MAILBOX_IDENTITY": mailbox})
+        return {
+            "mailbox": mailbox,
+            "recipient_type": str(payload.get("recipient_type") or ""),
+            "hidden_from_address_lists": bool(payload.get("hidden_from_address_lists")),
+        }
