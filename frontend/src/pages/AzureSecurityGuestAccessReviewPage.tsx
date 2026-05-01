@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo, useState } from "react";
+import { useDeferredValue, useMemo, useState, useTransition } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
@@ -200,6 +200,7 @@ function GuestCard({
 export default function AzureSecurityGuestAccessReviewPage() {
   const [search, setSearch] = useState("");
   const [focus, setFocus] = useState<GuestFocus>("priority");
+  const [, startTransition] = useTransition();
   const [guestAgeThreshold, setGuestAgeThreshold] = useState(180);
   const [signInThreshold, setSignInThreshold] = useState(90);
   const deferredSearch = useDeferredValue(search);
@@ -271,9 +272,35 @@ export default function AzureSecurityGuestAccessReviewPage() {
     [exceptionIndex, guestUsers],
   );
 
+  // Precompute per-guest scores once when data/thresholds change — reused by sort and priority filter.
+  const guestScoreCache = useMemo(() => {
+    const cache = new Map<string, number>();
+    for (const user of guestUsers) {
+      cache.set(user.id, guestPriorityScore(user, guestAgeThreshold, signInThreshold));
+    }
+    return cache;
+  }, [guestAgeThreshold, guestUsers, signInThreshold]);
+
+  // Precompute sort order once when data/thresholds change — not re-run on focus/search changes.
+  const sortedGuests = useMemo(
+    () =>
+      [...guestUsers].sort(
+        (left, right) =>
+          (guestScoreCache.get(right.id) ?? 0) - (guestScoreCache.get(left.id) ?? 0) ||
+          left.display_name.localeCompare(right.display_name),
+      ),
+    [guestScoreCache, guestUsers],
+  );
+
+  // Precompute flags strings once per data refresh so matchesSearch uses a cheap Map lookup.
+  const guestFlagsCache = useMemo(
+    () => new Map(guestUsers.map((u) => [u.id, guestFlags(u, guestAgeThreshold, signInThreshold)])),
+    [guestAgeThreshold, guestUsers, signInThreshold],
+  );
+
   const priorityGuests = useMemo(
     () =>
-      [...guestUsers]
+      sortedGuests
         .filter(
           (user) =>
             isOldGuest(user, guestAgeThreshold) ||
@@ -281,25 +308,16 @@ export default function AzureSecurityGuestAccessReviewPage() {
             (user.enabled === false && !(isLicensedUser(user) && hasSecurityFindingException(exceptionIndex, user.id, "disabled-licensed"))) ||
             (isLicensedUser(user) && !hasSecurityFindingException(exceptionIndex, user.id, "disabled-licensed")),
         )
-        .sort(
-          (left, right) =>
-            guestPriorityScore(right, guestAgeThreshold, signInThreshold) -
-              guestPriorityScore(left, guestAgeThreshold, signInThreshold) ||
-            left.display_name.localeCompare(right.display_name),
-        )
         .slice(0, 8),
-    [exceptionIndex, guestAgeThreshold, guestUsers, signInThreshold],
+    [exceptionIndex, guestAgeThreshold, signInThreshold, sortedGuests],
   );
 
+  // Set for O(1) priority membership check instead of O(n) .some() per guest.
+  const priorityGuestIds = useMemo(() => new Set(priorityGuests.map((u) => u.id)), [priorityGuests]);
+
   const filteredGuests = useMemo(() => {
-    const sorted = [...guestUsers].sort(
-      (left, right) =>
-        guestPriorityScore(right, guestAgeThreshold, signInThreshold) -
-          guestPriorityScore(left, guestAgeThreshold, signInThreshold) ||
-        left.display_name.localeCompare(right.display_name),
-    );
-    return sorted.filter((user) => {
-      if (focus === "priority" && !priorityGuests.some((candidate) => candidate.id === user.id)) return false;
+    return sortedGuests.filter((user) => {
+      if (focus === "priority" && !priorityGuestIds.has(user.id)) return false;
       if (focus === "old-guests" && !isOldGuest(user, guestAgeThreshold)) return false;
       if (
         focus === "stale-guests" &&
@@ -321,12 +339,12 @@ export default function AzureSecurityGuestAccessReviewPage() {
           user.extra.department,
           user.extra.job_title,
           user.extra.priority_reason,
-          guestFlags(user, guestAgeThreshold, signInThreshold),
+          guestFlagsCache.get(user.id) ?? [],
         ],
         deferredSearch,
       );
     });
-  }, [deferredSearch, exceptionIndex, focus, guestAgeThreshold, guestUsers, priorityGuests, signInThreshold]);
+  }, [deferredSearch, exceptionIndex, focus, guestAgeThreshold, guestFlagsCache, priorityGuestIds, signInThreshold, sortedGuests]);
 
   const filteredGroups = useMemo(
     () =>
@@ -497,7 +515,7 @@ export default function AzureSecurityGuestAccessReviewPage() {
           />
           <select
             value={focus}
-            onChange={(event) => setFocus(event.target.value as GuestFocus)}
+            onChange={(event) => startTransition(() => setFocus(event.target.value as GuestFocus))}
             className="rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
           >
             <option value="priority">Priority queue</option>

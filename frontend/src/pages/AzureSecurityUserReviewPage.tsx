@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
@@ -262,6 +262,7 @@ export default function AzureSecurityUserReviewPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [focus, setFocus] = useState<UserFocus>("priority");
+  const [, startTransition] = useTransition();
   const [exceptionDraftUser, setExceptionDraftUser] = useState<AzureDirectoryObject | null>(null);
   const [exceptionDraftFindingKey, setExceptionDraftFindingKey] = useState<SecurityFindingExceptionFindingKey>("priority-user");
   const [exceptionReason, setExceptionReason] = useState("");
@@ -378,12 +379,18 @@ export default function AzureSecurityUserReviewPage() {
     return { disabledLicensedCount, staleSignInCount, guestCount, onPremCount, sharedServiceCount, priorityQueue: priorityCandidates.slice(0, 8), scoreCache };
   }, [hasFindingException, users]);
 
-  const filteredUsers = useMemo(() => {
+  // Precompute sort order once when data changes — not re-run on every focus/search change.
+  const sortedUsers = useMemo(() => {
     const score = (user: AzureDirectoryObject) => scoreCache.get(user.id) ?? priorityScore(user);
-    const sorted = [...users].sort(
-      (left, right) => score(right) - score(left) || left.display_name.localeCompare(right.display_name),
-    );
-    return sorted.filter((user) => {
+    return [...users].sort((left, right) => score(right) - score(left) || left.display_name.localeCompare(right.display_name));
+  }, [scoreCache, users]);
+
+  // Precompute flags strings once per data refresh so matchesSearch uses a cheap Map lookup.
+  const userFlagsCache = useMemo(() => new Map(users.map((u) => [u.id, userFlags(u)])), [users]);
+
+  const filteredUsers = useMemo(() => {
+    const score = (user: AzureDirectoryObject) => scoreCache.get(user.id) ?? 0;
+    return sortedUsers.filter((user) => {
       if (focus === "priority" && (score(user) < 60 || hasFindingException(user.id, "priority-user"))) return false;
       if (focus === "stale" && (!hasNoSuccessfulSignIn(user) || hasFindingException(user.id, "stale-signin"))) return false;
       if (
@@ -404,12 +411,12 @@ export default function AzureSecurityUserReviewPage() {
           user.extra.department,
           user.extra.job_title,
           user.extra.priority_reason,
-          userFlags(user),
+          userFlagsCache.get(user.id) ?? [],
         ],
         deferredSearch,
       );
     });
-  }, [deferredSearch, focus, hasFindingException, scoreCache, users]);
+  }, [deferredSearch, focus, hasFindingException, scoreCache, sortedUsers, userFlagsCache]);
   const reviewPagination = useSecurityReviewPagination(
     `${deferredSearch}|${focus}|${filteredUsers.length}`,
     filteredUsers.length,
@@ -597,7 +604,7 @@ export default function AzureSecurityUserReviewPage() {
           />
           <select
             value={focus}
-            onChange={(event) => setFocus(event.target.value as UserFocus)}
+            onChange={(event) => startTransition(() => setFocus(event.target.value as UserFocus))}
             className="rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
           >
             <option value="priority">Priority queue</option>

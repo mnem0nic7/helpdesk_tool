@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo, useState } from "react";
+import { useDeferredValue, useMemo, useState, useTransition } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import AzurePageSkeleton from "../components/AzurePageSkeleton.tsx";
@@ -107,6 +107,7 @@ function SectionFrame({
 export default function AzureSecurityIdentityReviewPage() {
   const [search, setSearch] = useState("");
   const [focus, setFocus] = useState<IdentityFocus>("all");
+  const [, startTransition] = useTransition();
   const deferredSearch = useDeferredValue(search);
 
   const groupsQuery = useQuery({
@@ -153,7 +154,13 @@ export default function AzureSecurityIdentityReviewPage() {
     [groups],
   );
   const securityGroups = useMemo(() => groups.filter((group) => group.enabled === true), [groups]);
-  const flaggedApps = useMemo(() => appRegistrations.filter((app) => appFlags(app).length > 0), [appRegistrations]);
+  // Precompute flags once when app data changes — reused by flaggedApps count and filteredFlaggedApps search.
+  const appFlagsCache = useMemo(() => new Map(appRegistrations.map((a) => [a.id, appFlags(a)])), [appRegistrations]);
+
+  const flaggedApps = useMemo(
+    () => appRegistrations.filter((app) => (appFlagsCache.get(app.id) ?? []).length > 0),
+    [appFlagsCache, appRegistrations],
+  );
   const ownerGapCount = useMemo(() => appRegistrations.filter((app) => hasOwnerGap(app)).length, [appRegistrations]);
   const externalAudienceCount = useMemo(
     () => appRegistrations.filter((app) => isExternalAudience(app)).length,
@@ -170,12 +177,12 @@ export default function AzureSecurityIdentityReviewPage() {
           app.extra.sign_in_audience,
           app.extra.owner_names,
           app.extra.owner_lookup_error,
-          appFlags(app),
+          appFlagsCache.get(app.id) ?? [],
         ],
         deferredSearch,
       ),
     );
-  }, [deferredSearch, flaggedApps, focus]);
+  }, [appFlagsCache, deferredSearch, flaggedApps, focus]);
 
   const filteredEnterpriseApps = useMemo(() => {
     const rows = focus === "all" || focus === "enterprise-apps" ? enterpriseApps : [];
@@ -345,7 +352,7 @@ export default function AzureSecurityIdentityReviewPage() {
           />
           <select
             value={focus}
-            onChange={(event) => setFocus(event.target.value as IdentityFocus)}
+            onChange={(event) => startTransition(() => setFocus(event.target.value as IdentityFocus))}
             className="rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
           >
             <option value="all">All identity surfaces</option>
