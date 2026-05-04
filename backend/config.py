@@ -407,3 +407,8 @@ AD_BASE_DN: str = os.getenv("AD_BASE_DN", "").strip()        # e.g. DC=corp,DC=l
 AD_BIND_DN: str = os.getenv("AD_BIND_DN", "").strip()        # e.g. CN=svc_account,OU=Service Accounts,DC=corp,DC=local
 AD_BIND_PASSWORD: str = os.getenv("AD_BIND_PASSWORD", "").strip()
 DISABLED_USERS_OU_DN: str = os.getenv("DISABLED_USERS_OU_DN", "OU=Disabled Users,OU=Oasis Legal Users and Computers,DC=oasislegal,DC=com").strip()
+
+# Password expiry email notifications
+PASSWORD_EXPIRY_NOTIFY_ENABLED: bool = os.getenv("PASSWORD_EXPIRY_NOTIFY_ENABLED", "").strip().lower() in {"1", "true", "yes"}
+AD_MAX_PWD_AGE_DAYS: int = int(os.getenv("AD_MAX_PWD_AGE_DAYS", "90"))
+PASSWORD_EXPIRY_NOTIFY_DAYS_BEFORE: int = int(os.getenv("PASSWORD_EXPIRY_NOTIFY_DAYS_BEFORE", "14"))
