@@ -118,7 +118,7 @@ Ordered newest-first. Max `limit` capped at 100.
 
 ### `PATCH /settings`
 
-Auth: admin only (`require_can_manage_users`).
+Auth: admin only (`require_admin`).
 
 Request body:
 ```json
