@@ -68,13 +68,6 @@ function buildPrincipalRoute(item: { object_type: string; principal_id: string }
   return "";
 }
 
-function matchesSearch(haystacks: Array<string | string[]>, search: string): boolean {
-  if (!search) return true;
-  const normalizedSearch = search.toLowerCase();
-  return haystacks
-    .flatMap((item) => (Array.isArray(item) ? item : [item]))
-    .some((item) => String(item || "").toLowerCase().includes(normalizedSearch));
-}
 
 function PrincipalCard({ principal }: { principal: SecurityAccessReviewPrincipal }) {
   const route = buildPrincipalRoute(principal);
@@ -203,46 +196,20 @@ export default function AzureSecurityAccessReviewPage() {
   const deferredSearch = useDeferredValue(search);
 
   const query = useQuery({
-    queryKey: ["azure", "security", "access-review"],
-    queryFn: () => api.getAzureSecurityAccessReview(),
+    queryKey: ["azure", "security", "access-review", { search: deferredSearch, principalFilter, riskFilter }],
+    queryFn: () => api.getAzureSecurityAccessReview({
+      search: deferredSearch || undefined,
+      principal_type: principalFilter !== "all" ? principalFilter : undefined,
+      privilege_level: riskFilter === "critical" || riskFilter === "elevated" ? riskFilter : undefined,
+      flagged_only: riskFilter === "flagged" ? true : undefined,
+    }),
+    placeholderData: (prev) => prev,
     ...getPollingQueryOptions("slow_5m"),
   });
 
-  const filteredAssignments = useMemo(() => {
-    const rows = query.data?.assignments ?? [];
-    return rows.filter((item) => {
-      if (principalFilter !== "all" && principalFilterKey(item.principal_type) !== principalFilter) {
-        return false;
-      }
-      if (riskFilter === "critical" && item.privilege_level !== "critical") return false;
-      if (riskFilter === "elevated" && item.privilege_level !== "elevated") return false;
-      if (riskFilter === "flagged" && item.flags.length === 0) return false;
-      return matchesSearch(
-        [item.display_name, item.principal_name, item.role_name, item.scope, item.subscription_name, item.flags],
-        deferredSearch,
-      );
-    });
-  }, [deferredSearch, principalFilter, query.data?.assignments, riskFilter]);
-
-  const filteredPrincipals = useMemo(() => {
-    const rows = query.data?.flagged_principals ?? [];
-    return rows.filter((item) => {
-      if (principalFilter !== "all" && principalFilterKey(item.principal_type) !== principalFilter) {
-        return false;
-      }
-      if (riskFilter === "critical" && item.highest_privilege !== "critical") return false;
-      if (riskFilter === "elevated" && item.highest_privilege !== "elevated") return false;
-      if (riskFilter === "flagged" && item.flags.length === 0) return false;
-      return matchesSearch([item.display_name, item.principal_name, item.role_names, item.flags], deferredSearch);
-    });
-  }, [deferredSearch, principalFilter, query.data?.flagged_principals, riskFilter]);
-
-  const filteredBreakGlass = useMemo(() => {
-    const rows = query.data?.break_glass_candidates ?? [];
-    return rows.filter((item) =>
-      matchesSearch([item.display_name, item.principal_name, item.matched_terms, item.flags], deferredSearch),
-    );
-  }, [deferredSearch, query.data?.break_glass_candidates]);
+  const filteredAssignments = query.data?.assignments ?? [];
+  const filteredPrincipals = query.data?.flagged_principals ?? [];
+  const filteredBreakGlass = query.data?.break_glass_candidates ?? [];
   const principalsPagination = useSecurityReviewPagination(
     `${deferredSearch}|${principalFilter}|${riskFilter}|principals|${filteredPrincipals.length}`,
     filteredPrincipals.length,

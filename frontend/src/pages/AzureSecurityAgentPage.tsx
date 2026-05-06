@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback, memo, useImperativeHandle, type ReactNode } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, memo, useImperativeHandle, useTransition, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
@@ -2212,12 +2212,15 @@ const DecisionFeed = memo(function DecisionFeed({
   const [decisionFilter, setDecisionFilter] = useState("");
   const [mitreFilter, setMitreFilter] = useState("");
   const [decisionLimit, setDecisionLimit] = useState(25);
+  const [, startFilterTransition] = useTransition();
 
   useImperativeHandle(ref, () => ({
     setFilter(filter: string) {
-      setDecisionFilter(filter);
-      setMitreFilter("");
-      setDecisionLimit(25);
+      startFilterTransition(() => {
+        setDecisionFilter(filter);
+        setMitreFilter("");
+        setDecisionLimit(25);
+      });
     },
   }), []);
 
@@ -2228,6 +2231,7 @@ const DecisionFeed = memo(function DecisionFeed({
       ...(decisionFilter ? { decision: decisionFilter } : {}),
       ...(mitreFilter ? { mitre_technique: mitreFilter } : {}),
     }),
+    placeholderData: (prev) => prev,
     ...getPollingQueryOptions("live_60s"),
   });
 
@@ -2263,7 +2267,7 @@ const DecisionFeed = memo(function DecisionFeed({
           {allMitreTechniques.length > 0 && (
             <select
               value={mitreFilter}
-              onChange={(e) => { setMitreFilter(e.target.value); setDecisionLimit(25); }}
+              onChange={(e) => startFilterTransition(() => { setMitreFilter(e.target.value); setDecisionLimit(25); })}
               className="rounded-md border border-gray-300 px-2 py-1 text-xs"
               title="Filter by MITRE ATT&CK technique"
             >
@@ -2275,7 +2279,7 @@ const DecisionFeed = memo(function DecisionFeed({
           )}
           <select
             value={decisionFilter}
-            onChange={(e) => { setDecisionFilter(e.target.value); setDecisionLimit(25); }}
+            onChange={(e) => startFilterTransition(() => { setDecisionFilter(e.target.value); setDecisionLimit(25); })}
             className="rounded-md border border-gray-300 px-2 py-1 text-xs"
           >
             <option value="">All decisions</option>

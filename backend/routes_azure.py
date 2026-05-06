@@ -933,9 +933,12 @@ async def export_virtual_machine_excess_excel() -> FileResponse:
 
 
 @router.get("/directory/users")
-async def get_users(search: str = Query(default="")) -> list[dict[str, Any]]:
+async def get_users(
+    search: str = Query(default=""),
+    focus: str = Query(default=""),
+) -> list[dict[str, Any]]:
     _ensure_azure_or_primary_site()
-    return azure_cache.list_directory_objects("users", search=search)
+    return azure_cache.list_directory_objects("users", search=search, focus=focus)
 
 
 @router.get("/directory/groups")

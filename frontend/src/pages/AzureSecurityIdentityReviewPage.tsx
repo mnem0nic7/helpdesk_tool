@@ -25,13 +25,6 @@ function parseNumber(value: string | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function matchesSearch(parts: Array<string | string[]>, search: string): boolean {
-  if (!search) return true;
-  const normalizedSearch = search.toLowerCase();
-  return parts
-    .flatMap((part) => (Array.isArray(part) ? part : [part]))
-    .some((part) => String(part || "").toLowerCase().includes(normalizedSearch));
-}
 
 function daysUntil(value: string): number | null {
   if (!value) return null;
@@ -110,24 +103,38 @@ export default function AzureSecurityIdentityReviewPage() {
   const [, startTransition] = useTransition();
   const deferredSearch = useDeferredValue(search);
 
+  const showGroups = focus === "all" || focus === "groups";
+  const showEnterpriseApps = focus === "all" || focus === "enterprise-apps";
+  const showAppRegistrations = focus === "all" || focus === "apps-needing-review";
+  const showRoles = focus === "all" || focus === "roles";
+
+  // Each dataset is only fetched when its tab is active (lazy by focus tab).
   const groupsQuery = useQuery({
-    queryKey: ["azure", "groups", { search: "" }],
-    queryFn: () => api.getAzureGroups(""),
+    queryKey: ["azure", "groups", { search: deferredSearch }],
+    queryFn: () => api.getAzureGroups(deferredSearch),
+    enabled: showGroups,
+    placeholderData: (prev) => prev,
     ...getPollingQueryOptions("slow_5m"),
   });
   const enterpriseAppsQuery = useQuery({
-    queryKey: ["azure", "enterprise-apps", { search: "" }],
-    queryFn: () => api.getAzureEnterpriseApps(""),
+    queryKey: ["azure", "enterprise-apps", { search: deferredSearch }],
+    queryFn: () => api.getAzureEnterpriseApps(deferredSearch),
+    enabled: showEnterpriseApps,
+    placeholderData: (prev) => prev,
     ...getPollingQueryOptions("slow_5m"),
   });
   const appRegistrationsQuery = useQuery({
-    queryKey: ["azure", "app-registrations", { search: "" }],
-    queryFn: () => api.getAzureAppRegistrations(""),
+    queryKey: ["azure", "app-registrations", { search: deferredSearch }],
+    queryFn: () => api.getAzureAppRegistrations(deferredSearch),
+    enabled: showAppRegistrations,
+    placeholderData: (prev) => prev,
     ...getPollingQueryOptions("slow_5m"),
   });
   const rolesQuery = useQuery({
-    queryKey: ["azure", "directory-roles", { search: "" }],
-    queryFn: () => api.getAzureDirectoryRoles(""),
+    queryKey: ["azure", "directory-roles", { search: deferredSearch }],
+    queryFn: () => api.getAzureDirectoryRoles(deferredSearch),
+    enabled: showRoles,
+    placeholderData: (prev) => prev,
     ...getPollingQueryOptions("slow_5m"),
   });
   const statusQuery = useQuery({
@@ -136,13 +143,18 @@ export default function AzureSecurityIdentityReviewPage() {
     ...getPollingQueryOptions("slow_5m"),
   });
 
-  const loading = [
-    groupsQuery,
-    enterpriseAppsQuery,
-    appRegistrationsQuery,
-    rolesQuery,
-  ].some((query) => query.isLoading);
-  const failure = [groupsQuery, enterpriseAppsQuery, appRegistrationsQuery, rolesQuery].find((query) => query.isError);
+  const loading =
+    (showGroups && groupsQuery.isLoading && !groupsQuery.data) ||
+    (showEnterpriseApps && enterpriseAppsQuery.isLoading && !enterpriseAppsQuery.data) ||
+    (showAppRegistrations && appRegistrationsQuery.isLoading && !appRegistrationsQuery.data) ||
+    (showRoles && rolesQuery.isLoading && !rolesQuery.data);
+  const failedQuery = [
+    showGroups ? groupsQuery : null,
+    showEnterpriseApps ? enterpriseAppsQuery : null,
+    showAppRegistrations ? appRegistrationsQuery : null,
+    showRoles ? rolesQuery : null,
+  ].find((q) => q?.isError);
+  const failure = failedQuery ?? null;
 
   const groups = groupsQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
   const enterpriseApps = enterpriseAppsQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
@@ -167,44 +179,23 @@ export default function AzureSecurityIdentityReviewPage() {
     [appRegistrations],
   );
 
-  const filteredFlaggedApps = useMemo(() => {
-    const rows = focus === "all" || focus === "apps-needing-review" ? flaggedApps : [];
-    return rows.filter((app) =>
-      matchesSearch(
-        [
-          app.display_name,
-          app.app_id,
-          app.extra.sign_in_audience,
-          app.extra.owner_names,
-          app.extra.owner_lookup_error,
-          appFlagsCache.get(app.id) ?? [],
-        ],
-        deferredSearch,
-      ),
-    );
-  }, [appFlagsCache, deferredSearch, flaggedApps, focus]);
-
-  const filteredEnterpriseApps = useMemo(() => {
-    const rows = focus === "all" || focus === "enterprise-apps" ? enterpriseApps : [];
-    return rows.filter((app) =>
-      matchesSearch(
-        [app.display_name, app.app_id, app.extra.service_principal_type, app.enabled === false ? "disabled" : "enabled"],
-        deferredSearch,
-      ),
-    );
-  }, [deferredSearch, enterpriseApps, focus]);
-
-  const filteredGroups = useMemo(() => {
-    const rows = focus === "all" || focus === "groups" ? groups : [];
-    return rows.filter((group) =>
-      matchesSearch([group.display_name, group.mail, group.extra.group_types, groupTags(group)], deferredSearch),
-    );
-  }, [deferredSearch, focus, groups]);
-
-  const filteredRoles = useMemo(() => {
-    const rows = focus === "all" || focus === "roles" ? roles : [];
-    return rows.filter((role) => matchesSearch([role.display_name, role.extra.description], deferredSearch));
-  }, [deferredSearch, focus, roles]);
+  // Server already filtered by search; just apply derived conditions client-side on the small result set.
+  const filteredFlaggedApps = useMemo(
+    () => (showAppRegistrations ? flaggedApps : []),
+    [flaggedApps, showAppRegistrations],
+  );
+  const filteredEnterpriseApps = useMemo(
+    () => (showEnterpriseApps ? enterpriseApps : []),
+    [enterpriseApps, showEnterpriseApps],
+  );
+  const filteredGroups = useMemo(
+    () => (showGroups ? groups : []),
+    [groups, showGroups],
+  );
+  const filteredRoles = useMemo(
+    () => (showRoles ? roles : []),
+    [roles, showRoles],
+  );
 
   const ownerLookupWarnings = useMemo(
     () =>
@@ -253,7 +244,7 @@ export default function AzureSecurityIdentityReviewPage() {
   if (failure) {
     return (
       <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-        Failed to load identity review: {failure.error instanceof Error ? failure.error.message : "Unknown error"}
+        Failed to load identity review: {failure?.error instanceof Error ? failure.error.message : "Unknown error"}
       </div>
     );
   }

@@ -77,7 +77,7 @@ function buildLargeUserResponse(count = 60) {
 describe("AzureSecurityUserReviewPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockApi.getAzureUsers.mockResolvedValue([
+    const allUsers = [
       buildUser({
         id: "user-1",
         display_name: "Emergency Admin",
@@ -144,7 +144,18 @@ describe("AzureSecurityUserReviewPage", () => {
           job_title: "Mailbox",
         },
       }),
-    ]);
+    ];
+    mockApi.getAzureUsers.mockImplementation((search: string = "", focus: string = "") => {
+      let result = allUsers;
+      if (focus === "guests") result = result.filter((u) => u.extra?.user_type === "Guest");
+      else if (focus === "synced") result = result.filter((u) => String(u.extra?.on_prem_sync).toLowerCase() === "true");
+      else if (focus === "shared-service") result = result.filter((u) => u.extra?.account_class === "shared_or_service");
+      if (search) {
+        const s = search.toLowerCase();
+        result = result.filter((u) => u.display_name.toLowerCase().includes(s) || u.principal_name.toLowerCase().includes(s));
+      }
+      return Promise.resolve(result);
+    });
     mockApi.getAzureStatus.mockResolvedValue({
       configured: true,
       initialized: true,
@@ -225,9 +236,11 @@ describe("AzureSecurityUserReviewPage", () => {
       target: { value: "guests" },
     });
 
-    const scoped = within(reviewSection as HTMLElement);
-    expect(scoped.getAllByText("Guest Vendor").length).toBeGreaterThan(0);
-    expect(scoped.queryByText("Emergency Admin")).not.toBeInTheDocument();
+    await waitFor(() => {
+      const scoped = within(reviewSection as HTMLElement);
+      expect(scoped.getAllByText("Guest Vendor").length).toBeGreaterThan(0);
+      expect(scoped.queryByText("Emergency Admin")).not.toBeInTheDocument();
+    });
   });
 
   it("pages large review queues instead of rendering every user at once", async () => {

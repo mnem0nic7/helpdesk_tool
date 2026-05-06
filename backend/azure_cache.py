@@ -145,6 +145,40 @@ _SHARED_ACCOUNT_MARKERS = (
 )
 _REDIS_SNAPSHOTS_HASH = "azure_cache:snapshots"
 _REDIS_DATASET_STATUS_HASH = "azure_cache:dataset_status"
+_USER_FOCUS_STALE_DAYS = 30
+
+
+def _focus_matches_user(item: dict[str, Any], focus: str) -> bool:
+    """Return True if a cached user record matches the given focus filter."""
+    extra = item.get("extra") or {}
+    enabled = item.get("enabled")
+    if focus == "guests":
+        return str(extra.get("user_type") or "").strip() == "Guest"
+    if focus == "synced":
+        return str(extra.get("on_prem_sync") or "").lower() == "true"
+    if focus == "shared-service":
+        return str(extra.get("account_class") or "") == "shared_or_service"
+    if focus == "disabled-licensed":
+        is_licensed = str(extra.get("is_licensed") or "").lower() == "true"
+        return enabled is False and is_licensed
+    if focus == "stale":
+        if enabled is not True:
+            return False
+        last_signin = str(extra.get("last_successful_utc") or "").strip()
+        if not last_signin:
+            return True
+        try:
+            ts = datetime.fromisoformat(last_signin.replace("Z", "+00:00"))
+            return ts <= datetime.now(timezone.utc) - timedelta(days=_USER_FOCUS_STALE_DAYS)
+        except ValueError:
+            return True
+    if focus == "priority":
+        try:
+            score = int(float(str(extra.get("priority_score") or "0")))
+        except (ValueError, TypeError):
+            score = 0
+        return score >= 60
+    return True
 
 
 class AzureCache:
@@ -3406,8 +3440,10 @@ class AzureCache:
             "utilization": utilization,
         }
 
-    def list_directory_objects(self, snapshot_name: str, *, search: str = "") -> list[dict[str, Any]]:
+    def list_directory_objects(self, snapshot_name: str, *, search: str = "", focus: str = "") -> list[dict[str, Any]]:
         rows = self._snapshot(snapshot_name) or []
+        if focus and snapshot_name == "users":
+            rows = [item for item in rows if _focus_matches_user(item, focus)]
         search_lower = search.strip().lower()
         if not search_lower:
             return rows

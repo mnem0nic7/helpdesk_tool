@@ -57,10 +57,19 @@ def _ensure_azure_site() -> None:
 
 @router.get("/access-review", response_model=SecurityAccessReviewResponse)
 def get_security_access_review(
+    search: str = Query(default=""),
+    principal_type: str = Query(default=""),
+    privilege_level: str = Query(default=""),
+    flagged_only: bool = Query(default=False),
     _session: dict[str, Any] = Depends(require_authenticated_user),
 ) -> SecurityAccessReviewResponse:
     _ensure_azure_site()
-    return build_security_access_review()
+    return build_security_access_review(
+        search=search,
+        principal_type=principal_type,
+        privilege_level=privilege_level,
+        flagged_only=flagged_only,
+    )
 
 
 @router.get("/workspace-summary", response_model=SecurityWorkspaceSummaryResponse)

@@ -1,4 +1,4 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "../test-utils.tsx";
 import AzureSecurityAccessReviewPage from "../pages/AzureSecurityAccessReviewPage.tsx";
@@ -157,7 +157,24 @@ function buildLargeAssignmentResponse(count = 60) {
 describe("AzureSecurityAccessReviewPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockApi.getAzureSecurityAccessReview.mockResolvedValue(buildResponse());
+    mockApi.getAzureSecurityAccessReview.mockImplementation(
+      (params?: { search?: string; principal_type?: string; privilege_level?: string; flagged_only?: boolean }) => {
+        const base = buildResponse();
+        let { assignments, flagged_principals, break_glass_candidates } = base;
+        if (params?.principal_type === "service_principal") {
+          assignments = assignments.filter((a) => a.principal_type === "ServicePrincipal");
+          flagged_principals = flagged_principals.filter((p) => p.principal_type === "ServicePrincipal");
+          break_glass_candidates = [];
+        }
+        if (params?.search) {
+          const s = params.search.toLowerCase();
+          assignments = assignments.filter((a) => a.display_name.toLowerCase().includes(s));
+          flagged_principals = flagged_principals.filter((p) => p.display_name.toLowerCase().includes(s));
+          break_glass_candidates = break_glass_candidates.filter((b) => b.display_name.toLowerCase().includes(s));
+        }
+        return Promise.resolve({ ...base, assignments, flagged_principals, break_glass_candidates });
+      },
+    );
   });
 
   it("renders the privileged access review shell", async () => {
@@ -187,9 +204,11 @@ describe("AzureSecurityAccessReviewPage", () => {
       target: { value: "service_principal" },
     });
 
-    expect(screen.getAllByText("Automation SP").length).toBeGreaterThan(0);
-    expect(screen.queryAllByText("Emergency Admin")).toHaveLength(0);
-    expect(screen.getAllByText("Contributor").length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(screen.getAllByText("Automation SP").length).toBeGreaterThan(0);
+      expect(screen.queryAllByText("Emergency Admin")).toHaveLength(0);
+      expect(screen.getAllByText("Contributor").length).toBeGreaterThan(0);
+    });
   });
 
   it("pages large access-review queues instead of rendering the whole dataset at once", async () => {

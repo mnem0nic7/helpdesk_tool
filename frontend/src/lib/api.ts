@@ -3893,8 +3893,8 @@ export const api = {
     return "/api/azure/vms/excess/export.xlsx";
   },
 
-  getAzureUsers(search = ""): Promise<AzureDirectoryObject[]> {
-    return fetchJSON<AzureDirectoryObject[]>(`/api/azure/directory/users${buildQuery({ search })}`);
+  getAzureUsers(search = "", focus = ""): Promise<AzureDirectoryObject[]> {
+    return fetchJSON<AzureDirectoryObject[]>(`/api/azure/directory/users${buildQuery({ search, focus })}`);
   },
 
   searchOneDriveCopyUsers(search = "", limit = 20): Promise<OneDriveCopyUserOption[]> {
@@ -4497,8 +4497,8 @@ export const api = {
     return postJSON<AzureCostChatResponse>("/api/azure/ai/cost-chat", { question, model });
   },
 
-  getAzureSecurityAccessReview(): Promise<SecurityAccessReviewResponse> {
-    return fetchJSON<SecurityAccessReviewResponse>("/api/azure/security/access-review");
+  getAzureSecurityAccessReview(params?: { search?: string; principal_type?: string; privilege_level?: string; flagged_only?: boolean }): Promise<SecurityAccessReviewResponse> {
+    return fetchJSON<SecurityAccessReviewResponse>(`/api/azure/security/access-review${buildQuery(params ?? {})}`);
   },
 
   getAzureSecurityWorkspaceSummary(): Promise<SecurityWorkspaceSummaryResponse> {

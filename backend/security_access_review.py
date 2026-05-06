@@ -276,7 +276,13 @@ def _break_glass_matches(display_name: str, principal_name: str) -> list[str]:
     return _unique_list(matches)
 
 
-def build_security_access_review() -> SecurityAccessReviewResponse:
+def build_security_access_review(
+    *,
+    search: str = "",
+    principal_type: str = "",
+    privilege_level: str = "",
+    flagged_only: bool = False,
+) -> SecurityAccessReviewResponse:
     status = azure_cache.status()
     inventory_last_refresh = _dataset_last_refresh(status, "inventory")
     directory_last_refresh = _dataset_last_refresh(status, "directory")
@@ -541,14 +547,53 @@ def build_security_access_review() -> SecurityAccessReviewResponse:
         "Direct Entra directory-role memberships and conditional access policy drift are still separate follow-on tools.",
     ]
 
+    # Apply optional server-side filters — metrics stay unfiltered so totals remain informational.
+    filtered_assignments = review_assignments
+    filtered_principals = flagged_principals
+    filtered_break_glass = break_glass_candidates[:25]
+
+    if principal_type:
+        pt_lower = principal_type.strip().lower()
+        pt_map = {"user": "user", "service_principal": "serviceprincipal", "group": ("group", "foreigngroup")}
+        mapped = pt_map.get(pt_lower)
+        if isinstance(mapped, tuple):
+            filtered_assignments = [a for a in filtered_assignments if a.principal_type.lower() in mapped]
+            filtered_principals = [p for p in filtered_principals if p.principal_type.lower() in mapped]
+        elif mapped:
+            filtered_assignments = [a for a in filtered_assignments if a.principal_type.lower() == mapped]
+            filtered_principals = [p for p in filtered_principals if p.principal_type.lower() == mapped]
+
+    if privilege_level in ("critical", "elevated"):
+        filtered_assignments = [a for a in filtered_assignments if a.privilege_level == privilege_level]
+        filtered_principals = [p for p in filtered_principals if p.highest_privilege == privilege_level]
+
+    if flagged_only:
+        filtered_assignments = [a for a in filtered_assignments if a.flags]
+        filtered_principals = [p for p in filtered_principals if p.flags]
+
+    if search:
+        s = search.strip().lower()
+        filtered_assignments = [
+            a for a in filtered_assignments
+            if s in (f"{a.display_name} {a.principal_name} {a.role_name} {a.scope} {a.subscription_name} {' '.join(a.flags)}").lower()
+        ]
+        filtered_principals = [
+            p for p in filtered_principals
+            if s in (f"{p.display_name} {p.principal_name} {' '.join(p.role_names)} {' '.join(p.flags)}").lower()
+        ]
+        filtered_break_glass = [
+            b for b in filtered_break_glass
+            if s in (f"{b.display_name} {b.principal_name} {' '.join(b.matched_terms)} {' '.join(b.flags)}").lower()
+        ]
+
     return SecurityAccessReviewResponse(
         generated_at=_utc_now(),
         inventory_last_refresh=inventory_last_refresh,
         directory_last_refresh=directory_last_refresh,
         metrics=metrics,
-        flagged_principals=flagged_principals,
-        assignments=review_assignments,
-        break_glass_candidates=break_glass_candidates[:25],
+        flagged_principals=filtered_principals,
+        assignments=filtered_assignments,
+        break_glass_candidates=filtered_break_glass,
         warnings=_unique_list(warnings),
         scope_notes=scope_notes,
     )

@@ -48,13 +48,6 @@ function formatTimestamp(value: string | null | undefined): string {
   }
 }
 
-function matchesSearch(parts: Array<string | string[]>, search: string): boolean {
-  if (!search) return true;
-  const normalizedSearch = search.toLowerCase();
-  return parts
-    .flatMap((part) => (Array.isArray(part) ? part : [part]))
-    .some((part) => String(part || "").toLowerCase().includes(normalizedSearch));
-}
 
 function buildUserRoute(userId: string): string {
   return `/users?userId=${encodeURIComponent(userId)}`;
@@ -269,9 +262,17 @@ export default function AzureSecurityUserReviewPage() {
   const [exceptionNotice, setExceptionNotice] = useState<ExceptionNotice>(null);
   const deferredSearch = useDeferredValue(search);
 
-  const usersQuery = useQuery({
-    queryKey: ["azure", "users", { search: "" }],
+  // All-users query: used only for count stats + top 8 priority queue (runs once per poll cycle).
+  const allUsersQuery = useQuery({
+    queryKey: ["azure", "users", "all"],
     queryFn: () => api.getAzureUsers(""),
+    ...getPollingQueryOptions("slow_5m"),
+  });
+  // Filtered-users query: server applies focus + search, returns a small subset for the table.
+  const filteredUsersQuery = useQuery({
+    queryKey: ["azure", "users", { focus, search: deferredSearch }],
+    queryFn: () => api.getAzureUsers(deferredSearch, focus),
+    placeholderData: (prev) => prev,
     ...getPollingQueryOptions("slow_5m"),
   });
   const statusQuery = useQuery({
@@ -290,7 +291,7 @@ export default function AzureSecurityUserReviewPage() {
     () => buildSecurityFindingExceptionIndex(activeExceptions),
     [activeExceptions],
   );
-  const users = usersQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
+  const users = allUsersQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
 
   const invalidateSecurityFindingViews = () => {
     queryClient.invalidateQueries({ queryKey: ["azure", "security", "finding-exceptions", DIRECTORY_USER_EXCEPTION_SCOPE] }).catch(() => undefined);
@@ -348,9 +349,8 @@ export default function AzureSecurityUserReviewPage() {
     [exceptionIndex],
   );
 
-  // Single pass: compute all counts + priority queue, with a score cache reused
-  // by filteredUsers to avoid calling priorityScore O(n log n) times in the sort.
-  const { disabledLicensedCount, staleSignInCount, guestCount, onPremCount, sharedServiceCount, priorityQueue, scoreCache } = useMemo(() => {
+  // Count stats + priority queue — runs once per poll cycle on the full user set.
+  const { disabledLicensedCount, staleSignInCount, guestCount, onPremCount, sharedServiceCount, priorityQueue } = useMemo(() => {
     const scoreCache = new Map<string, number>();
     const score = (user: AzureDirectoryObject) => {
       let s = scoreCache.get(user.id);
@@ -376,54 +376,35 @@ export default function AzureSecurityUserReviewPage() {
 
     priorityCandidates.sort((a, b) => score(b) - score(a) || a.display_name.localeCompare(b.display_name));
 
-    return { disabledLicensedCount, staleSignInCount, guestCount, onPremCount, sharedServiceCount, priorityQueue: priorityCandidates.slice(0, 8), scoreCache };
+    return { disabledLicensedCount, staleSignInCount, guestCount, onPremCount, sharedServiceCount, priorityQueue: priorityCandidates.slice(0, 8) };
   }, [hasFindingException, users]);
 
-  // Precompute sort order once when data changes — not re-run on every focus/search change.
-  const sortedUsers = useMemo(() => {
-    const score = (user: AzureDirectoryObject) => scoreCache.get(user.id) ?? priorityScore(user);
-    return [...users].sort((left, right) => score(right) - score(left) || left.display_name.localeCompare(right.display_name));
-  }, [scoreCache, users]);
-
-  // Precompute flags strings once per data refresh so matchesSearch uses a cheap Map lookup.
-  const userFlagsCache = useMemo(() => new Map(users.map((u) => [u.id, userFlags(u)])), [users]);
-
-  const filteredUsers = useMemo(() => {
-    const score = (user: AzureDirectoryObject) => scoreCache.get(user.id) ?? 0;
-    return sortedUsers.filter((user) => {
-      if (focus === "priority" && (score(user) < 60 || hasFindingException(user.id, "priority-user"))) return false;
-      if (focus === "stale" && (!hasNoSuccessfulSignIn(user) || hasFindingException(user.id, "stale-signin"))) return false;
-      if (
-        focus === "disabled-licensed" &&
-        (!(user.enabled === false && isLicensedUser(user)) || hasFindingException(user.id, "disabled-licensed"))
-      ) {
-        return false;
-      }
-      if (focus === "guests" && (user.extra.user_type !== "Guest" || hasFindingException(user.id, "guest-user"))) return false;
-      if (focus === "synced" && (!isOnPremSynced(user) || hasFindingException(user.id, "on-prem-synced"))) return false;
-      if (focus === "shared-service" && (!isSharedOrService(user) || hasFindingException(user.id, "shared-service"))) return false;
+  // Server already filtered by focus + search. Apply exception suppression locally on the small result set.
+  const FOCUS_EXCEPTION_KEY: Partial<Record<UserFocus, SecurityFindingExceptionFindingKey>> = {
+    priority: "priority-user",
+    stale: "stale-signin",
+    "disabled-licensed": "disabled-licensed",
+    guests: "guest-user",
+    synced: "on-prem-synced",
+    "shared-service": "shared-service",
+  };
+  const displayUsers = useMemo(() => {
+    const rows = filteredUsersQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
+    const exKey = FOCUS_EXCEPTION_KEY[focus];
+    return rows.filter((user) => {
+      if (exKey && hasFindingException(user.id, exKey)) return false;
       if (focus === "all" && hasFindingException(user.id, "all-findings")) return false;
-      return matchesSearch(
-        [
-          user.display_name,
-          user.principal_name,
-          user.mail,
-          user.extra.department,
-          user.extra.job_title,
-          user.extra.priority_reason,
-          userFlagsCache.get(user.id) ?? [],
-        ],
-        deferredSearch,
-      );
+      return true;
     });
-  }, [deferredSearch, focus, hasFindingException, scoreCache, sortedUsers, userFlagsCache]);
+  }, [filteredUsersQuery.data, focus, hasFindingException]);
+
   const reviewPagination = useSecurityReviewPagination(
-    `${deferredSearch}|${focus}|${filteredUsers.length}`,
-    filteredUsers.length,
+    `${deferredSearch}|${focus}|${displayUsers.length}`,
+    displayUsers.length,
   );
   const visibleUsers = useMemo(
-    () => sliceSecurityReviewPage(filteredUsers, reviewPagination.pageStart, reviewPagination.pageSize),
-    [filteredUsers, reviewPagination.pageSize, reviewPagination.pageStart],
+    () => sliceSecurityReviewPage(displayUsers, reviewPagination.pageStart, reviewPagination.pageSize),
+    [displayUsers, reviewPagination.pageSize, reviewPagination.pageStart],
   );
   const closeExceptionDraft = useCallback(() => {
     setExceptionDraftUser(null);
@@ -431,14 +412,14 @@ export default function AzureSecurityUserReviewPage() {
     setExceptionReason("");
   }, []);
 
-  if (usersQuery.isLoading) {
+  if (allUsersQuery.isLoading) {
     return <AzurePageSkeleton titleWidth="w-56" subtitleWidth="w-[42rem]" statCount={6} sectionCount={3} />;
   }
 
-  if (usersQuery.isError) {
+  if (allUsersQuery.isError) {
     return (
       <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-        Failed to load user review: {usersQuery.error instanceof Error ? usersQuery.error.message : "Unknown error"}
+        Failed to load user review: {allUsersQuery.error instanceof Error ? allUsersQuery.error.message : "Unknown error"}
       </div>
     );
   }
@@ -592,7 +573,7 @@ export default function AzureSecurityUserReviewPage() {
       <SectionFrame
         title="Review queue"
         description="Filter the cached user inventory into the cohort you want to review, then pivot into the raw user page for deeper admin work."
-        count={filteredUsers.length}
+        count={displayUsers.length}
       >
         <div className="mb-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
           <input
@@ -619,7 +600,7 @@ export default function AzureSecurityUserReviewPage() {
 
         <div className="mb-5">
           <SecurityReviewPagination
-            count={filteredUsers.length}
+            count={displayUsers.length}
             currentPage={reviewPagination.currentPage}
             pageSize={reviewPagination.pageSize}
             setCurrentPage={reviewPagination.setCurrentPage}
@@ -629,7 +610,7 @@ export default function AzureSecurityUserReviewPage() {
           />
         </div>
 
-        {filteredUsers.length === 0 ? (
+        {displayUsers.length === 0 ? (
           <div className="rounded-xl bg-slate-50 px-4 py-6 text-sm text-slate-500">No users match the current review filters.</div>
         ) : (
           <div className="overflow-auto rounded-xl border border-slate-200">

@@ -34,9 +34,6 @@ function matchesSearch(parts: Array<string | string[]>, search: string): boolean
     .some((part) => String(part || "").toLowerCase().includes(normalizedSearch));
 }
 
-function isGuestUser(user: AzureDirectoryObject): boolean {
-  return user.object_type === "user" && (user.extra.user_type === "Guest" || user.extra.account_class === "guest_external");
-}
 
 function guestAgeDays(user: AzureDirectoryObject): number {
   return daysSince(user.extra.created_datetime || "");
@@ -205,9 +202,10 @@ export default function AzureSecurityGuestAccessReviewPage() {
   const [signInThreshold, setSignInThreshold] = useState(90);
   const deferredSearch = useDeferredValue(search);
 
+  // Server pre-filters to guests only so subsequent client-side ops run on a small set.
   const usersQuery = useQuery({
-    queryKey: ["azure", "users", { search: "" }],
-    queryFn: () => api.getAzureUsers(""),
+    queryKey: ["azure", "users", { focus: "guests" }],
+    queryFn: () => api.getAzureUsers("", "guests"),
     ...getPollingQueryOptions("slow_5m"),
   });
   const groupsQuery = useQuery({
@@ -242,11 +240,9 @@ export default function AzureSecurityGuestAccessReviewPage() {
   const groups = groupsQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
   const appRegistrations = appRegistrationsQuery.data ?? EMPTY_DIRECTORY_OBJECTS;
 
+  // Server already returned only guest users; just apply exception suppression locally.
   const guestUsers = useMemo(
-    () =>
-      users.filter(
-        (user) => isGuestUser(user) && !hasSecurityFindingException(exceptionIndex, user.id, "guest-user"),
-      ),
+    () => users.filter((user) => !hasSecurityFindingException(exceptionIndex, user.id, "guest-user")),
     [exceptionIndex, users],
   );
   const collaborationGroups = useMemo(() => groups.filter((group) => isCollaborationSurface(group)), [groups]);
