@@ -1,3 +1,6 @@
+# Superpowers tooling runtime state
+.superpowers/
+
 # Environment & secrets
 backend/.env
 .env
