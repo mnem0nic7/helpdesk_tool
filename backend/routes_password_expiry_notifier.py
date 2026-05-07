@@ -47,13 +47,14 @@ async def get_status() -> dict[str, Any]:
 @router.get("/runs", dependencies=[Depends(require_authenticated_user)])
 async def get_runs(limit: int = 30, offset: int = 0) -> dict[str, Any]:
     limit = min(limit, 100)
+    ph = password_expiry_notifier._placeholder()
     with password_expiry_notifier._conn() as conn:
         total = conn.execute(
             "SELECT COUNT(*) AS cnt FROM password_expiry_notify_runs"
         ).fetchone()["cnt"]
         rows = conn.execute(
             "SELECT run_date, ran_at, users_notified, test_mode "
-            "FROM password_expiry_notify_runs ORDER BY run_date DESC LIMIT ? OFFSET ?",
+            f"FROM password_expiry_notify_runs ORDER BY run_date DESC LIMIT {ph} OFFSET {ph}",
             (limit, offset),
         ).fetchall()
     return {"items": [dict(r) for r in rows], "total": total}
@@ -62,13 +63,14 @@ async def get_runs(limit: int = 30, offset: int = 0) -> dict[str, Any]:
 @router.get("/notifications", dependencies=[Depends(require_authenticated_user)])
 async def get_notifications(limit: int = 50, offset: int = 0) -> dict[str, Any]:
     limit = min(limit, 100)
+    ph = password_expiry_notifier._placeholder()
     with password_expiry_notifier._conn() as conn:
         total = conn.execute(
             "SELECT COUNT(*) AS cnt FROM password_expiry_notifications"
         ).fetchone()["cnt"]
         rows = conn.execute(
             "SELECT id, sam_account_name, email, expiry_date, days_until_expiry, notified_at, test_mode "
-            "FROM password_expiry_notifications ORDER BY notified_at DESC LIMIT ? OFFSET ?",
+            f"FROM password_expiry_notifications ORDER BY notified_at DESC LIMIT {ph} OFFSET {ph}",
             (limit, offset),
         ).fetchall()
     return {"items": [dict(r) for r in rows], "total": total}
