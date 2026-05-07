@@ -2609,7 +2609,7 @@ export default function AzureSecurityAgentPage() {
   const dryRun = config?.dry_run ?? false;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-screen-2xl">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
