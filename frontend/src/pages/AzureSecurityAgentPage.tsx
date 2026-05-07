@@ -2327,7 +2327,17 @@ const DecisionFeed = memo(function DecisionFeed({
       ) : (
         <>
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-100 text-sm">
+            <table className="min-w-full table-fixed divide-y divide-gray-100 text-sm">
+              <colgroup>
+                <col className="w-28" />   {/* Time */}
+                <col />                    {/* Alert — takes remaining space */}
+                <col className="w-20" />   {/* Source */}
+                <col className="w-20" />   {/* Severity */}
+                <col className="w-24" />   {/* Tier */}
+                <col className="w-28" />   {/* Action */}
+                <col className="w-28" />   {/* Status */}
+                <col className="w-8" />    {/* Chevron */}
+              </colgroup>
               <thead className="bg-gray-50">
                 <tr>
                   {["Time", "Alert", "Source", "Severity", "Tier", "Action", "Status", ""].map((h) => (
