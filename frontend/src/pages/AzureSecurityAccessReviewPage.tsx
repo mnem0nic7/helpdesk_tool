@@ -38,13 +38,6 @@ function privilegeTone(value: "critical" | "elevated" | "limited"): "rose" | "am
   return "slate";
 }
 
-function principalFilterKey(principalType: string): PrincipalFilter {
-  const normalized = principalType.trim().toLowerCase();
-  if (normalized === "user") return "user";
-  if (normalized === "serviceprincipal") return "service_principal";
-  if (normalized === "group" || normalized === "foreigngroup") return "group";
-  return "all";
-}
 
 function principalTypeLabel(principalType: string): string {
   const normalized = principalType.trim().toLowerCase();
