@@ -417,6 +417,7 @@ def _break_glass_summary(status: dict[str, Any]) -> SecurityWorkspaceLaneSummary
             on_prem_sync=on_prem_sync,
             account_class=account_class,
             days_since_password_change=days_since_password_change,
+            mfa_enrolled=None,
         )
         if candidate_status == "critical":
             critical_accounts += 1
