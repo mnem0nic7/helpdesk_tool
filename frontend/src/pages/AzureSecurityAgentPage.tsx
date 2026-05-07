@@ -2654,41 +2654,39 @@ export default function AzureSecurityAgentPage() {
         <ConfigDrawer config={config} onSave={handleSaveConfig} saving={savingConfig} />
       )}
 
-      {/* Summary cards */}
-      {summary && (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <div className="rounded-lg bg-white shadow p-4">
-            <p className="text-xs text-gray-500">Actions Today</p>
-            <p className="mt-1 text-lg font-semibold text-blue-700">{summary.total_actions_today}</p>
-          </div>
-          <div
-            className={`rounded-lg bg-white shadow p-4 transition ${summary.pending_tier2 ? "cursor-pointer hover:bg-amber-50" : ""}`}
-            onClick={summary.pending_tier2 ? () => filterAndScrollToDecisions("queue") : undefined}
-            title={summary.pending_tier2 ? "Click to filter decisions" : undefined}
-          >
-            <p className="text-xs text-gray-500">Pending T2</p>
-            <p className={`mt-1 text-lg font-semibold ${summary.pending_tier2 ? "text-amber-700" : "text-gray-500"}`}>
-              {summary.pending_tier2}
-            </p>
-          </div>
-          <div
-            className={`rounded-lg bg-white shadow p-4 transition ${summary.pending_approvals ? "cursor-pointer hover:bg-rose-50" : ""}`}
-            onClick={summary.pending_approvals ? () => filterAndScrollToDecisions("recommend") : undefined}
-            title={summary.pending_approvals ? "Click to filter decisions" : undefined}
-          >
-            <p className="text-xs text-gray-500">Awaiting Approval</p>
-            <p className={`mt-1 text-lg font-semibold ${summary.pending_approvals ? "text-rose-700" : "text-gray-500"}`}>
-              {summary.pending_approvals}
-            </p>
-          </div>
-          <div className="rounded-lg bg-white shadow p-4">
-            <p className="text-xs text-gray-500">Last Run</p>
-            <p className={`mt-1 text-lg font-semibold ${summary.last_run_error ? "text-red-600" : "text-gray-700"}`}>
-              {summary.last_run_at ? fmtTime(summary.last_run_at) : "—"}
-            </p>
-          </div>
+      {/* Summary cards — always rendered to avoid CLS when summary data arrives */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="rounded-lg bg-white shadow p-4">
+          <p className="text-xs text-gray-500">Actions Today</p>
+          <p className="mt-1 text-lg font-semibold text-blue-700">{summary?.total_actions_today ?? "—"}</p>
         </div>
-      )}
+        <div
+          className={`rounded-lg bg-white shadow p-4 transition ${summary?.pending_tier2 ? "cursor-pointer hover:bg-amber-50" : ""}`}
+          onClick={summary?.pending_tier2 ? () => filterAndScrollToDecisions("queue") : undefined}
+          title={summary?.pending_tier2 ? "Click to filter decisions" : undefined}
+        >
+          <p className="text-xs text-gray-500">Pending T2</p>
+          <p className={`mt-1 text-lg font-semibold ${summary?.pending_tier2 ? "text-amber-700" : "text-gray-500"}`}>
+            {summary?.pending_tier2 ?? "—"}
+          </p>
+        </div>
+        <div
+          className={`rounded-lg bg-white shadow p-4 transition ${summary?.pending_approvals ? "cursor-pointer hover:bg-rose-50" : ""}`}
+          onClick={summary?.pending_approvals ? () => filterAndScrollToDecisions("recommend") : undefined}
+          title={summary?.pending_approvals ? "Click to filter decisions" : undefined}
+        >
+          <p className="text-xs text-gray-500">Awaiting Approval</p>
+          <p className={`mt-1 text-lg font-semibold ${summary?.pending_approvals ? "text-rose-700" : "text-gray-500"}`}>
+            {summary?.pending_approvals ?? "—"}
+          </p>
+        </div>
+        <div className="rounded-lg bg-white shadow p-4">
+          <p className="text-xs text-gray-500">Last Run</p>
+          <p className={`mt-1 text-lg font-semibold ${summary?.last_run_error ? "text-red-600" : "text-gray-700"}`}>
+            {summary ? (summary.last_run_at ? fmtTime(summary.last_run_at) : "—") : "—"}
+          </p>
+        </div>
+      </div>
       {summary?.last_run_error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           Last run error: {summary.last_run_error}
