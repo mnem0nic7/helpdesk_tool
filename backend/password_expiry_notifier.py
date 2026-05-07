@@ -147,6 +147,14 @@ class PasswordExpiryNotifier:
                     test_mode       SMALLINT NOT NULL DEFAULT 1
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS password_expiry_notifier_settings (
+                    id          INTEGER PRIMARY KEY DEFAULT 1,
+                    enabled     SMALLINT NOT NULL DEFAULT 0,
+                    updated_at  TEXT NOT NULL DEFAULT '',
+                    updated_by  TEXT NOT NULL DEFAULT ''
+                )
+            """)
 
     # ------------------------------------------------------------------
     # DB helpers
@@ -213,6 +221,14 @@ class PasswordExpiryNotifier:
             (_today_str(), _utcnow().isoformat(), users_notified, 1 if test_mode else 0),
         )
 
+    def _get_notify_enabled(self) -> bool:
+        """Read enabled from DB settings row; fall back to env-var default."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT enabled FROM password_expiry_notifier_settings WHERE id = 1"
+            ).fetchone()
+        return bool(row["enabled"]) if row is not None else self._notify_enabled
+
     # ------------------------------------------------------------------
     # Daily job
     # ------------------------------------------------------------------
@@ -227,9 +243,11 @@ class PasswordExpiryNotifier:
             if self._already_ran_today(conn):
                 return
 
+        notify_enabled = self._get_notify_enabled()
+
         logger.info(
             "Password expiry notifier: starting daily job (test_mode=%s)",
-            not self._notify_enabled,
+            not notify_enabled,
         )
 
         try:
@@ -264,7 +282,7 @@ class PasswordExpiryNotifier:
             last_set = datetime.fromisoformat(user["pwd_last_set"]).replace(tzinfo=timezone.utc)
             expiry_date = (last_set + timedelta(days=AD_MAX_PWD_AGE_DAYS)).date().isoformat()
 
-            if not self._notify_enabled:
+            if not notify_enabled:
                 logger.info(
                     "[TEST MODE] Would notify %s <%s> — password expires in %d day(s) on %s",
                     sam, email, days, expiry_date,
@@ -283,7 +301,7 @@ class PasswordExpiryNotifier:
                     email=email,
                     expiry_date=expiry_date,
                     days=days,
-                    test_mode=not self._notify_enabled,
+                    test_mode=not notify_enabled,
                     conn=conn,
                 )
             notified += 1
@@ -291,14 +309,14 @@ class PasswordExpiryNotifier:
         with self._conn() as conn:
             self._record_run(
                 users_notified=notified,
-                test_mode=not self._notify_enabled,
+                test_mode=not notify_enabled,
                 conn=conn,
             )
 
         logger.info(
             "Password expiry notifier: daily job complete — %d user(s) notified (test_mode=%s)",
             notified,
-            not self._notify_enabled,
+            not notify_enabled,
         )
 
     # ------------------------------------------------------------------

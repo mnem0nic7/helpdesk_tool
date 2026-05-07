@@ -48,6 +48,7 @@ from routes_user_admin import router as user_admin_router
 from routes_user_exit import router as user_exit_router
 from routes_ad import router as ad_router
 from routes_deactivation_schedule import router as deactivation_schedule_router
+from routes_password_expiry_notifier import router as password_expiry_notifier_router
 from deactivation_schedule import deactivation_schedule as _deactivation_schedule_store
 from password_expiry_notifier import password_expiry_notifier as _password_expiry_notifier
 from ai_work_scheduler import AIWorkScheduler
@@ -459,6 +460,7 @@ app.include_router(user_admin_router)
 app.include_router(user_exit_router)
 app.include_router(ad_router)
 app.include_router(deactivation_schedule_router)
+app.include_router(password_expiry_notifier_router)
 
 # ---------------------------------------------------------------------------
 # Routes

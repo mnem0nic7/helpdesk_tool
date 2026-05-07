@@ -5017,6 +5017,40 @@ export const api = {
   listAllDeactivationJobs(limit = 100): Promise<DeactivationJob[]> {
     return fetchJSON<DeactivationJob[]>(`/api/deactivation-schedule?limit=${limit}`);
   },
+
+  getPasswordExpiryStatus(): Promise<PasswordExpiryStatus> {
+    return fetchJSON<PasswordExpiryStatus>("/api/password-expiry-notifier/status");
+  },
+
+  getPasswordExpiryRuns(
+    limit = 30,
+    offset = 0,
+  ): Promise<{ items: PasswordExpiryRun[]; total: number }> {
+    return fetchJSON(`/api/password-expiry-notifier/runs?limit=${limit}&offset=${offset}`);
+  },
+
+  getPasswordExpiryNotifications(
+    limit = 50,
+    offset = 0,
+  ): Promise<{ items: PasswordExpiryNotification[]; total: number }> {
+    return fetchJSON(`/api/password-expiry-notifier/notifications?limit=${limit}&offset=${offset}`);
+  },
+
+  async patchPasswordExpirySettings(enabled: boolean): Promise<PasswordExpiryStatus> {
+    const res = await fetch("/api/password-expiry-notifier/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("PATCH", "/api/password-expiry-notifier/settings", res));
+    }
+    return res.json() as Promise<PasswordExpiryStatus>;
+  },
 };
 
 export default api;
@@ -5199,5 +5233,36 @@ export interface SecurityLaneAISummary {
   bullets_json: string;
   generated_at: string;
   model_used: string;
+}
+
+export interface PasswordExpiryStatus {
+  enabled: boolean;
+  last_run: {
+    run_date: string;
+    ran_at: string;
+    users_notified: number;
+    test_mode: number;
+  } | null;
+  config: {
+    max_age_days: number;
+    days_before: number;
+  };
+}
+
+export interface PasswordExpiryRun {
+  run_date: string;
+  ran_at: string;
+  users_notified: number;
+  test_mode: number;
+}
+
+export interface PasswordExpiryNotification {
+  id: string;
+  sam_account_name: string;
+  email: string;
+  expiry_date: string;
+  days_until_expiry: number;
+  notified_at: string;
+  test_mode: number;
 }
 

@@ -45,6 +45,7 @@ const AzureAlertsPage = lazy(() => import("./pages/AzureAlertsPage"));
 const AzureAccountHealthPage = lazy(() => import("./pages/AzureAccountHealthPage"));
 const AzureVirtualDesktopsPage = lazy(() => import("./pages/AzureVirtualDesktopsPage"));
 const ADManagementPage = lazy(() => import("./pages/ADManagementPage"));
+const PasswordExpiryNotifierPage = lazy(() => import("./pages/PasswordExpiryNotifierPage"));
 
 function PageFallback() {
   return (
@@ -131,6 +132,7 @@ export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
                 <Route path="knowledge-base" element={<KnowledgeBasePage />} />
                 {branding.scope === "primary" ? <Route path="users" element={<UsersPage />} /> : null}
                 {branding.scope === "primary" ? <Route path="active-directory" element={<ADManagementPage />} /> : null}
+                {branding.scope === "primary" ? <Route path="password-expiry" element={<PasswordExpiryNotifierPage />} /> : null}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </>
             )}
