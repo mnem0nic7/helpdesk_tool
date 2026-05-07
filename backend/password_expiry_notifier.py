@@ -27,8 +27,8 @@ from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL = 60  # seconds
 _DB_PATH = os.path.join(DATA_DIR, "password_expiry_notifier.db")
+_RUN_HOUR_UTC = 6  # target hour (UTC) to attempt the daily job
 
 _RESET_URL = "https://myaccount.microsoft.com/?ref=MeControl"
 
@@ -334,12 +334,22 @@ class PasswordExpiryNotifier:
     async def _run_loop(self) -> None:
         while True:
             try:
-                await asyncio.sleep(_POLL_INTERVAL)
-                await self.run_daily_job()
+                now = _utcnow()
+                target = now.replace(
+                    hour=_RUN_HOUR_UTC, minute=0, second=0, microsecond=0
+                )
+                if now >= target:
+                    # Past today's window — run (guard skips if already done today)
+                    await self.run_daily_job()
+                    # Sleep until tomorrow's window
+                    target += timedelta(days=1)
+                delay = max((target - _utcnow()).total_seconds(), 60)
+                await asyncio.sleep(delay)
             except asyncio.CancelledError:
                 break
             except Exception:
                 logger.exception("Password expiry notifier loop error")
+                await asyncio.sleep(300)
 
 
 password_expiry_notifier = PasswordExpiryNotifier()
