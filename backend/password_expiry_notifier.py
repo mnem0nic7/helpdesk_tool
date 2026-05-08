@@ -84,6 +84,11 @@ def _build_email_body(display_name: str, days: int, expiry_date: str) -> str:
 <p>Your network password will expire in <strong>{days} day(s)</strong> (on {expiry_date}).</p>
 <p>Please reset it before it expires to avoid losing access:</p>
 <p><a href="{_RESET_URL}">Reset your password</a></p>
+<ol>
+  <li>Follow the link to your account.</li>
+  <li>Click the <strong>three lines</strong> to show options and select <strong>Change Password</strong>.</li>
+  <li>After signing in to your security page you will be prompted to enter your new password.</li>
+</ol>
 <p>If you need help, contact the IT Help Desk.</p>
 <p>— IT Team</p>"""
 
