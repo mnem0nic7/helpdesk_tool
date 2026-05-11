@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback, memo, useImperativeHandle, useTransition, type ReactNode } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type { DefenderAgentConfig, DefenderAgentCustomRule, DefenderAgentPlaybook, DefenderAgentDecision, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType, DefenderAgentDispositionStats } from "../lib/api.ts";
@@ -2473,17 +2473,7 @@ export default function AzureSecurityAgentPage() {
   const [showFaq, setShowFaq] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [runningNow, setRunningNow] = useState(false);
-  const [searchParams, setSearchParams] = useSearchParams();
-  const selectedDecisionId = searchParams.get("decision");
-
-  function setSelectedDecisionId(id: string | null) {
-    setSearchParams(prev => {
-      const next = new URLSearchParams(prev);
-      if (id) next.set("decision", id);
-      else next.delete("decision");
-      return next;
-    }, { replace: true });
-  }
+  const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<{ id: string; name: string } | null>(null);
   const [showFindingsOnly, setShowFindingsOnly] = useState(false);
   const [expandedError, setExpandedError] = useState<string | null>(null);
@@ -2692,6 +2682,7 @@ export default function AzureSecurityAgentPage() {
   const handleExecuteNow       = useCallback((id: string) => executeNowMutation.mutate(id),       [executeNowMutation.mutate]);
   const handleEnableSignIn     = useCallback((id: string) => enableSignInMutation.mutate(id),     [enableSignInMutation.mutate]);
   const handleOpenEntityTimeline = useCallback((id: string, name: string) => setSelectedEntity({ id, name }), []);
+  const handleOpenDetail = useCallback((id: string) => setSelectedDecisionId(id), [setSelectedDecisionId]);
 
   const enabled = config?.enabled ?? false;
   const dryRun = config?.dry_run ?? false;
@@ -2787,7 +2778,7 @@ export default function AzureSecurityAgentPage() {
         enabled={enabled}
         dispositionStats={dispositionStatsQuery.data}
         isAdmin={isAdmin}
-        onOpenDetail={setSelectedDecisionId}
+        onOpenDetail={handleOpenDetail}
         onOpenEntityTimeline={handleOpenEntityTimeline}
         exportUrl={api.exportDefenderAgentDecisions(30)}
         headingRef={decisionsHeadingRef}
