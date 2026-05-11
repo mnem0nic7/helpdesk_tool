@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback, memo, useImperativeHandle, useTransition, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
 import type { DefenderAgentConfig, DefenderAgentCustomRule, DefenderAgentPlaybook, DefenderAgentDecision, DefenderAgentMetrics, DefenderAgentSuppression, DefenderAgentWatchlistEntry, DefenderSuppressionType, DefenderAgentDispositionStats } from "../lib/api.ts";
@@ -818,6 +818,15 @@ function MetricsDashboard({ metrics }: { metrics: DefenderAgentMetrics }) {
 // Detail drawer
 // ---------------------------------------------------------------------------
 
+const DRAWER_DEFAULT_WIDTH = 768;
+const DRAWER_MIN_WIDTH = 640;
+const DRAWER_VIEWPORT_MARGIN = 32;
+
+function clampDrawerWidth(w: number): number {
+  const max = Math.max(360, window.innerWidth - DRAWER_VIEWPORT_MARGIN);
+  return Math.min(Math.max(w, Math.min(DRAWER_MIN_WIDTH, max)), max);
+}
+
 function AlertDetailDrawer({
   decisionId,
   onClose,
@@ -853,6 +862,35 @@ function AlertDetailDrawer({
     queryFn: () => api.getDefenderAgentDecision(decisionId),
     staleTime: 10_000,
   });
+
+  const [drawerWidth, setDrawerWidth] = useState(DRAWER_DEFAULT_WIDTH);
+  const isDragging = useRef(false);
+
+  function handleResizePointerDown(e: React.PointerEvent) {
+    e.preventDefault();
+    isDragging.current = true;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    function onMove(ev: PointerEvent) {
+      if (!isDragging.current) return;
+      const newWidth = window.innerWidth - ev.clientX;
+      setDrawerWidth(clampDrawerWidth(newWidth));
+    }
+    function onUp() {
+      isDragging.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+    }
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  }
+
+  function handleResizeDoubleClick() {
+    setDrawerWidth(DRAWER_DEFAULT_WIDTH);
+  }
 
   const [dispositionNote, setDispositionNote] = useState("");
   const dispositionMut = useMutation({
@@ -951,7 +989,13 @@ function AlertDetailDrawer({
       />
 
       {/* Slide-over panel */}
-      <div className="fixed right-0 top-0 z-50 flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl">
+      <div className="fixed right-0 top-0 z-50 flex h-full flex-col bg-white shadow-2xl" style={{ width: drawerWidth }}>
+        {/* Resize handle */}
+        <div
+          className="absolute left-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-gray-300 active:bg-blue-400 transition-colors"
+          onPointerDown={handleResizePointerDown}
+          onDoubleClick={handleResizeDoubleClick}
+        />
         {/* Header */}
         <div className="flex items-start justify-between border-b border-gray-200 px-6 py-4">
           <div className="flex-1 min-w-0 pr-4">
@@ -1499,46 +1543,15 @@ function AlertDetailDrawer({
 
 const DecisionRow = memo(function DecisionRow({
   d,
-  isAdmin,
-  onCancel,
-  onApprove,
-  onResolve,
-  onUnisolate,
-  onUnrestrict,
-  onForceInvestigate,
-  onExecuteNow,
-  onEnableSignIn,
   onOpenDetail,
   onOpenEntityTimeline,
 }: {
   d: DefenderAgentDecision;
-  isAdmin: boolean;
-  onCancel: (id: string) => void;
-  onApprove: (id: string) => void;
-  onResolve: (id: string) => void;
-  onUnisolate: (id: string) => void;
-  onUnrestrict: (id: string) => void;
-  onForceInvestigate: (id: string) => void;
-  onExecuteNow: (id: string) => void;
-  onEnableSignIn: (id: string) => void;
   onOpenDetail: (id: string) => void;
   onOpenEntityTimeline: (entityId: string, entityName: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const tier = tierLabel(d);
   const status = decisionStatus(d);
-
-  // Primary actions
-  const canCancel           = d.decision === "queue" && !d.cancelled && !d.job_ids.length;
-  const canApprove          = !d.human_approved && !d.cancelled && isAdmin;
-  const canResolve          = !d.resolved;
-  const canExecuteNow       = d.decision === "queue" && !d.cancelled && !d.job_ids.length && isAdmin;
-  const canForceInvestigate = d.entities.some(e => e.type === "device") && isAdmin;
-  const canUnisolate        = d.entities.some(e => e.type === "device") && !d.cancelled && isAdmin;
-  const canUnrestrict       = d.entities.some(e => e.type === "device") && !d.cancelled && isAdmin;
-  const canEnableSignIn     = d.entities.some(e => e.type === "user" || e.type === "account") && !d.cancelled && isAdmin;
-
-  const hasAnyAction = canCancel || canApprove || canResolve || canExecuteNow || canForceInvestigate || canUnisolate || canUnrestrict || canEnableSignIn;
 
   const watchlistedIds = useMemo(
     () => d.watchlisted_entities?.length
@@ -1548,11 +1561,10 @@ const DecisionRow = memo(function DecisionRow({
   );
 
   return (
-    <>
-      <tr
-        className={`hover:bg-gray-50 cursor-pointer ${expanded ? "bg-blue-50/40" : ""}`}
-        onClick={() => setExpanded((v) => !v)}
-      >
+    <tr
+      className="hover:bg-gray-50 cursor-pointer"
+      onClick={() => onOpenDetail(d.decision_id)}
+    >
         <td className="whitespace-nowrap px-3 py-2 text-xs text-gray-500">{fmtTime(d.executed_at)}</td>
         <td className="px-3 py-2 max-w-xs">
           <div className="text-sm font-medium text-gray-800 truncate" title={d.alert_title}>
@@ -1640,123 +1652,7 @@ const DecisionRow = memo(function DecisionRow({
             </span>
           )}
         </td>
-        <td className="whitespace-nowrap px-3 py-2 text-right">
-          <svg className={`inline h-4 w-4 text-gray-400 transition-transform ${expanded ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd"/>
-          </svg>
-        </td>
-      </tr>
-
-      {/* Inline action panel */}
-      {expanded && (
-        <tr className="bg-blue-50/30">
-          <td colSpan={8} className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Primary actions */}
-              {canExecuteNow && (
-                <button
-                  onClick={() => { onExecuteNow(d.decision_id); setExpanded(false); }}
-                  className="rounded border border-green-300 bg-green-50 px-2.5 py-1 text-xs font-medium text-green-700 hover:bg-green-100"
-                >
-                  ⚡ Execute Now
-                </button>
-              )}
-              {canCancel && (
-                <button
-                  onClick={() => { onCancel(d.decision_id); setExpanded(false); }}
-                  className="rounded border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
-                >
-                  ✕ Cancel
-                </button>
-              )}
-              {canApprove && (
-                <button
-                  onClick={() => { onApprove(d.decision_id); setExpanded(false); }}
-                  className="rounded border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                >
-                  ✓ Approve & Execute
-                </button>
-              )}
-              {canResolve && (
-                <button
-                  onClick={() => { onResolve(d.decision_id); setExpanded(false); }}
-                  className="rounded border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-                >
-                  ✓ Mark Resolved
-                </button>
-              )}
-              {canForceInvestigate && (
-                <button
-                  onClick={() => { onForceInvestigate(d.decision_id); setExpanded(false); }}
-                  className="rounded border border-purple-300 bg-purple-50 px-2.5 py-1 text-xs font-medium text-purple-700 hover:bg-purple-100"
-                >
-                  🔍 Force Investigate
-                </button>
-              )}
-
-              {/* Undo / reversal actions */}
-              {canEnableSignIn && (
-                <>
-                  {(canCancel || canApprove || canExecuteNow || canForceInvestigate) && (
-                    <span className="text-gray-300 select-none">|</span>
-                  )}
-                  <button
-                    onClick={() => { onEnableSignIn(d.decision_id); setExpanded(false); }}
-                    className="rounded border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                  >
-                    ↩ Enable Sign-in
-                  </button>
-                </>
-              )}
-              {canUnisolate && (
-                <>
-                  {(canCancel || canApprove || canExecuteNow || canForceInvestigate) && (
-                    <span className="text-gray-300 select-none">|</span>
-                  )}
-                  <button
-                    onClick={() => { onUnisolate(d.decision_id); setExpanded(false); }}
-                    className="rounded border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                  >
-                    ↩ Release Isolation
-                  </button>
-                </>
-              )}
-              {canUnrestrict && (
-                <button
-                  onClick={() => { onUnrestrict(d.decision_id); setExpanded(false); }}
-                  className="rounded border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                >
-                  ↩ Remove App Restriction
-                </button>
-              )}
-
-              {!hasAnyAction && (
-                <span className="text-xs text-gray-400 italic">No actions available for this decision</span>
-              )}
-
-              {/* Spacer + details/investigate links */}
-              <span className="ml-auto flex items-center gap-2">
-                {d.decision !== "skip" && (
-                  <a
-                    href={`/security/copilot?decisionId=${d.decision_id}`}
-                    onClick={(e) => { e.stopPropagation(); setExpanded(false); }}
-                    className="rounded border border-sky-300 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100"
-                  >
-                    🔬 Investigate
-                  </a>
-                )}
-                <button
-                  onClick={() => { setExpanded(false); onOpenDetail(d.decision_id); }}
-                  className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
-                >
-                  Details →
-                </button>
-              </span>
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
+    </tr>
   );
 });
 
@@ -2163,6 +2059,153 @@ function CustomRulesPanel() {
   );
 }
 
+const SEVERITY_ORDER: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+
+// ---------------------------------------------------------------------------
+// Defender decision filters
+// ---------------------------------------------------------------------------
+
+type DefenderFilters = {
+  search: string;
+  decision: string;
+  severity: string;
+  serviceSource: string;
+  tier: string;
+  status: string;
+  mitre: string;
+  dateFrom: string;
+  dateTo: string;
+};
+
+const EMPTY_FILTERS: DefenderFilters = {
+  search: "",
+  decision: "",
+  severity: "",
+  serviceSource: "",
+  tier: "",
+  status: "",
+  mitre: "",
+  dateFrom: "",
+  dateTo: "",
+};
+
+function hasActiveFilters(f: DefenderFilters): boolean {
+  return Object.values(f).some(Boolean);
+}
+
+function DefenderDecisionFilters({
+  filters,
+  onChange,
+  searchValue,
+  onSearchChange,
+  onClearAll,
+  mitreTechniques,
+  serviceSources,
+}: {
+  filters: DefenderFilters;
+  onChange: (f: DefenderFilters) => void;
+  searchValue: string;
+  onSearchChange: (v: string) => void;
+  onClearAll: () => void;
+  mitreTechniques: string[];
+  serviceSources: string[];
+}) {
+  function set(key: keyof DefenderFilters, value: string) {
+    onChange({ ...filters, [key]: value });
+  }
+
+  const active = hasActiveFilters(filters) || !!searchValue;
+
+  return (
+    <div className="border-b border-gray-200 bg-gray-50 px-5 py-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+        {/* Search */}
+        <input
+          type="text"
+          value={searchValue}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Search alerts…"
+          className="col-span-2 sm:col-span-1 rounded-md border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-400 focus:outline-none"
+        />
+        {/* Decision */}
+        <select value={filters.decision} onChange={(e) => set("decision", e.target.value)} className="rounded-md border border-gray-300 px-2 py-1.5 text-xs">
+          <option value="">All decisions</option>
+          <option value="action_recommended">Action Recommended</option>
+          <option value="execute">T1 Immediate</option>
+          <option value="queue">T2 Queued</option>
+          <option value="recommend">T3 Recommend</option>
+          <option value="skip">Skipped</option>
+        </select>
+        {/* Severity */}
+        <select value={filters.severity} onChange={(e) => set("severity", e.target.value)} className="rounded-md border border-gray-300 px-2 py-1.5 text-xs">
+          <option value="">All severities</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+        {/* Tier */}
+        <select value={filters.tier} onChange={(e) => set("tier", e.target.value)} className="rounded-md border border-gray-300 px-2 py-1.5 text-xs">
+          <option value="">All tiers</option>
+          <option value="1">T1 — Immediate</option>
+          <option value="2">T2 — Queued</option>
+          <option value="3">T3 — Recommend</option>
+        </select>
+        {/* Status */}
+        <select value={filters.status} onChange={(e) => set("status", e.target.value)} className="rounded-md border border-gray-300 px-2 py-1.5 text-xs">
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="resolved">Resolved</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        {/* Service source */}
+        {serviceSources.length > 0 && (
+          <select value={filters.serviceSource} onChange={(e) => set("serviceSource", e.target.value)} className="rounded-md border border-gray-300 px-2 py-1.5 text-xs">
+            <option value="">All sources</option>
+            {serviceSources.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        )}
+        {/* MITRE */}
+        {mitreTechniques.length > 0 && (
+          <select value={filters.mitre} onChange={(e) => set("mitre", e.target.value)} className="rounded-md border border-gray-300 px-2 py-1.5 text-xs">
+            <option value="">All techniques</option>
+            {mitreTechniques.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        )}
+        {/* Date range */}
+        <input
+          type="date"
+          value={filters.dateFrom}
+          onChange={(e) => set("dateFrom", e.target.value)}
+          title="Alert created after"
+          className="rounded-md border border-gray-300 px-2 py-1.5 text-xs"
+        />
+        <input
+          type="date"
+          value={filters.dateTo}
+          onChange={(e) => set("dateTo", e.target.value)}
+          title="Alert created before"
+          className="rounded-md border border-gray-300 px-2 py-1.5 text-xs"
+        />
+      </div>
+      {active && (
+        <div className="mt-2 flex justify-end">
+          <button
+            onClick={onClearAll}
+            className="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50"
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Decision feed — isolated in its own memo'd component so that summary/runs
 // polls (which only update unrelated sections) don't cascade into this tree.
@@ -2176,14 +2219,6 @@ type DecisionFeedProps = {
   enabled: boolean;
   dispositionStats: DefenderAgentDispositionStats | undefined;
   isAdmin: boolean;
-  onCancel: (id: string) => void;
-  onApprove: (id: string) => void;
-  onResolve: (id: string) => void;
-  onUnisolate: (id: string) => void;
-  onUnrestrict: (id: string) => void;
-  onForceInvestigate: (id: string) => void;
-  onExecuteNow: (id: string) => void;
-  onEnableSignIn: (id: string) => void;
   onOpenDetail: (id: string) => void;
   onOpenEntityTimeline: (id: string, name: string) => void;
   exportUrl: string;
@@ -2196,47 +2231,32 @@ const DecisionFeed = memo(function DecisionFeed({
   enabled,
   dispositionStats,
   isAdmin,
-  onCancel,
-  onApprove,
-  onResolve,
-  onUnisolate,
-  onUnrestrict,
-  onForceInvestigate,
-  onExecuteNow,
-  onEnableSignIn,
   onOpenDetail,
   onOpenEntityTimeline,
   exportUrl,
   headingRef,
 }: DecisionFeedProps) {
-  const [decisionFilter, setDecisionFilter] = useState("");
-  const [mitreFilter, setMitreFilter] = useState("");
+  const [filters, setFilters] = useState<DefenderFilters>(EMPTY_FILTERS);
+  const [searchInput, setSearchInput] = useState("");
   const [decisionLimit, setDecisionLimit] = useState(25);
   const [, startFilterTransition] = useTransition();
+
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setFilters(prev => ({ ...prev, search: searchInput }));
+      setDecisionLimit(25);
+    }, 300);
+    return () => clearTimeout(id);
+  }, [searchInput]);
 
   useImperativeHandle(ref, () => ({
     setFilter(filter: string) {
       startFilterTransition(() => {
-        setDecisionFilter(filter);
-        setMitreFilter("");
+        setFilters({ ...EMPTY_FILTERS, decision: filter });
         setDecisionLimit(25);
       });
     },
   }), []);
-
-  const query = useQuery({
-    queryKey: ["defender-agent-decisions", decisionLimit, decisionFilter, mitreFilter],
-    queryFn: () => api.listDefenderAgentDecisions({
-      limit: decisionLimit,
-      ...(decisionFilter ? { decision: decisionFilter } : {}),
-      ...(mitreFilter ? { mitre_technique: mitreFilter } : {}),
-    }),
-    placeholderData: (prev) => prev,
-    ...getPollingQueryOptions("live_60s"),
-  });
-
-  const decisions = query.data?.decisions ?? [];
-  const decisionsTotal = query.data?.total ?? 0;
 
   const mitreTechniquesQuery = useQuery({
     queryKey: ["defender-agent-mitre-techniques"],
@@ -2245,12 +2265,79 @@ const DecisionFeed = memo(function DecisionFeed({
   });
   const allMitreTechniques = mitreTechniquesQuery.data?.techniques ?? [];
 
+  // Keep a stable list of service sources from a separate quick query
+  const serviceSourcesQuery = useQuery({
+    queryKey: ["defender-agent-decisions-sources"],
+    queryFn: () => api.listDefenderAgentDecisions({ limit: 500 }),
+    staleTime: 5 * 60_000,
+  });
+  const allServiceSources = useMemo(() => {
+    const seen = new Set<string>();
+    for (const d of (serviceSourcesQuery.data?.decisions ?? [])) {
+      if (d.service_source) seen.add(d.service_source);
+    }
+    return [...seen].sort();
+  }, [serviceSourcesQuery.data]);
+
+  const resolvedParam = filters.status === "resolved" ? true : filters.status === "active" ? false : undefined;
+  const cancelledParam = filters.status === "cancelled" ? true : filters.status === "active" ? false : undefined;
+
+  const query = useQuery({
+    queryKey: ["defender-agent-decisions", decisionLimit, filters],
+    queryFn: () => api.listDefenderAgentDecisions({
+      limit: decisionLimit,
+      ...(filters.decision ? { decision: filters.decision } : {}),
+      ...(filters.mitre ? { mitre_technique: filters.mitre } : {}),
+      ...(filters.severity ? { severity: filters.severity } : {}),
+      ...(filters.serviceSource ? { service_source: filters.serviceSource } : {}),
+      ...(filters.tier ? { tier: parseInt(filters.tier, 10) } : {}),
+      ...(resolvedParam !== undefined ? { resolved: resolvedParam } : {}),
+      ...(cancelledParam !== undefined ? { cancelled: cancelledParam } : {}),
+      ...(filters.search ? { search: filters.search } : {}),
+      ...(filters.dateFrom ? { date_from: filters.dateFrom } : {}),
+      ...(filters.dateTo ? { date_to: filters.dateTo } : {}),
+    }),
+    placeholderData: (prev) => prev,
+    ...getPollingQueryOptions("live_60s"),
+  });
+
+  const decisionsTotal = query.data?.total ?? 0;
+
+  type SortKey = "time" | "severity" | "tier" | "status";
+  const [sortKey, setSortKey] = useState<SortKey>("time");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  function toggleSort(key: SortKey) {
+    startFilterTransition(() => {
+      if (sortKey === key) setSortDir((d) => d === "asc" ? "desc" : "asc");
+      else { setSortKey(key); setSortDir("desc"); }
+    });
+  }
+
+  const sortedDecisions = useMemo(() => {
+    const copy = [...(query.data?.decisions ?? [])];
+    copy.sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "time") cmp = a.executed_at.localeCompare(b.executed_at);
+      else if (sortKey === "severity") cmp = (SEVERITY_ORDER[a.alert_severity] ?? 0) - (SEVERITY_ORDER[b.alert_severity] ?? 0);
+      else if (sortKey === "tier") cmp = (a.tier ?? 99) - (b.tier ?? 99);
+      else if (sortKey === "status") {
+        const statusScore = (d: typeof a) => d.resolved ? 2 : d.cancelled ? 3 : 1;
+        cmp = statusScore(a) - statusScore(b);
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return copy;
+  }, [query.data, sortKey, sortDir]);
+
+  const decisions = sortedDecisions;
+
   return (
     <div className="rounded-lg bg-white shadow" ref={headingRef}>
       <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-4">
         <h2 className="text-lg font-semibold text-gray-900">Decision Feed</h2>
         <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
-          {decisions.length}{(decisionFilter || mitreFilter) ? ` of ${decisionsTotal}` : ""}
+          {decisions.length}{(hasActiveFilters(filters) || searchInput) ? ` of ${decisionsTotal}` : ""}
         </span>
         <div className="ml-auto flex items-center gap-2 flex-wrap">
           <a
@@ -2264,33 +2351,24 @@ const DecisionFeed = memo(function DecisionFeed({
             </svg>
             Export CSV
           </a>
-          {allMitreTechniques.length > 0 && (
-            <select
-              value={mitreFilter}
-              onChange={(e) => startFilterTransition(() => { setMitreFilter(e.target.value); setDecisionLimit(25); })}
-              className="rounded-md border border-gray-300 px-2 py-1 text-xs"
-              title="Filter by MITRE ATT&CK technique"
-            >
-              <option value="">All techniques</option>
-              {allMitreTechniques.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
-          )}
-          <select
-            value={decisionFilter}
-            onChange={(e) => startFilterTransition(() => { setDecisionFilter(e.target.value); setDecisionLimit(25); })}
-            className="rounded-md border border-gray-300 px-2 py-1 text-xs"
-          >
-            <option value="">All decisions</option>
-            <option value="action_recommended">Action Recommended</option>
-            <option value="execute">T1 Immediate</option>
-            <option value="queue">T2 Queued</option>
-            <option value="recommend">T3 Recommend</option>
-            <option value="skip">Skipped</option>
-          </select>
         </div>
       </div>
+
+      <DefenderDecisionFilters
+        filters={filters}
+        onChange={(f) => startFilterTransition(() => { setFilters(f); setDecisionLimit(25); })}
+        searchValue={searchInput}
+        onSearchChange={setSearchInput}
+        onClearAll={() => {
+          startFilterTransition(() => {
+            setFilters(EMPTY_FILTERS);
+            setSearchInput("");
+            setDecisionLimit(25);
+          });
+        }}
+        mitreTechniques={allMitreTechniques}
+        serviceSources={allServiceSources}
+      />
 
       {dispositionStats && dispositionStats.reviewed > 0 && (
         <div className="border-b border-gray-100 bg-gray-50 px-5 py-2 flex flex-wrap items-center gap-4 text-xs">
@@ -2336,15 +2414,24 @@ const DecisionFeed = memo(function DecisionFeed({
                 <col className="w-24" />   {/* Tier */}
                 <col className="w-28" />   {/* Action */}
                 <col className="w-28" />   {/* Status */}
-                <col className="w-8" />    {/* Chevron */}
               </colgroup>
               <thead className="bg-gray-50">
                 <tr>
-                  {["Time", "Alert", "Source", "Severity", "Tier", "Action", "Status", ""].map((h) => (
-                    <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
+                  {(["Time", "Alert", "Source", "Severity", "Tier", "Action", "Status"] as const).map((h) => {
+                    const key: SortKey | null = h === "Time" ? "time" : h === "Severity" ? "severity" : h === "Tier" ? "tier" : h === "Status" ? "status" : null;
+                    return (
+                      <th
+                        key={h}
+                        className={`px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap ${key ? "cursor-pointer select-none hover:text-gray-800" : ""}`}
+                        onClick={key ? () => toggleSort(key) : undefined}
+                      >
+                        {h}
+                        {key && sortKey === key && (
+                          <span className="ml-1">{sortDir === "asc" ? "↑" : "↓"}</span>
+                        )}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
@@ -2352,15 +2439,6 @@ const DecisionFeed = memo(function DecisionFeed({
                   <DecisionRow
                     key={d.decision_id}
                     d={d}
-                    isAdmin={isAdmin}
-                    onCancel={onCancel}
-                    onApprove={onApprove}
-                    onResolve={onResolve}
-                    onUnisolate={onUnisolate}
-                    onUnrestrict={onUnrestrict}
-                    onForceInvestigate={onForceInvestigate}
-                    onExecuteNow={onExecuteNow}
-                    onEnableSignIn={onEnableSignIn}
                     onOpenDetail={onOpenDetail}
                     onOpenEntityTimeline={onOpenEntityTimeline}
                   />
@@ -2395,7 +2473,17 @@ export default function AzureSecurityAgentPage() {
   const [showFaq, setShowFaq] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [runningNow, setRunningNow] = useState(false);
-  const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedDecisionId = searchParams.get("decision");
+
+  function setSelectedDecisionId(id: string | null) {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (id) next.set("decision", id);
+      else next.delete("decision");
+      return next;
+    }, { replace: true });
+  }
   const [selectedEntity, setSelectedEntity] = useState<{ id: string; name: string } | null>(null);
   const [showFindingsOnly, setShowFindingsOnly] = useState(false);
   const [expandedError, setExpandedError] = useState<string | null>(null);
@@ -2699,14 +2787,6 @@ export default function AzureSecurityAgentPage() {
         enabled={enabled}
         dispositionStats={dispositionStatsQuery.data}
         isAdmin={isAdmin}
-        onCancel={handleCancel}
-        onApprove={handleApprove}
-        onResolve={handleResolve}
-        onUnisolate={handleUnisolate}
-        onUnrestrict={handleUnrestrict}
-        onForceInvestigate={handleForceInvestigate}
-        onExecuteNow={handleExecuteNow}
-        onEnableSignIn={handleEnableSignIn}
         onOpenDetail={setSelectedDecisionId}
         onOpenEntityTimeline={handleOpenEntityTimeline}
         exportUrl={api.exportDefenderAgentDecisions(30)}
