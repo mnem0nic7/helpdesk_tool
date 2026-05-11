@@ -3945,7 +3945,7 @@ export const api = {
   listDefenderAgentRuns(limit = 20): Promise<DefenderAgentRun[]> {
     return fetchJSON<DefenderAgentRun[]>(`/api/azure/security/defender-agent/runs?limit=${limit}`);
   },
-  listDefenderAgentDecisions(params?: { limit?: number; offset?: number; decision?: string; mitre_technique?: string; severity?: string; service_source?: string; tier?: number; resolved?: boolean; cancelled?: boolean; search?: string; date_from?: string; date_to?: string }): Promise<DefenderAgentDecisionsResponse> {
+  listDefenderAgentDecisions(params?: { limit?: number; offset?: number; decision?: string; mitre_technique?: string; severity?: string; service_source?: string; tier?: number; resolved?: boolean; cancelled?: boolean; search?: string; date_from?: string; date_to?: string; sort_by?: string; sort_dir?: string }): Promise<DefenderAgentDecisionsResponse> {
     return fetchJSON<DefenderAgentDecisionsResponse>(
       `/api/azure/security/defender-agent/decisions${buildQuery({
         limit: params?.limit ?? 100,
@@ -3960,8 +3960,13 @@ export const api = {
         ...(params?.search ? { search: params.search } : {}),
         ...(params?.date_from ? { date_from: params.date_from } : {}),
         ...(params?.date_to ? { date_to: params.date_to } : {}),
+        ...(params?.sort_by ? { sort_by: params.sort_by } : {}),
+        ...(params?.sort_dir ? { sort_dir: params.sort_dir } : {}),
       })}`
     );
+  },
+  listDefenderAgentServiceSources(): Promise<{ service_sources: string[] }> {
+    return fetchJSON<{ service_sources: string[] }>("/api/azure/security/defender-agent/decisions/service-sources");
   },
   listDefenderMitreTechniques(): Promise<{ techniques: string[] }> {
     return fetchJSON<{ techniques: string[] }>("/api/azure/security/defender-agent/decisions/mitre-techniques");

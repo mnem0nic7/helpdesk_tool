@@ -99,6 +99,18 @@ def list_runs(
 # Decisions
 # ---------------------------------------------------------------------------
 
+_VALID_SORT_BY = {"executed_at", "alert_severity", "tier", "status"}
+_VALID_SORT_DIR = {"asc", "desc"}
+
+
+@router.get("/decisions/service-sources")
+def list_service_sources(
+    _session: dict = Depends(require_authenticated_user),
+) -> dict:
+    _ensure_azure_site()
+    return {"service_sources": defender_agent_store.list_service_sources()}
+
+
 @router.get("/decisions", response_model=DefenderAgentDecisionsResponse)
 def list_decisions(
     limit: int = Query(100, ge=1, le=500),
@@ -113,9 +125,15 @@ def list_decisions(
     search: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    sort_by: str = Query("executed_at"),
+    sort_dir: str = Query("desc"),
     _session: dict = Depends(require_authenticated_user),
 ) -> dict:
     _ensure_azure_site()
+    if sort_by not in _VALID_SORT_BY:
+        sort_by = "executed_at"
+    if sort_dir not in _VALID_SORT_DIR:
+        sort_dir = "desc"
     decisions, total = defender_agent_store.list_decisions(
         limit=limit,
         offset=offset,
@@ -129,6 +147,8 @@ def list_decisions(
         search=search,
         date_from=date_from,
         date_to=date_to,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
     return {"decisions": decisions, "total": total}
 

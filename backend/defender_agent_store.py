@@ -539,6 +539,35 @@ class DefenderAgentStore:
             return None
         return self._row_to_decision(dict(row), include_raw=True)
 
+    def list_service_sources(self) -> list[str]:
+        """Return sorted distinct service_source values across all decisions."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT service_source FROM defender_agent_decisions"
+                " WHERE service_source IS NOT NULL AND service_source != ''"
+                " ORDER BY service_source"
+            ).fetchall()
+        return [r["service_source"] for r in rows]
+
+    _SORT_EXPR: dict[str, str] = {
+        "executed_at": "executed_at",
+        "alert_severity": (
+            "CASE alert_severity"
+            " WHEN 'critical' THEN 4"
+            " WHEN 'high' THEN 3"
+            " WHEN 'medium' THEN 2"
+            " WHEN 'low' THEN 1"
+            " ELSE 0 END"
+        ),
+        "tier": "COALESCE(tier, 99)",
+        "status": (
+            "CASE"
+            " WHEN cancelled = 1 THEN 3"
+            " WHEN resolved = 1 THEN 2"
+            " ELSE 1 END"
+        ),
+    }
+
     def list_decisions(
         self,
         limit: int = 100,
@@ -553,6 +582,8 @@ class DefenderAgentStore:
         search: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        sort_by: str = "executed_at",
+        sort_dir: str = "desc",
     ) -> tuple[list[dict[str, Any]], int]:
         p = self._placeholder()
         where_clauses: list[str] = []
@@ -604,6 +635,11 @@ class DefenderAgentStore:
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
+        sort_expr = self._SORT_EXPR.get(sort_by, "executed_at")
+        direction = "ASC" if sort_dir.lower() == "asc" else "DESC"
+        # Always break ties by executed_at desc so order is stable
+        order_sql = f"{sort_expr} {direction}" if sort_expr == "executed_at" else f"{sort_expr} {direction}, executed_at DESC"
+
         with self._conn() as conn:
             total_row = conn.execute(f"SELECT COUNT(*) AS c FROM defender_agent_decisions {where_sql}", params).fetchone()
             total = int(total_row["c"]) if total_row else 0
@@ -611,7 +647,7 @@ class DefenderAgentStore:
                 f"""
                 SELECT * FROM defender_agent_decisions
                  {where_sql}
-                 ORDER BY executed_at DESC
+                 ORDER BY {order_sql}
                  LIMIT {p} OFFSET {p}
                 """,
                 [*params, limit, offset],

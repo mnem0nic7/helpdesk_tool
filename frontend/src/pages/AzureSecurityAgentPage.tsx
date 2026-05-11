@@ -2059,7 +2059,7 @@ function CustomRulesPanel() {
   );
 }
 
-const SEVERITY_ORDER: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+
 
 // ---------------------------------------------------------------------------
 // Defender decision filters
@@ -2263,25 +2263,36 @@ const DecisionFeed = memo(function DecisionFeed({
   });
   const allMitreTechniques = mitreTechniquesQuery.data?.techniques ?? [];
 
-  // Keep a stable list of service sources from a separate quick query
   const serviceSourcesQuery = useQuery({
-    queryKey: ["defender-agent-decisions-sources"],
-    queryFn: () => api.listDefenderAgentDecisions({ limit: 500 }),
+    queryKey: ["defender-agent-service-sources"],
+    queryFn: () => api.listDefenderAgentServiceSources(),
     staleTime: 5 * 60_000,
   });
-  const allServiceSources = useMemo(() => {
-    const seen = new Set<string>();
-    for (const d of (serviceSourcesQuery.data?.decisions ?? [])) {
-      if (d.service_source) seen.add(d.service_source);
-    }
-    return [...seen].sort();
-  }, [serviceSourcesQuery.data]);
+  const allServiceSources = serviceSourcesQuery.data?.service_sources ?? [];
 
   const resolvedParam = filters.status === "resolved" ? true : filters.status === "active" ? false : undefined;
   const cancelledParam = filters.status === "cancelled" ? true : filters.status === "active" ? false : undefined;
 
+  type SortKey = "time" | "severity" | "tier" | "status";
+  const [sortKey, setSortKey] = useState<SortKey>("time");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const SORT_KEY_MAP: Record<SortKey, string> = {
+    time: "executed_at",
+    severity: "alert_severity",
+    tier: "tier",
+    status: "status",
+  };
+
+  function toggleSort(key: SortKey) {
+    startFilterTransition(() => {
+      if (sortKey === key) setSortDir((d) => d === "asc" ? "desc" : "asc");
+      else { setSortKey(key); setSortDir("desc"); }
+    });
+  }
+
   const query = useQuery({
-    queryKey: ["defender-agent-decisions", decisionLimit, filters],
+    queryKey: ["defender-agent-decisions", decisionLimit, filters, sortKey, sortDir],
     queryFn: () => api.listDefenderAgentDecisions({
       limit: decisionLimit,
       ...(filters.decision ? { decision: filters.decision } : {}),
@@ -2294,41 +2305,15 @@ const DecisionFeed = memo(function DecisionFeed({
       ...(filters.search ? { search: filters.search } : {}),
       ...(filters.dateFrom ? { date_from: filters.dateFrom } : {}),
       ...(filters.dateTo ? { date_to: filters.dateTo } : {}),
+      sort_by: SORT_KEY_MAP[sortKey],
+      sort_dir: sortDir,
     }),
     placeholderData: (prev) => prev,
     ...getPollingQueryOptions("live_60s"),
   });
 
   const decisionsTotal = query.data?.total ?? 0;
-
-  type SortKey = "time" | "severity" | "tier" | "status";
-  const [sortKey, setSortKey] = useState<SortKey>("time");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-
-  function toggleSort(key: SortKey) {
-    startFilterTransition(() => {
-      if (sortKey === key) setSortDir((d) => d === "asc" ? "desc" : "asc");
-      else { setSortKey(key); setSortDir("desc"); }
-    });
-  }
-
-  const sortedDecisions = useMemo(() => {
-    const copy = [...(query.data?.decisions ?? [])];
-    copy.sort((a, b) => {
-      let cmp = 0;
-      if (sortKey === "time") cmp = a.executed_at.localeCompare(b.executed_at);
-      else if (sortKey === "severity") cmp = (SEVERITY_ORDER[a.alert_severity] ?? 0) - (SEVERITY_ORDER[b.alert_severity] ?? 0);
-      else if (sortKey === "tier") cmp = (a.tier ?? 99) - (b.tier ?? 99);
-      else if (sortKey === "status") {
-        const statusScore = (d: typeof a) => d.resolved ? 2 : d.cancelled ? 3 : 1;
-        cmp = statusScore(a) - statusScore(b);
-      }
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-    return copy;
-  }, [query.data, sortKey, sortDir]);
-
-  const decisions = sortedDecisions;
+  const decisions = query.data?.decisions ?? [];
 
   return (
     <div className="rounded-lg bg-white shadow" ref={headingRef}>
