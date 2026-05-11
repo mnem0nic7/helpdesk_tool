@@ -2218,7 +2218,6 @@ type DecisionFeedHandle = {
 type DecisionFeedProps = {
   enabled: boolean;
   dispositionStats: DefenderAgentDispositionStats | undefined;
-  isAdmin: boolean;
   onOpenDetail: (id: string) => void;
   onOpenEntityTimeline: (id: string, name: string) => void;
   exportUrl: string;
@@ -2230,7 +2229,6 @@ const DecisionFeed = memo(function DecisionFeed({
   ref,
   enabled,
   dispositionStats,
-  isAdmin,
   onOpenDetail,
   onOpenEntityTimeline,
   exportUrl,
@@ -2670,17 +2668,6 @@ export default function AzureSecurityAgentPage() {
     setTimeout(() => decisionsHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   }
 
-  // Stable callbacks for DecisionRow memo — recreated only when the underlying
-  // mutation object changes, which is only when TanStack Query's mutate reference
-  // changes (effectively never during normal usage).
-  const handleCancel           = useCallback((id: string) => cancelMutation.mutate(id),           [cancelMutation.mutate]);
-  const handleApprove          = useCallback((id: string) => approveMutation.mutate(id),          [approveMutation.mutate]);
-  const handleResolve          = useCallback((id: string) => resolveMutation.mutate(id),          [resolveMutation.mutate]);
-  const handleUnisolate        = useCallback((id: string) => unisolateMutation.mutate(id),        [unisolateMutation.mutate]);
-  const handleUnrestrict       = useCallback((id: string) => unrestrictMutation.mutate(id),       [unrestrictMutation.mutate]);
-  const handleForceInvestigate = useCallback((id: string) => forceInvestigateMutation.mutate(id), [forceInvestigateMutation.mutate]);
-  const handleExecuteNow       = useCallback((id: string) => executeNowMutation.mutate(id),       [executeNowMutation.mutate]);
-  const handleEnableSignIn     = useCallback((id: string) => enableSignInMutation.mutate(id),     [enableSignInMutation.mutate]);
   const handleOpenEntityTimeline = useCallback((id: string, name: string) => setSelectedEntity({ id, name }), []);
   const handleOpenDetail = useCallback((id: string) => setSelectedDecisionId(id), [setSelectedDecisionId]);
 
@@ -2777,7 +2764,6 @@ export default function AzureSecurityAgentPage() {
         ref={feedRef}
         enabled={enabled}
         dispositionStats={dispositionStatsQuery.data}
-        isAdmin={isAdmin}
         onOpenDetail={handleOpenDetail}
         onOpenEntityTimeline={handleOpenEntityTimeline}
         exportUrl={api.exportDefenderAgentDecisions(30)}
