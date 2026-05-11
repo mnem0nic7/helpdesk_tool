@@ -3945,13 +3945,21 @@ export const api = {
   listDefenderAgentRuns(limit = 20): Promise<DefenderAgentRun[]> {
     return fetchJSON<DefenderAgentRun[]>(`/api/azure/security/defender-agent/runs?limit=${limit}`);
   },
-  listDefenderAgentDecisions(params?: { limit?: number; offset?: number; decision?: string; mitre_technique?: string }): Promise<DefenderAgentDecisionsResponse> {
+  listDefenderAgentDecisions(params?: { limit?: number; offset?: number; decision?: string; mitre_technique?: string; severity?: string; service_source?: string; tier?: number; resolved?: boolean; cancelled?: boolean; search?: string; date_from?: string; date_to?: string }): Promise<DefenderAgentDecisionsResponse> {
     return fetchJSON<DefenderAgentDecisionsResponse>(
       `/api/azure/security/defender-agent/decisions${buildQuery({
         limit: params?.limit ?? 100,
         offset: params?.offset ?? 0,
         ...(params?.decision ? { decision: params.decision } : {}),
         ...(params?.mitre_technique ? { mitre_technique: params.mitre_technique } : {}),
+        ...(params?.severity ? { severity: params.severity } : {}),
+        ...(params?.service_source ? { service_source: params.service_source } : {}),
+        ...(params?.tier !== undefined ? { tier: params.tier } : {}),
+        ...(params?.resolved !== undefined ? { resolved: params.resolved } : {}),
+        ...(params?.cancelled !== undefined ? { cancelled: params.cancelled } : {}),
+        ...(params?.search ? { search: params.search } : {}),
+        ...(params?.date_from ? { date_from: params.date_from } : {}),
+        ...(params?.date_to ? { date_to: params.date_to } : {}),
       })}`
     );
   },

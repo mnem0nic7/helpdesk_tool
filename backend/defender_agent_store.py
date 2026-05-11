@@ -545,6 +545,14 @@ class DefenderAgentStore:
         offset: int = 0,
         decision_filter: str | None = None,
         mitre_technique: str | None = None,
+        severity: str | None = None,
+        service_source: str | None = None,
+        tier: int | None = None,
+        resolved: bool | None = None,
+        cancelled: bool | None = None,
+        search: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         p = self._placeholder()
         where_clauses: list[str] = []
@@ -561,6 +569,38 @@ class DefenderAgentStore:
         if mitre_technique:
             where_clauses.append(f"mitre_techniques_json LIKE {p}")
             params.append(f"%{mitre_technique}%")
+
+        if severity:
+            where_clauses.append(f"alert_severity = {p}")
+            params.append(severity)
+
+        if service_source:
+            where_clauses.append(f"service_source = {p}")
+            params.append(service_source)
+
+        if tier is not None:
+            where_clauses.append(f"tier = {p}")
+            params.append(tier)
+
+        if resolved is not None:
+            where_clauses.append(f"resolved = {p}")
+            params.append(1 if resolved else 0)
+
+        if cancelled is not None:
+            where_clauses.append(f"cancelled = {p}")
+            params.append(1 if cancelled else 0)
+
+        if search:
+            where_clauses.append(f"alert_title LIKE {p}")
+            params.append(f"%{search}%")
+
+        if date_from:
+            where_clauses.append(f"alert_created_at >= {p}")
+            params.append(date_from)
+
+        if date_to:
+            where_clauses.append(f"alert_created_at <= {p}")
+            params.append(date_to)
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 

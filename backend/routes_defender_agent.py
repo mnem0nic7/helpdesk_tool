@@ -105,6 +105,14 @@ def list_decisions(
     offset: int = Query(0, ge=0),
     decision: str | None = Query(None),
     mitre_technique: str | None = Query(None),
+    severity: str | None = Query(None),
+    service_source: str | None = Query(None),
+    tier: int | None = Query(None),
+    resolved: bool | None = Query(None),
+    cancelled: bool | None = Query(None),
+    search: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     _session: dict = Depends(require_authenticated_user),
 ) -> dict:
     _ensure_azure_site()
@@ -113,6 +121,14 @@ def list_decisions(
         offset=offset,
         decision_filter=decision,
         mitre_technique=mitre_technique,
+        severity=severity,
+        service_source=service_source,
+        tier=tier,
+        resolved=resolved,
+        cancelled=cancelled,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
     )
     return {"decisions": decisions, "total": total}
 
