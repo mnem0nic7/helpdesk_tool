@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import secrets
 import string
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import ldap3
@@ -52,6 +52,7 @@ _USER_ATTRS = [
     "userAccountControl", "accountExpires", "pwdLastSet", "lastLogonTimestamp",
     "lockoutTime", "badPwdCount", "distinguishedName", "objectGUID",
     "whenCreated", "whenChanged", "memberOf", "employeeID", "company",
+    "msDS-ResultantPSO",
 ]
 
 _GROUP_ATTRS = [
@@ -188,6 +189,16 @@ def _group_scope_label(group_type: int) -> str:
     return f"{scope} {kind}"
 
 
+def _pwd_must_change(raw_pwd_last_set: Any) -> bool:
+    val = _first(raw_pwd_last_set)
+    if val is None:
+        return False
+    try:
+        return int(val) == 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _entry_to_user(entry: ldap3.Entry) -> dict[str, Any]:
     attrs = entry.entry_attributes_as_dict
     uac = int(_first(attrs.get("userAccountControl") or [512]) or 512)
@@ -222,7 +233,57 @@ def _entry_to_user(entry: ldap3.Entry) -> dict[str, Any]:
         "when_created": _ad_date_to_iso(_first(attrs.get("whenCreated"))),
         "when_changed": _ad_date_to_iso(_first(attrs.get("whenChanged"))),
         "member_of": [str(g) for g in (attrs.get("memberOf") or [])],
+        "pso_dn": str(_first(attrs.get("msDS-ResultantPSO")) or "") or None,
+        "must_change_at_next_logon": _pwd_must_change(attrs.get("pwdLastSet")),
     }
+
+
+def _get_domain_max_password_age_days() -> int | None:
+    """Query the domain root for maxPwdAge and return as days, or None on error."""
+    try:
+        conn = _get_connection()
+    except (ADError, ADNotConfigured):
+        return None
+    try:
+        conn.search("", "(objectClass=*)", BASE, attributes=["maxPwdAge"])
+        if not conn.entries:
+            return None
+        raw = _first(conn.entries[0].entry_attributes_as_dict.get("maxPwdAge"))
+        if raw is None:
+            return None
+        val = abs(int(raw))
+        if val == 0:
+            return None
+        return val // (10_000_000 * 86400)
+    except (LDAPException, TypeError, ValueError):
+        return None
+    finally:
+        conn.unbind()
+
+
+def _get_pso_max_password_age_days(pso_dn: str) -> tuple[int | None, str]:
+    """Fetch a PSO object and return (max_age_days, policy_name). Falls back to (None, pso_dn)."""
+    try:
+        conn = _get_connection()
+    except (ADError, ADNotConfigured):
+        return None, pso_dn
+    try:
+        conn.search(pso_dn, "(objectClass=*)", BASE, attributes=["msDS-MaximumPasswordAge", "name", "cn"])
+        if not conn.entries:
+            return None, pso_dn
+        attrs = conn.entries[0].entry_attributes_as_dict
+        name = str(_first(attrs.get("name") or attrs.get("cn")) or pso_dn)
+        raw = _first(attrs.get("msDS-MaximumPasswordAge"))
+        if raw is None:
+            return None, name
+        val = abs(int(raw))
+        if val == 0:
+            return None, name
+        return val // (10_000_000 * 86400), name
+    except (LDAPException, TypeError, ValueError):
+        return None, pso_dn
+    finally:
+        conn.unbind()
 
 
 def _entry_to_group(entry: ldap3.Entry) -> dict[str, Any]:
@@ -925,3 +986,68 @@ def global_search(query: str, limit: int = 30) -> list[dict[str, Any]]:
             "email": str(_first(attrs.get("mail")) or ""),
         })
     return results
+
+
+# ---------------------------------------------------------------------------
+# Password expiry
+# ---------------------------------------------------------------------------
+
+
+def get_password_expiry(identifier: str) -> dict[str, Any]:
+    """Return password expiry info for a user identified by UPN, email, or SAM."""
+    if not ad_configured():
+        return {"status": "not_configured", "error": "Active Directory is not configured"}
+
+    user = find_user_by_upn_or_email(identifier)
+    if user is None:
+        try:
+            user = get_user(identifier)
+        except ADError:
+            pass
+
+    if user is None:
+        return {"status": "not_found", "error": f"User '{identifier}' not found in Active Directory"}
+
+    pso_dn: str | None = user.get("pso_dn")
+    policy_source = "domain_default"
+    policy_name = "Default Domain Policy"
+    max_age_days: int | None
+
+    if pso_dn:
+        max_age_days, policy_name = _get_pso_max_password_age_days(pso_dn)
+        policy_source = "fine_grained"
+    else:
+        max_age_days = _get_domain_max_password_age_days()
+
+    pwd_last_set: str | None = user.get("pwd_last_set")
+    must_change: bool = user.get("must_change_at_next_logon", False)
+    password_never_expires: bool = user["flags"]["password_never_expires"]
+
+    password_expires_at: str | None = None
+    days_remaining: int | None = None
+
+    if must_change:
+        days_remaining = 0
+    elif not password_never_expires and pwd_last_set and max_age_days:
+        last_set_dt = datetime.fromisoformat(pwd_last_set)
+        expires_dt = last_set_dt + timedelta(days=max_age_days)
+        password_expires_at = expires_dt.isoformat()
+        now = datetime.now(tz=timezone.utc)
+        days_remaining = max(0, (expires_dt - now).days)
+
+    return {
+        "status": "ok",
+        "display_name": user.get("display_name", ""),
+        "sam_account_name": user.get("sam_account_name", ""),
+        "upn": user.get("upn", ""),
+        "enabled": user["flags"]["enabled"],
+        "pwd_last_set": pwd_last_set,
+        "must_change_at_next_logon": must_change,
+        "password_never_expires": password_never_expires,
+        "password_expires_at": password_expires_at,
+        "days_remaining": days_remaining,
+        "policy_source": policy_source,
+        "policy_name": policy_name,
+        "max_password_age_days": max_age_days,
+        "error": None,
+    }
