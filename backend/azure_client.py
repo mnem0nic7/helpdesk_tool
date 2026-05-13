@@ -1182,6 +1182,64 @@ Resources
             )
             return self.graph_request("GET", f"users/{user_id}", params={"$select": ",".join(_USER_BASE_SELECT)})
 
+    def get_entra_password_expiry(self, identifier: str) -> dict[str, Any]:
+        """Return password expiry info for an Entra user by UPN, email, or object ID."""
+        if not self.configured:
+            return {"status": "not_configured", "error": "Entra is not configured: missing app credentials"}
+
+        _select = "id,displayName,userPrincipalName,accountEnabled,lastPasswordChangeDateTime,passwordPolicies"
+        try:
+            user = self.graph_request("GET", f"users/{identifier}", params={"$select": _select})
+        except AzureApiError as exc:
+            err = str(exc)
+            err_lower = err.lower()
+            if any(k in err_lower for k in ("resourcenotfound", "does not exist", "not found", "badrequest")):
+                return {"status": "not_found", "error": f"User '{identifier}' not found in Entra"}
+            return {"status": "unavailable", "error": err}
+
+        password_never_expires = "DisablePasswordExpiration" in (user.get("passwordPolicies") or "")
+        last_change: str | None = user.get("lastPasswordChangeDateTime")
+
+        max_age_days = 90
+        policy_name = "Default password policy (90 days)"
+        try:
+            domains = self.graph_paged_get("domains", params={"$select": "id,isDefault,passwordValidityPeriodInDays"})
+            default_domain = next((d for d in domains if d.get("isDefault")), None)
+            if default_domain:
+                validity = default_domain.get("passwordValidityPeriodInDays")
+                if validity is not None:
+                    if int(validity) == 2147483647:
+                        password_never_expires = True
+                    else:
+                        max_age_days = int(validity)
+                        policy_name = f"Domain policy ({max_age_days} days)"
+        except (AzureApiError, StopIteration, TypeError, ValueError):
+            pass
+
+        password_expires_at: str | None = None
+        days_remaining: int | None = None
+
+        if not password_never_expires and last_change and max_age_days:
+            last_dt = datetime.fromisoformat(last_change.replace("Z", "+00:00"))
+            expires_dt = last_dt + timedelta(days=max_age_days)
+            password_expires_at = expires_dt.isoformat()
+            now = datetime.now(tz=timezone.utc)
+            days_remaining = max(0, (expires_dt - now).days)
+
+        return {
+            "status": "ok",
+            "display_name": user.get("displayName", ""),
+            "upn": user.get("userPrincipalName", ""),
+            "enabled": bool(user.get("accountEnabled")),
+            "last_password_change": last_change,
+            "password_never_expires": password_never_expires,
+            "password_expires_at": password_expires_at,
+            "days_remaining": days_remaining,
+            "policy_name": policy_name,
+            "max_password_age_days": max_age_days if not password_never_expires else None,
+            "error": None,
+        }
+
     def list_subscribed_skus(self) -> list[dict[str, Any]]:
         return self.graph_paged_get(
             "subscribedSkus",
