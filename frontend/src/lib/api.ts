@@ -3927,6 +3927,10 @@ export const api = {
     return fetchJSON<MailboxRulesStatus>(`/api/tools/mailbox-rules${buildQuery({ mailbox })}`);
   },
 
+  lookupPasswordExpiry(user: string): Promise<PasswordExpiryLookupResult> {
+    return fetchJSON<PasswordExpiryLookupResult>(`/api/tools/password-expiry${buildQuery({ user })}`);
+  },
+
   getAutoReply(mailbox: string): Promise<AutoReplyStatus> {
     return fetchJSON<AutoReplyStatus>(`/api/tools/auto-reply${buildQuery({ mailbox })}`);
   },
@@ -5246,6 +5250,45 @@ export interface SecurityLaneAISummary {
   bullets_json: string;
   generated_at: string;
   model_used: string;
+}
+
+export type PasswordExpiryLookupSourceStatus = "ok" | "unavailable" | "not_found" | "not_configured";
+
+export interface PasswordExpiryLookupAdResult {
+  status: PasswordExpiryLookupSourceStatus;
+  display_name: string;
+  sam_account_name: string;
+  upn: string;
+  enabled: boolean | null;
+  pwd_last_set: string | null;
+  must_change_at_next_logon: boolean;
+  password_never_expires: boolean;
+  password_expires_at: string | null;
+  days_remaining: number | null;
+  policy_source: string;
+  policy_name: string;
+  max_password_age_days: number | null;
+  error: string | null;
+}
+
+export interface PasswordExpiryLookupEntraResult {
+  status: PasswordExpiryLookupSourceStatus;
+  display_name: string;
+  upn: string;
+  enabled: boolean | null;
+  last_password_change: string | null;
+  password_never_expires: boolean;
+  password_expires_at: string | null;
+  days_remaining: number | null;
+  policy_name: string;
+  max_password_age_days: number | null;
+  error: string | null;
+}
+
+export interface PasswordExpiryLookupResult {
+  identifier: string;
+  ad: PasswordExpiryLookupAdResult;
+  entra: PasswordExpiryLookupEntraResult;
 }
 
 export interface PasswordExpiryStatus {
