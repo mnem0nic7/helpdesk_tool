@@ -2097,7 +2097,7 @@ export default function ToolsPage() {
           </section>
           )}
 
-          {canUseDeactivateTool ? (
+          {!isOasisDev && canUseDeactivateTool ? (
             <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>

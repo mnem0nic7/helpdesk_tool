@@ -105,4 +105,19 @@ describe("ToolsPage (oasisdev scope)", () => {
       screen.queryByText("Find mailboxes where a user has delegate access")
     ).not.toBeInTheDocument();
   });
+
+  it("hides the Offboard user section even for admins", async () => {
+    mockApi.getMe.mockResolvedValue({
+      email: "gallison@movedocs.com",
+      name: "Gallison",
+      is_admin: true,
+      can_manage_users: true,
+      can_access_tools: true,
+    });
+    render(<ToolsPage />);
+    await screen.findByText("Look up when a user's password expires");
+    expect(
+      screen.queryByText("Offboard user")
+    ).not.toBeInTheDocument();
+  });
 });
