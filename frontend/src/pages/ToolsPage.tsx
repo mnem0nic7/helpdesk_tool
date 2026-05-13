@@ -413,7 +413,7 @@ function PasswordExpiryLookupPanel({ data }: { data: PasswordExpiryLookupResult 
           {policySource && (
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-slate-400">Policy source</dt>
-              <dd className="capitalize">{policySource.replace("_", " ")}</dd>
+              <dd className="capitalize">{policySource.replaceAll("_", " ")}</dd>
             </div>
           )}
           <div className="flex gap-2">
