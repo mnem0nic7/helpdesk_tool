@@ -1,8 +1,8 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 import pytest
 
 
-def _mock_user(pwd_last_set_raw="133800000000000000", pso_dn=None, password_never_expires=False, enabled=True):
+def _mock_user(pwd_last_set_raw="134143000000000000", pso_dn=None, password_never_expires=False, enabled=True):
     """Build a minimal _entry_to_user-style dict."""
     uac = 512 | (0x10000 if password_never_expires else 0) | (0 if enabled else 0x2)
     entry = MagicMock()
@@ -44,7 +44,7 @@ def test_get_password_expiry_returns_ok(monkeypatch):
     mock_conn.__exit__ = MagicMock(return_value=False)
 
     domain_conn = MagicMock()
-    # maxPwdAge = -15552000000000000 (180 days in 100ns intervals, negative)
+    # maxPwdAge = -155520000000000 (180 days in 100ns intervals, negative)
     domain_conn.entries = [MagicMock(entry_attributes_as_dict={"maxPwdAge": ["-155520000000000"]})]
 
     connections = iter([mock_conn, domain_conn])
@@ -59,7 +59,7 @@ def test_get_password_expiry_returns_ok(monkeypatch):
     assert result["must_change_at_next_logon"] is False
     assert result["password_never_expires"] is False
     assert result["password_expires_at"] is not None
-    assert result["days_remaining"] is not None
+    assert result["days_remaining"] > 0
 
 
 def test_get_password_expiry_not_configured(monkeypatch):
@@ -124,3 +124,30 @@ def test_get_password_expiry_never_expires(monkeypatch):
     assert result["password_never_expires"] is True
     assert result["password_expires_at"] is None
     assert result["days_remaining"] is None
+
+
+def test_get_password_expiry_uses_pso_when_present(monkeypatch):
+    import ad_client
+
+    monkeypatch.setattr(ad_client, "ad_configured", lambda: True)
+
+    pso_dn = "CN=StrictPSO,CN=Password Settings Container,CN=System,DC=example,DC=com"
+
+    user_conn = MagicMock()
+    user_conn.entries = [_mock_user(pso_dn=pso_dn)]
+
+    pso_conn = MagicMock()
+    pso_conn.entries = [MagicMock(entry_attributes_as_dict={
+        "msDS-MaximumPasswordAge": ["-77760000000000"],
+        "name": ["StrictPSO"],
+        "cn": ["StrictPSO"],
+    })]
+
+    connections = iter([user_conn, pso_conn])
+    monkeypatch.setattr(ad_client, "_get_connection", lambda: next(connections))
+
+    result = ad_client.get_password_expiry("jsmith@example.com")
+
+    assert result["status"] == "ok"
+    assert result["policy_source"] == "fine_grained"
+    assert result["max_password_age_days"] == 90

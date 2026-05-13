@@ -245,7 +245,7 @@ def _get_domain_max_password_age_days() -> int | None:
     except (ADError, ADNotConfigured):
         return None
     try:
-        conn.search("", "(objectClass=*)", BASE, attributes=["maxPwdAge"])
+        conn.search(AD_BASE_DN, "(objectClass=domain)", BASE, attributes=["maxPwdAge"])
         if not conn.entries:
             return None
         raw = _first(conn.entries[0].entry_attributes_as_dict.get("maxPwdAge"))
