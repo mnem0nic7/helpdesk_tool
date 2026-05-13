@@ -885,3 +885,102 @@ def test_emailgistics_helper_rejects_non_admin_users(test_client, monkeypatch):
 
     assert resp.status_code == 403
     assert resp.json()["detail"] == "Admin access is required for Emailgistics tools"
+
+
+def test_password_expiry_returns_combined_result(test_client, monkeypatch):
+    import routes_tools
+
+    ad_result = {
+        "status": "ok",
+        "display_name": "John Smith",
+        "sam_account_name": "jsmith",
+        "upn": "jsmith@example.com",
+        "enabled": True,
+        "pwd_last_set": "2025-11-01T14:32:00+00:00",
+        "must_change_at_next_logon": False,
+        "password_never_expires": False,
+        "password_expires_at": "2026-05-01T14:32:00+00:00",
+        "days_remaining": 12,
+        "policy_source": "domain_default",
+        "policy_name": "Default Domain Policy",
+        "max_password_age_days": 180,
+        "error": None,
+    }
+    entra_result = {
+        "status": "ok",
+        "display_name": "John Smith",
+        "upn": "jsmith@example.com",
+        "enabled": True,
+        "last_password_change": "2025-11-01T14:32:00+00:00",
+        "password_never_expires": False,
+        "password_expires_at": "2026-05-01T14:32:00+00:00",
+        "days_remaining": 12,
+        "policy_name": "Domain policy (180 days)",
+        "max_password_age_days": 180,
+        "error": None,
+    }
+
+    mock_ad = MagicMock()
+    mock_ad.get_password_expiry.return_value = ad_result
+
+    mock_azure_client_instance = MagicMock()
+    mock_azure_client_instance.get_entra_password_expiry.return_value = entra_result
+    MockAzureClient = MagicMock(return_value=mock_azure_client_instance)
+
+    monkeypatch.setattr(routes_tools, "ad", mock_ad)
+    monkeypatch.setattr(routes_tools, "AzureClient", MockAzureClient)
+
+    resp = test_client.get(
+        "/api/tools/password-expiry?user=jsmith@example.com",
+        headers={"host": "it-app.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["identifier"] == "jsmith@example.com"
+    assert payload["ad"]["status"] == "ok"
+    assert payload["ad"]["sam_account_name"] == "jsmith"
+    assert payload["entra"]["status"] == "ok"
+    assert payload["entra"]["display_name"] == "John Smith"
+    mock_ad.get_password_expiry.assert_called_once_with("jsmith@example.com")
+    mock_azure_client_instance.get_entra_password_expiry.assert_called_once_with("jsmith@example.com")
+
+
+def test_password_expiry_missing_user_param_returns_422(test_client):
+    resp = test_client.get(
+        "/api/tools/password-expiry",
+        headers={"host": "it-app.movedocs.com"},
+    )
+    assert resp.status_code == 422
+
+
+def test_password_expiry_partial_result_when_ad_not_configured(test_client, monkeypatch):
+    import routes_tools
+
+    ad_result = {"status": "not_configured", "error": "Active Directory is not configured"}
+    entra_result = {
+        "status": "ok", "display_name": "John Smith", "upn": "jsmith@example.com",
+        "enabled": True, "last_password_change": "2025-11-01T14:32:00+00:00",
+        "password_never_expires": False, "password_expires_at": "2026-05-01T14:32:00+00:00",
+        "days_remaining": 12, "policy_name": "Domain policy (180 days)",
+        "max_password_age_days": 180, "error": None,
+    }
+
+    mock_ad = MagicMock()
+    mock_ad.get_password_expiry.return_value = ad_result
+    mock_azure_client_instance = MagicMock()
+    mock_azure_client_instance.get_entra_password_expiry.return_value = entra_result
+    MockAzureClient = MagicMock(return_value=mock_azure_client_instance)
+
+    monkeypatch.setattr(routes_tools, "ad", mock_ad)
+    monkeypatch.setattr(routes_tools, "AzureClient", MockAzureClient)
+
+    resp = test_client.get(
+        "/api/tools/password-expiry?user=jsmith@example.com",
+        headers={"host": "it-app.movedocs.com"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["ad"]["status"] == "not_configured"
+    assert payload["entra"]["status"] == "ok"

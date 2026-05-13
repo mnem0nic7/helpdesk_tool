@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import uuid
@@ -14,6 +15,7 @@ import ad_client as ad
 from auth import list_login_audit, require_tools_access, session_is_admin
 from emailgistics_helper_service import emailgistics_helper_service
 from azure_cache import azure_cache
+from azure_client import AzureClient
 from models import (
     AppLoginAuditEventResponse,
     AutoReplyStatus,
@@ -27,6 +29,9 @@ from models import (
     OneDriveCopyJobCreateRequest,
     OneDriveCopyJobResponse,
     OneDriveCopyUserOptionResponse,
+    PasswordExpiryLookupAdResult,
+    PasswordExpiryLookupEntraResult,
+    PasswordExpiryLookupResponse,
     SetAutoReplyRequest,
 )
 from mailbox_delegate_scan_jobs import mailbox_delegate_scan_jobs
@@ -256,6 +261,38 @@ def list_mailbox_rules(
         return MailboxRulesResponse.model_validate(user_admin_providers.list_mailbox_rules(mailbox))
     except UserAdminProviderError as exc:
         raise HTTPException(status_code=502, detail=_friendly_mailbox_rules_error(str(exc))) from exc
+
+
+@router.get("/password-expiry", response_model=PasswordExpiryLookupResponse)
+def get_password_expiry(
+    user: str = Query(..., min_length=1),
+    _session: dict[str, Any] = Depends(_require_tools_session),
+) -> PasswordExpiryLookupResponse:
+    identifier = user.strip()
+
+    def _fetch_ad() -> dict[str, Any]:
+        try:
+            return ad.get_password_expiry(identifier)
+        except Exception as exc:
+            return {"status": "unavailable", "error": str(exc)}
+
+    def _fetch_entra() -> dict[str, Any]:
+        try:
+            return AzureClient().get_entra_password_expiry(identifier)
+        except Exception as exc:
+            return {"status": "unavailable", "error": str(exc)}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        ad_future = pool.submit(_fetch_ad)
+        entra_future = pool.submit(_fetch_entra)
+        ad_result = ad_future.result()
+        entra_result = entra_future.result()
+
+    return PasswordExpiryLookupResponse(
+        identifier=identifier,
+        ad=PasswordExpiryLookupAdResult(**ad_result),
+        entra=PasswordExpiryLookupEntraResult(**entra_result),
+    )
 
 
 @router.get("/auto-reply", response_model=AutoReplyStatus)
