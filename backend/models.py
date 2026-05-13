@@ -791,6 +791,49 @@ class MailboxRuleResponse(BaseModel):
     actions_summary: list[str] = Field(default_factory=list)
 
 
+class PasswordExpiryLookupAdResult(BaseModel):
+    """AD password expiry lookup result."""
+
+    status: str
+    display_name: str = ""
+    sam_account_name: str = ""
+    upn: str = ""
+    enabled: bool | None = None
+    pwd_last_set: str | None = None
+    must_change_at_next_logon: bool = False
+    password_never_expires: bool = False
+    password_expires_at: str | None = None
+    days_remaining: int | None = None
+    policy_source: str = ""
+    policy_name: str = ""
+    max_password_age_days: int | None = None
+    error: str | None = None
+
+
+class PasswordExpiryLookupEntraResult(BaseModel):
+    """Entra password expiry lookup result."""
+
+    status: str
+    display_name: str = ""
+    upn: str = ""
+    enabled: bool | None = None
+    last_password_change: str | None = None
+    password_never_expires: bool = False
+    password_expires_at: str | None = None
+    days_remaining: int | None = None
+    policy_name: str = ""
+    max_password_age_days: int | None = None
+    error: str | None = None
+
+
+class PasswordExpiryLookupResponse(BaseModel):
+    """Password expiry lookup response combining AD and Entra results."""
+
+    identifier: str
+    ad: PasswordExpiryLookupAdResult
+    entra: PasswordExpiryLookupEntraResult
+
+
 class MailboxRulesResponse(BaseModel):
     """Inbox rule listing payload for a provided mailbox identifier."""
 
