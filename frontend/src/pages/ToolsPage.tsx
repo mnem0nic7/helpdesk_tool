@@ -13,6 +13,8 @@ import {
   OFFBOARDING_LANES,
   type OneDriveCopyJobStatus,
   type OneDriveCopyUserOption,
+  type PasswordExpiryLookupResult,
+  type PasswordExpiryLookupSourceStatus,
   type SetAutoReplyRequest,
 } from "../lib/api.ts";
 import {
@@ -294,6 +296,172 @@ function CountCard({ label, value, tone = "text-slate-900" }: { label: string; v
       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
       <div className={`mt-1 text-2xl font-semibold ${tone}`}>{value}</div>
     </div>
+  );
+}
+
+function ExpiryChip({
+  days,
+  neverExpires,
+  mustChange,
+}: {
+  days: number | null;
+  neverExpires: boolean;
+  mustChange: boolean;
+}) {
+  if (mustChange) {
+    return <CountCard label="Days Remaining" value="Must change now" tone="text-red-700" />;
+  }
+  if (neverExpires) {
+    return <CountCard label="Days Remaining" value="Never expires" tone="text-emerald-700" />;
+  }
+  if (days === null) {
+    return <CountCard label="Days Remaining" value="—" />;
+  }
+  const tone = days <= 14 ? "text-red-700" : days <= 30 ? "text-amber-700" : "text-emerald-700";
+  return <CountCard label="Days Remaining" value={String(days)} tone={tone} />;
+}
+
+function PasswordExpiryLookupPanel({ data }: { data: PasswordExpiryLookupResult }) {
+  const resolvedName =
+    data.ad.display_name || data.entra.display_name || data.identifier;
+  const resolvedUpn = data.ad.upn || data.entra.upn || data.identifier;
+
+  function formatDate(iso: string | null) {
+    if (!iso) return "—";
+    return new Date(iso).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  }
+
+  function SourceBlock({
+    label,
+    status,
+    error,
+    daysRemaining,
+    neverExpires,
+    mustChange,
+    lastSet,
+    expiresAt,
+    enabled,
+    policyName,
+    policySource,
+    maxAgeDays,
+  }: {
+    label: string;
+    status: PasswordExpiryLookupSourceStatus;
+    error: string | null;
+    daysRemaining: number | null;
+    neverExpires: boolean;
+    mustChange: boolean;
+    lastSet: string | null;
+    expiresAt: string | null;
+    enabled: boolean | null;
+    policyName: string;
+    policySource?: string;
+    maxAgeDays: number | null;
+  }) {
+    if (status === "not_configured") {
+      return (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+          <p className="mt-2 text-sm text-slate-400">{label} is not configured on this server.</p>
+        </div>
+      );
+    }
+    if (status === "unavailable") {
+      return (
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+          <p className="mt-2 text-sm text-amber-700">{error || `${label} is temporarily unavailable.`}</p>
+        </div>
+      );
+    }
+    if (status === "not_found") {
+      return (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+          <p className="mt-2 text-sm text-slate-400">User not found in {label}.</p>
+        </div>
+      );
+    }
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+        <div className="mt-3 flex flex-wrap gap-3">
+          <ExpiryChip days={daysRemaining} neverExpires={neverExpires} mustChange={mustChange} />
+          <CountCard label="Last Set" value={formatDate(lastSet)} />
+          <CountCard
+            label="Account"
+            value={enabled === null ? "—" : enabled ? "Enabled" : "Disabled"}
+            tone={enabled === false ? "text-red-700" : "text-slate-900"}
+          />
+        </div>
+        {mustChange && (
+          <p className="mt-2 text-sm font-medium text-red-600">Password must be changed at next logon.</p>
+        )}
+        <dl className="mt-3 space-y-1 text-sm text-slate-600">
+          <div className="flex gap-2">
+            <dt className="w-28 shrink-0 text-slate-400">Expires</dt>
+            <dd>{neverExpires ? "Never" : formatDate(expiresAt)}</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-28 shrink-0 text-slate-400">Policy</dt>
+            <dd>{policyName || "—"}</dd>
+          </div>
+          {policySource && (
+            <div className="flex gap-2">
+              <dt className="w-28 shrink-0 text-slate-400">Policy source</dt>
+              <dd className="capitalize">{policySource.replace("_", " ")}</dd>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <dt className="w-28 shrink-0 text-slate-400">Max age</dt>
+            <dd>{maxAgeDays !== null ? `${maxAgeDays} days` : "—"}</dd>
+          </div>
+        </dl>
+      </div>
+    );
+  }
+
+  return (
+    <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Password Expiry</div>
+        <h2 className="mt-1 text-2xl font-semibold text-slate-900">{resolvedName}</h2>
+        <p className="mt-0.5 text-sm text-slate-500">{resolvedUpn}</p>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <SourceBlock
+          label="On-prem AD"
+          status={data.ad.status}
+          error={data.ad.error}
+          daysRemaining={data.ad.days_remaining}
+          neverExpires={data.ad.password_never_expires}
+          mustChange={data.ad.must_change_at_next_logon}
+          lastSet={data.ad.pwd_last_set}
+          expiresAt={data.ad.password_expires_at}
+          enabled={data.ad.enabled}
+          policyName={data.ad.policy_name}
+          policySource={data.ad.policy_source}
+          maxAgeDays={data.ad.max_password_age_days}
+        />
+        <SourceBlock
+          label="Entra (Azure AD)"
+          status={data.entra.status}
+          error={data.entra.error}
+          daysRemaining={data.entra.days_remaining}
+          neverExpires={data.entra.password_never_expires}
+          mustChange={false}
+          lastSet={data.entra.last_password_change}
+          expiresAt={data.entra.password_expires_at}
+          enabled={data.entra.enabled}
+          policyName={data.entra.policy_name}
+          maxAgeDays={data.entra.max_password_age_days}
+        />
+      </div>
+    </section>
   );
 }
 
@@ -1092,6 +1260,8 @@ export default function ToolsPage() {
   const [activeLanes, setActiveLanes] = useState<Set<OffboardingLane>>(new Set(OFFBOARDING_LANES));
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [offboardingFormError, setOffboardingFormError] = useState("");
+  const [passwordExpiryInput, setPasswordExpiryInput] = useState("");
+  const [activePasswordExpiryLookup, setActivePasswordExpiryLookup] = useState<string | null>(null);
   const deferredDeactivateSearch = useDeferredValue(deactivateUserInput);
   const deferredSourceSearch = useDeferredValue(sourceUpnInput);
   const deferredDestinationSearch = useDeferredValue(destinationUpnInput);
@@ -1258,6 +1428,13 @@ export default function ToolsPage() {
     enabled: hasSignedInUser && !!activeMailboxLookup,
     retry: false,
     staleTime: 15_000,
+  });
+
+  const passwordExpiryQuery = useQuery({
+    queryKey: ["password-expiry", activePasswordExpiryLookup],
+    queryFn: () => api.lookupPasswordExpiry(activePasswordExpiryLookup as string),
+    enabled: hasSignedInUser && !!activePasswordExpiryLookup,
+    retry: false,
   });
 
   const mailboxDelegatesQuery = useQuery({
@@ -1568,6 +1745,12 @@ export default function ToolsPage() {
       return;
     }
     setActiveMailboxLookup(mailbox);
+  }
+
+  function submitPasswordExpiryLookup() {
+    const identifier = passwordExpiryInput.trim();
+    if (!identifier) return;
+    setActivePasswordExpiryLookup(identifier);
   }
 
   function submitSetAutoReply() {
@@ -2204,6 +2387,55 @@ export default function ToolsPage() {
               }}
               isRefreshing={mailboxRulesQuery.isFetching}
             />
+          </section>
+
+          <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Password Expiry</div>
+                <h2 className="mt-1 text-2xl font-semibold text-slate-900">Look up when a user&apos;s password expires</h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Enter a user email, UPN, or sAMAccountName to check their on-prem AD and Entra (Azure AD) password expiry.
+                </p>
+              </div>
+              <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700">Read only</span>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-slate-700">Email, UPN, or sAMAccountName</label>
+                <input
+                  type="text"
+                  value={passwordExpiryInput}
+                  onChange={(e) => setPasswordExpiryInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitPasswordExpiryLookup();
+                  }}
+                  placeholder="jsmith@example.com or jsmith"
+                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={submitPasswordExpiryLookup}
+                disabled={!passwordExpiryInput.trim() || passwordExpiryQuery.isFetching}
+                className={buttonClass("primary", !passwordExpiryInput.trim() || passwordExpiryQuery.isFetching)}
+              >
+                {passwordExpiryQuery.isFetching ? "Looking up..." : "Look up"}
+              </button>
+            </div>
+
+            {passwordExpiryQuery.isError && (
+              <p className="text-sm text-red-600">
+                {passwordExpiryQuery.error instanceof Error
+                  ? passwordExpiryQuery.error.message
+                  : "Lookup failed. Please try again."}
+              </p>
+            )}
+
+            {passwordExpiryQuery.data && (
+              <PasswordExpiryLookupPanel data={passwordExpiryQuery.data} />
+            )}
           </section>
         </div>
 
