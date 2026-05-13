@@ -1216,6 +1216,7 @@ function EmailgisticsHelperResults({
 
 export default function ToolsPage() {
   const branding = getSiteBranding();
+  const isOasisDev = branding.scope === "oasisdev";
   const queryClient = useQueryClient();
   const [sourceUpnInput, setSourceUpnInput] = useState("");
   const [destinationUpnInput, setDestinationUpnInput] = useState("");
@@ -1864,6 +1865,7 @@ export default function ToolsPage() {
       ) : null}
       {hasSignedInUser ? (
         <>
+      {!isOasisDev && (
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -1875,9 +1877,11 @@ export default function ToolsPage() {
           </div>
         </div>
       </section>
+      )}
 
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <div className="space-y-6">
+          {!isOasisDev && (
           <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -1990,7 +1994,9 @@ export default function ToolsPage() {
               </span>
             </div>
           </section>
+          )}
 
+          {!isOasisDev && (
           <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -2035,7 +2041,9 @@ export default function ToolsPage() {
               isRefreshing={mailboxDelegatesQuery.isFetching}
             />
           </section>
+          )}
 
+          {!isOasisDev && (
           <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -2087,6 +2095,7 @@ export default function ToolsPage() {
               isCancelling={cancelDelegateMailboxJobMutation.isPending}
             />
           </section>
+          )}
 
           {canUseDeactivateTool ? (
             <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -2278,7 +2287,7 @@ export default function ToolsPage() {
             </section>
           ) : null}
 
-          {canUseEmailgisticsHelper ? (
+          {!isOasisDev && canUseEmailgisticsHelper ? (
             <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
@@ -2344,6 +2353,7 @@ export default function ToolsPage() {
             </section>
           ) : null}
 
+          {!isOasisDev && (
           <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -2388,6 +2398,7 @@ export default function ToolsPage() {
               isRefreshing={mailboxRulesQuery.isFetching}
             />
           </section>
+          )}
 
           <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2439,6 +2450,7 @@ export default function ToolsPage() {
           </section>
         </div>
 
+        {!isOasisDev && (
         <div className="space-y-6">
           {activeJobQuery.data ? (
             <OneDriveCopyJobDetail job={activeJobQuery.data} />
@@ -2684,6 +2696,7 @@ export default function ToolsPage() {
 
           <LoginAuditPanel events={loginAuditQuery.data ?? []} />
         </div>
+        )}
       </section>
         </>
       ) : null}

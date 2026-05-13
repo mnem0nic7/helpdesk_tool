@@ -128,7 +128,7 @@ export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
                 <Route path="triage" element={<TriagePage />} />
                 <Route path="ai-log" element={<AILogPage />} />
                 <Route path="alerts" element={<AlertsPage />} />
-                {branding.scope === "primary" ? <Route path="tools" element={<ToolsPage />} /> : null}
+                {(branding.scope === "primary" || branding.scope === "oasisdev") ? <Route path="tools" element={<ToolsPage />} /> : null}
                 <Route path="knowledge-base" element={<KnowledgeBasePage />} />
                 {branding.scope === "primary" ? <Route path="users" element={<UsersPage />} /> : null}
                 {branding.scope === "primary" ? <Route path="active-directory" element={<ADManagementPage />} /> : null}

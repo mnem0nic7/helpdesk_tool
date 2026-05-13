@@ -159,10 +159,10 @@ describe("Layout tools navigation", () => {
     expect(screen.getAllByText("Directory Role Membership Review").length).toBeGreaterThan(0);
   });
 
-  it("hides Tools on oasisdev", async () => {
+  it("shows Tools on oasisdev", async () => {
     renderLayoutAt("/", "oasisdev");
     await screen.findByText("Page content");
-    expect(screen.queryByRole("link", { name: /Tools/ })).not.toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /Tools/ })).toBeInTheDocument();
   });
 
   it("shows Tools even if the legacy tools-access flag is false", async () => {

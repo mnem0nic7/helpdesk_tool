@@ -27,7 +27,7 @@ const helpdeskNavItems: NavItem[] = [
   { to: "/triage", label: "AI Triage", icon: "\u25C6" },
   { to: "/ai-log", label: "AI Log", icon: "\u25CB" },
   { to: "/alerts", label: "Alerts", icon: "\u25B3" },
-  { to: "/tools", label: "Tools", icon: "\u2692", primaryOnly: true },
+  { to: "/tools", label: "Tools", icon: "\u2692" },
   { to: "/users", label: "Users", icon: "\u25C7", primaryOnly: true },
   { to: "/active-directory", label: "Active Directory", icon: "\u25A6", primaryOnly: true },
   { to: "/password-expiry", label: "Pwd Expiry", icon: "\u23F0", primaryOnly: true },
