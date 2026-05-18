@@ -275,14 +275,19 @@ class AzureClient:
         }
         if headers:
             request_headers.update(headers)
-        resp = self._session.request(
-            method,
-            url,
-            params=params,
-            json=json_body,
-            headers=request_headers,
-            timeout=60,
-        )
+        try:
+            resp = self._session.request(
+                method,
+                url,
+                params=params,
+                json=json_body,
+                headers=request_headers,
+                timeout=60,
+            )
+        except requests.exceptions.Timeout as exc:
+            raise AzureApiError(f"{method} {url} timed out") from exc
+        except requests.exceptions.RequestException as exc:
+            raise AzureApiError(f"{method} {url} request failed: {exc}") from exc
         if not resp.ok:
             raise AzureApiError(
                 f"{method} {url} failed ({resp.status_code}): {resp.text[:1000]}",
