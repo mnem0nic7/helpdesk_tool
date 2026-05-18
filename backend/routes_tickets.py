@@ -1010,13 +1010,15 @@ async def remove_oasisdev_label(
         issue = all_issues.get(key)
         current_labels: list[str] = (issue or {}).get("fields", {}).get("labels") or []
         new_labels = [lbl for lbl in current_labels if "oasisdev" not in lbl.lower()]
+        if "libra_support" not in new_labels:
+            new_labels.append("libra_support")
 
         # Write updates to Jira
         ctx = get_jira_write_context(_admin, shared_client=_client)
         ctx.client.update_issue_fields(key, {"labels": new_labels})
         note_text = (
             "This ticket has been reviewed and confirmed to be unrelated to OasisDev. "
-            "The oasisdev label has been removed."
+            "The oasisdev label has been removed and the ticket has been tagged as Libra Support."
         )
         if ctx.is_fallback:
             note_text = prepend_fallback_actor_line(note_text, _admin)
