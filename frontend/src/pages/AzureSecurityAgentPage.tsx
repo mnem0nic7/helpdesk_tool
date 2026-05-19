@@ -933,6 +933,27 @@ function AlertDetailDrawer({
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["defender-agent-decision", decisionId] }),
   });
 
+  const [selectedPlaybookId, setSelectedPlaybookId] = useState("");
+  const playbooksQuery = useQuery({
+    queryKey: ["defender-agent-playbooks-drawer"],
+    queryFn: () => api.listDefenderAgentPlaybooks(),
+    staleTime: 60_000,
+    enabled: isAdmin,
+  });
+  const enabledPlaybooks = useMemo(
+    () => (playbooksQuery.data ?? []).filter((p) => p.enabled),
+    [playbooksQuery.data],
+  );
+  const selectedPlaybook = enabledPlaybooks.find((p) => p.id === selectedPlaybookId) ?? null;
+  const runPlaybookMut = useMutation({
+    mutationFn: (playbookId: string) => api.runPlaybookOnDecision(decisionId, playbookId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["defender-agent-decision", decisionId] });
+      queryClient.invalidateQueries({ queryKey: ["defender-agent-decisions"] });
+      setSelectedPlaybookId("");
+    },
+  });
+
   // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -1147,6 +1168,67 @@ function AlertDetailDrawer({
               {recommendedActions && (
                 <Section title="Microsoft recommended actions">
                   <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">{recommendedActions}</p>
+                </Section>
+              )}
+
+              {/* Run Playbook */}
+              {isAdmin && (
+                <Section title="Run playbook">
+                  {enabledPlaybooks.length === 0 ? (
+                    <p className="text-xs text-gray-400">No enabled playbooks. Create one in the Playbooks panel.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex gap-2">
+                        <select
+                          value={selectedPlaybookId}
+                          onChange={(e) => setSelectedPlaybookId(e.target.value)}
+                          className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        >
+                          <option value="">Select a playbook…</option>
+                          {enabledPlaybooks.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => {
+                            if (!selectedPlaybookId) return;
+                            const actions = selectedPlaybook?.actions ?? [];
+                            const label = actions.map((a) => ACTION_LABELS[a] ?? a.replace(/_/g, " ")).join(", ") || "no actions";
+                            if (confirm(`Run playbook "${selectedPlaybook?.name}"?\n\nActions: ${label}`)) {
+                              runPlaybookMut.mutate(selectedPlaybookId);
+                            }
+                          }}
+                          disabled={!selectedPlaybookId || runPlaybookMut.isPending}
+                          className="shrink-0 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-40"
+                        >
+                          {runPlaybookMut.isPending ? "Running…" : "Run"}
+                        </button>
+                      </div>
+                      {selectedPlaybook && (
+                        <div className="rounded-md bg-gray-50 border border-gray-100 px-3 py-2 space-y-1">
+                          {selectedPlaybook.description && (
+                            <p className="text-xs text-gray-600">{selectedPlaybook.description}</p>
+                          )}
+                          <div className="flex flex-wrap gap-1">
+                            {selectedPlaybook.actions.map((a) => (
+                              <span
+                                key={a}
+                                className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${ACTION_COLORS[a] ?? "bg-gray-100 text-gray-600"}`}
+                              >
+                                {ACTION_LABELS[a] ?? a.replace(/_/g, " ")}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {runPlaybookMut.isError && (
+                        <p className="text-xs text-red-600">{runPlaybookMut.error instanceof Error ? runPlaybookMut.error.message : "Failed to run playbook"}</p>
+                      )}
+                      {runPlaybookMut.isSuccess && (
+                        <p className="text-xs text-emerald-600">Playbook dispatched successfully.</p>
+                      )}
+                    </div>
+                  )}
                 </Section>
               )}
 
@@ -1543,10 +1625,12 @@ function AlertDetailDrawer({
 
 const DecisionRow = memo(function DecisionRow({
   d,
+  isOdd,
   onOpenDetail,
   onOpenEntityTimeline,
 }: {
   d: DefenderAgentDecision;
+  isOdd?: boolean;
   onOpenDetail: (id: string) => void;
   onOpenEntityTimeline: (entityId: string, entityName: string) => void;
 }) {
@@ -1562,7 +1646,7 @@ const DecisionRow = memo(function DecisionRow({
 
   return (
     <tr
-      className="hover:bg-gray-50 cursor-pointer"
+      className={["transition-colors hover:bg-blue-50 cursor-pointer", isOdd ? "bg-gray-50/50" : ""].join(" ")}
       onClick={() => onOpenDetail(d.decision_id)}
     >
         <td className="whitespace-nowrap px-3 py-2 text-xs text-gray-500">{fmtTime(d.executed_at)}</td>
@@ -2377,6 +2461,7 @@ const DecisionFeed = memo(function DecisionFeed({
         </div>
       )}
 
+      <div className="min-h-96">
       {query.isLoading ? (
         <div className="flex items-center justify-center py-12">
           <div className="h-6 w-6 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
@@ -2387,7 +2472,7 @@ const DecisionFeed = memo(function DecisionFeed({
         </p>
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <div className="max-h-[72vh] overflow-auto rounded-lg border border-gray-200">
             <table className="min-w-full table-fixed divide-y divide-gray-100 text-sm">
               <colgroup>
                 <col className="w-28" />   {/* Time */}
@@ -2398,7 +2483,7 @@ const DecisionFeed = memo(function DecisionFeed({
                 <col className="w-28" />   {/* Action */}
                 <col className="w-28" />   {/* Status */}
               </colgroup>
-              <thead className="bg-gray-50">
+              <thead className="sticky top-0 z-10 bg-gray-50">
                 <tr>
                   {(["Time", "Alert", "Source", "Severity", "Tier", "Action", "Status"] as const).map((h) => {
                     const key: SortKey | null = h === "Time" ? "time" : h === "Severity" ? "severity" : h === "Tier" ? "tier" : h === "Status" ? "status" : null;
@@ -2418,10 +2503,11 @@ const DecisionFeed = memo(function DecisionFeed({
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
-                {decisions.map((d) => (
+                {decisions.map((d, idx) => (
                   <DecisionRow
                     key={d.decision_id}
                     d={d}
+                    isOdd={idx % 2 === 1}
                     onOpenDetail={onOpenDetail}
                     onOpenEntityTimeline={onOpenEntityTimeline}
                   />
@@ -2442,6 +2528,7 @@ const DecisionFeed = memo(function DecisionFeed({
           )}
         </>
       )}
+      </div>
     </div>
   );
 });
@@ -2670,11 +2757,9 @@ export default function AzureSecurityAgentPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 mt-1">
-          {dryRun && (
-            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800">
-              Dry Run — no actions taken
-            </span>
-          )}
+          <span className={`rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800 ${dryRun ? "" : "invisible"}`}>
+            Dry Run — no actions taken
+          </span>
           <span className={`rounded-full px-3 py-1 text-xs font-medium ${enabled ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-600"}`}>
             {enabled ? "Agent Enabled" : "Agent Disabled"}
           </span>
@@ -2882,75 +2967,74 @@ export default function AzureSecurityAgentPage() {
           <span className="text-xs text-gray-400">Watchlisted entities get visual callouts; boost_tier escalates decisions one tier</span>
         </div>
 
-        {/* Add form (admin only) */}
-        {isAdmin && (
-          <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
-            <div className="flex flex-wrap gap-2 items-end">
-              <label className="block">
-                <span className="text-xs text-gray-500">Type</span>
-                <select
-                  value={watchlistForm.entity_type}
-                  onChange={(e) => setWatchlistForm((p) => ({ ...p, entity_type: e.target.value as "user" | "device" }))}
-                  className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                >
-                  <option value="user">User</option>
-                  <option value="device">Device</option>
-                </select>
-              </label>
-              <label className="block flex-1 min-w-[160px]">
-                <span className="text-xs text-gray-500">Entity ID / UPN</span>
-                <input
-                  type="text"
-                  placeholder="e.g. alice@contoso.com"
-                  value={watchlistForm.entity_id}
-                  onChange={(e) => setWatchlistForm((p) => ({ ...p, entity_id: e.target.value }))}
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block flex-1 min-w-[120px]">
-                <span className="text-xs text-gray-500">Display name (optional)</span>
-                <input
-                  type="text"
-                  placeholder="Alice Smith"
-                  value={watchlistForm.entity_name}
-                  onChange={(e) => setWatchlistForm((p) => ({ ...p, entity_name: e.target.value }))}
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block flex-1 min-w-[120px]">
-                <span className="text-xs text-gray-500">Reason</span>
-                <input
-                  type="text"
-                  placeholder="VIP / Privileged account"
-                  value={watchlistForm.reason}
-                  onChange={(e) => setWatchlistForm((p) => ({ ...p, reason: e.target.value }))}
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer self-end pb-1.5">
-                <input
-                  type="checkbox"
-                  checked={watchlistForm.boost_tier}
-                  onChange={(e) => setWatchlistForm((p) => ({ ...p, boost_tier: e.target.checked }))}
-                  className="h-4 w-4 rounded border-gray-300 text-amber-600"
-                />
-                Boost tier
-              </label>
-              <button
-                onClick={() => {
-                  if (!watchlistForm.entity_id.trim()) return;
-                  addWatchlistMutation.mutate(watchlistForm, {
-                    onSuccess: () => setWatchlistForm({ entity_type: "user", entity_id: "", entity_name: "", reason: "", boost_tier: false }),
-                  });
-                }}
-                disabled={!watchlistForm.entity_id.trim() || addWatchlistMutation.isPending}
-                className="self-end rounded-md bg-amber-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-40"
+        {/* Add form (admin only) — always occupies layout space while me query is pending
+            to prevent the card from growing once isAdmin resolves (CLS fix) */}
+        <div className={`border-b border-gray-100 bg-gray-50 px-5 py-4 ${me === undefined ? "invisible" : !isAdmin ? "hidden" : ""}`}>
+          <div className="flex flex-wrap gap-2 items-end">
+            <label className="block">
+              <span className="text-xs text-gray-500">Type</span>
+              <select
+                value={watchlistForm.entity_type}
+                onChange={(e) => setWatchlistForm((p) => ({ ...p, entity_type: e.target.value as "user" | "device" }))}
+                className="mt-1 block rounded-md border border-gray-300 px-2 py-1.5 text-sm"
               >
-                {addWatchlistMutation.isPending ? "Adding…" : "Add"}
-              </button>
-            </div>
+                <option value="user">User</option>
+                <option value="device">Device</option>
+              </select>
+            </label>
+            <label className="block flex-1 min-w-[160px]">
+              <span className="text-xs text-gray-500">Entity ID / UPN</span>
+              <input
+                type="text"
+                placeholder="e.g. alice@contoso.com"
+                value={watchlistForm.entity_id}
+                onChange={(e) => setWatchlistForm((p) => ({ ...p, entity_id: e.target.value }))}
+                className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="block flex-1 min-w-[120px]">
+              <span className="text-xs text-gray-500">Display name (optional)</span>
+              <input
+                type="text"
+                placeholder="Alice Smith"
+                value={watchlistForm.entity_name}
+                onChange={(e) => setWatchlistForm((p) => ({ ...p, entity_name: e.target.value }))}
+                className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="block flex-1 min-w-[120px]">
+              <span className="text-xs text-gray-500">Reason</span>
+              <input
+                type="text"
+                placeholder="VIP / Privileged account"
+                value={watchlistForm.reason}
+                onChange={(e) => setWatchlistForm((p) => ({ ...p, reason: e.target.value }))}
+                className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer self-end pb-1.5">
+              <input
+                type="checkbox"
+                checked={watchlistForm.boost_tier}
+                onChange={(e) => setWatchlistForm((p) => ({ ...p, boost_tier: e.target.checked }))}
+                className="h-4 w-4 rounded border-gray-300 text-amber-600"
+              />
+              Boost tier
+            </label>
+            <button
+              onClick={() => {
+                if (!watchlistForm.entity_id.trim()) return;
+                addWatchlistMutation.mutate(watchlistForm, {
+                  onSuccess: () => setWatchlistForm({ entity_type: "user", entity_id: "", entity_name: "", reason: "", boost_tier: false }),
+                });
+              }}
+              disabled={!watchlistForm.entity_id.trim() || addWatchlistMutation.isPending}
+              className="self-end rounded-md bg-amber-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-40"
+            >
+              {addWatchlistMutation.isPending ? "Adding…" : "Add"}
+            </button>
           </div>
-        )}
+        </div>
 
         {/* Watchlist table */}
         {watchlistEntries.length === 0 ? (

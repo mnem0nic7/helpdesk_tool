@@ -36,6 +36,7 @@ from models import (
     DefenderAgentSuppressionCreate,
     DefenderAgentSuppressionItem,
     DefenderAgentSuppressionsResponse,
+    DefenderAgentRunPlaybookBody,
 )
 from site_context import get_current_site_scope
 
@@ -541,6 +542,60 @@ def enable_sign_in_decision(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return row
+
+
+# ---------------------------------------------------------------------------
+# Run playbook against decision entities
+# ---------------------------------------------------------------------------
+
+@router.post("/decisions/{decision_id}/run-playbook", response_model=DefenderAgentDecisionItem)
+def run_playbook_on_decision(
+    decision_id: str,
+    body: DefenderAgentRunPlaybookBody,
+    _session: dict = Depends(require_admin),
+) -> dict:
+    """Manually run a playbook's actions against all entities in a decision (admin only)."""
+    _ensure_azure_site()
+    row = defender_agent_store.get_decision(decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+
+    pb = defender_agent_store.get_playbook(body.playbook_id)
+    if pb is None:
+        raise HTTPException(status_code=404, detail="Playbook not found")
+    if not pb.get("enabled"):
+        raise HTTPException(status_code=400, detail="Playbook is disabled")
+
+    actions = pb.get("actions") or []
+    if not actions:
+        raise HTTPException(status_code=400, detail="Playbook has no actions defined")
+
+    from defender_agent import _dispatch_action
+    from security_device_jobs import security_device_jobs as sdj
+    from user_admin_jobs import user_admin_jobs as uaj
+
+    entities = row.get("entities") or []
+    operator = str(_session.get("email") or _session.get("name") or "")
+    reason = f"Manual playbook '{pb['name']}' run by {operator} on alert: {row.get('alert_title', '')}"
+
+    new_job_ids: list[str] = []
+    for action_type in actions:
+        jids = _dispatch_action(
+            action_type=action_type,
+            entities=entities,
+            alert={},
+            user_admin_jobs=uaj,
+            security_device_jobs=sdj,
+            reason=reason,
+            alert_severity=str(row.get("alert_severity") or ""),
+        )
+        new_job_ids.extend(jids)
+
+    if new_job_ids:
+        existing = list(row.get("job_ids") or [])
+        defender_agent_store.update_decision_jobs(decision_id, existing + new_job_ids)
+
+    return defender_agent_store.get_decision(decision_id) or row
 
 
 # ---------------------------------------------------------------------------

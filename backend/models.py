@@ -2735,6 +2735,10 @@ class DefenderAgentPlaybookUpdate(BaseModel):
     enabled: bool | None = None
 
 
+class DefenderAgentRunPlaybookBody(BaseModel):
+    playbook_id: str
+
+
 class DefenderAgentCustomRule(BaseModel):
     id: str
     name: str = ""
