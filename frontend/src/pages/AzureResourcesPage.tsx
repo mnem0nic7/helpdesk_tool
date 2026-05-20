@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api, type AzureResourceRow } from "../lib/api.ts";
@@ -135,17 +135,31 @@ export default function AzureResourcesPage() {
   const networkSavings = networkSavingsQuery.data ?? [];
   const unattachedPublicIps = networkSavings.filter((item) => item.opportunity_type === "unattached_public_ip");
   const networkReviewRows = networkSavings.filter((item) => item.opportunity_type !== "unattached_public_ip");
-  const subscriptions = Array.from(new Set(resources.map((item) => item.subscription_name || item.subscription_id))).sort();
-  const resourceTypes = Array.from(new Set(resources.map((item) => item.resource_type).filter(Boolean))).sort();
-  const locations = Array.from(new Set(resources.map((item) => item.location).filter(Boolean))).sort();
-  const states = Array.from(new Set(resources.map((item) => item.state).filter(Boolean))).sort();
-  const filtered = resources;
-  const sorted = sortRows(filtered, sortKey, sortDir, (item, key) => {
-    if (key === "subscription") return item.subscription_name || item.subscription_id;
-    if (key === "sku") return item.vm_size || item.sku_name;
-    return (item as unknown as Record<string, unknown>)[key] as string;
-  });
-  const filterKey = [search, subscriptionId, resourceType, location, state, sortKey, sortDir].join("|");
+  const subscriptions = useMemo(
+    () => Array.from(new Set(resources.map((item) => item.subscription_name || item.subscription_id))).sort(),
+    [resources],
+  );
+  const resourceTypes = useMemo(
+    () => Array.from(new Set(resources.map((item) => item.resource_type).filter(Boolean))).sort(),
+    [resources],
+  );
+  const locations = useMemo(
+    () => Array.from(new Set(resources.map((item) => item.location).filter(Boolean))).sort(),
+    [resources],
+  );
+  const states = useMemo(
+    () => Array.from(new Set(resources.map((item) => item.state).filter(Boolean))).sort(),
+    [resources],
+  );
+  const sorted = useMemo(
+    () => sortRows(resources, sortKey, sortDir, (item, key) => {
+      if (key === "subscription") return item.subscription_name || item.subscription_id;
+      if (key === "sku") return item.vm_size || item.sku_name;
+      return (item as unknown as Record<string, unknown>)[key] as string;
+    }),
+    [resources, sortKey, sortDir],
+  );
+  const filterKey = [deferredSearch, subscriptionId, resourceType, location, state, sortKey, sortDir].join("|");
   const { visibleCount, hasMore, sentinelRef } = useInfiniteScrollCount(sorted.length, 20, filterKey);
   const visibleResources = sorted.slice(0, visibleCount);
   const activeResource = selectedResource ? resources.find((resource) => resource.id === selectedResource.id) ?? selectedResource : null;
@@ -265,7 +279,7 @@ export default function AzureResourcesPage() {
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 px-4 py-3 text-sm text-slate-500">
-          Showing <span className="font-semibold text-slate-900">{visibleResources.length.toLocaleString()}</span> of {filtered.length.toLocaleString()} filtered resources
+          Showing <span className="font-semibold text-slate-900">{visibleResources.length.toLocaleString()}</span> of {sorted.length.toLocaleString()} filtered resources
           <span className="text-slate-400"> | </span>
           {(data.total_count ?? resources.length).toLocaleString()} total resources
         </div>
@@ -314,7 +328,7 @@ export default function AzureResourcesPage() {
           </table>
           {hasMore ? (
             <div ref={sentinelRef} className="border-t border-slate-200 px-4 py-3 text-center text-xs text-slate-400">
-              Showing {visibleResources.length.toLocaleString()} of {filtered.length.toLocaleString()} resources — scroll inside this table for more rows
+              Showing {visibleResources.length.toLocaleString()} of {sorted.length.toLocaleString()} resources — scroll inside this table for more rows
             </div>
           ) : null}
         </div>
