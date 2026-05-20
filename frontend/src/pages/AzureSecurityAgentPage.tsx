@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback, memo, useImperativeHandle, useTransition, type ReactNode } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, memo, useImperativeHandle, useTransition, useDeferredValue, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api.ts";
@@ -2397,7 +2397,8 @@ const DecisionFeed = memo(function DecisionFeed({
   });
 
   const decisionsTotal = query.data?.total ?? 0;
-  const decisions = query.data?.decisions ?? [];
+  const rawDecisions = query.data?.decisions ?? [];
+  const decisions = useDeferredValue(rawDecisions);
 
   return (
     <div className="rounded-lg bg-white shadow" ref={headingRef}>
@@ -2740,8 +2741,11 @@ export default function AzureSecurityAgentPage() {
     setTimeout(() => decisionsHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   }
 
+  const [, startDetailTransition] = useTransition();
   const handleOpenEntityTimeline = useCallback((id: string, name: string) => setSelectedEntity({ id, name }), []);
-  const handleOpenDetail = useCallback((id: string) => setSelectedDecisionId(id), [setSelectedDecisionId]);
+  const handleOpenDetail = useCallback((id: string) => {
+    startDetailTransition(() => setSelectedDecisionId(id));
+  }, [startDetailTransition]);
 
   const enabled = config?.enabled ?? false;
   const dryRun = config?.dry_run ?? false;
