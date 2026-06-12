@@ -10,6 +10,9 @@ import re
 import statistics
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+_CENTRAL = ZoneInfo("America/Chicago")
 from typing import Any, Literal, Optional
 
 from config import (
@@ -204,6 +207,16 @@ def _iso_to_utc_seconds(value: Any) -> str:
     if not dt:
         return ""
     return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _to_central_str(value: Any) -> str:
+    """Convert a datetime-like value to a Central-time string (YYYY-MM-DD HH:MM:SS)."""
+    if isinstance(value, dict):
+        value = value.get("iso8601") or value.get("jira") or value.get("friendly") or ""
+    dt = parse_dt(str(value or "").strip())
+    if not dt:
+        return ""
+    return dt.astimezone(_CENTRAL).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def safe_get(d: dict[str, Any], *keys: str, default: Any = "") -> Any:
@@ -1083,7 +1096,8 @@ def _last_comment_date(fields: dict[str, Any]) -> str:
     if not comments:
         return ""
     last = comments[-1]
-    return last.get("updated") or last.get("created") or ""
+    raw = last.get("updated") or last.get("created") or ""
+    return _to_central_str(raw) if isinstance(raw, dict) else raw
 
 
 def _last_comment_author(fields: dict[str, Any]) -> str:
@@ -1165,9 +1179,8 @@ def _all_comments_text(fields: dict[str, Any]) -> str:
     parts: list[str] = []
     for c in comments:
         author = (c.get("author") or {}).get("displayName", "Unknown")
-        date = c.get("created") or ""
-        if date:
-            date = date[:19].replace("T", " ")
+        date_raw = c.get("created") or ""
+        date = _to_central_str(date_raw) if date_raw else ""
         body_obj = c.get("body")
         if isinstance(body_obj, str):
             body = body_obj
