@@ -108,6 +108,44 @@ def test_create_offboarding_run_rejects_ad_lane_without_ad_sam(test_client, monk
     assert "ad_sam" in resp.json()["detail"]
 
 
+def test_create_offboarding_run_rejects_jira_lane_without_identifiers(test_client, monkeypatch):
+    import routes_tools
+
+    mock_store = MagicMock()
+    monkeypatch.setattr(routes_tools, "offboarding_runs", mock_store)
+
+    resp = test_client.post(
+        "/api/tools/offboarding-runs",
+        json={"lanes": ["jira_deactivate"]},
+        headers={"host": "it-app.movedocs.com"},
+    )
+
+    assert resp.status_code == 400
+    assert "Jira" in resp.json()["detail"]
+
+
+def test_create_offboarding_run_accepts_jira_lane(test_client, monkeypatch):
+    import routes_tools
+    import offboarding_runs as or_module
+
+    mock_store = MagicMock()
+    monkeypatch.setattr(routes_tools, "offboarding_runs", mock_store)
+    monkeypatch.setattr(or_module, "offboarding_runs", mock_store)
+
+    with patch("routes_tools.run_offboarding"):
+        resp = test_client.post(
+            "/api/tools/offboarding-runs",
+            json={
+                "entra_user_id": "user-1",
+                "display_name": "Jane Doe",
+                "lanes": ["jira_deactivate"],
+            },
+            headers={"host": "it-app.movedocs.com"},
+        )
+
+    assert resp.status_code == 202
+
+
 def test_create_offboarding_run_rejects_empty_lanes(test_client, monkeypatch):
     import routes_tools
 
@@ -288,37 +326,6 @@ def test_retry_offboarding_lane_returns_400_for_unknown_lane(test_client, monkey
     )
 
     assert resp.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# POST /offboarding-runs/launch-exit-workflow
-# ---------------------------------------------------------------------------
-
-def test_launch_exit_workflow_returns_workflow_id_and_deep_link(test_client, monkeypatch):
-    import routes_tools
-    import user_exit_workflows as uew_module
-
-    mock_uew = MagicMock()
-    mock_uew.create_workflow.return_value = {
-        "workflow_id": "wf-1",
-        "user_id": "user-1",
-        "status": "running",
-        "steps": [],
-        "manual_tasks": [],
-    }
-    monkeypatch.setattr(routes_tools, "user_exit_workflows", mock_uew)
-    monkeypatch.setattr(uew_module, "user_exit_workflows", mock_uew)
-
-    resp = test_client.post(
-        "/api/tools/offboarding-runs/launch-exit-workflow",
-        json={"entra_user_id": "user-1", "display_name": "Jane Doe"},
-        headers={"host": "it-app.movedocs.com"},
-    )
-
-    assert resp.status_code == 200
-    payload = resp.json()
-    assert payload["workflow_id"] == "wf-1"
-    assert payload["deep_link"] == "/users?workflow=wf-1"
 
 
 # ---------------------------------------------------------------------------

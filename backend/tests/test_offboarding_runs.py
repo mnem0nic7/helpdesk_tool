@@ -273,6 +273,140 @@ def test_run_offboarding_passes_removed_groups_to_validate_lane():
     assert validate_calls == [removed_groups]
 
 
+def _run_jira_lane(mock_jira_client: MagicMock, *, entra_user_id: str = "u1", display_name: str = "Jane") -> dict:
+    """Run only the jira_deactivate lane with a mocked JiraClient; return the run dict."""
+    from offboarding_runs import run_offboarding
+
+    store = _fresh_store()
+    store.create_run(
+        run_id="r1",
+        entra_user_id=entra_user_id,
+        ad_sam="",
+        display_name=display_name,
+        actor_email="admin@example.com",
+        lanes=["jira_deactivate"],
+    )
+
+    mock_uap_module = MagicMock()
+    mock_uap = MagicMock()
+    mock_uap_module.user_admin_providers = mock_uap
+    mock_uap.entra.client.graph_request.return_value = {
+        "mail": "jane@example.com",
+        "userPrincipalName": "jane@example.com",
+    }
+
+    mock_jira_module = MagicMock()
+    mock_jira_module.JiraClient.return_value = mock_jira_client
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "user_admin_providers": mock_uap_module,
+            "ad_client": MagicMock(),
+            "jira_client": mock_jira_module,
+        },
+    ):
+        run_offboarding(
+            run_id="r1",
+            entra_user_id=entra_user_id,
+            ad_sam="",
+            display_name=display_name,
+            lanes=["jira_deactivate"],
+            store=store,
+        )
+    return store.get_run("r1")
+
+
+def test_jira_deactivate_lane_deactivates_account_found_by_email():
+    jira = MagicMock()
+    jira.find_user_by_email.return_value = {
+        "accountId": "acc-123",
+        "displayName": "Jane Doe",
+        "active": True,
+    }
+
+    run = _run_jira_lane(jira)
+
+    step = run["steps"][0]
+    assert step["lane"] == "jira_deactivate"
+    assert step["status"] == "ok"
+    assert "deactivated" in step["message"].lower()
+    assert step["detail"]["account_id"] == "acc-123"
+    jira.find_user_by_email.assert_called_once_with("jane@example.com")
+    jira.deactivate_user_account.assert_called_once()
+    assert jira.deactivate_user_account.call_args.args[0] == "acc-123"
+    assert run["has_errors"] is False
+
+
+def test_jira_deactivate_lane_reports_no_account_without_failing():
+    jira = MagicMock()
+    jira.find_user_by_email.return_value = None
+    jira.find_user_account_id.return_value = None
+
+    run = _run_jira_lane(jira)
+
+    step = run["steps"][0]
+    assert step["status"] == "ok"
+    assert "no jira account found" in step["message"].lower()
+    assert step["detail"] == {"jira_account_found": False, "lookup_email": "jane@example.com"}
+    jira.deactivate_user_account.assert_not_called()
+    assert run["has_errors"] is False
+
+
+def test_jira_deactivate_lane_skips_already_inactive_account():
+    jira = MagicMock()
+    jira.find_user_by_email.return_value = {
+        "accountId": "acc-123",
+        "displayName": "Jane Doe",
+        "active": False,
+    }
+
+    run = _run_jira_lane(jira)
+
+    step = run["steps"][0]
+    assert step["status"] == "ok"
+    assert "already deactivated" in step["message"].lower()
+    jira.deactivate_user_account.assert_not_called()
+
+
+def test_jira_deactivate_lane_falls_back_to_display_name_lookup():
+    jira = MagicMock()
+    jira.find_user_by_email.return_value = None
+    jira.find_user_account_id.return_value = "acc-456"
+    jira.get_user.return_value = {
+        "accountId": "acc-456",
+        "displayName": "Jane Doe",
+        "active": True,
+    }
+
+    run = _run_jira_lane(jira)
+
+    step = run["steps"][0]
+    assert step["status"] == "ok"
+    jira.find_user_account_id.assert_called_once_with("Jane")
+    jira.deactivate_user_account.assert_called_once()
+    assert jira.deactivate_user_account.call_args.args[0] == "acc-456"
+
+
+def test_jira_deactivate_lane_records_failure_when_api_errors():
+    jira = MagicMock()
+    jira.find_user_by_email.return_value = {
+        "accountId": "acc-123",
+        "displayName": "Jane Doe",
+        "active": True,
+    }
+    jira.deactivate_user_account.side_effect = RuntimeError(
+        "ATLASSIAN_ADMIN_API_KEY is not configured; cannot deactivate Jira accounts"
+    )
+
+    run = _run_jira_lane(jira)
+
+    step = run["steps"][0]
+    assert step["status"] == "failed"
+    assert "ATLASSIAN_ADMIN_API_KEY" in step["message"]
+    assert run["has_errors"] is True
+
+
 def test_run_offboarding_marks_validate_lane_failed_when_groups_remain():
     from offboarding_runs import run_offboarding
 

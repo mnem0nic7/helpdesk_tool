@@ -27,6 +27,7 @@ const { mockApi } = vi.hoisted(() => ({
 vi.mock("../lib/api.ts", () => ({
   api: mockApi,
   default: mockApi,
+  OFFBOARDING_LANES: [],
 }));
 
 vi.mock("../lib/siteContext.ts", () => ({

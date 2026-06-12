@@ -46,6 +46,7 @@ const OFFBOARDING_LANE_LABELS: Record<OffboardingLane, string> = {
   entra_group_validate: "Entra: re-query to validate cleanup",
   entra_license_cleanup: "Entra: remove direct licenses",
   mailbox_convert_shared: "Exchange: convert mailbox to shared",
+  jira_deactivate: "Jira: deactivate account",
   ad_disable: "AD: disable account",
   ad_reset_pw: "AD: reset password (random)",
   ad_group_cleanup: "AD: remove from groups except Domain Users",

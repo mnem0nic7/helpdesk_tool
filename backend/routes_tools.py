@@ -460,6 +460,13 @@ def create_offboarding_run(
         raise HTTPException(status_code=400, detail="Entra lanes require entra_user_id")
     if any(lane.startswith("ad_") for lane in body.lanes) and not body.ad_sam.strip():
         raise HTTPException(status_code=400, detail="AD lanes require ad_sam")
+    if "jira_deactivate" in body.lanes and not (
+        body.entra_user_id.strip() or body.display_name.strip()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Jira deactivation requires entra_user_id or display_name",
+        )
     if not body.lanes:
         raise HTTPException(status_code=400, detail="At least one lane is required")
 

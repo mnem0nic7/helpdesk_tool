@@ -195,6 +195,9 @@ ATLASSIAN_ACCESS_GROUPS: list[str] = _env_csv("ATLASSIAN_ACCESS_GROUPS") or [
 ATLASSIAN_ADMIN_GROUPS: list[str] = _env_csv("ATLASSIAN_ADMIN_GROUPS") or [
     "MoveDocs Service Desk Agents",
 ]
+# Org admin API key from admin.atlassian.com — required to deactivate managed
+# Atlassian accounts via api.atlassian.com (the site API token cannot do this).
+ATLASSIAN_ADMIN_API_KEY: str = os.getenv("ATLASSIAN_ADMIN_API_KEY", "").strip()
 TOOLS_ALLOWED_IDENTIFIERS: list[str] = _env_csv("TOOLS_ALLOWED_IDENTIFIERS") or [
     "gallison",
     "wberry",

@@ -1820,6 +1820,7 @@ export const OFFBOARDING_LANES = [
   "entra_group_validate",
   "entra_license_cleanup",
   "mailbox_convert_shared",
+  "jira_deactivate",
   "ad_disable",
   "ad_reset_pw",
   "ad_group_cleanup",

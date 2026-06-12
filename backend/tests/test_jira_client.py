@@ -65,6 +65,109 @@ def test_find_user_account_id_does_not_match_extra_first_or_last_names(monkeypat
     assert client.find_user_account_id("Raza Abidi") is None
 
 
+def test_find_user_by_email_prefers_exact_email_match(monkeypatch):
+    client = JiraClient()
+    monkeypatch.setattr(
+        client,
+        "search_users",
+        lambda query: [
+            {"accountId": "acct-1", "emailAddress": "jane@example.com", "accountType": "atlassian"},
+            {"accountId": "acct-2", "emailAddress": "jane.other@example.com", "accountType": "atlassian"},
+        ],
+    )
+
+    user = client.find_user_by_email("Jane@Example.com")
+    assert user is not None
+    assert user["accountId"] == "acct-1"
+
+
+def test_find_user_by_email_accepts_single_candidate_with_hidden_email(monkeypatch):
+    client = JiraClient()
+    monkeypatch.setattr(
+        client,
+        "search_users",
+        lambda query: [
+            {"accountId": "acct-1", "emailAddress": "", "accountType": "atlassian"},
+        ],
+    )
+
+    user = client.find_user_by_email("jane@example.com")
+    assert user is not None
+    assert user["accountId"] == "acct-1"
+
+
+def test_find_user_by_email_rejects_ambiguous_hidden_email_candidates(monkeypatch):
+    client = JiraClient()
+    monkeypatch.setattr(
+        client,
+        "search_users",
+        lambda query: [
+            {"accountId": "acct-1", "emailAddress": "", "accountType": "atlassian"},
+            {"accountId": "acct-2", "emailAddress": "", "accountType": "atlassian"},
+        ],
+    )
+
+    assert client.find_user_by_email("jane@example.com") is None
+
+
+def test_find_user_by_email_ignores_app_and_customer_accounts(monkeypatch):
+    client = JiraClient()
+    monkeypatch.setattr(
+        client,
+        "search_users",
+        lambda query: [
+            {"accountId": "acct-app", "emailAddress": "", "accountType": "app"},
+            {"accountId": "acct-1", "emailAddress": "jane@example.com", "accountType": "atlassian"},
+        ],
+    )
+
+    user = client.find_user_by_email("jane@example.com")
+    assert user is not None
+    assert user["accountId"] == "acct-1"
+
+
+def test_find_user_by_email_returns_none_for_blank_input():
+    client = JiraClient()
+    assert client.find_user_by_email("") is None
+    assert client.find_user_by_email("   ") is None
+
+
+def test_deactivate_user_account_requires_admin_api_key(monkeypatch):
+    import jira_client as jc
+
+    monkeypatch.setattr(jc, "ATLASSIAN_ADMIN_API_KEY", "")
+    client = JiraClient()
+
+    try:
+        client.deactivate_user_account("acct-1")
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "ATLASSIAN_ADMIN_API_KEY" in str(exc)
+
+
+def test_deactivate_user_account_posts_to_lifecycle_disable(monkeypatch):
+    import jira_client as jc
+
+    monkeypatch.setattr(jc, "ATLASSIAN_ADMIN_API_KEY", "admin-key")
+    captured: dict = {}
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        captured["json"] = kwargs.get("json")
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        return resp
+
+    monkeypatch.setattr(jc.requests, "post", fake_post)
+    client = JiraClient()
+    client.deactivate_user_account("acct-1", message="Offboarded")
+
+    assert captured["url"] == "https://api.atlassian.com/users/acct-1/manage/lifecycle/disable"
+    assert captured["headers"]["Authorization"] == "Bearer admin-key"
+    assert captured["json"] == {"message": "Offboarded"}
+
+
 def test_create_issue_posts_expected_payload():
     client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
     response = MagicMock()

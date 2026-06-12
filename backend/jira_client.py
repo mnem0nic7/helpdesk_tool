@@ -11,6 +11,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 from config import (
+    ATLASSIAN_ADMIN_API_KEY,
     JIRA_API_TOKEN,
     JIRA_BASE_URL,
     JIRA_EMAIL,
@@ -909,6 +910,58 @@ class JiraClient:
         resp = self.session.get(url, params={"accountId": account_id}, timeout=self._TIMEOUT)
         resp.raise_for_status()
         return resp.json()
+
+    def find_user_by_email(self, email: str) -> dict[str, Any] | None:
+        """Return the unique Jira user matching an email/UPN, or None.
+
+        Prefers an exact ``emailAddress`` match. Jira still matches hidden
+        emails server-side, so when no email is visible a single remaining
+        candidate is accepted. Inactive accounts are included so callers can
+        distinguish "already deactivated" from "no account".
+        """
+        target = (email or "").strip().lower()
+        if not target:
+            return None
+        users = self.search_users(target)
+        candidates = [
+            user
+            for user in users
+            if user.get("accountId")
+            and str(user.get("accountType") or "atlassian") == "atlassian"
+        ]
+        exact = [
+            user
+            for user in candidates
+            if str(user.get("emailAddress") or "").strip().lower() == target
+        ]
+        if len(exact) == 1:
+            return exact[0]
+        if not exact and len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    def deactivate_user_account(self, account_id: str, *, message: str = "") -> None:
+        """Deactivate a managed Atlassian account via the admin lifecycle API.
+
+        POST https://api.atlassian.com/users/{account_id}/manage/lifecycle/disable
+        authenticated with the org admin API key — the site API token used by
+        this client cannot deactivate accounts.
+        """
+        if not ATLASSIAN_ADMIN_API_KEY:
+            raise RuntimeError(
+                "ATLASSIAN_ADMIN_API_KEY is not configured; cannot deactivate Jira accounts"
+            )
+        url = f"https://api.atlassian.com/users/{account_id}/manage/lifecycle/disable"
+        resp = requests.post(
+            url,
+            json={"message": message} if message else {},
+            headers={
+                "Authorization": f"Bearer {ATLASSIAN_ADMIN_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            timeout=self._TIMEOUT,
+        )
+        resp.raise_for_status()
 
     def get_priorities(self) -> list[dict[str, Any]]:
         """GET /rest/api/3/priority — returns all configured priorities."""

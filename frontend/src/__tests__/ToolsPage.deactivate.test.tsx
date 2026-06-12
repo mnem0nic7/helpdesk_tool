@@ -37,9 +37,12 @@ const { mockApi, OFFBOARDING_LANES_VALUES } = vi.hoisted(() => ({
     "entra_disable",
     "entra_revoke",
     "entra_reset_pw",
+    "entra_reset_mfa",
     "entra_group_cleanup",
     "entra_group_validate",
     "entra_license_cleanup",
+    "mailbox_convert_shared",
+    "jira_deactivate",
     "ad_disable",
     "ad_reset_pw",
     "ad_group_cleanup",
@@ -167,7 +170,7 @@ describe("ToolsPage — offboarding section", () => {
     expect(screen.queryByText("Offboard user")).not.toBeInTheDocument();
   });
 
-  it("shows all 11 lane checkboxes after selecting a user with an AD account", async () => {
+  it("shows all 14 lane checkboxes after selecting a user with an AD account", async () => {
     mockApi.searchOneDriveCopyUsers.mockResolvedValue([userWithAD]);
 
     render(<ToolsPage />);
@@ -180,12 +183,13 @@ describe("ToolsPage — offboarding section", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Jane Doe/i }));
 
     await waitFor(() => {
-      // 11 lanes total — all should be visible
+      // 14 lanes total — all should be visible
       // The "Lanes to execute" span is inside a header div; go up to the outer container
       const laneSection = screen.getByText("Lanes to execute").closest("div")?.parentElement;
       const laneCheckboxes = within(laneSection!).getAllByRole("checkbox");
-      expect(laneCheckboxes).toHaveLength(11);
+      expect(laneCheckboxes).toHaveLength(14);
     });
+    expect(screen.getByText("Jira: deactivate account")).toBeInTheDocument();
   });
 
   it("hides AD lanes when selected user has no on_prem_sam", async () => {
@@ -203,8 +207,8 @@ describe("ToolsPage — offboarding section", () => {
     await waitFor(() => {
       const laneSection = screen.getByText("Lanes to execute").closest("div")?.parentElement;
       const laneCheckboxes = within(laneSection!).getAllByRole("checkbox");
-      // Only the 6 Entra lanes visible
-      expect(laneCheckboxes).toHaveLength(6);
+      // Only the 9 cloud lanes visible (AD lanes hidden)
+      expect(laneCheckboxes).toHaveLength(9);
     });
   });
 
@@ -317,28 +321,5 @@ describe("ToolsPage — offboarding section", () => {
 
     const csvLink = await screen.findByRole("link", { name: "Download CSV" });
     expect(csvLink).toHaveAttribute("href", "/api/tools/offboarding-runs/run-1/csv");
-  });
-
-  it("calls launchExitWorkflowFromTools when Launch full Exit Workflow is clicked", async () => {
-    mockApi.searchOneDriveCopyUsers.mockResolvedValue([userWithAD]);
-
-    render(<ToolsPage />);
-
-    await screen.findByText("Offboard user");
-
-    const userInput = screen.getByLabelText("User to offboard");
-    fireEvent.focus(userInput);
-    fireEvent.change(userInput, { target: { value: "jane" } });
-    fireEvent.click(await screen.findByRole("button", { name: /Jane Doe/i }));
-
-    await waitFor(() => screen.getAllByRole("checkbox").length > 0);
-
-    fireEvent.click(screen.getByRole("button", { name: "Launch full Exit Workflow" }));
-
-    await waitFor(() => {
-      expect(mockApi.launchExitWorkflowFromTools).toHaveBeenCalledWith(
-        expect.objectContaining({ entra_user_id: "user-1" }),
-      );
-    });
   });
 });

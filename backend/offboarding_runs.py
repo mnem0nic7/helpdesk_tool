@@ -29,6 +29,7 @@ OffboardingLane = Literal[
     "entra_group_validate",
     "entra_license_cleanup",
     "mailbox_convert_shared",
+    "jira_deactivate",
     "ad_disable",
     "ad_reset_pw",
     "ad_group_cleanup",
@@ -46,6 +47,7 @@ _LANE_ORDER: list[str] = [
     "entra_group_validate",
     "entra_license_cleanup",
     "mailbox_convert_shared",
+    "jira_deactivate",
     "ad_disable",
     "ad_reset_pw",
     "ad_group_cleanup",
@@ -414,6 +416,57 @@ def run_offboarding(
                     result = _uap.mailbox.exchange_powershell.convert_mailbox_to_shared(mail)
                     message = f"Mailbox converted to shared ({result.get('recipient_type', '')})"
                     detail = result
+
+                elif lane == "jira_deactivate":
+                    import jira_client as _jira_module
+
+                    jira = _jira_module.JiraClient()
+                    # Resolve the user's email/UPN from Graph for the Jira lookup
+                    email = ""
+                    if entra_user_id:
+                        try:
+                            graph_user = _uap.entra.client.graph_request(
+                                "GET", f"users/{entra_user_id}",
+                                params={"$select": "mail,userPrincipalName"},
+                            )
+                            email = str(
+                                graph_user.get("mail") or graph_user.get("userPrincipalName") or ""
+                            ).strip()
+                        except Exception:
+                            pass
+                    jira_user = jira.find_user_by_email(email) if email else None
+                    if jira_user is None and display_name:
+                        # Fallback: strict unique display-name match (e.g. Jira email
+                        # differs from the UPN)
+                        account_id = jira.find_user_account_id(display_name)
+                        if account_id:
+                            jira_user = jira.get_user(account_id)
+                    if jira_user is None:
+                        message = f"No Jira account found for {email or display_name}"
+                        detail = {"jira_account_found": False, "lookup_email": email}
+                    elif jira_user.get("active") is False:
+                        message = (
+                            f"Jira account already deactivated "
+                            f"({jira_user.get('displayName') or email})"
+                        )
+                        detail = {
+                            "jira_account_found": True,
+                            "already_inactive": True,
+                            "account_id": jira_user.get("accountId", ""),
+                            "lookup_email": email,
+                        }
+                    else:
+                        jira.deactivate_user_account(
+                            str(jira_user.get("accountId") or ""),
+                            message="Deactivated by OIT Helpdesk offboarding",
+                        )
+                        message = f"Jira account deactivated ({email or jira_user.get('displayName', '')})"
+                        detail = {
+                            "jira_account_found": True,
+                            "account_id": jira_user.get("accountId", ""),
+                            "jira_display_name": jira_user.get("displayName", ""),
+                            "lookup_email": email,
+                        }
 
                 elif lane == "ad_disable":
                     ad.disable_user(ad_sam)
