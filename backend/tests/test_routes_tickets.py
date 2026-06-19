@@ -457,6 +457,25 @@ def _request_comments() -> list[dict[str, Any]]:
 
 
 class TestTicketDetailAndActions:
+    def test_load_detail_evicts_old_key_when_ticket_moved_projects(self, test_client, mock_cache, monkeypatch):
+        import routes_tickets
+
+        # Opening OIT-123 after it was moved to MSD: Jira returns the issue
+        # under its new key, so the stale OIT-123 cache entry must be evicted.
+        moved_issue = _detail_issue()
+        moved_issue["key"] = "MSD-555"
+        monkeypatch.setattr(routes_tickets._client, "get_issue", lambda key: moved_issue)
+        monkeypatch.setattr(routes_tickets._client, "get_request_comments", lambda key: [])
+        monkeypatch.setattr(
+            routes_tickets.requestor_sync_service,
+            "maybe_reconcile_issue",
+            lambda issue: {"requestor_identity": {}},
+        )
+
+        routes_tickets._load_ticket_detail("OIT-123")
+
+        mock_cache.evict_issue.assert_called_once_with("OIT-123")
+
     def test_create_ticket_creates_issue_updates_fields_and_returns_detail(self, test_client, mock_cache, monkeypatch):
         import routes_tickets
 

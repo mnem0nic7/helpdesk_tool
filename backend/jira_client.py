@@ -282,6 +282,42 @@ class JiraClient:
 
         return all_issues
 
+    def fetch_tracked_issue_keys(self) -> set[str]:
+        """Return the current set of issue keys across all tracked projects.
+
+        This is a lightweight keys-only paginated fetch (no fields, no comment
+        backfill) used to reconcile the cache: any cached key that Jira no
+        longer reports has been moved to another project or deleted, and must
+        be evicted. Returns an empty set if no tracked projects are configured.
+        """
+        if not TRACKED_JIRA_PROJECT_KEYS:
+            return set()
+        project_list = ", ".join(TRACKED_JIRA_PROJECT_KEYS)
+        jql = f"project in ({project_list}) ORDER BY key ASC"
+        url = f"{self.base_url}/rest/api/3/search/jql"
+        keys: set[str] = set()
+        next_page_token: str | None = None
+        while True:
+            payload: dict[str, Any] = {
+                "jql": jql,
+                "maxResults": 100,
+                "fields": ["key"],
+            }
+            if next_page_token:
+                payload["nextPageToken"] = next_page_token
+            resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+            for issue in data.get("issues", []):
+                key = str(issue.get("key") or "").strip().upper()
+                if key:
+                    keys.add(key)
+            next_page_token = data.get("nextPageToken")
+            if not next_page_token:
+                break
+        logger.info("fetch_tracked_issue_keys: %d keys for JQL: %s", len(keys), jql)
+        return keys
+
     # ------------------------------------------------------------------
     # Comment backfill
     # ------------------------------------------------------------------

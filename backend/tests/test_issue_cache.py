@@ -37,10 +37,16 @@ class _FakeClient:
         self.updated_issues = updated_issues
         self.enriched_batches: list[list[str]] = []
         self.search_jqls: list[str] = []
+        # Current set of keys Jira reports for tracked projects; defaults to the
+        # keys present in updated_issues so existing tests are unaffected.
+        self.tracked_keys: set[str] = {iss["key"] for iss in updated_issues}
 
     def search_all(self, jql: str, progress_callback=None) -> list[dict]:
         self.search_jqls.append(jql)
         return list(self.updated_issues)
+
+    def fetch_tracked_issue_keys(self) -> set[str]:
+        return set(self.tracked_keys)
 
     def enrich_request_types(self, issues: list[dict], existing_cache=None) -> None:
         self.enriched_batches.append([issue["key"] for issue in issues])
@@ -94,6 +100,37 @@ def test_incremental_refresh_prunes_cached_non_tracked_project_keys(tmp_path):
 
     assert "MSD-900" not in cache._all_issues
     assert "MSD-900" not in cache._issues
+
+
+def test_reconcile_evicts_cached_key_no_longer_in_tracked_project(tmp_path):
+    # A ticket moved out of OIT keeps its old OIT-prefixed key and project, so
+    # is_tracked_issue() still returns True and prune cannot catch it. The only
+    # signal is that Jira's current key set no longer contains it.
+    cache = _build_cache(tmp_path, updated_issues=[])
+    stale = _issue("OIT-22389", "Moved to MSD")
+    stale["fields"]["project"] = {"key": "OIT"}
+    cache._all_issues[stale["key"]] = stale
+    cache._issues[stale["key"]] = stale
+    # Jira still reports the seeded tickets but no longer reports OIT-22389.
+    cache._client.tracked_keys = {"OIT-100", "OIT-500"}
+
+    evicted = cache.reconcile_tracked_issue_keys()
+
+    assert evicted == ["OIT-22389"]
+    assert "OIT-22389" not in cache._all_issues
+    assert "OIT-22389" not in cache._issues
+    assert "OIT-100" in cache._all_issues
+
+
+def test_reconcile_keeps_keys_still_present_in_jira(tmp_path):
+    cache = _build_cache(tmp_path, updated_issues=[])
+    cache._client.tracked_keys = {"OIT-100", "OIT-500"}
+
+    evicted = cache.reconcile_tracked_issue_keys()
+
+    assert evicted == []
+    assert "OIT-100" in cache._all_issues
+    assert "OIT-500" in cache._all_issues
 
 
 def test_incremental_refresh_expands_lookback_from_last_refresh_gap(tmp_path):

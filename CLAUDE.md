@@ -167,6 +167,10 @@ Frontend routing switches on `getSiteBranding()` in `frontend/src/App.tsx`. Do n
 
 These are durable rules and design contracts — not time-bound release notes. Grouped by topic for navigation.
 
+### Jira issue cache
+
+- The issue cache (`backend/issue_cache.py`) is keyed by Jira issue key. The periodic background loop only runs incremental refreshes (`project = OIT AND updated >= -Nm`), which can never observe a ticket that was moved *out* of a tracked project (its key changes, e.g. `OIT-22389` → `MSD-10997`), and `_prune_non_tracked_issues()` cannot catch it because the stale entry still carries its old `OIT`-prefixed key and `fields.project.key`. To evict moved/deleted tickets, the loop periodically calls `reconcile_tracked_issue_keys()` (every `_RECONCILE_EVERY_CYCLES` cycles), which diffs the cached key set against `JiraClient.fetch_tracked_issue_keys()` (a lightweight keys-only fetch) and evicts keys Jira no longer reports. An empty key fetch is treated as "unknown" and skips eviction so a transient Jira hiccup never wipes the cache. The ticket-detail path (`_load_ticket_detail`) also evicts the requested key when `get_issue` returns a different (moved) key.
+
 ### Reporting
 
 - The report builder preview includes an `Export Current View` action in `frontend/src/pages/ReportsPage.tsx`; it reuses the existing report export API and should export the current filters, selected columns, sort, and grouping.

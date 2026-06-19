@@ -37,6 +37,9 @@ _FILTERED_JQL = (
 
 # Refresh interval in seconds
 _REFRESH_INTERVAL = 15
+# Reconcile the full tracked-project key set every N refresh cycles to evict
+# tickets moved to another project (~5 min at the 15s interval).
+_RECONCILE_EVERY_CYCLES = 20
 _INCREMENTAL_LOOKBACK_MINUTES = 2
 _INCREMENTAL_OVERLAP_MINUTES = 2
 _KEY_REFRESH_BATCH_SIZE = 50
@@ -659,6 +662,32 @@ class IssueCache:
                 ", ".join(sorted(dropped_keys)[:10]),
             )
         return dropped_keys
+
+    def reconcile_tracked_issue_keys(self) -> list[str]:
+        """Evict cached issues that Jira no longer reports for tracked projects.
+
+        A ticket moved out of a tracked project (e.g. OIT-22389 → MSD-10997)
+        keeps its old key and stale ``fields.project.key`` in the cache, so
+        ``_prune_non_tracked_issues`` cannot detect it and the incremental JQL
+        never sees it again. Comparing the cached key set against Jira's current
+        authoritative key set is the only reliable signal for these moves.
+        """
+        current_keys = self._client.fetch_tracked_issue_keys()
+        if not current_keys:
+            # Treat an empty result as "unknown" rather than "everything moved"
+            # so a transient Jira hiccup never wipes the cache.
+            return []
+        with self._lock:
+            stale_keys = [key for key in self._all_issues if key not in current_keys]
+        for key in stale_keys:
+            self.evict_issue(key)
+        if stale_keys:
+            logger.info(
+                "Cache: reconciled %d moved/deleted issues: %s",
+                len(stale_keys),
+                ", ".join(sorted(stale_keys)[:10]),
+            )
+        return stale_keys
 
     # ------------------------------------------------------------------
     # Initialization
@@ -1457,6 +1486,7 @@ class IssueCache:
         then repeats on the interval.
         """
         first = True
+        cycle = 0
         while True:
             if not first:
                 await asyncio.sleep(_REFRESH_INTERVAL)
@@ -1491,6 +1521,15 @@ class IssueCache:
                 await self._run_alert_checks()
             except Exception:
                 logger.exception("Cache: incremental refresh failed")
+
+            cycle += 1
+            if cycle % _RECONCILE_EVERY_CYCLES == 0:
+                try:
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, self.reconcile_tracked_issue_keys
+                    )
+                except Exception:
+                    logger.exception("Cache: tracked-key reconciliation failed")
 
     async def _run_alert_checks(self) -> None:
         """Evaluate alert rules and send emails if triggered."""

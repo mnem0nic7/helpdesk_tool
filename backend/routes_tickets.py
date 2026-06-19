@@ -303,6 +303,12 @@ def _get_user_display_name(account_id: str | None) -> str:
 
 def _load_ticket_detail(key: str, issue: dict[str, Any] | None = None) -> dict[str, Any]:
     issue = issue or _client.get_issue(key)
+    # A ticket moved to another project comes back under its new key; evict the
+    # stale cache entry under the requested key so it stops showing on the board.
+    resolved_key = str(issue.get("key") or "").strip().upper()
+    requested_key = str(key or "").strip().upper()
+    if resolved_key and requested_key and resolved_key != requested_key:
+        cache.evict_issue(requested_key)
     requestor_result = requestor_sync_service.maybe_reconcile_issue(issue)
     comments = _client.get_request_comments(key)
     issue_fields = issue.setdefault("fields", {})
