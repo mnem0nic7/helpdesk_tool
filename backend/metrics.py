@@ -158,32 +158,28 @@ def map_status_bucket(status_name: str | None) -> str:
     return "Active"
 
 
-def is_excluded(issue: dict[str, Any]) -> bool:
-    """Return ``True`` if the issue should be excluded from metrics.
+def _is_non_tracked_project(issue: dict[str, Any]) -> bool:
+    """Return ``True`` if the issue no longer belongs to a tracked Jira project.
 
-    An issue is excluded when its labels or summary contain *oasisdev*
-    (case-insensitive).
+    A ticket moved out of OIT (e.g. ``OIT-22389`` → ``MSD-10997``) carries a
+    non-OIT key/project and must never surface in metrics, lists, or reporting.
     """
     fields = issue.get("fields", {})
-
     project_obj = fields.get("project") or {}
     project_key = str(project_obj.get("key") or "").strip().upper()
     issue_key = str(issue.get("key") or "").strip().upper()
     if not project_key and "-" in issue_key:
         project_key = issue_key.split("-", 1)[0]
-    if project_key and project_key not in _TRACKED_PROJECT_KEY_SET:
-        return True
+    return bool(project_key) and project_key not in _TRACKED_PROJECT_KEY_SET
 
-    labels: list[str] = fields.get("labels") or []
-    for label in labels:
-        if "oasisdev" in label.lower():
-            return True
 
-    summary: str = fields.get("summary") or ""
-    if "oasisdev" in summary.lower():
-        return True
+def is_excluded(issue: dict[str, Any]) -> bool:
+    """Return ``True`` if the issue should be excluded from primary metrics.
 
-    return False
+    An issue is excluded when it has moved out of a tracked Jira project or when
+    its labels or summary contain *oasisdev* (case-insensitive).
+    """
+    return _is_non_tracked_project(issue) or _has_oasisdev_marker(issue)
 
 
 def parse_dt(s: str | None) -> Optional[datetime]:
@@ -352,19 +348,28 @@ def _filter_issues(
     issues: list[dict[str, Any]],
     scope: IssueScope = "primary",
 ) -> tuple[list[dict[str, Any]], int]:
-    """Partition issues into (included, excluded_count) for a dashboard scope."""
+    """Partition issues into (included, excluded_count) for a dashboard scope.
+
+    Issues that have moved out of a tracked Jira project are dropped from every
+    scope so they never surface in metrics or reporting; oasisdev-marked tickets
+    are the only ones shown on the oasisdev scope.
+    """
     included: list[dict[str, Any]] = []
     excluded_count = 0
     for issue in issues:
-        excluded = is_excluded(issue)
+        if _is_non_tracked_project(issue):
+            # Moved out of a tracked project (e.g. OIT → MSD): never show.
+            excluded_count += 1
+            continue
+        oasisdev = _has_oasisdev_marker(issue)
         if scope == "all":
             included.append(issue)
             continue
         if scope == "oasisdev":
-            if excluded:
+            if oasisdev:
                 included.append(issue)
             continue
-        if excluded:
+        if oasisdev:
             excluded_count += 1
         else:
             included.append(issue)

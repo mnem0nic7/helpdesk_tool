@@ -8,6 +8,7 @@ from metrics import (
     parse_dt,
     percentile,
     is_excluded,
+    _filter_issues,
     matches_libra_support_filter,
     map_status_bucket,
     _is_open,
@@ -95,6 +96,47 @@ class TestIsExcluded:
     def test_normal_not_excluded(self):
         issue = {"fields": {"labels": ["production"], "summary": "Normal ticket"}}
         assert is_excluded(issue) is False
+
+
+# ===== _filter_issues: moved tickets never surface =====
+
+class TestFilterIssuesDropsMovedTickets:
+    """A ticket moved out of a tracked project (OIT -> MSD) must be dropped
+    from every dashboard scope so it never shows in metrics or reporting."""
+
+    @staticmethod
+    def _moved() -> dict:
+        return {
+            "key": "MSD-10997",
+            "fields": {"project": {"key": "MSD"}, "labels": [], "summary": "Moved to MSD"},
+        }
+
+    @staticmethod
+    def _oit() -> dict:
+        return {"key": "OIT-100", "fields": {"labels": [], "summary": "Normal"}}
+
+    @staticmethod
+    def _oasis() -> dict:
+        return {"key": "OIT-500", "fields": {"labels": ["oasisdev"], "summary": "Oasis"}}
+
+    def test_moved_dropped_from_primary(self):
+        included, excluded = _filter_issues([self._moved(), self._oit()], scope="primary")
+        assert {i["key"] for i in included} == {"OIT-100"}
+        assert excluded == 1
+
+    def test_moved_dropped_from_oasisdev(self):
+        included, _ = _filter_issues([self._moved(), self._oasis()], scope="oasisdev")
+        keys = {i["key"] for i in included}
+        assert "MSD-10997" not in keys
+        assert "OIT-500" in keys
+
+    def test_moved_dropped_from_all(self):
+        included, _ = _filter_issues(
+            [self._moved(), self._oit(), self._oasis()], scope="all"
+        )
+        keys = {i["key"] for i in included}
+        assert "MSD-10997" not in keys
+        assert {"OIT-100", "OIT-500"} <= keys
 
 
 # ===== map_status_bucket =====
