@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import sqlite3
 from types import SimpleNamespace
 
@@ -120,6 +121,14 @@ def test_reconcile_evicts_cached_key_no_longer_in_tracked_project(tmp_path):
     assert "OIT-22389" not in cache._all_issues
     assert "OIT-22389" not in cache._issues
     assert "OIT-100" in cache._all_issues
+    # Evicted, not deleted: the row is tombstoned in the store, not removed.
+    restored = IssueCache(str(tmp_path / "issues.db"))
+    assert restored._load_from_db() is True
+    assert "OIT-22389" not in restored._all_issues
+    with sqlite3.connect(tmp_path / "issues.db") as conn:
+        row = conn.execute("SELECT data FROM issues WHERE key = ?", ("OIT-22389",)).fetchone()
+    assert row is not None
+    assert json.loads(row[0])["fields"]["_movedocs_cache_removed_at"]
 
 
 def test_reconcile_keeps_keys_still_present_in_jira(tmp_path):
@@ -131,6 +140,26 @@ def test_reconcile_keeps_keys_still_present_in_jira(tmp_path):
     assert evicted == []
     assert "OIT-100" in cache._all_issues
     assert "OIT-500" in cache._all_issues
+
+
+def test_reconcile_skips_eviction_when_key_fetch_is_implausibly_small(tmp_path):
+    # A degraded/truncated Jira response can return a small but *non-empty*
+    # key set (e.g. one page of a paginated fetch that got cut short). Trusting
+    # that as authoritative would evict the vast majority of a large, healthy
+    # cache. Only a small handful of the cached keys should ever go stale in a
+    # single ~5 minute reconcile cycle, so a result covering far less than the
+    # cache must be treated as unknown (like an empty result), not acted on.
+    cache = _build_cache(tmp_path, updated_issues=[])
+    cache._all_issues = {f"OIT-{i}": _issue(f"OIT-{i}", "Bulk ticket") for i in range(1000)}
+    cache._issues = dict(cache._all_issues)
+    # Jira reports only 100 keys total — far fewer than the 1000 cached — as
+    # would happen if the keys-only fetch was cut short mid-pagination.
+    cache._client.tracked_keys = {f"OIT-{i}" for i in range(100)}
+
+    evicted = cache.reconcile_tracked_issue_keys()
+
+    assert evicted == []
+    assert len(cache._all_issues) == 1000
 
 
 def test_incremental_refresh_expands_lookback_from_last_refresh_gap(tmp_path):
@@ -577,9 +606,51 @@ def test_load_from_db_drops_non_tracked_project_keys(tmp_path):
     assert restored._load_from_db() is True
     assert set(restored._all_issues) == {"OIT-100"}
     assert "MSD-100" not in restored._issues
+    # The row is tombstoned (marked removed), not deleted, so it stays
+    # recoverable/auditable instead of being gone for good.
     with sqlite3.connect(db_path) as conn:
-        count = conn.execute("SELECT COUNT(*) FROM issues WHERE key = ?", ("MSD-100",)).fetchone()[0]
-    assert count == 0
+        row = conn.execute("SELECT data FROM issues WHERE key = ?", ("MSD-100",)).fetchone()
+    assert row is not None
+    assert json.loads(row[0])["fields"]["_movedocs_cache_removed_at"]
+
+
+def test_load_from_db_skips_previously_tombstoned_issues(tmp_path):
+    db_path = tmp_path / "issues.db"
+    cache = IssueCache(str(db_path))
+    tombstoned = _issue("OIT-200", "Evicted earlier")
+    tombstoned["fields"]["_movedocs_cache_removed_at"] = "2026-07-31T02:00:00+00:00"
+    cache._upsert_to_db([tombstoned])
+
+    restored = IssueCache(str(db_path))
+
+    assert restored._load_from_db() is True
+    assert "OIT-200" not in restored._all_issues
+
+
+def test_replace_store_snapshot_tombstones_keys_missing_from_full_fetch(tmp_path):
+    # _replace_store_snapshot() is the full-fetch resync path: it reconciles
+    # the store with whatever _all_issues currently holds. A key present in
+    # the store but no longer in _all_issues (e.g. genuinely deleted in Jira)
+    # must be tombstoned, not dropped from the table.
+    db_path = tmp_path / "issues.db"
+    cache = IssueCache(str(db_path))
+    cache._all_issues = {
+        "OIT-100": _issue("OIT-100", "Still here"),
+        "OIT-101": _issue("OIT-101", "Also still here"),
+    }
+    cache._issues = dict(cache._all_issues)
+    cache._save_all_to_db()
+
+    # A later full fetch no longer contains OIT-101.
+    cache._all_issues = {"OIT-100": _issue("OIT-100", "Still here")}
+    cache._issues = dict(cache._all_issues)
+    cache._save_all_to_db()
+
+    with sqlite3.connect(db_path) as conn:
+        rows = dict(conn.execute("SELECT key, data FROM issues").fetchall())
+    assert set(rows) == {"OIT-100", "OIT-101"}
+    assert not json.loads(rows["OIT-100"])["fields"].get("_movedocs_cache_removed_at")
+    assert json.loads(rows["OIT-101"])["fields"]["_movedocs_cache_removed_at"]
 
 
 def test_init_restores_last_refresh_from_metadata(tmp_path):

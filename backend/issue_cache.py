@@ -40,6 +40,12 @@ _REFRESH_INTERVAL = 15
 # Reconcile the full tracked-project key set every N refresh cycles to evict
 # tickets moved to another project (~5 min at the 15s interval).
 _RECONCILE_EVERY_CYCLES = 20
+# A healthy key-only fetch should cover nearly the whole tracked-project cache.
+# A degraded/truncated Jira response (e.g. pagination cut short) can still
+# return a small but non-empty key set; trusting that as authoritative would
+# evict most of a large cache in one cycle. Require the fetch to cover at
+# least this fraction of the current cache before treating it as authoritative.
+_RECONCILE_MIN_KEY_COVERAGE_RATIO = 0.5
 _INCREMENTAL_LOOKBACK_MINUTES = 2
 _INCREMENTAL_OVERLAP_MINUTES = 2
 _KEY_REFRESH_BATCH_SIZE = 50
@@ -52,6 +58,24 @@ _OCC_TICKET_ID_ONE_TIME_BACKFILL_METADATA_KEY = (
 )
 _REDIS_ISSUES_HASH = "issue_cache:issues"
 _REDIS_METADATA_KEY = "issue_cache:metadata"
+# Marker written into an issue's fields when it's evicted from the active
+# cache. Eviction never deletes the underlying row/hash entry — it tombstones
+# it in place — so a wrongly-evicted ticket (moved/deleted signal that turns
+# out to be wrong, e.g. a degraded Jira response) stays inspectable/
+# recoverable in the store instead of being gone for good.
+_REMOVED_MARKER_FIELD = "_movedocs_cache_removed_at"
+
+
+def _is_removed_issue(issue: dict[str, Any]) -> bool:
+    return bool((issue.get("fields") or {}).get(_REMOVED_MARKER_FIELD))
+
+
+def _tombstone_issue(issue: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``issue`` flagged as removed instead of deleting it."""
+    tombstoned = dict(issue)
+    tombstoned["fields"] = dict(issue.get("fields") or {})
+    tombstoned["fields"][_REMOVED_MARKER_FIELD] = datetime.now(timezone.utc).isoformat()
+    return tombstoned
 
 
 class IssueCache:
@@ -121,8 +145,6 @@ class IssueCache:
             try:
                 if op == "upsert":
                     self._write_issues_to_store(payload)
-                elif op == "delete":
-                    self._delete_keys_from_store([str(item or "") for item in payload])
                 elif op == "replace":
                     self._replace_store_snapshot()
             except Exception:
@@ -132,8 +154,6 @@ class IssueCache:
         if not self._use_redis_store or self._flush_queue is None:
             if op == "upsert":
                 self._write_issues_to_store(payload)
-            elif op == "delete":
-                self._delete_keys_from_store([str(item or "") for item in payload])
             elif op == "replace":
                 self._replace_store_snapshot()
             return
@@ -182,36 +202,52 @@ class IssueCache:
                 (key, value),
             )
 
-    def _delete_keys_from_store(self, keys: list[str]) -> None:
-        normalized = [str(key or "").strip().upper() for key in keys if str(key or "").strip()]
-        if not normalized:
-            return
-        if self._use_redis_store:
-            redis_state_store.hdel(_REDIS_ISSUES_HASH, *normalized)
-            return
-        with self._conn() as conn:
-            conn.executemany("DELETE FROM issues WHERE key = ?", [(key,) for key in normalized])
+    def _soft_delete(self, issues: list[dict[str, Any]]) -> None:
+        """Persist a removal marker for these issues instead of deleting the
+        row/hash entry outright.
+
+        Used everywhere the cache evicts a ticket (moved/deleted signal,
+        reconcile, targeted refresh, non-tracked project pruning). Keeping a
+        tombstoned copy means a wrongly-evicted ticket — e.g. from a degraded
+        Jira response during reconcile — stays inspectable/recoverable in the
+        store instead of being gone for good.
+        """
+        tombstoned = [
+            _tombstone_issue(issue)
+            for issue in issues
+            if str((issue or {}).get("key") or "").strip()
+        ]
+        if tombstoned:
+            self._enqueue_store_op("upsert", tombstoned)
 
     def _replace_store_snapshot(self) -> None:
+        """Reconcile the store with the current in-memory state after a full
+        fetch, without deleting rows: keys no longer in ``_all_issues`` are
+        tombstoned in place rather than removed.
+        """
+        live_keys = set(self._all_issues.keys())
         if self._use_redis_store:
-            redis_state_store.delete(_REDIS_ISSUES_HASH)
-            redis_state_store.hset_many_json(
-                _REDIS_ISSUES_HASH,
-                {
-                    key: issue
-                    for key, issue in self._all_issues.items()
-                },
-            )
+            existing = redis_state_store.hgetall_json(_REDIS_ISSUES_HASH)
+            stale_issues = [
+                issue
+                for key, issue in existing.items()
+                if key not in live_keys and not _is_removed_issue(issue)
+            ]
+            self._soft_delete(stale_issues)
+            if self._all_issues:
+                redis_state_store.hset_many_json(_REDIS_ISSUES_HASH, dict(self._all_issues))
             return
         with self._conn() as conn:
-            conn.execute("DELETE FROM issues")
-            conn.executemany(
-                "INSERT INTO issues (key, data, excluded) VALUES (?, ?, ?)",
-                [
-                    (key, json.dumps(issue), int(key not in self._issues))
-                    for key, issue in self._all_issues.items()
-                ],
-            )
+            rows = conn.execute("SELECT key, data FROM issues").fetchall()
+        stale_issues = []
+        for key, data in rows:
+            if key in live_keys:
+                continue
+            issue = json.loads(data)
+            if not _is_removed_issue(issue):
+                stale_issues.append(issue)
+        self._soft_delete(stale_issues)
+        self._write_issues_to_store(list(self._all_issues.values()))
 
     def _backfill_redis_from_sqlite_if_needed(self) -> None:
         if not self._use_redis_store or not os.path.exists(self._db_path):
@@ -423,7 +459,7 @@ class IssueCache:
         if not key:
             return
         if not JiraClient.is_tracked_issue(issue):
-            self.evict_issue(key)
+            self.evict_issue(key, issue=issue)
             logger.info(
                 "Cache: ignored non-tracked issue %s (%s)",
                 key,
@@ -453,19 +489,23 @@ class IssueCache:
 
         self._upsert_to_db([issue])
 
-    def evict_issue(self, key: str) -> bool:
-        """Remove a single issue from memory and SQLite.
+    def evict_issue(self, key: str, *, issue: dict[str, Any] | None = None) -> bool:
+        """Remove a single issue from the active cache, tombstoning it in the store.
 
         Used when a ticket is moved to a different Jira board and no longer
         appears in this project's JQL results, leaving a stale cache entry.
         Returns True if the issue was present and removed, False if not found.
+        ``issue`` lets a caller that already has the fresh payload (e.g.
+        ``upsert_issue`` finding it belongs to a non-tracked project) produce a
+        more informative tombstone than a bare key.
         """
         key = key.strip().upper()
         with self._lock:
-            in_all = key in self._all_issues
+            cached = self._all_issues.get(key)
+            in_all = cached is not None
             self._all_issues.pop(key, None)
             self._issues.pop(key, None)
-        self._enqueue_store_op("delete", [key])
+        self._soft_delete([cached or issue or {"key": key, "fields": {}}])
         if in_all:
             logger.info("Cache: evicted issue %s", key)
         return in_all
@@ -528,10 +568,12 @@ class IssueCache:
                 ", ".join(missing_keys),
             )
             with self._lock:
+                missing_issues = []
                 for key in missing_keys:
+                    missing_issues.append(self._all_issues.get(key) or {"key": key, "fields": {}})
                     self._all_issues.pop(key, None)
                     self._issues.pop(key, None)
-            self._enqueue_store_op("delete", missing_keys)
+            self._soft_delete(missing_issues)
 
         if not refreshed_issues:
             return []
@@ -599,11 +641,17 @@ class IssueCache:
             return False
         new_all: dict[str, dict[str, Any]] = {}
         new_filtered: dict[str, dict[str, Any]] = {}
-        dropped_keys: list[str] = []
+        dropped_issues: list[dict[str, Any]] = []
+        removed_count = 0
         for key, data, excluded in rows:
             issue = json.loads(data)
+            if _is_removed_issue(issue):
+                # Already tombstoned by a previous eviction — stays out of the
+                # active cache without needing to be re-marked.
+                removed_count += 1
+                continue
             if not JiraClient.is_tracked_issue(issue):
-                dropped_keys.append(key)
+                dropped_issues.append(issue)
                 continue
             new_all[key] = issue
             if not excluded:
@@ -612,13 +660,15 @@ class IssueCache:
             self._all_issues = new_all
             self._issues = new_filtered
             self._initialized = True
-        if dropped_keys:
-            self._enqueue_store_op("delete", dropped_keys)
+        if dropped_issues:
+            self._soft_delete(dropped_issues)
             logger.info(
                 "Cache: dropped %d non-tracked issues from SQLite restore: %s",
-                len(dropped_keys),
-                ", ".join(sorted(dropped_keys)[:10]),
+                len(dropped_issues),
+                ", ".join(sorted(i.get("key", "") for i in dropped_issues)[:10]),
             )
+        if removed_count:
+            logger.info("Cache: skipped %d previously evicted issues on restore", removed_count)
         self._restore_last_refresh()
         logger.info(
             "Cache: restored %d total, %d filtered from SQLite (last Jira sync: %s)",
@@ -646,16 +696,17 @@ class IssueCache:
     def _prune_non_tracked_issues(self) -> list[str]:
         """Drop cached issues that no longer belong to a tracked Jira board/project."""
         with self._lock:
-            dropped_keys = [
-                key
+            dropped = [
+                (key, issue)
                 for key, issue in self._all_issues.items()
                 if not JiraClient.is_tracked_issue(issue)
             ]
+            dropped_keys = [key for key, _ in dropped]
             for key in dropped_keys:
                 self._all_issues.pop(key, None)
                 self._issues.pop(key, None)
         if dropped_keys:
-            self._enqueue_store_op("delete", dropped_keys)
+            self._soft_delete([issue for _, issue in dropped])
             logger.info(
                 "Cache: pruned %d non-tracked issues: %s",
                 len(dropped_keys),
@@ -678,6 +729,23 @@ class IssueCache:
             # so a transient Jira hiccup never wipes the cache.
             return []
         with self._lock:
+            cached_count = len(self._all_issues)
+            if (
+                cached_count
+                and len(current_keys) < cached_count * _RECONCILE_MIN_KEY_COVERAGE_RATIO
+            ):
+                # A degraded/truncated fetch is indistinguishable from "most of
+                # the cache moved out of the tracked project" without this
+                # check — treat it as unknown rather than evicting most of a
+                # healthy cache.
+                logger.warning(
+                    "Cache: skipping reconcile — fetch_tracked_issue_keys returned "
+                    "%d keys, far fewer than the %d cached issues (likely a "
+                    "degraded Jira response)",
+                    len(current_keys),
+                    cached_count,
+                )
+                return []
             stale_keys = [key for key in self._all_issues if key not in current_keys]
         for key in stale_keys:
             self.evict_issue(key)
