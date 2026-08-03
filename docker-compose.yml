@@ -104,6 +104,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./.deploy-state/active_upstreams.caddy:/etc/caddy/active_upstreams.caddy:ro
+      - /workspace/activity_tracker/.deploy-state/active_upstreams.caddy:/etc/caddy/activity_active_upstreams.caddy:ro
       - caddy_data:/data
       - caddy_config:/config
     restart: unless-stopped

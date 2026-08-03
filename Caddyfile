@@ -3,6 +3,7 @@
 }
 
 import /etc/caddy/active_upstreams.caddy
+import /etc/caddy/activity_active_upstreams.caddy
 
 it-app.movedocs.com, oasisdev.movedocs.com, azure.movedocs.com, security.movedocs.com {
 	tls {
@@ -19,4 +20,18 @@ it-app.movedocs.com, oasisdev.movedocs.com, azure.movedocs.com, security.movedoc
 	respond @internal 404
 
 	import active_upstreams
+}
+
+activity.movedocs.com {
+	tls {
+		issuer acme {
+			dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+			resolvers 1.1.1.1 1.0.0.1
+			propagation_delay 30s
+			propagation_timeout 5m
+		}
+		issuer internal
+	}
+
+	import activity_active_upstreams
 }
