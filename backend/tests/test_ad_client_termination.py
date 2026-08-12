@@ -50,6 +50,7 @@ def test_update_termination_attributes_modifies_correct_attrs(monkeypatch):
     assert "msDS-cloudExtensionAttribute1" in changes_arg
     assert "manager" in changes_arg
     assert "department" in changes_arg
+    assert "employeeNumber" in changes_arg
 
     assert result["mailNickname"] == "jdoe"
     assert result["physicalDeliveryOfficeName"] == "DISABLED"
@@ -58,6 +59,7 @@ def test_update_termination_attributes_modifies_correct_attrs(monkeypatch):
     assert result["telephoneNumber"] == ""
     assert result["manager"] == ""
     assert result["department"] == ""
+    assert result["employeeNumber"] == ""
 
     mock_conn.unbind.assert_called_once()
 

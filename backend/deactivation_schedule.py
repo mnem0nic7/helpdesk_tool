@@ -201,8 +201,6 @@ class DeactivationScheduleStore:
                 logger.error("Deactivation schedule runner error: %s", exc)
 
     async def _execute(self, job: dict[str, Any]) -> None:
-        import secrets
-        import string
         from user_admin_jobs import user_admin_jobs
         import ad_client as ad
 
@@ -246,7 +244,10 @@ class DeactivationScheduleStore:
             result["entra_reset_pw"] = f"Error: {exc}"
             logger.error("Deactivation: reset_password (Entra) failed for %s: %s", job_id, exc)
 
-        # 4. On-prem AD: disable + random password reset
+        # 4. On-prem AD: disable, reset password, remove from groups, clear
+        # termination attributes, move to the disabled-users OU. Mirrors the
+        # ad_* lanes in offboarding_runs.py so a ticket-triggered deactivation
+        # leaves the account in the same state as a full offboarding run.
         if ad_sam:
             try:
                 await loop.run_in_executor(None, lambda: ad.disable_user(ad_sam))
@@ -256,24 +257,45 @@ class DeactivationScheduleStore:
                 logger.error("Deactivation: AD disable failed for %s: %s", job_id, exc)
 
             try:
-                alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-                random_pw = "".join(secrets.choice(alphabet) for _ in range(20))
-                # Ensure complexity: uppercase, lowercase, digit, special
-                random_pw = (
-                    secrets.choice(string.ascii_uppercase)
-                    + secrets.choice(string.ascii_lowercase)
-                    + secrets.choice(string.digits)
-                    + secrets.choice("!@#$%^&*")
-                    + random_pw[4:]
-                )
-                await loop.run_in_executor(None, lambda: ad.reset_password(ad_sam, random_pw, must_change=False))
+                await loop.run_in_executor(None, lambda: ad.reset_password_random(ad_sam))
                 result["ad_reset_pw"] = f"AD password reset for: {ad_sam}"
             except Exception as exc:
                 result["ad_reset_pw"] = f"Error: {exc}"
                 logger.error("Deactivation: AD password reset failed for %s: %s", job_id, exc)
+
+            try:
+                group_result = await loop.run_in_executor(
+                    None, lambda: ad.remove_from_all_groups_except_domain_users(ad_sam)
+                )
+                removed = group_result.get("removed", [])
+                failures = group_result.get("failures", [])
+                msg = f"Removed {len(removed)} group(s)"
+                if failures:
+                    msg += f"; {len(failures)} failure(s): {failures}"
+                result["ad_group_cleanup"] = msg
+            except Exception as exc:
+                result["ad_group_cleanup"] = f"Error: {exc}"
+                logger.error("Deactivation: AD group cleanup failed for %s: %s", job_id, exc)
+
+            try:
+                await loop.run_in_executor(None, lambda: ad.update_termination_attributes(ad_sam))
+                result["ad_attribute_cleanup"] = "Termination attributes applied"
+            except Exception as exc:
+                result["ad_attribute_cleanup"] = f"Error: {exc}"
+                logger.error("Deactivation: AD attribute cleanup failed for %s: %s", job_id, exc)
+
+            try:
+                new_dn = await loop.run_in_executor(None, lambda: ad.move_to_disabled_users_ou(ad_sam))
+                result["ad_move_ou"] = f"Moved to disabled OU: {new_dn}"
+            except Exception as exc:
+                result["ad_move_ou"] = f"Error: {exc}"
+                logger.error("Deactivation: AD move to disabled OU failed for %s: %s", job_id, exc)
         else:
             result["ad_disable"] = "No AD account linked"
             result["ad_reset_pw"] = "No AD account linked"
+            result["ad_group_cleanup"] = "No AD account linked"
+            result["ad_attribute_cleanup"] = "No AD account linked"
+            result["ad_move_ou"] = "No AD account linked"
 
         errors = [v for v in result.values() if isinstance(v, str) and v.startswith("Error")]
         overall = "failed" if errors else "completed"

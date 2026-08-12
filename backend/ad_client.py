@@ -683,6 +683,7 @@ def update_termination_attributes(sam: str) -> dict[str, str]:
             "msDS-cloudExtensionAttribute1": [(MODIFY_REPLACE, [])],
             "manager": [(MODIFY_REPLACE, [])],
             "department": [(MODIFY_REPLACE, [])],
+            "employeeNumber": [(MODIFY_REPLACE, [])],  # cleared so ADP stops syncing this account
         }
         conn.modify(user["dn"], changes)
         if conn.result["result"] != 0:
@@ -702,6 +703,7 @@ def update_termination_attributes(sam: str) -> dict[str, str]:
         "msDS-cloudExtensionAttribute1": "",
         "manager": "",
         "department": "",
+        "employeeNumber": "",
     }
 
 

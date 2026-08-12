@@ -210,8 +210,8 @@ These are durable rules and design contracts — not time-bound release notes. G
 
 ### User lifecycle and AD
 
-- The deactivation scheduler (`backend/deactivation_schedule.py`, `/api/deactivation-schedule`) queues scheduled or immediate user deactivations tied to a Jira ticket key. Each job runs four steps in order: Entra disable sign-in → Entra revoke sessions → Entra random password reset → AD disable + AD random password reset. Any step error marks the entire job `failed`. The scheduler polls every 30 s and is started as a leader-only background service.
-- On-prem AD client (`backend/ad_client.py`) uses ldap3. Strip `ldap://`/`ldaps://` scheme from `AD_SERVER` before passing to `ldap3.Server()`. LDAPS on port 636 is required for password reset. `AD_BIND_DN` must be the full Distinguished Name of the service account.
+- The deactivation scheduler (`backend/deactivation_schedule.py`, `/api/deactivation-schedule`) queues scheduled or immediate user deactivations tied to a Jira ticket key. Each job runs eight steps in order: Entra disable sign-in → Entra revoke sessions → Entra random password reset → AD disable → AD random password reset → AD group cleanup (remove from all groups except Domain Users) → AD termination attribute cleanup → AD move to the disabled-users OU. The AD-side steps call the same `ad_client.py` helpers as the `ad_*` lanes in `backend/offboarding_runs.py`, so a ticket-triggered deactivation leaves the on-prem account in the same state as a full offboarding run. Any step error marks the entire job `failed`. The scheduler polls every 30 s and is started as a leader-only background service.
+- On-prem AD client (`backend/ad_client.py`) uses ldap3. Strip `ldap://`/`ldaps://` scheme from `AD_SERVER` before passing to `ldap3.Server()`. LDAPS on port 636 is required for password reset. `AD_BIND_DN` must be the full Distinguished Name of the service account. `update_termination_attributes()` also clears `employeeNumber` so ADP stops syncing a terminated account, matching the legacy on-prem exit script.
 
 ### Frontend conventions
 
