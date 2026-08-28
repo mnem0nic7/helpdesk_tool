@@ -7,11 +7,16 @@ from typing import Any
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import ad_client as ad
+from ad_employee_number_import import (
+    ad_employee_number_import_jobs,
+    run_apply_phase,
+    run_matching_phase,
+)
 from auth import list_login_audit, require_tools_access, session_is_admin
 from emailgistics_helper_service import emailgistics_helper_service
 from azure_cache import azure_cache
@@ -542,3 +547,115 @@ def retry_offboarding_lane(
         store=offboarding_runs,
     )
     return {"run_id": run_id, "status": "requeued", "lane": body.lane}
+
+
+class ConfirmAdEmployeeNumberImportRequest(BaseModel):
+    excluded_row_ids: list[str] = []
+
+
+@router.post("/ad-employee-number-import/jobs", status_code=202)
+async def create_ad_employee_number_import_job(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    session: dict[str, Any] = Depends(_require_admin_tools_session),
+):
+    filename = file.filename or "upload.csv"
+    if not filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only .csv files are supported")
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 10 MB)")
+
+    job_id = uuid.uuid4().hex
+    ad_employee_number_import_jobs.create_job(
+        job_id=job_id,
+        requested_by=str(session.get("email") or ""),
+        filename=filename,
+        total_rows=0,
+    )
+    background_tasks.add_task(
+        run_matching_phase,
+        job_id,
+        content,
+        store=ad_employee_number_import_jobs,
+    )
+    return {"job_id": job_id, "status": "queued"}
+
+
+@router.get("/ad-employee-number-import/jobs")
+def list_ad_employee_number_import_jobs(
+    limit: int = Query(default=50, ge=1, le=200),
+    _session: dict[str, Any] = Depends(_require_admin_tools_session),
+):
+    return ad_employee_number_import_jobs.list_jobs(limit=limit)
+
+
+@router.get("/ad-employee-number-import/jobs/{job_id}")
+def get_ad_employee_number_import_job(
+    job_id: str,
+    action: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    _session: dict[str, Any] = Depends(_require_admin_tools_session),
+):
+    job = ad_employee_number_import_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    rows = ad_employee_number_import_jobs.list_rows(job_id, action=action, limit=limit, offset=offset)
+    rows_total = ad_employee_number_import_jobs.count_rows(job_id, action=action)
+    return {**job, "rows": rows, "rows_total": rows_total}
+
+
+@router.post("/ad-employee-number-import/jobs/{job_id}/confirm", status_code=202)
+def confirm_ad_employee_number_import_job(
+    job_id: str,
+    body: ConfirmAdEmployeeNumberImportRequest,
+    background_tasks: BackgroundTasks,
+    _session: dict[str, Any] = Depends(_require_admin_tools_session),
+):
+    job = ad_employee_number_import_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("status") != "awaiting_confirmation":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is not awaiting confirmation (status: {job.get('status')})",
+        )
+    ad_employee_number_import_jobs.update_job_status(job_id, status="applying")
+    background_tasks.add_task(
+        run_apply_phase,
+        job_id,
+        body.excluded_row_ids,
+        store=ad_employee_number_import_jobs,
+    )
+    return {"job_id": job_id, "status": "applying"}
+
+
+@router.post("/ad-employee-number-import/jobs/{job_id}/cancel")
+def cancel_ad_employee_number_import_job(
+    job_id: str,
+    _session: dict[str, Any] = Depends(_require_admin_tools_session),
+):
+    job = ad_employee_number_import_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("status") in {"queued", "matching", "awaiting_confirmation"}:
+        ad_employee_number_import_jobs.update_job_status(job_id, status="cancelled")
+        return {"cancelled": True, "message": "Import job cancelled."}
+    return {"cancelled": False, "message": "Import job is already finished."}
+
+
+@router.get("/ad-employee-number-import/jobs/{job_id}/csv")
+def get_ad_employee_number_import_job_csv(
+    job_id: str,
+    _session: dict[str, Any] = Depends(_require_admin_tools_session),
+):
+    job = ad_employee_number_import_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    csv_content = ad_employee_number_import_jobs.render_csv(job_id)
+    return StreamingResponse(
+        iter([csv_content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="ad_employee_number_import_{job_id[:8]}.csv"'},
+    )

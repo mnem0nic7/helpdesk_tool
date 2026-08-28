@@ -23,6 +23,7 @@ import {
   resolvePollingIntervalMs,
 } from "../lib/queryPolling.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
+import AdEmployeeNumberImportTool from "../components/AdEmployeeNumberImportTool.tsx";
 
 const EXCLUDED_ROOT_FOLDERS = [
   "Apps",
@@ -1218,6 +1219,7 @@ function EmailgisticsHelperResults({
 export default function ToolsPage() {
   const branding = getSiteBranding();
   const isOasisDev = branding.scope === "oasisdev";
+  const isPrimaryScope = branding.scope === "primary";
   const queryClient = useQueryClient();
   const [sourceUpnInput, setSourceUpnInput] = useState("");
   const [destinationUpnInput, setDestinationUpnInput] = useState("");
@@ -1848,6 +1850,7 @@ export default function ToolsPage() {
     (selectedDelegateUser !== null || looksLikeUpn(delegateUserInput)) && !createDelegateMailboxJobMutation.isPending;
   const canUseEmailgisticsHelper = !!meQuery.data?.is_admin;
   const canUseDeactivateTool = !!meQuery.data?.is_admin;
+  const canUseAdEmployeeNumberImport = !!meQuery.data?.is_admin;
   const canRunEmailgisticsHelper =
     canUseEmailgisticsHelper &&
     (selectedEmailgisticsUser !== null || looksLikeUpn(emailgisticsUserInput)) &&
@@ -2353,6 +2356,8 @@ export default function ToolsPage() {
               />
             </section>
           ) : null}
+
+          {isPrimaryScope && canUseAdEmployeeNumberImport ? <AdEmployeeNumberImportTool /> : null}
 
           {!isOasisDev && (
           <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">

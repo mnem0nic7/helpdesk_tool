@@ -21,6 +21,12 @@ const { mockApi } = vi.hoisted(() => ({
     createDelegateMailboxJob: vi.fn(),
     cancelDelegateMailboxJob: vi.fn(),
     runEmailgisticsHelper: vi.fn(),
+    createAdEmployeeNumberImportJob: vi.fn(),
+    listAdEmployeeNumberImportJobs: vi.fn(),
+    getAdEmployeeNumberImportJob: vi.fn(),
+    confirmAdEmployeeNumberImportJob: vi.fn(),
+    cancelAdEmployeeNumberImportJob: vi.fn(),
+    adEmployeeNumberImportJobCsvUrl: vi.fn(),
   },
 }));
 
@@ -286,6 +292,9 @@ describe("ToolsPage", () => {
       cancelled: true,
       message: "Mailbox delegate scan cancelled.",
     });
+    mockApi.listAdEmployeeNumberImportJobs.mockResolvedValue([]);
+    mockApi.getAdEmployeeNumberImportJob.mockResolvedValue(null);
+    mockApi.adEmployeeNumberImportJobCsvUrl.mockReturnValue("/api/tools/ad-employee-number-import/jobs/job-1/csv");
     mockApi.runEmailgisticsHelper.mockResolvedValue({
       status: "completed",
       user_mailbox: "helper-user@example.com",
@@ -504,6 +513,27 @@ describe("ToolsPage", () => {
 
     expect(await screen.findByText("Copy a full OneDrive to another user")).toBeInTheDocument();
     expect(screen.queryByText("Grant mailbox access for Emailgistics")).not.toBeInTheDocument();
+  });
+
+  it("renders the AD employee number import card for admins on primary scope", async () => {
+    render(<ToolsPage />);
+
+    expect(await screen.findByText("AD employee number import")).toBeInTheDocument();
+  });
+
+  it("hides the AD employee number import card for non-admin users", async () => {
+    mockApi.getMe.mockResolvedValueOnce({
+      email: "someone@example.com",
+      name: "Someone",
+      is_admin: false,
+      can_manage_users: false,
+      can_access_tools: true,
+    });
+
+    render(<ToolsPage />);
+
+    await screen.findByText("Copy a full OneDrive to another user");
+    expect(screen.queryByText("AD employee number import")).not.toBeInTheDocument();
   });
 
   it("clears finished OneDrive copy jobs from the history card", async () => {

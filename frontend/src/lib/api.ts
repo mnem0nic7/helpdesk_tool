@@ -1865,6 +1865,60 @@ export interface CreateOffboardingRunRequest {
   lanes: OffboardingLane[];
 }
 
+export type AdEmployeeNumberImportJobStatus =
+  | "queued"
+  | "matching"
+  | "awaiting_confirmation"
+  | "applying"
+  | "completed"
+  | "completed_with_errors"
+  | "failed"
+  | "cancelled";
+
+export type AdEmployeeNumberImportRowAction =
+  | "update"
+  | "no_change"
+  | "not_found"
+  | "skipped_blank"
+  | "skipped_duplicate";
+
+export interface AdEmployeeNumberImportJobSummary {
+  job_id: string;
+  requested_by: string;
+  filename: string;
+  status: AdEmployeeNumberImportJobStatus;
+  total_rows: number;
+  update_count: number;
+  no_change_count: number;
+  not_found_count: number;
+  skipped_count: number;
+  applied_count: number;
+  apply_failed_count: number;
+  error: string;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface AdEmployeeNumberImportRow {
+  id: string;
+  job_id: string;
+  row_index: number;
+  source_email: string;
+  ad_sam: string;
+  ad_display_name: string;
+  current_employee_number: string;
+  new_employee_number: string;
+  action: AdEmployeeNumberImportRowAction;
+  applied: boolean;
+  apply_error: string;
+}
+
+export interface AdEmployeeNumberImportJobDetail extends AdEmployeeNumberImportJobSummary {
+  rows: AdEmployeeNumberImportRow[];
+  rows_total: number;
+}
+
 export interface OneDriveCopyJobStatus {
   job_id: string;
   site_scope: string;
@@ -4218,6 +4272,56 @@ export const api = {
 
   offboardingRunCsvUrl(runId: string): string {
     return `/api/tools/offboarding-runs/${encodeURIComponent(runId)}/csv`;
+  },
+
+  async createAdEmployeeNumberImportJob(file: File): Promise<{ job_id: string; status: string }> {
+    const body = new FormData();
+    body.append("file", file);
+    const res = await fetch("/api/tools/ad-employee-number-import/jobs", { method: "POST", body });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("POST", "/api/tools/ad-employee-number-import/jobs", res));
+    }
+    return res.json() as Promise<{ job_id: string; status: string }>;
+  },
+
+  listAdEmployeeNumberImportJobs(limit = 50): Promise<AdEmployeeNumberImportJobSummary[]> {
+    return fetchJSON<AdEmployeeNumberImportJobSummary[]>(`/api/tools/ad-employee-number-import/jobs?limit=${limit}`);
+  },
+
+  getAdEmployeeNumberImportJob(
+    jobId: string,
+    options: { action?: AdEmployeeNumberImportRowAction; limit?: number; offset?: number } = {},
+  ): Promise<AdEmployeeNumberImportJobDetail> {
+    const params = new URLSearchParams();
+    if (options.action) params.set("action", options.action);
+    if (options.limit) params.set("limit", String(options.limit));
+    if (options.offset) params.set("offset", String(options.offset));
+    const query = params.toString();
+    return fetchJSON<AdEmployeeNumberImportJobDetail>(
+      `/api/tools/ad-employee-number-import/jobs/${encodeURIComponent(jobId)}${query ? `?${query}` : ""}`,
+    );
+  },
+
+  confirmAdEmployeeNumberImportJob(jobId: string, excludedRowIds: string[]): Promise<{ job_id: string; status: string }> {
+    return postJSON<{ job_id: string; status: string }>(
+      `/api/tools/ad-employee-number-import/jobs/${encodeURIComponent(jobId)}/confirm`,
+      { excluded_row_ids: excludedRowIds },
+    );
+  },
+
+  cancelAdEmployeeNumberImportJob(jobId: string): Promise<{ cancelled: boolean; message: string }> {
+    return postJSON<{ cancelled: boolean; message: string }>(
+      `/api/tools/ad-employee-number-import/jobs/${encodeURIComponent(jobId)}/cancel`,
+      {},
+    );
+  },
+
+  adEmployeeNumberImportJobCsvUrl(jobId: string): string {
+    return `/api/tools/ad-employee-number-import/jobs/${encodeURIComponent(jobId)}/csv`;
   },
 
   getDelegateMailboxJob(job_id: string): Promise<DelegateMailboxJobStatus> {

@@ -51,7 +51,7 @@ _USER_ATTRS = [
     "description", "streetAddress", "l", "st", "postalCode", "co",
     "userAccountControl", "accountExpires", "pwdLastSet", "lastLogonTimestamp",
     "lockoutTime", "badPwdCount", "distinguishedName", "objectGUID",
-    "whenCreated", "whenChanged", "memberOf", "employeeID", "company",
+    "whenCreated", "whenChanged", "memberOf", "employeeID", "employeeNumber", "company",
     "msDS-ResultantPSO",
 ]
 
@@ -223,6 +223,7 @@ def _entry_to_user(entry: ldap3.Entry) -> dict[str, Any]:
         "country": str(_first(attrs.get("co")) or ""),
         "company": str(_first(attrs.get("company")) or ""),
         "employee_id": str(_first(attrs.get("employeeID")) or ""),
+        "employee_number": str(_first(attrs.get("employeeNumber")) or ""),
         "user_account_control": uac,
         "flags": _uac_flags(uac),
         "last_logon": _ad_ts_to_iso(_first(attrs.get("lastLogonTimestamp"))),
@@ -501,7 +502,7 @@ def update_user(sam: str, attributes: dict[str, str]) -> dict[str, Any]:
     _allowed = {
         "displayName", "givenName", "sn", "mail", "telephoneNumber", "mobile",
         "department", "title", "description", "streetAddress", "l", "st",
-        "postalCode", "co", "company", "employeeID", "manager",
+        "postalCode", "co", "company", "employeeID", "employeeNumber", "manager",
     }
     changes: dict[str, list] = {}
     for attr, value in attributes.items():

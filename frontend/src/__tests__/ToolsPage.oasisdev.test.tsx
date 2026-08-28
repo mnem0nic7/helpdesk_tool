@@ -22,6 +22,8 @@ const { mockApi, OFFBOARDING_LANES_VALUES } = vi.hoisted(() => ({
     cancelDelegateMailboxJob: vi.fn(),
     runEmailgisticsHelper: vi.fn(),
     lookupPasswordExpiry: vi.fn(),
+    listAdEmployeeNumberImportJobs: vi.fn(),
+    getAdEmployeeNumberImportJob: vi.fn(),
   },
   OFFBOARDING_LANES_VALUES: [
     "entra_disable",
@@ -118,6 +120,21 @@ describe("ToolsPage (oasisdev scope)", () => {
     await screen.findByText("Look up when a user's password expires");
     expect(
       screen.queryByText("Offboard user")
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the AD employee number import card even for admins", async () => {
+    mockApi.getMe.mockResolvedValue({
+      email: "gallison@movedocs.com",
+      name: "Gallison",
+      is_admin: true,
+      can_manage_users: true,
+      can_access_tools: true,
+    });
+    render(<ToolsPage />);
+    await screen.findByText("Look up when a user's password expires");
+    expect(
+      screen.queryByText("AD employee number import")
     ).not.toBeInTheDocument();
   });
 });

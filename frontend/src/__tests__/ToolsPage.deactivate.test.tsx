@@ -32,6 +32,8 @@ const { mockApi, OFFBOARDING_LANES_VALUES } = vi.hoisted(() => ({
     offboardingRunCsvUrl: vi.fn(),
     setAutoReply: vi.fn(),
     getAutoReply: vi.fn(),
+    listAdEmployeeNumberImportJobs: vi.fn(),
+    getAdEmployeeNumberImportJob: vi.fn(),
   },
   OFFBOARDING_LANES_VALUES: [
     "entra_disable",
@@ -140,6 +142,8 @@ function setupDefaultMocks() {
   mockApi.offboardingRunCsvUrl.mockReturnValue("/api/tools/offboarding-runs/run-1/csv");
   mockApi.setAutoReply.mockResolvedValue({});
   mockApi.getAutoReply.mockResolvedValue({ enabled: false, message: "" });
+  mockApi.listAdEmployeeNumberImportJobs.mockResolvedValue([]);
+  mockApi.getAdEmployeeNumberImportJob.mockResolvedValue(null);
 }
 
 describe("ToolsPage — offboarding section", () => {
