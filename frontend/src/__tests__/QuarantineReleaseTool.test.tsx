@@ -100,4 +100,15 @@ describe("QuarantineReleaseTool", () => {
       }),
     );
   });
+
+  it("surfaces an inline error when the settings patch fails", async () => {
+    mockApi.patchQuarantineReleaseSettings.mockRejectedValue(new Error("Not authorized"));
+
+    render(<QuarantineReleaseTool />);
+
+    const toggle = await screen.findByRole("switch");
+    fireEvent.click(toggle);
+
+    expect(await screen.findByText("Not authorized")).toBeInTheDocument();
+  });
 });

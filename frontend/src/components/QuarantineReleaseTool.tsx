@@ -56,6 +56,18 @@ export default function QuarantineReleaseTool() {
   const status = statusQuery.data;
   const enabled = status?.enabled ?? false;
 
+  const settingsErrorMessage = settingsMutation.isError
+    ? settingsMutation.error instanceof Error
+      ? settingsMutation.error.message
+      : "Failed to update settings"
+    : null;
+
+  const statusErrorMessage = statusQuery.isError
+    ? statusQuery.error instanceof Error
+      ? statusQuery.error.message
+      : "Failed to load status"
+    : null;
+
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -99,7 +111,9 @@ export default function QuarantineReleaseTool() {
         <div className="h-4 w-px bg-slate-200" />
 
         <div className="text-sm text-slate-600">
-          {status?.last_run ? (
+          {statusErrorMessage ? (
+            <span className="text-red-600">Unable to load status: {statusErrorMessage}</span>
+          ) : status?.last_run ? (
             <>
               Last run <strong>{formatDateTime(status.last_run.ran_at)}</strong> —{" "}
               <strong>{status.last_run.checked_count}</strong> checked,{" "}
@@ -111,6 +125,8 @@ export default function QuarantineReleaseTool() {
           )}
         </div>
       </div>
+
+      {settingsErrorMessage ? <p className="mt-2 text-sm text-red-600">{settingsErrorMessage}</p> : null}
 
       <div className="mt-4 flex flex-wrap items-end gap-3">
         <div className="flex-1">
