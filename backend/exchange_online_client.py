@@ -134,10 +134,12 @@ Connect-ExchangeOnline `
   -SkipLoadingFormatData `
   -CommandName @(
     'Get-Mailbox',
+    'Set-Mailbox',
     'Add-MailboxPermission',
     'Add-RecipientPermission',
     'Get-EXOMailboxPermission',
     'Get-EXORecipientPermission',
+    'Remove-DistributionGroupMember',
     'Disconnect-ExchangeOnline'
   ) | Out-Null
 try {{
@@ -578,4 +580,37 @@ $result = Get-Mailbox -Identity $mailboxIdentity | Select-Object RecipientTypeDe
             "mailbox": mailbox,
             "recipient_type": str(payload.get("recipient_type") or ""),
             "hidden_from_address_lists": bool(payload.get("hidden_from_address_lists")),
+        }
+
+    def remove_distribution_group_member(self, group_identity: str, member_identity: str) -> dict[str, Any]:
+        """Remove a member from a classic distribution list.
+
+        Graph's /groups/{id}/members/$ref endpoint does not support membership
+        changes on mail-enabled, non-security distribution lists — only Exchange
+        Online PowerShell can modify them.
+        """
+        group = str(group_identity or "").strip()
+        member = str(member_identity or "").strip()
+        if not group:
+            raise ExchangeOnlinePowerShellError("group_identity is required")
+        if not member:
+            raise ExchangeOnlinePowerShellError("member_identity is required")
+        script = """
+$groupIdentity = $env:DL_GROUP_IDENTITY
+$memberIdentity = $env:DL_MEMBER_IDENTITY
+Remove-DistributionGroupMember -Identity $groupIdentity -Member $memberIdentity -Confirm:$false
+@{
+  group = $groupIdentity
+  member = $memberIdentity
+  removed = $true
+} | ConvertTo-Json -Depth 4 -Compress
+"""
+        payload = self._run_script(
+            script.strip(),
+            extra_env={"DL_GROUP_IDENTITY": group, "DL_MEMBER_IDENTITY": member},
+        )
+        return {
+            "group": group,
+            "member": member,
+            "removed": bool(payload.get("removed", True)),
         }
