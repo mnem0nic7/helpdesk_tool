@@ -24,6 +24,7 @@ import {
 } from "../lib/queryPolling.ts";
 import { getSiteBranding } from "../lib/siteContext.ts";
 import AdEmployeeNumberImportTool from "../components/AdEmployeeNumberImportTool.tsx";
+import QuarantineReleaseTool from "../components/QuarantineReleaseTool.tsx";
 
 const EXCLUDED_ROOT_FOLDERS = [
   "Apps",
@@ -1851,6 +1852,7 @@ export default function ToolsPage() {
   const canUseEmailgisticsHelper = !!meQuery.data?.is_admin;
   const canUseDeactivateTool = !!meQuery.data?.is_admin;
   const canUseAdEmployeeNumberImport = !!meQuery.data?.is_admin;
+  const canUseQuarantineRelease = !!meQuery.data?.is_admin;
   const canRunEmailgisticsHelper =
     canUseEmailgisticsHelper &&
     (selectedEmailgisticsUser !== null || looksLikeUpn(emailgisticsUserInput)) &&
@@ -2358,6 +2360,8 @@ export default function ToolsPage() {
           ) : null}
 
           {isPrimaryScope && canUseAdEmployeeNumberImport ? <AdEmployeeNumberImportTool /> : null}
+
+          {isPrimaryScope && canUseQuarantineRelease ? <QuarantineReleaseTool /> : null}
 
           {!isOasisDev && (
           <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
