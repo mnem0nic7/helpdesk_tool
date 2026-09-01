@@ -1,9 +1,21 @@
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 import pytest
 
 
-def _mock_user(pwd_last_set_raw="134143000000000000", pso_dn=None, password_never_expires=False, enabled=True):
+def _filetime_days_ago(days: int) -> str:
+    """Windows FILETIME (100ns since 1601-01-01) for `days` before now."""
+    epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
+    dt = datetime.now(timezone.utc) - timedelta(days=days)
+    return str(int((dt - epoch).total_seconds() * 10_000_000))
+
+
+def _mock_user(pwd_last_set_raw=None, pso_dn=None, password_never_expires=False, enabled=True):
     """Build a minimal _entry_to_user-style dict."""
+    if pwd_last_set_raw is None:
+        # Computed relative to "now" so this fixture never rots into a
+        # false failure as real time passes (see 2026-09-01 incident).
+        pwd_last_set_raw = _filetime_days_ago(10)
     uac = 512 | (0x10000 if password_never_expires else 0) | (0 if enabled else 0x2)
     entry = MagicMock()
     attrs = {
