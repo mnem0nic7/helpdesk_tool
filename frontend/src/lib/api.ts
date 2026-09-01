@@ -5176,6 +5176,44 @@ export const api = {
     }
     return res.json() as Promise<PasswordExpiryStatus>;
   },
+
+  getQuarantineReleaseStatus(): Promise<QuarantineReleaseStatus> {
+    return fetchJSON<QuarantineReleaseStatus>("/api/quarantine-release/status");
+  },
+
+  getQuarantineReleaseRuns(
+    limit = 30,
+    offset = 0,
+  ): Promise<{ items: QuarantineReleaseRun[]; total: number }> {
+    return fetchJSON(`/api/quarantine-release/runs?limit=${limit}&offset=${offset}`);
+  },
+
+  getQuarantineReleaseReleases(
+    limit = 50,
+    offset = 0,
+    runHour?: string,
+  ): Promise<{ items: QuarantineReleaseMessage[]; total: number }> {
+    const runHourParam = runHour ? `&run_hour=${encodeURIComponent(runHour)}` : "";
+    return fetchJSON(`/api/quarantine-release/releases?limit=${limit}&offset=${offset}${runHourParam}`);
+  },
+
+  async patchQuarantineReleaseSettings(
+    body: { enabled?: boolean; allowed_domains?: string[] },
+  ): Promise<QuarantineReleaseStatus> {
+    const res = await fetch("/api/quarantine-release/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("PATCH", "/api/quarantine-release/settings", res));
+    }
+    return res.json() as Promise<QuarantineReleaseStatus>;
+  },
 };
 
 export default api;
@@ -5428,5 +5466,34 @@ export interface PasswordExpiryNotification {
   days_until_expiry: number;
   notified_at: string;
   test_mode: number;
+}
+
+export interface QuarantineReleaseRun {
+  run_hour: string;
+  ran_at: string;
+  domains_checked: string;
+  checked_count: number;
+  released_count: number;
+  failed_count: number;
+}
+
+export interface QuarantineReleaseMessage {
+  id: string;
+  run_hour: string;
+  message_identity: string;
+  sender_address: string;
+  recipient_address: string;
+  subject: string;
+  received_at: string;
+  quarantine_reason: string;
+  status: "released" | "failed";
+  error: string | null;
+  released_at: string;
+}
+
+export interface QuarantineReleaseStatus {
+  enabled: boolean;
+  allowed_domains: string[];
+  last_run: QuarantineReleaseRun | null;
 }
 
