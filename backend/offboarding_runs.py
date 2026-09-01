@@ -21,14 +21,14 @@ logger = logging.getLogger(__name__)
 _DB_PATH = os.path.join(DATA_DIR, "offboarding_runs.db")
 
 OffboardingLane = Literal[
+    "entra_reset_pw",
     "entra_disable",
     "entra_revoke",
-    "entra_reset_pw",
     "entra_reset_mfa",
     "entra_group_cleanup",
     "entra_group_validate",
-    "entra_license_cleanup",
     "mailbox_convert_shared",
+    "entra_license_cleanup",
     "jira_deactivate",
     "ad_disable",
     "ad_reset_pw",
@@ -39,14 +39,14 @@ OffboardingLane = Literal[
 
 # Canonical execution order — subset of lanes submitted by caller are run in this order
 _LANE_ORDER: list[str] = [
+    "entra_reset_pw",
     "entra_disable",
     "entra_revoke",
-    "entra_reset_pw",
     "entra_reset_mfa",
     "entra_group_cleanup",
     "entra_group_validate",
-    "entra_license_cleanup",
     "mailbox_convert_shared",
+    "entra_license_cleanup",
     "jira_deactivate",
     "ad_disable",
     "ad_reset_pw",
@@ -58,6 +58,20 @@ _LANE_ORDER: list[str] = [
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _resolve_entra_mail(_uap: Any, entra_user_id: str, fallback: str = "") -> str:
+    """Resolve a user's mail/UPN from Graph, falling back to `fallback` on any failure."""
+    if not entra_user_id:
+        return fallback
+    try:
+        graph_user = _uap.entra.client.graph_request(
+            "GET", f"users/{entra_user_id}",
+            params={"$select": "mail,userPrincipalName"},
+        )
+        return str(graph_user.get("mail") or graph_user.get("userPrincipalName") or "").strip() or fallback
+    except Exception:
+        return fallback
 
 
 class OffboardingRunsStore:
@@ -381,9 +395,31 @@ def run_offboarding(
 
                 elif lane == "entra_group_cleanup":
                     result = _uap.entra.remove_direct_cloud_group_memberships(entra_user_id)
-                    removed_cloud_groups = result.get("after_summary", {}).get("removed_groups", [])
+                    summary = dict(result.get("after_summary") or {})
+                    removed_cloud_groups = list(summary.get("removed_groups", []))
+                    distribution_lists = summary.get("distribution_lists", [])
+                    if distribution_lists:
+                        member_mail = _resolve_entra_mail(_uap, entra_user_id, display_name)
+                        dl_removed: list[str] = []
+                        dl_failures: list[str] = []
+                        for dl in distribution_lists:
+                            dl_name = dl.get("name") or dl.get("id", "")
+                            group_identity = dl.get("mail") or dl.get("id")
+                            try:
+                                _uap.mailbox.exchange_powershell.remove_distribution_group_member(
+                                    group_identity, member_mail
+                                )
+                                dl_removed.append(dl_name)
+                                removed_cloud_groups.append(dl_name)
+                            except Exception as exc:
+                                dl_failures.append(f"{dl_name}: {exc}")
+                        summary["distribution_lists_removed"] = dl_removed
+                        if dl_failures:
+                            summary["distribution_list_failures"] = dl_failures
+                            ok = False
+                            has_errors = True
                     message = result.get("summary", f"Removed {len(removed_cloud_groups)} group(s)")
-                    detail = result.get("after_summary")
+                    detail = summary
 
                 elif lane == "entra_group_validate":
                     result = _uap.entra.validate_cloud_group_removal(entra_user_id, removed_cloud_groups)
@@ -403,16 +439,7 @@ def run_offboarding(
                     detail = result.get("after_summary")
 
                 elif lane == "mailbox_convert_shared":
-                    mail = display_name  # fallback; entra_user_id is the authoritative id
-                    # Resolve primary email from Graph if possible
-                    try:
-                        graph_user = _uap.entra.client.graph_request(
-                            "GET", f"users/{entra_user_id}",
-                            params={"$select": "mail,userPrincipalName"},
-                        )
-                        mail = str(graph_user.get("mail") or graph_user.get("userPrincipalName") or "").strip()
-                    except Exception:
-                        pass
+                    mail = _resolve_entra_mail(_uap, entra_user_id, display_name)
                     result = _uap.mailbox.exchange_powershell.convert_mailbox_to_shared(mail)
                     message = f"Mailbox converted to shared ({result.get('recipient_type', '')})"
                     detail = result
@@ -422,18 +449,7 @@ def run_offboarding(
 
                     jira = _jira_module.JiraClient()
                     # Resolve the user's email/UPN from Graph for the Jira lookup
-                    email = ""
-                    if entra_user_id:
-                        try:
-                            graph_user = _uap.entra.client.graph_request(
-                                "GET", f"users/{entra_user_id}",
-                                params={"$select": "mail,userPrincipalName"},
-                            )
-                            email = str(
-                                graph_user.get("mail") or graph_user.get("userPrincipalName") or ""
-                            ).strip()
-                        except Exception:
-                            pass
+                    email = _resolve_entra_mail(_uap, entra_user_id)
                     jira_user = jira.find_user_by_email(email) if email else None
                     if jira_user is None and display_name:
                         # Fallback: strict unique display-name match (e.g. Jira email

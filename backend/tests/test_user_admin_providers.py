@@ -396,6 +396,107 @@ def test_list_delegate_mailboxes_for_user_returns_partial_results_when_full_acce
 # EntraAdminProvider.validate_cloud_group_removal
 # ---------------------------------------------------------------------------
 
+class FakeEntraClientForResetPassword:
+    configured = True
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def graph_request(self, method: str, path: str, **kwargs):
+        self.calls.append({"method": method, "path": path, "json_body": kwargs.get("json_body")})
+        return {}
+
+
+def test_reset_password_patches_user_password_profile_directly():
+    client = FakeEntraClientForResetPassword()
+    provider = EntraAdminProvider(client=client)
+
+    result = provider.execute("reset_password", "user-1", {"force_change_on_next_login": True})
+
+    assert len(client.calls) == 1
+    call = client.calls[0]
+    assert call["method"] == "PATCH"
+    assert call["path"] == "users/user-1"
+    assert call["json_body"]["passwordProfile"]["forceChangePasswordNextSignIn"] is True
+    assert call["json_body"]["passwordProfile"]["password"] == result["one_time_secret"]
+
+
+def test_reset_password_uses_requested_password_when_provided():
+    client = FakeEntraClientForResetPassword()
+    provider = EntraAdminProvider(client=client)
+
+    result = provider.execute(
+        "reset_password", "user-1", {"new_password": "Sup3r!Secret1", "force_change_on_next_login": False}
+    )
+
+    call = client.calls[0]
+    assert call["json_body"]["passwordProfile"]["password"] == "Sup3r!Secret1"
+    assert call["json_body"]["passwordProfile"]["forceChangePasswordNextSignIn"] is False
+    assert result["one_time_secret"] == "Sup3r!Secret1"
+
+
+class FakeEntraClientForGroupCleanup:
+    configured = True
+
+    def __init__(self, member_of: list[dict], group_details: dict[str, dict], delete_should_fail: set[str] | None = None) -> None:
+        self._member_of = member_of
+        self._group_details = group_details
+        self.delete_calls: list[str] = []
+        self.delete_should_fail = delete_should_fail or set()
+
+    def graph_paged_get(self, path: str, **kwargs):
+        return self._member_of
+
+    def graph_request(self, method: str, path: str, **kwargs):
+        group_id = path.split("/")[1]
+        if method == "GET":
+            return self._group_details[group_id]
+        if method == "DELETE":
+            self.delete_calls.append(group_id)
+            if group_id in self.delete_should_fail:
+                raise AzureApiError("Graph rejected removal", status_code=400)
+            return {}
+        raise AssertionError(f"unexpected call {method} {path}")
+
+
+def test_remove_direct_cloud_group_memberships_routes_distribution_lists_separately():
+    member_of = [
+        {"@odata.type": "#microsoft.graph.group", "id": "g-sec", "displayName": "Security Group"},
+        {"@odata.type": "#microsoft.graph.group", "id": "g-dl", "displayName": "All Staff"},
+    ]
+    group_details = {
+        "g-sec": {
+            "id": "g-sec",
+            "displayName": "Security Group",
+            "groupTypes": [],
+            "mailEnabled": False,
+            "securityEnabled": True,
+            "onPremisesSyncEnabled": False,
+        },
+        "g-dl": {
+            "id": "g-dl",
+            "displayName": "All Staff",
+            "mail": "allstaff@example.com",
+            "groupTypes": [],
+            "mailEnabled": True,
+            "securityEnabled": False,
+            "onPremisesSyncEnabled": False,
+        },
+    }
+    client = FakeEntraClientForGroupCleanup(member_of, group_details)
+    provider = EntraAdminProvider(client=client)
+
+    result = provider.remove_direct_cloud_group_memberships("user-1")
+
+    # Graph DELETE is only attempted for the security group — the distribution
+    # list is never sent through /members/$ref since Graph rejects it outright.
+    assert client.delete_calls == ["g-sec"]
+    assert result["after_summary"]["removed_groups"] == ["Security Group"]
+    assert result["after_summary"]["distribution_lists"] == [
+        {"id": "g-dl", "name": "All Staff", "mail": "allstaff@example.com"}
+    ]
+
+
 class FakeEntraClientForValidation:
     configured = True
 

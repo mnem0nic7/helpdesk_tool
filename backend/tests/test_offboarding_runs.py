@@ -142,6 +142,27 @@ def test_render_csv_returns_empty_for_missing_run():
 # Orchestrator: lane ordering and step creation
 # ---------------------------------------------------------------------------
 
+def test_canonical_lane_order_matches_expected_sequence():
+    from offboarding_runs import _LANE_ORDER
+
+    assert _LANE_ORDER == [
+        "entra_reset_pw",
+        "entra_disable",
+        "entra_revoke",
+        "entra_reset_mfa",
+        "entra_group_cleanup",
+        "entra_group_validate",
+        "mailbox_convert_shared",
+        "entra_license_cleanup",
+        "jira_deactivate",
+        "ad_disable",
+        "ad_reset_pw",
+        "ad_group_cleanup",
+        "ad_attribute_cleanup",
+        "ad_move_ou",
+    ]
+
+
 def test_run_offboarding_executes_lanes_in_canonical_order():
     from offboarding_runs import run_offboarding
 
@@ -271,6 +292,149 @@ def test_run_offboarding_passes_removed_groups_to_validate_lane():
         )
 
     assert validate_calls == [removed_groups]
+
+
+def test_entra_group_cleanup_falls_back_to_exchange_for_distribution_lists():
+    from offboarding_runs import run_offboarding
+
+    store = _fresh_store()
+    store.create_run(
+        run_id="r1",
+        entra_user_id="u1",
+        ad_sam="",
+        display_name="Jane",
+        actor_email="admin@example.com",
+        lanes=["entra_group_cleanup"],
+    )
+
+    mock_uap_module = MagicMock()
+    mock_uap = MagicMock()
+    mock_uap_module.user_admin_providers = mock_uap
+    mock_uap.entra.remove_direct_cloud_group_memberships.return_value = {
+        "summary": "Removed 1 direct cloud group membership(s)",
+        "after_summary": {
+            "removed_groups": ["GroupA"],
+            "distribution_lists": [
+                {"id": "dl-1", "name": "All Staff", "mail": "allstaff@example.com"}
+            ],
+        },
+    }
+    mock_uap.entra.client.graph_request.return_value = {"mail": "jane@example.com"}
+    mock_uap.mailbox.exchange_powershell.remove_distribution_group_member.return_value = {
+        "group": "allstaff@example.com",
+        "member": "jane@example.com",
+        "removed": True,
+    }
+
+    mock_ad = MagicMock()
+
+    with patch.dict("sys.modules", {"user_admin_providers": mock_uap_module, "ad_client": mock_ad}):
+        run_offboarding(
+            run_id="r1",
+            entra_user_id="u1",
+            ad_sam="",
+            display_name="Jane",
+            lanes=["entra_group_cleanup"],
+            store=store,
+        )
+
+    mock_uap.mailbox.exchange_powershell.remove_distribution_group_member.assert_called_once_with(
+        "allstaff@example.com", "jane@example.com"
+    )
+    run = store.get_run("r1")
+    step = run["steps"][0]
+    assert step["status"] == "ok"
+    assert step["detail"]["distribution_lists_removed"] == ["All Staff"]
+    assert run["has_errors"] is False
+
+
+def test_entra_group_cleanup_records_failure_when_exchange_removal_fails():
+    from offboarding_runs import run_offboarding
+
+    store = _fresh_store()
+    store.create_run(
+        run_id="r1",
+        entra_user_id="u1",
+        ad_sam="",
+        display_name="Jane",
+        actor_email="admin@example.com",
+        lanes=["entra_group_cleanup"],
+    )
+
+    mock_uap_module = MagicMock()
+    mock_uap = MagicMock()
+    mock_uap_module.user_admin_providers = mock_uap
+    mock_uap.entra.remove_direct_cloud_group_memberships.return_value = {
+        "summary": "Removed 0 direct cloud group membership(s)",
+        "after_summary": {
+            "removed_groups": [],
+            "distribution_lists": [
+                {"id": "dl-1", "name": "All Staff", "mail": "allstaff@example.com"}
+            ],
+        },
+    }
+    mock_uap.entra.client.graph_request.return_value = {"mail": "jane@example.com"}
+    mock_uap.mailbox.exchange_powershell.remove_distribution_group_member.side_effect = RuntimeError("boom")
+
+    mock_ad = MagicMock()
+
+    with patch.dict("sys.modules", {"user_admin_providers": mock_uap_module, "ad_client": mock_ad}):
+        run_offboarding(
+            run_id="r1",
+            entra_user_id="u1",
+            ad_sam="",
+            display_name="Jane",
+            lanes=["entra_group_cleanup"],
+            store=store,
+        )
+
+    run = store.get_run("r1")
+    step = run["steps"][0]
+    assert step["status"] == "failed"
+    assert "boom" in step["detail"]["distribution_list_failures"][0]
+    assert run["has_errors"] is True
+
+
+def test_mailbox_convert_shared_resolves_mail_and_converts():
+    from offboarding_runs import run_offboarding
+
+    store = _fresh_store()
+    store.create_run(
+        run_id="r1",
+        entra_user_id="u1",
+        ad_sam="",
+        display_name="Jane",
+        actor_email="admin@example.com",
+        lanes=["mailbox_convert_shared"],
+    )
+
+    mock_uap_module = MagicMock()
+    mock_uap = MagicMock()
+    mock_uap_module.user_admin_providers = mock_uap
+    mock_uap.entra.client.graph_request.return_value = {"mail": "jane@example.com"}
+    mock_uap.mailbox.exchange_powershell.convert_mailbox_to_shared.return_value = {
+        "mailbox": "jane@example.com",
+        "recipient_type": "SharedMailbox",
+        "hidden_from_address_lists": True,
+    }
+
+    mock_ad = MagicMock()
+
+    with patch.dict("sys.modules", {"user_admin_providers": mock_uap_module, "ad_client": mock_ad}):
+        run_offboarding(
+            run_id="r1",
+            entra_user_id="u1",
+            ad_sam="",
+            display_name="Jane",
+            lanes=["mailbox_convert_shared"],
+            store=store,
+        )
+
+    mock_uap.mailbox.exchange_powershell.convert_mailbox_to_shared.assert_called_once_with("jane@example.com")
+    run = store.get_run("r1")
+    step = run["steps"][0]
+    assert step["status"] == "ok"
+    assert "SharedMailbox" in step["message"]
 
 
 def _run_jira_lane(mock_jira_client: MagicMock, *, entra_user_id: str = "u1", display_name: str = "Jane") -> dict:

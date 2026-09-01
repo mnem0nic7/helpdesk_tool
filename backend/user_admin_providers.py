@@ -21,7 +21,6 @@ from models import UserAdminActionType
 logger = logging.getLogger(__name__)
 
 _GRAPH_OBJECT_ROOT = "https://graph.microsoft.com/v1.0"
-_PASSWORD_METHOD_ID = "28c10230-6103-485e-b985-444c60001490"
 _PROFILE_FIELDS = {
     "display_name": "displayName",
     "department": "department",
@@ -682,6 +681,7 @@ class EntraAdminProvider:
         skipped_dynamic: list[str] = []
         skipped_on_prem: list[str] = []
         skipped_unsupported: list[str] = []
+        distribution_lists: list[dict[str, str]] = []
         failures: list[str] = []
 
         for item in self._member_of(user_id):
@@ -701,6 +701,7 @@ class EntraAdminProvider:
                             [
                                 "id",
                                 "displayName",
+                                "mail",
                                 "groupTypes",
                                 "mailEnabled",
                                 "securityEnabled",
@@ -729,6 +730,19 @@ class EntraAdminProvider:
                 skipped_unsupported.append(group_name)
                 continue
 
+            # Classic distribution lists (mail-enabled, not security-enabled, not a
+            # Microsoft 365 group) can't have membership changed via Graph's
+            # /groups/{id}/members/$ref — only Exchange Online PowerShell can.
+            if is_mail and not is_security and not is_unified:
+                distribution_lists.append(
+                    {
+                        "id": group_id,
+                        "name": group_name,
+                        "mail": str(detail.get("mail") or "").strip(),
+                    }
+                )
+                continue
+
             try:
                 _safe_graph_call(
                     self.client.graph_request,
@@ -752,6 +766,7 @@ class EntraAdminProvider:
                 "skipped_dynamic": skipped_dynamic,
                 "skipped_on_prem": skipped_on_prem,
                 "skipped_unsupported": skipped_unsupported,
+                "distribution_lists": distribution_lists,
             },
         }
 
@@ -857,22 +872,21 @@ class EntraAdminProvider:
             requested_password = str(params.get("new_password") or "").strip()
             password = requested_password or f"{secrets.token_urlsafe(10)}!Aa1"
             force_change = bool(params.get("force_change_on_next_login", True))
-            payload = _safe_graph_call(
-                self.client.graph_request,
-                "POST",
-                f"users/{user_id}/authentication/passwordMethods/{_PASSWORD_METHOD_ID}/resetPassword",
-                json_body={
-                    "newPassword": password,
-                    "requireChangeOnNextSignIn": force_change,
+            self._update_user(
+                user_id,
+                {
+                    "passwordProfile": {
+                        "password": password,
+                        "forceChangePasswordNextSignIn": force_change,
+                    }
                 },
             )
-            returned_password = str(payload.get("newPassword") or password)
             return {
                 "provider": "entra",
                 "summary": "Reset password",
                 "before_summary": {},
                 "after_summary": {"force_change_on_next_login": force_change},
-                "one_time_secret": returned_password,
+                "one_time_secret": password,
             }
 
         if action_type == "reset_mfa":
@@ -884,7 +898,7 @@ class EntraAdminProvider:
             for method in methods:
                 method_id = str(method.get("id") or "").strip()
                 odata_type = str(method.get("@odata.type") or "").strip()
-                if not method_id or method_id == _PASSWORD_METHOD_ID:
+                if not method_id:
                     continue
                 segment = _AUTH_METHOD_SEGMENTS.get(odata_type)
                 if not segment:
