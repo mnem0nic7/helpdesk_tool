@@ -415,3 +415,6 @@ DISABLED_USERS_OU_DN: str = os.getenv("DISABLED_USERS_OU_DN", "OU=Disabled Users
 PASSWORD_EXPIRY_NOTIFY_ENABLED: bool = os.getenv("PASSWORD_EXPIRY_NOTIFY_ENABLED", "").strip().lower() in {"1", "true", "yes"}
 AD_MAX_PWD_AGE_DAYS: int = int(os.getenv("AD_MAX_PWD_AGE_DAYS", "90"))
 PASSWORD_EXPIRY_NOTIFY_DAYS_BEFORE: int = int(os.getenv("PASSWORD_EXPIRY_NOTIFY_DAYS_BEFORE", "14"))
+
+# Quarantine auto-release job
+QUARANTINE_RELEASE_DEFAULT_DOMAINS: str = os.getenv("QUARANTINE_RELEASE_DEFAULT_DOMAINS", "complexlegal.com").strip()
