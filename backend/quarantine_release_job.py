@@ -6,9 +6,11 @@ enabled=false means the job does nothing and writes no run row.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -135,6 +137,115 @@ class QuarantineReleaseJob:
             (run_hour,),
         ).fetchone()
         return row is not None
+
+    # ------------------------------------------------------------------
+    # Run recording
+    # ------------------------------------------------------------------
+
+    def _record_release(
+        self,
+        *,
+        run_hour: str,
+        message: dict[str, Any],
+        status: str,
+        error: str | None,
+        conn: sqlite3.Connection,
+    ) -> None:
+        ph = self._placeholder()
+        conn.execute(
+            f"""INSERT INTO quarantine_releases
+                (id, run_hour, message_identity, sender_address, recipient_address,
+                 subject, received_at, quarantine_reason, status, error, released_at)
+                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
+            (
+                uuid.uuid4().hex,
+                run_hour,
+                str(message.get("identity") or ""),
+                str(message.get("sender_address") or ""),
+                str(message.get("recipient_address") or ""),
+                str(message.get("subject") or ""),
+                str(message.get("received_at") or ""),
+                str(message.get("quarantine_reason") or ""),
+                status,
+                error,
+                _utcnow().isoformat(),
+            ),
+        )
+
+    def _record_run(
+        self,
+        *,
+        run_hour: str,
+        domains: list[str],
+        checked_count: int,
+        released_count: int,
+        failed_count: int,
+        conn: sqlite3.Connection,
+    ) -> None:
+        ph = self._placeholder()
+        conn.execute(
+            f"""INSERT INTO quarantine_release_runs
+                (run_hour, ran_at, domains_checked, checked_count, released_count, failed_count)
+                VALUES ({ph},{ph},{ph},{ph},{ph},{ph})""",
+            (run_hour, _utcnow().isoformat(), ",".join(domains), checked_count, released_count, failed_count),
+        )
+
+    async def run_hourly_job(self) -> None:
+        import user_admin_providers as _uap_module
+
+        current_hour = _utcnow().replace(minute=0, second=0, microsecond=0)
+        run_hour = current_hour.strftime("%Y-%m-%dT%H:00:00Z")
+
+        with self._conn() as conn:
+            if self._already_ran_this_hour(run_hour, conn):
+                return
+
+        settings = self._get_settings()
+        if not settings["enabled"]:
+            return
+        domains = settings["allowed_domains"]
+        if not domains:
+            return
+
+        exchange = _uap_module.user_admin_providers.mailbox.exchange_powershell
+        loop = asyncio.get_event_loop()
+
+        try:
+            messages = await loop.run_in_executor(None, lambda: exchange.list_quarantine_messages(domains))
+        except Exception:
+            logger.exception("Quarantine release job: failed to list quarantine messages")
+            return
+
+        released = 0
+        failed = 0
+        for message in messages:
+            identity = str(message.get("identity") or "").strip()
+            if not identity:
+                continue
+            try:
+                await loop.run_in_executor(None, lambda: exchange.release_quarantine_message(identity))
+                status, error = "released", None
+                released += 1
+            except Exception as exc:
+                status, error = "failed", str(exc)
+                failed += 1
+            with self._conn() as conn:
+                self._record_release(run_hour=run_hour, message=message, status=status, error=error, conn=conn)
+
+        with self._conn() as conn:
+            self._record_run(
+                run_hour=run_hour,
+                domains=domains,
+                checked_count=len(messages),
+                released_count=released,
+                failed_count=failed,
+                conn=conn,
+            )
+
+        logger.info(
+            "Quarantine release job: run %s complete — %d checked, %d released, %d failed",
+            run_hour, len(messages), released, failed,
+        )
 
 
 quarantine_release_job = QuarantineReleaseJob()
