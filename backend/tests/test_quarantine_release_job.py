@@ -87,7 +87,13 @@ async def test_run_hourly_job_skips_when_disabled_and_writes_no_run_row():
     assert count == 0
 
 
-async def test_run_hourly_job_releases_matching_messages_and_records_run():
+async def test_run_hourly_job_releases_matching_messages_and_records_run(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    import quarantine_release_job as qrj_module
+
+    hour = datetime(2026, 9, 1, 19, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(qrj_module, "_utcnow", lambda: hour)
+
     job = _fresh_job()
     _seed_settings(job, enabled=True, domains="complexlegal.com")
 
@@ -108,7 +114,11 @@ async def test_run_hourly_job_releases_matching_messages_and_records_run():
     with patch.dict("sys.modules", {"user_admin_providers": mock_uap_module}):
         await job.run_hourly_job()
 
-    exchange.list_quarantine_messages.assert_called_once_with(["complexlegal.com"], timeout_seconds=600)
+    exchange.list_quarantine_messages.assert_called_once_with(
+        ["complexlegal.com"],
+        received_after=hour - timedelta(hours=qrj_module._QUARANTINE_LOOKBACK_HOURS),
+        timeout_seconds=600,
+    )
     exchange.release_quarantine_message.assert_called_once_with("msg-1")
 
     with job._sqlite_conn() as conn:
@@ -204,10 +214,16 @@ async def test_run_hourly_job_does_not_reattempt_a_message_already_released_in_a
     assert release_count == 1
 
 
-async def test_run_hourly_job_records_run_row_with_error_when_listing_fails():
+async def test_run_hourly_job_records_run_row_with_error_when_listing_fails(monkeypatch):
     """A failed list_quarantine_messages() call used to just log and return, leaving NO
     run row — indistinguishable from a job that's never run. It must now record a run row
     with the error populated so /status can surface the failure."""
+    from datetime import datetime, timedelta, timezone
+    import quarantine_release_job as qrj_module
+
+    hour = datetime(2026, 9, 1, 19, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(qrj_module, "_utcnow", lambda: hour)
+
     job = _fresh_job()
     _seed_settings(job, enabled=True, domains="complexlegal.com")
 
@@ -218,7 +234,11 @@ async def test_run_hourly_job_records_run_row_with_error_when_listing_fails():
     with patch.dict("sys.modules", {"user_admin_providers": mock_uap_module}):
         await job.run_hourly_job()
 
-    exchange.list_quarantine_messages.assert_called_once_with(["complexlegal.com"], timeout_seconds=600)
+    exchange.list_quarantine_messages.assert_called_once_with(
+        ["complexlegal.com"],
+        received_after=hour - timedelta(hours=qrj_module._QUARANTINE_LOOKBACK_HOURS),
+        timeout_seconds=600,
+    )
     with job._sqlite_conn() as conn:
         run = conn.execute("SELECT * FROM quarantine_release_runs").fetchone()
     assert run is not None

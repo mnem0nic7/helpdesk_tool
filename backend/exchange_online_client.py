@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -618,18 +619,29 @@ Remove-DistributionGroupMember -Identity $groupIdentity -Member $memberIdentity 
         }
 
     def list_quarantine_messages(
-        self, domains: list[str], timeout_seconds: int | None = None
+        self,
+        domains: list[str],
+        *,
+        received_after: datetime,
+        timeout_seconds: int | None = None,
     ) -> list[dict[str, Any]]:
-        """List currently quarantined messages whose sender domain is in `domains`."""
+        """List quarantined messages received after `received_after` whose sender domain is in `domains`.
+
+        `received_after` is applied server-side via `-StartReceivedDate` — without it,
+        Get-QuarantineMessage sweeps the tenant's entire quarantine retention window
+        (every sender, thousands+ of messages) on every call, which is what caused the
+        2026-09-01 hourly-job timeout. Callers must pass a bounded, recent window.
+        """
         clean_domains = [str(d or "").strip() for d in domains if str(d or "").strip()]
         if not clean_domains:
             return []
         script = """
 $domains = @($env:QR_DOMAINS -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+$startReceived = [DateTime]::Parse($env:QR_START_RECEIVED, [System.Globalization.CultureInfo]::InvariantCulture).ToUniversalTime()
 $allMessages = @()
 $page = 1
 while ($true) {
-  $batch = @(Get-QuarantineMessage -PageSize 100 -Page $page)
+  $batch = @(Get-QuarantineMessage -PageSize 100 -Page $page -StartReceivedDate $startReceived)
   if ($batch.Count -eq 0) { break }
   $allMessages += $batch
   if ($batch.Count -lt 100) { break }
@@ -658,7 +670,10 @@ $matched = @(
 """
         payload = self._run_script(
             script.strip(),
-            extra_env={"QR_DOMAINS": ",".join(clean_domains)},
+            extra_env={
+                "QR_DOMAINS": ",".join(clean_domains),
+                "QR_START_RECEIVED": received_after.isoformat(),
+            },
             timeout_seconds=timeout_seconds,
         )
         messages = payload.get("messages") if isinstance(payload, dict) else []

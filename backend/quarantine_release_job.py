@@ -11,7 +11,7 @@ import logging
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from config import DATA_DIR, QUARANTINE_RELEASE_DEFAULT_DOMAINS
@@ -21,6 +21,14 @@ from sqlite_utils import connect_sqlite
 logger = logging.getLogger(__name__)
 
 _DB_PATH = os.path.join(DATA_DIR, "quarantine_release.db")
+
+# Get-QuarantineMessage has no domain filter, so we must bound it by received
+# date ourselves. 3 hours covers the hourly cadence plus a safety margin for a
+# missed cycle (e.g. leader failover); _already_released_identities() dedupes
+# any overlap. Without this bound the query sweeps the tenant's entire
+# quarantine retention window (every sender, thousands+ of messages) on every
+# run — the root cause of the 2026-09-01 hourly-job timeout incident.
+_QUARANTINE_LOOKBACK_HOURS = 3
 
 
 def _utcnow() -> datetime:
@@ -228,10 +236,14 @@ class QuarantineReleaseJob:
 
         exchange = _uap_module.user_admin_providers.mailbox.exchange_powershell
         loop = asyncio.get_event_loop()
+        received_after = current_hour - timedelta(hours=_QUARANTINE_LOOKBACK_HOURS)
 
         try:
             messages = await loop.run_in_executor(
-                None, lambda: exchange.list_quarantine_messages(domains, timeout_seconds=600)
+                None,
+                lambda: exchange.list_quarantine_messages(
+                    domains, received_after=received_after, timeout_seconds=600
+                ),
             )
         except Exception as exc:
             logger.exception("Quarantine release job: failed to list quarantine messages")

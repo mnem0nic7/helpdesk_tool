@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pathlib import Path
 
 from exchange_online_client import (
@@ -229,7 +230,10 @@ def test_list_quarantine_messages_filters_by_domain_client_side(monkeypatch):
 
     monkeypatch.setattr(client, "_run_script", fake_run_script)
 
-    result = client.list_quarantine_messages(["complexlegal.com", "partner.org"])
+    received_after = datetime(2026, 9, 1, 16, 0, 0, tzinfo=timezone.utc)
+    result = client.list_quarantine_messages(
+        ["complexlegal.com", "partner.org"], received_after=received_after
+    )
 
     assert result == [
         {
@@ -241,7 +245,10 @@ def test_list_quarantine_messages_filters_by_domain_client_side(monkeypatch):
             "quarantine_reason": "Spam",
         }
     ]
-    assert captured["extra_env"] == {"QR_DOMAINS": "complexlegal.com,partner.org"}
+    assert captured["extra_env"] == {
+        "QR_DOMAINS": "complexlegal.com,partner.org",
+        "QR_START_RECEIVED": "2026-09-01T16:00:00+00:00",
+    }
     assert "Get-QuarantineMessage" in captured["script_body"]
     assert "$env:QR_DOMAINS" in captured["script_body"]
     assert "-PageSize 100" in captured["script_body"]
@@ -251,6 +258,28 @@ def test_list_quarantine_messages_filters_by_domain_client_side(monkeypatch):
     assert "SenderAddress" in captured["script_body"]
     assert "Split('@')" in captured["script_body"]
     assert "-SenderAddress \"*@$domain\"" not in captured["script_body"]
+
+
+def test_list_quarantine_messages_scopes_query_to_start_received_date(monkeypatch):
+    """Root cause of the 2026-09-01 timeout incident: an unfiltered sweep of the
+    tenant's entire quarantine retention window (thousands of unrelated messages)
+    on every hourly run. The query must be server-side scoped to new mail only."""
+    client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
+    captured: dict[str, object] = {}
+
+    def fake_run_script(script_body, *, extra_env=None, timeout_seconds=None, cancel_requested=None):
+        captured["script_body"] = script_body
+        captured["extra_env"] = extra_env or {}
+        return {"messages": []}
+
+    monkeypatch.setattr(client, "_run_script", fake_run_script)
+
+    received_after = datetime(2026, 9, 1, 16, 0, 0, tzinfo=timezone.utc)
+    client.list_quarantine_messages(["complexlegal.com"], received_after=received_after)
+
+    assert captured["extra_env"]["QR_START_RECEIVED"] == "2026-09-01T16:00:00+00:00"
+    assert "-StartReceivedDate" in captured["script_body"]
+    assert "$env:QR_START_RECEIVED" in captured["script_body"]
 
 
 def test_list_quarantine_messages_passes_through_timeout_seconds(monkeypatch):
@@ -263,7 +292,10 @@ def test_list_quarantine_messages_passes_through_timeout_seconds(monkeypatch):
 
     monkeypatch.setattr(client, "_run_script", fake_run_script)
 
-    client.list_quarantine_messages(["complexlegal.com"], timeout_seconds=600)
+    received_after = datetime(2026, 9, 1, 16, 0, 0, tzinfo=timezone.utc)
+    client.list_quarantine_messages(
+        ["complexlegal.com"], received_after=received_after, timeout_seconds=600
+    )
 
     assert captured["timeout_seconds"] == 600
 
@@ -278,7 +310,8 @@ def test_list_quarantine_messages_defaults_timeout_seconds_to_none(monkeypatch):
 
     monkeypatch.setattr(client, "_run_script", fake_run_script)
 
-    client.list_quarantine_messages(["complexlegal.com"])
+    received_after = datetime(2026, 9, 1, 16, 0, 0, tzinfo=timezone.utc)
+    client.list_quarantine_messages(["complexlegal.com"], received_after=received_after)
 
     assert captured["timeout_seconds"] is None
 
@@ -286,7 +319,8 @@ def test_list_quarantine_messages_defaults_timeout_seconds_to_none(monkeypatch):
 def test_list_quarantine_messages_returns_empty_list_for_no_domains():
     client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
 
-    assert client.list_quarantine_messages([]) == []
+    received_after = datetime(2026, 9, 1, 16, 0, 0, tzinfo=timezone.utc)
+    assert client.list_quarantine_messages([], received_after=received_after) == []
 
 
 def test_list_quarantine_messages_coerces_single_dict_payload_to_list(monkeypatch):
@@ -298,7 +332,8 @@ def test_list_quarantine_messages_coerces_single_dict_payload_to_list(monkeypatc
 
     monkeypatch.setattr(client, "_run_script", fake_run_script)
 
-    result = client.list_quarantine_messages(["complexlegal.com"])
+    received_after = datetime(2026, 9, 1, 16, 0, 0, tzinfo=timezone.utc)
+    result = client.list_quarantine_messages(["complexlegal.com"], received_after=received_after)
 
     assert len(result) == 1
     assert result[0]["identity"] == "msg-1"
