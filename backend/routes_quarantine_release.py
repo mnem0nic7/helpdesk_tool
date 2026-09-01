@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from auth import require_admin
@@ -22,7 +22,7 @@ class PatchSettingsRequest(BaseModel):
 def _last_run(job) -> dict[str, Any] | None:
     with job._conn() as conn:
         row = conn.execute(
-            "SELECT run_hour, ran_at, domains_checked, checked_count, released_count, failed_count "
+            "SELECT run_hour, ran_at, domains_checked, checked_count, released_count, failed_count, error "
             "FROM quarantine_release_runs ORDER BY run_hour DESC LIMIT 1"
         ).fetchone()
     return dict(row) if row is not None else None
@@ -43,13 +43,14 @@ async def get_status() -> dict[str, Any]:
 
 
 @router.get("/runs", dependencies=[Depends(require_admin)])
-async def get_runs(limit: int = 30, offset: int = 0) -> dict[str, Any]:
-    limit = min(limit, 100)
+async def get_runs(
+    limit: int = Query(30, ge=1, le=100), offset: int = Query(0, ge=0)
+) -> dict[str, Any]:
     ph = quarantine_release_job._placeholder()
     with quarantine_release_job._conn() as conn:
         total = conn.execute("SELECT COUNT(*) AS cnt FROM quarantine_release_runs").fetchone()["cnt"]
         rows = conn.execute(
-            "SELECT run_hour, ran_at, domains_checked, checked_count, released_count, failed_count "
+            "SELECT run_hour, ran_at, domains_checked, checked_count, released_count, failed_count, error "
             f"FROM quarantine_release_runs ORDER BY run_hour DESC LIMIT {ph} OFFSET {ph}",
             (limit, offset),
         ).fetchall()
@@ -57,8 +58,11 @@ async def get_runs(limit: int = 30, offset: int = 0) -> dict[str, Any]:
 
 
 @router.get("/releases", dependencies=[Depends(require_admin)])
-async def get_releases(limit: int = 50, offset: int = 0, run_hour: str | None = None) -> dict[str, Any]:
-    limit = min(limit, 100)
+async def get_releases(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    run_hour: str | None = None,
+) -> dict[str, Any]:
     ph = quarantine_release_job._placeholder()
     columns = (
         "id, run_hour, message_identity, sender_address, recipient_address, "

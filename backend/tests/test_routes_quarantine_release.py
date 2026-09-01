@@ -36,6 +36,27 @@ def test_get_status_reflects_last_run(test_client, monkeypatch, tmp_path):
     last_run = resp.json()["last_run"]
     assert last_run["run_hour"] == "2026-09-01T14:00:00Z"
     assert last_run["released_count"] == 3
+    assert last_run["error"] is None
+
+
+def test_get_status_surfaces_run_error(test_client, monkeypatch, tmp_path):
+    import quarantine_release_job as qrj_module
+
+    job = qrj_module.QuarantineReleaseJob(db_path=str(tmp_path / "qr.db"))
+    with job._sqlite_conn() as conn:
+        conn.execute(
+            "INSERT INTO quarantine_release_runs "
+            "(run_hour, ran_at, domains_checked, checked_count, released_count, failed_count, error) "
+            "VALUES ('2026-09-01T15:00:00Z', '2026-09-01T15:01:00+00:00', 'complexlegal.com', 0, 0, 0, "
+            "'Exchange Online PowerShell timed out after 600 seconds.')"
+        )
+    import routes_quarantine_release
+    monkeypatch.setattr(routes_quarantine_release, "quarantine_release_job", job)
+
+    resp = test_client.get("/api/quarantine-release/status")
+    assert resp.status_code == 200
+    last_run = resp.json()["last_run"]
+    assert last_run["error"] == "Exchange Online PowerShell timed out after 600 seconds."
 
 
 def test_get_status_forbidden_for_non_admin(test_client, monkeypatch, tmp_path):
@@ -75,6 +96,29 @@ def test_get_runs_pagination(test_client, monkeypatch, tmp_path):
     assert data["total"] == 3
     assert len(data["items"]) == 2
     assert data["items"][0]["run_hour"] == "2026-09-01T14:00:00Z"
+
+
+def test_get_runs_rejects_negative_limit_and_offset(test_client, monkeypatch, tmp_path):
+    import quarantine_release_job as qrj_module
+
+    job = qrj_module.QuarantineReleaseJob(db_path=str(tmp_path / "qr.db"))
+    import routes_quarantine_release
+    monkeypatch.setattr(routes_quarantine_release, "quarantine_release_job", job)
+
+    assert test_client.get("/api/quarantine-release/runs?limit=-5").status_code == 422
+    assert test_client.get("/api/quarantine-release/runs?offset=-1").status_code == 422
+    assert test_client.get("/api/quarantine-release/runs?limit=0").status_code == 422
+
+
+def test_get_releases_rejects_negative_limit_and_offset(test_client, monkeypatch, tmp_path):
+    import quarantine_release_job as qrj_module
+
+    job = qrj_module.QuarantineReleaseJob(db_path=str(tmp_path / "qr.db"))
+    import routes_quarantine_release
+    monkeypatch.setattr(routes_quarantine_release, "quarantine_release_job", job)
+
+    assert test_client.get("/api/quarantine-release/releases?limit=-5").status_code == 422
+    assert test_client.get("/api/quarantine-release/releases?offset=-1").status_code == 422
 
 
 def test_get_releases_pagination_and_run_hour_filter(test_client, monkeypatch, tmp_path):

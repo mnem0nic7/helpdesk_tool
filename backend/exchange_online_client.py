@@ -617,7 +617,9 @@ Remove-DistributionGroupMember -Identity $groupIdentity -Member $memberIdentity 
             "removed": bool(payload.get("removed", True)),
         }
 
-    def list_quarantine_messages(self, domains: list[str]) -> list[dict[str, Any]]:
+    def list_quarantine_messages(
+        self, domains: list[str], timeout_seconds: int | None = None
+    ) -> list[dict[str, Any]]:
         """List currently quarantined messages whose sender domain is in `domains`."""
         clean_domains = [str(d or "").strip() for d in domains if str(d or "").strip()]
         if not clean_domains:
@@ -654,7 +656,11 @@ $matched = @(
   )
 } | ConvertTo-Json -Depth 6 -Compress
 """
-        payload = self._run_script(script.strip(), extra_env={"QR_DOMAINS": ",".join(clean_domains)})
+        payload = self._run_script(
+            script.strip(),
+            extra_env={"QR_DOMAINS": ",".join(clean_domains)},
+            timeout_seconds=timeout_seconds,
+        )
         messages = payload.get("messages") if isinstance(payload, dict) else []
         if isinstance(messages, dict):
             messages = [messages]

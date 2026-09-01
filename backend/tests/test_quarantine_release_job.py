@@ -108,7 +108,7 @@ async def test_run_hourly_job_releases_matching_messages_and_records_run():
     with patch.dict("sys.modules", {"user_admin_providers": mock_uap_module}):
         await job.run_hourly_job()
 
-    exchange.list_quarantine_messages.assert_called_once_with(["complexlegal.com"])
+    exchange.list_quarantine_messages.assert_called_once_with(["complexlegal.com"], timeout_seconds=600)
     exchange.release_quarantine_message.assert_called_once_with("msg-1")
 
     with job._sqlite_conn() as conn:
@@ -145,6 +145,116 @@ async def test_run_hourly_job_records_failure_without_aborting_other_messages():
     assert run["released_count"] == 1
     assert run["failed_count"] == 1
     assert statuses == {"msg-1": "failed", "msg-2": "released"}
+
+
+async def test_run_hourly_job_does_not_reattempt_a_message_already_released_in_a_prior_run(monkeypatch):
+    """Get-QuarantineMessage keeps returning a message for its whole retention window even
+    after release. Simulate two separate hourly runs (via monkeypatching _utcnow, since the
+    hour-gating key is derived from wall-clock time) where the mocked list call returns the
+    SAME identity both times, and assert the second run does not re-attempt the release and
+    records zero counts for that message rather than a spurious failure."""
+    import quarantine_release_job as qrj_module
+    from datetime import datetime, timezone
+
+    job = _fresh_job()
+    _seed_settings(job, enabled=True, domains="complexlegal.com")
+
+    mock_uap_module = MagicMock()
+    exchange = mock_uap_module.user_admin_providers.mailbox.exchange_powershell
+    same_message = {
+        "identity": "msg-1",
+        "sender_address": "billing@complexlegal.com",
+        "recipient_address": "ap@example.com",
+        "subject": "Invoice",
+        "received_at": "2026-09-01T14:05:00Z",
+        "quarantine_reason": "Spam",
+    }
+    exchange.list_quarantine_messages.return_value = [dict(same_message)]
+    exchange.release_quarantine_message.return_value = {"identity": "msg-1", "released": True}
+
+    hour1 = datetime(2026, 9, 1, 14, tzinfo=timezone.utc)
+    hour2 = datetime(2026, 9, 1, 15, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(qrj_module, "_utcnow", lambda: hour1)
+    with patch.dict("sys.modules", {"user_admin_providers": mock_uap_module}):
+        await job.run_hourly_job()
+
+    assert exchange.release_quarantine_message.call_count == 1
+
+    monkeypatch.setattr(qrj_module, "_utcnow", lambda: hour2)
+    with patch.dict("sys.modules", {"user_admin_providers": mock_uap_module}):
+        await job.run_hourly_job()
+
+    # Second hour's fetch returned the same already-released identity; it must be
+    # filtered out before the release loop, so release is still only called once total.
+    assert exchange.release_quarantine_message.call_count == 1
+
+    with job._sqlite_conn() as conn:
+        run_hour_2 = conn.execute(
+            "SELECT * FROM quarantine_release_runs WHERE run_hour = ?",
+            ("2026-09-01T15:00:00Z",),
+        ).fetchone()
+    assert run_hour_2 is not None
+    assert run_hour_2["checked_count"] == 0
+    assert run_hour_2["released_count"] == 0
+    assert run_hour_2["failed_count"] == 0
+
+    with job._sqlite_conn() as conn:
+        release_count = conn.execute("SELECT COUNT(*) AS c FROM quarantine_releases").fetchone()["c"]
+    assert release_count == 1
+
+
+async def test_run_hourly_job_records_run_row_with_error_when_listing_fails():
+    """A failed list_quarantine_messages() call used to just log and return, leaving NO
+    run row — indistinguishable from a job that's never run. It must now record a run row
+    with the error populated so /status can surface the failure."""
+    job = _fresh_job()
+    _seed_settings(job, enabled=True, domains="complexlegal.com")
+
+    mock_uap_module = MagicMock()
+    exchange = mock_uap_module.user_admin_providers.mailbox.exchange_powershell
+    exchange.list_quarantine_messages.side_effect = RuntimeError("timed out after 600 seconds")
+
+    with patch.dict("sys.modules", {"user_admin_providers": mock_uap_module}):
+        await job.run_hourly_job()
+
+    exchange.list_quarantine_messages.assert_called_once_with(["complexlegal.com"], timeout_seconds=600)
+    with job._sqlite_conn() as conn:
+        run = conn.execute("SELECT * FROM quarantine_release_runs").fetchone()
+    assert run is not None
+    assert run["checked_count"] == 0
+    assert run["released_count"] == 0
+    assert run["failed_count"] == 0
+    assert run["error"] == "timed out after 600 seconds"
+
+
+async def test_run_hourly_job_warns_and_skips_message_with_missing_identity(caplog):
+    job = _fresh_job()
+    _seed_settings(job, enabled=True, domains="complexlegal.com")
+
+    mock_uap_module = MagicMock()
+    exchange = mock_uap_module.user_admin_providers.mailbox.exchange_powershell
+    exchange.list_quarantine_messages.return_value = [
+        {
+            "identity": "",
+            "sender_address": "nobody@complexlegal.com",
+            "recipient_address": "x@example.com",
+            "subject": "Mystery",
+            "received_at": "",
+            "quarantine_reason": "Spam",
+        }
+    ]
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger="quarantine_release_job"):
+        with patch.dict("sys.modules", {"user_admin_providers": mock_uap_module}):
+            await job.run_hourly_job()
+
+    exchange.release_quarantine_message.assert_not_called()
+    assert any("missing identity" in record.message for record in caplog.records)
+    with job._sqlite_conn() as conn:
+        release_count = conn.execute("SELECT COUNT(*) AS c FROM quarantine_releases").fetchone()["c"]
+    assert release_count == 0
 
 
 async def test_run_hourly_job_skips_if_already_ran_this_hour():

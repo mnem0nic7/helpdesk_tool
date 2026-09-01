@@ -83,9 +83,13 @@ class QuarantineReleaseJob:
                     domains_checked TEXT NOT NULL,
                     checked_count   INTEGER NOT NULL DEFAULT 0,
                     released_count  INTEGER NOT NULL DEFAULT 0,
-                    failed_count    INTEGER NOT NULL DEFAULT 0
+                    failed_count    INTEGER NOT NULL DEFAULT 0,
+                    error           TEXT
                 )
             """)
+            run_cols = {r[1] for r in conn.execute("PRAGMA table_info(quarantine_release_runs)").fetchall()}
+            if "error" not in run_cols:
+                conn.execute("ALTER TABLE quarantine_release_runs ADD COLUMN error TEXT")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS quarantine_releases (
                     id                TEXT PRIMARY KEY,
@@ -142,6 +146,12 @@ class QuarantineReleaseJob:
     # Run recording
     # ------------------------------------------------------------------
 
+    def _already_released_identities(self, conn: sqlite3.Connection) -> set[str]:
+        rows = conn.execute(
+            "SELECT DISTINCT message_identity FROM quarantine_releases WHERE status = 'released'"
+        ).fetchall()
+        return {str(row["message_identity"]) for row in rows}
+
     def _record_release(
         self,
         *,
@@ -180,14 +190,23 @@ class QuarantineReleaseJob:
         checked_count: int,
         released_count: int,
         failed_count: int,
+        error: str | None = None,
         conn: sqlite3.Connection,
     ) -> None:
         ph = self._placeholder()
         conn.execute(
             f"""INSERT INTO quarantine_release_runs
-                (run_hour, ran_at, domains_checked, checked_count, released_count, failed_count)
-                VALUES ({ph},{ph},{ph},{ph},{ph},{ph})""",
-            (run_hour, _utcnow().isoformat(), ",".join(domains), checked_count, released_count, failed_count),
+                (run_hour, ran_at, domains_checked, checked_count, released_count, failed_count, error)
+                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
+            (
+                run_hour,
+                _utcnow().isoformat(),
+                ",".join(domains),
+                checked_count,
+                released_count,
+                failed_count,
+                error,
+            ),
         )
 
     async def run_hourly_job(self) -> None:
@@ -211,16 +230,45 @@ class QuarantineReleaseJob:
         loop = asyncio.get_event_loop()
 
         try:
-            messages = await loop.run_in_executor(None, lambda: exchange.list_quarantine_messages(domains))
-        except Exception:
+            messages = await loop.run_in_executor(
+                None, lambda: exchange.list_quarantine_messages(domains, timeout_seconds=600)
+            )
+        except Exception as exc:
             logger.exception("Quarantine release job: failed to list quarantine messages")
+            with self._conn() as conn:
+                self._record_run(
+                    run_hour=run_hour,
+                    domains=domains,
+                    checked_count=0,
+                    released_count=0,
+                    failed_count=0,
+                    error=str(exc),
+                    conn=conn,
+                )
             return
+
+        # Get-QuarantineMessage keeps returning a message for the rest of its retention
+        # window even after it has been released, so filter out anything we've already
+        # successfully released in a prior run — otherwise every later hour re-attempts
+        # the release, Exchange rejects it, and the audit log fills with spurious failures.
+        with self._conn() as conn:
+            already_released = self._already_released_identities(conn)
+        messages = [
+            message for message in messages
+            if str(message.get("identity") or "").strip() not in already_released
+        ]
 
         released = 0
         failed = 0
         for message in messages:
             identity = str(message.get("identity") or "").strip()
             if not identity:
+                logger.warning(
+                    "Quarantine release job: skipping quarantine entry with missing identity "
+                    "(sender=%s subject=%s)",
+                    message.get("sender_address"),
+                    message.get("subject"),
+                )
                 continue
             try:
                 await loop.run_in_executor(None, lambda: exchange.release_quarantine_message(identity))

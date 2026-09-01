@@ -253,6 +253,36 @@ def test_list_quarantine_messages_filters_by_domain_client_side(monkeypatch):
     assert "-SenderAddress \"*@$domain\"" not in captured["script_body"]
 
 
+def test_list_quarantine_messages_passes_through_timeout_seconds(monkeypatch):
+    client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
+    captured: dict[str, object] = {}
+
+    def fake_run_script(script_body, *, extra_env=None, timeout_seconds=None, cancel_requested=None):
+        captured["timeout_seconds"] = timeout_seconds
+        return {"messages": []}
+
+    monkeypatch.setattr(client, "_run_script", fake_run_script)
+
+    client.list_quarantine_messages(["complexlegal.com"], timeout_seconds=600)
+
+    assert captured["timeout_seconds"] == 600
+
+
+def test_list_quarantine_messages_defaults_timeout_seconds_to_none(monkeypatch):
+    client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
+    captured: dict[str, object] = {}
+
+    def fake_run_script(script_body, *, extra_env=None, timeout_seconds=None, cancel_requested=None):
+        captured["timeout_seconds"] = timeout_seconds
+        return {"messages": []}
+
+    monkeypatch.setattr(client, "_run_script", fake_run_script)
+
+    client.list_quarantine_messages(["complexlegal.com"])
+
+    assert captured["timeout_seconds"] is None
+
+
 def test_list_quarantine_messages_returns_empty_list_for_no_domains():
     client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
 
