@@ -1812,14 +1812,14 @@ export interface EmailgisticsHelperStatus {
 }
 
 export const OFFBOARDING_LANES = [
+  "entra_reset_pw",
   "entra_disable",
   "entra_revoke",
-  "entra_reset_pw",
   "entra_reset_mfa",
   "entra_group_cleanup",
   "entra_group_validate",
-  "entra_license_cleanup",
   "mailbox_convert_shared",
+  "entra_license_cleanup",
   "jira_deactivate",
   "ad_disable",
   "ad_reset_pw",
