@@ -207,7 +207,7 @@ def test_run_script_command_name_allow_list_includes_quarantine_cmdlets(monkeypa
     assert "'Release-QuarantineMessage'" in captured["script"]
 
 
-def test_list_quarantine_messages_builds_one_call_per_domain(monkeypatch):
+def test_list_quarantine_messages_filters_by_domain_client_side(monkeypatch):
     client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
     captured: dict[str, object] = {}
 
@@ -244,6 +244,13 @@ def test_list_quarantine_messages_builds_one_call_per_domain(monkeypatch):
     assert captured["extra_env"] == {"QR_DOMAINS": "complexlegal.com,partner.org"}
     assert "Get-QuarantineMessage" in captured["script_body"]
     assert "$env:QR_DOMAINS" in captured["script_body"]
+    assert "-PageSize 100" in captured["script_body"]
+    assert "-Page $page" in captured["script_body"]
+    assert "while ($true)" in captured["script_body"]
+    assert "Where-Object" in captured["script_body"]
+    assert "SenderAddress" in captured["script_body"]
+    assert "Split('@')" in captured["script_body"]
+    assert "-SenderAddress \"*@$domain\"" not in captured["script_body"]
 
 
 def test_list_quarantine_messages_returns_empty_list_for_no_domains():

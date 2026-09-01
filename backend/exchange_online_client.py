@@ -623,23 +623,25 @@ Remove-DistributionGroupMember -Identity $groupIdentity -Member $memberIdentity 
         if not clean_domains:
             return []
         script = """
-$domains = $env:QR_DOMAINS -split ','
+$domains = @($env:QR_DOMAINS -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
 $allMessages = @()
-foreach ($domain in $domains) {
-  $domain = $domain.Trim()
-  if (-not $domain) { continue }
-  $page = 1
-  while ($true) {
-    $batch = @(Get-QuarantineMessage -SenderAddress "*@$domain" -PageSize 100 -Page $page)
-    if ($batch.Count -eq 0) { break }
-    $allMessages += $batch
-    if ($batch.Count -lt 100) { break }
-    $page++
-  }
+$page = 1
+while ($true) {
+  $batch = @(Get-QuarantineMessage -PageSize 100 -Page $page)
+  if ($batch.Count -eq 0) { break }
+  $allMessages += $batch
+  if ($batch.Count -lt 100) { break }
+  $page++
 }
+$matched = @(
+  $allMessages | Where-Object {
+    $senderDomain = ([string]$_.SenderAddress).Split('@')[-1].ToLowerInvariant()
+    $domains -contains $senderDomain
+  }
+)
 [pscustomobject]@{
   messages = @(
-    foreach ($m in $allMessages) {
+    foreach ($m in $matched) {
       [pscustomobject]@{
         identity = $m.Identity.ToString()
         sender_address = $m.SenderAddress
