@@ -188,6 +188,111 @@ def test_remove_distribution_group_member_requires_group_and_member():
     except ExchangeOnlinePowerShellError:
         pass
 
+def test_run_script_command_name_allow_list_includes_quarantine_cmdlets(monkeypatch):
+    client = ExchangeOnlinePowerShellClient(
+        azure_client=StubAzureClient(), organization_override="contoso.onmicrosoft.com"
+    )
+    monkeypatch.setattr("exchange_online_client.shutil.which", lambda name: "/usr/bin/pwsh")
+    captured: dict[str, str] = {}
+
+    def fake_popen(args, **kwargs):
+        captured["script"] = Path(args[-1]).read_text()
+        return FakeProcess()
+
+    monkeypatch.setattr("exchange_online_client.subprocess.Popen", fake_popen)
+
+    client._run_script("Get-Mailbox -Identity 'x'")
+
+    assert "'Get-QuarantineMessage'" in captured["script"]
+    assert "'Release-QuarantineMessage'" in captured["script"]
+
+
+def test_list_quarantine_messages_builds_one_call_per_domain(monkeypatch):
+    client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
+    captured: dict[str, object] = {}
+
+    def fake_run_script(script_body, *, extra_env=None, timeout_seconds=None, cancel_requested=None):
+        captured["script_body"] = script_body
+        captured["extra_env"] = extra_env or {}
+        return {
+            "messages": [
+                {
+                    "identity": "msg-1",
+                    "sender_address": "billing@complexlegal.com",
+                    "recipient_address": "ap@example.com",
+                    "subject": "Invoice",
+                    "received_at": "2026-09-01T14:05:00Z",
+                    "quarantine_reason": "Spam",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(client, "_run_script", fake_run_script)
+
+    result = client.list_quarantine_messages(["complexlegal.com", "partner.org"])
+
+    assert result == [
+        {
+            "identity": "msg-1",
+            "sender_address": "billing@complexlegal.com",
+            "recipient_address": "ap@example.com",
+            "subject": "Invoice",
+            "received_at": "2026-09-01T14:05:00Z",
+            "quarantine_reason": "Spam",
+        }
+    ]
+    assert captured["extra_env"] == {"QR_DOMAINS": "complexlegal.com,partner.org"}
+    assert "Get-QuarantineMessage" in captured["script_body"]
+    assert "$env:QR_DOMAINS" in captured["script_body"]
+
+
+def test_list_quarantine_messages_returns_empty_list_for_no_domains():
+    client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
+
+    assert client.list_quarantine_messages([]) == []
+
+
+def test_list_quarantine_messages_coerces_single_dict_payload_to_list(monkeypatch):
+    client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
+
+    def fake_run_script(script_body, *, extra_env=None, timeout_seconds=None, cancel_requested=None):
+        return {"messages": {"identity": "msg-1", "sender_address": "a@complexlegal.com",
+                              "recipient_address": "b@example.com", "subject": "", "received_at": "", "quarantine_reason": "Spam"}}
+
+    monkeypatch.setattr(client, "_run_script", fake_run_script)
+
+    result = client.list_quarantine_messages(["complexlegal.com"])
+
+    assert len(result) == 1
+    assert result[0]["identity"] == "msg-1"
+
+
+def test_release_quarantine_message_uses_release_to_all(monkeypatch):
+    client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
+    captured: dict[str, object] = {}
+
+    def fake_run_script(script_body, *, extra_env=None, timeout_seconds=None, cancel_requested=None):
+        captured["script_body"] = script_body
+        captured["extra_env"] = extra_env or {}
+        return {"identity": "msg-1", "released": True}
+
+    monkeypatch.setattr(client, "_run_script", fake_run_script)
+
+    result = client.release_quarantine_message("msg-1")
+
+    assert result == {"identity": "msg-1", "released": True}
+    assert captured["extra_env"] == {"QR_IDENTITY": "msg-1"}
+    assert "Release-QuarantineMessage -Identity $identity -ReleaseToAll -Confirm:$false" in captured["script_body"]
+
+
+def test_release_quarantine_message_requires_identity():
+    client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
+
+    try:
+        client.release_quarantine_message("")
+        assert False, "expected ExchangeOnlinePowerShellError"
+    except ExchangeOnlinePowerShellError:
+        pass
 
 def test_sanitize_powershell_error_text_removes_ansi_sequences():
     raw = "\x1b[31;1mGet-EXORecipientPermission:\x1b[0m Something failed\r\n\r\n\x1b[36;1mLine |\x1b[0m"

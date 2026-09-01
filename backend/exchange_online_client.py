@@ -140,6 +140,8 @@ Connect-ExchangeOnline `
     'Get-EXOMailboxPermission',
     'Get-EXORecipientPermission',
     'Remove-DistributionGroupMember',
+    'Get-QuarantineMessage',
+    'Release-QuarantineMessage',
     'Disconnect-ExchangeOnline'
   ) | Out-Null
 try {{
@@ -613,4 +615,64 @@ Remove-DistributionGroupMember -Identity $groupIdentity -Member $memberIdentity 
             "group": group,
             "member": member,
             "removed": bool(payload.get("removed", True)),
+        }
+
+    def list_quarantine_messages(self, domains: list[str]) -> list[dict[str, Any]]:
+        """List currently quarantined messages whose sender domain is in `domains`."""
+        clean_domains = [str(d or "").strip() for d in domains if str(d or "").strip()]
+        if not clean_domains:
+            return []
+        script = """
+$domains = $env:QR_DOMAINS -split ','
+$allMessages = @()
+foreach ($domain in $domains) {
+  $domain = $domain.Trim()
+  if (-not $domain) { continue }
+  $page = 1
+  while ($true) {
+    $batch = @(Get-QuarantineMessage -SenderAddress "*@$domain" -PageSize 100 -Page $page)
+    if ($batch.Count -eq 0) { break }
+    $allMessages += $batch
+    if ($batch.Count -lt 100) { break }
+    $page++
+  }
+}
+[pscustomobject]@{
+  messages = @(
+    foreach ($m in $allMessages) {
+      [pscustomobject]@{
+        identity = $m.Identity.ToString()
+        sender_address = $m.SenderAddress
+        recipient_address = ($m.RecipientAddress -join ';')
+        subject = $m.Subject
+        received_at = $m.ReceivedTime.ToString("o")
+        quarantine_reason = $m.Type.ToString()
+      }
+    }
+  )
+} | ConvertTo-Json -Depth 6 -Compress
+"""
+        payload = self._run_script(script.strip(), extra_env={"QR_DOMAINS": ",".join(clean_domains)})
+        messages = payload.get("messages") if isinstance(payload, dict) else []
+        if isinstance(messages, dict):
+            messages = [messages]
+        return messages if isinstance(messages, list) else []
+
+    def release_quarantine_message(self, identity: str) -> dict[str, Any]:
+        """Release a quarantined message to all of its original recipients."""
+        message_identity = str(identity or "").strip()
+        if not message_identity:
+            raise ExchangeOnlinePowerShellError("identity is required")
+        script = """
+$identity = $env:QR_IDENTITY
+Release-QuarantineMessage -Identity $identity -ReleaseToAll -Confirm:$false
+@{
+  identity = $identity
+  released = $true
+} | ConvertTo-Json -Compress
+"""
+        payload = self._run_script(script.strip(), extra_env={"QR_IDENTITY": message_identity})
+        return {
+            "identity": message_identity,
+            "released": bool(payload.get("released", True)),
         }
