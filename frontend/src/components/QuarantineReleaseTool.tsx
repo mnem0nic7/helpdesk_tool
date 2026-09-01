@@ -2,9 +2,12 @@
  * Tools-page card: admin toggle for the hourly Exchange Online quarantine
  * auto-release job, plus run history and per-message release detail.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type QuarantineReleaseRun } from "../lib/api.ts";
+
+const RUNS_LIMIT = 30;
+const RELEASES_LIMIT = 50;
 
 function formatDateTime(value: string | null): string {
   if (!value) return "—";
@@ -13,10 +16,52 @@ function formatDateTime(value: string | null): string {
   return parsed.toLocaleString();
 }
 
+function Pager({
+  offset,
+  limit,
+  total,
+  onOffsetChange,
+}: {
+  offset: number;
+  limit: number;
+  total: number;
+  onOffsetChange: (offset: number) => void;
+}) {
+  if (total <= limit && offset === 0) return null;
+  const start = total === 0 ? 0 : offset + 1;
+  const end = Math.min(offset + limit, total);
+  return (
+    <div className="mt-2 flex items-center justify-end gap-2 text-sm text-slate-500">
+      <span>
+        Showing {start}–{end} of {total}
+      </span>
+      <button
+        type="button"
+        disabled={offset === 0}
+        onClick={() => onOffsetChange(Math.max(0, offset - limit))}
+        className="rounded border border-slate-200 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        ‹ Prev
+      </button>
+      <button
+        type="button"
+        disabled={offset + limit >= total}
+        onClick={() => onOffsetChange(offset + limit)}
+        className="rounded border border-slate-200 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Next ›
+      </button>
+    </div>
+  );
+}
+
 export default function QuarantineReleaseTool() {
   const queryClient = useQueryClient();
   const [domainsInput, setDomainsInput] = useState("");
+  const hasEditedDomainsRef = useRef(false);
   const [selectedRunHour, setSelectedRunHour] = useState<string | null>(null);
+  const [runsOffset, setRunsOffset] = useState(0);
+  const [releasesOffset, setReleasesOffset] = useState(0);
 
   const statusQuery = useQuery({
     queryKey: ["quarantine-release", "status"],
@@ -24,13 +69,13 @@ export default function QuarantineReleaseTool() {
   });
 
   const runsQuery = useQuery({
-    queryKey: ["quarantine-release", "runs"],
-    queryFn: () => api.getQuarantineReleaseRuns(30, 0),
+    queryKey: ["quarantine-release", "runs", runsOffset],
+    queryFn: () => api.getQuarantineReleaseRuns(RUNS_LIMIT, runsOffset),
   });
 
   const releasesQuery = useQuery({
-    queryKey: ["quarantine-release", "releases", selectedRunHour],
-    queryFn: () => api.getQuarantineReleaseReleases(50, 0, selectedRunHour ?? undefined),
+    queryKey: ["quarantine-release", "releases", selectedRunHour, releasesOffset],
+    queryFn: () => api.getQuarantineReleaseReleases(RELEASES_LIMIT, releasesOffset, selectedRunHour ?? undefined),
   });
 
   const settingsMutation = useMutation({
@@ -41,8 +86,22 @@ export default function QuarantineReleaseTool() {
     },
   });
 
+  // Keep the domains input in sync with whatever is actually loaded from the backend
+  // until the admin genuinely edits it, so an unedited "Save domains" click can never
+  // submit an accidentally-empty list.
+  useEffect(() => {
+    if (statusQuery.data && !hasEditedDomainsRef.current) {
+      setDomainsInput(statusQuery.data.allowed_domains.join(", "));
+    }
+  }, [statusQuery.data]);
+
   function handleRefresh() {
     queryClient.invalidateQueries({ queryKey: ["quarantine-release"] });
+  }
+
+  function handleDomainsInputChange(value: string) {
+    hasEditedDomainsRef.current = true;
+    setDomainsInput(value);
   }
 
   function handleSaveDomains() {
@@ -51,6 +110,11 @@ export default function QuarantineReleaseTool() {
       .map((d) => d.trim())
       .filter((d) => d.length > 0);
     settingsMutation.mutate({ allowed_domains: domains });
+  }
+
+  function handleSelectRunHour(runHour: string) {
+    setSelectedRunHour(runHour);
+    setReleasesOffset(0);
   }
 
   const status = statusQuery.data;
@@ -137,8 +201,8 @@ export default function QuarantineReleaseTool() {
             id="quarantine-release-domains"
             aria-label="Trusted domains"
             type="text"
-            defaultValue={status?.allowed_domains.join(", ") ?? ""}
-            onChange={(event) => setDomainsInput(event.target.value)}
+            value={domainsInput}
+            onChange={(event) => handleDomainsInputChange(event.target.value)}
             className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
           />
         </div>
@@ -168,7 +232,7 @@ export default function QuarantineReleaseTool() {
               {(runsQuery.data?.items ?? []).map((run: QuarantineReleaseRun) => (
                 <tr
                   key={run.run_hour}
-                  onClick={() => setSelectedRunHour(run.run_hour)}
+                  onClick={() => handleSelectRunHour(run.run_hour)}
                   className={`cursor-pointer hover:bg-slate-50 ${selectedRunHour === run.run_hour ? "bg-sky-50" : ""}`}
                 >
                   <td className="px-3 py-2">{formatDateTime(run.ran_at)}</td>
@@ -187,6 +251,12 @@ export default function QuarantineReleaseTool() {
             </tbody>
           </table>
         </div>
+        <Pager
+          offset={runsOffset}
+          limit={RUNS_LIMIT}
+          total={runsQuery.data?.total ?? 0}
+          onOffsetChange={setRunsOffset}
+        />
       </div>
 
       <div className="mt-6">
@@ -226,6 +296,12 @@ export default function QuarantineReleaseTool() {
             </tbody>
           </table>
         </div>
+        <Pager
+          offset={releasesOffset}
+          limit={RELEASES_LIMIT}
+          total={releasesQuery.data?.total ?? 0}
+          onOffsetChange={setReleasesOffset}
+        />
       </div>
     </section>
   );

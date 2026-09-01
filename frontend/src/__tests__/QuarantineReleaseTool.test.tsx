@@ -101,6 +101,53 @@ describe("QuarantineReleaseTool", () => {
     );
   });
 
+  it("saves the still-loaded domain list when Save is clicked without editing the field", async () => {
+    mockApi.getQuarantineReleaseStatus.mockResolvedValue({
+      enabled: false,
+      allowed_domains: ["complexlegal.com"],
+      last_run: null,
+    });
+
+    render(<QuarantineReleaseTool />);
+
+    // Wait for the domains input to be populated from the loaded status before
+    // clicking Save — without ever typing into it.
+    const input = await screen.findByLabelText(/trusted domains/i);
+    await waitFor(() => expect(input).toHaveValue("complexlegal.com"));
+
+    fireEvent.click(screen.getByRole("button", { name: /save domains/i }));
+
+    await waitFor(() =>
+      expect(mockApi.patchQuarantineReleaseSettings).toHaveBeenCalledWith({
+        allowed_domains: ["complexlegal.com"],
+      }),
+    );
+  });
+
+  it("paginates run history when Next is clicked", async () => {
+    mockApi.getQuarantineReleaseRuns.mockResolvedValue({
+      items: [
+        {
+          run_hour: "2026-09-01T14:00:00Z",
+          ran_at: "2026-09-01T14:02:00+00:00",
+          domains_checked: "complexlegal.com",
+          checked_count: 3,
+          released_count: 3,
+          failed_count: 0,
+          error: null,
+        },
+      ],
+      total: 45,
+    });
+
+    render(<QuarantineReleaseTool />);
+
+    const nextButtons = await screen.findAllByRole("button", { name: /^next/i });
+    fireEvent.click(nextButtons[0]);
+
+    await waitFor(() => expect(mockApi.getQuarantineReleaseRuns).toHaveBeenLastCalledWith(30, 30));
+  });
+
   it("surfaces an inline error when the settings patch fails", async () => {
     mockApi.patchQuarantineReleaseSettings.mockRejectedValue(new Error("Not authorized"));
 

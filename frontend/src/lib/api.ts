@@ -5475,6 +5475,7 @@ export interface QuarantineReleaseRun {
   checked_count: number;
   released_count: number;
   failed_count: number;
+  error: string | null;
 }
 
 export interface QuarantineReleaseMessage {
