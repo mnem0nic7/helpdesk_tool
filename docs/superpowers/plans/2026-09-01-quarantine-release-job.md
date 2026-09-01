@@ -751,7 +751,7 @@ Add to `backend/quarantine_release_job.py`. First add `import asyncio` and `impo
             if not identity:
                 continue
             try:
-                await loop.run_in_executor(None, lambda i=identity: exchange.release_quarantine_message(i))
+                await loop.run_in_executor(None, lambda: exchange.release_quarantine_message(identity))
                 status, error = "released", None
                 released += 1
             except Exception as exc:
