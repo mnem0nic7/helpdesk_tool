@@ -358,12 +358,18 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         return None
     stored_is_admin = row["is_admin"]
     stored_can_manage_users = row["can_manage_users"]
+    auth_provider = str(row["auth_provider"] or "entra")
+    resolved_is_admin = (
+        bool(stored_is_admin)
+        if auth_provider == "atlassian" and stored_is_admin is not None
+        else is_admin_user(str(row["email"] or ""))
+    )
     return {
         "email": row["email"],
         "name": row["name"],
         "expires_at": expires_at,
-        "auth_provider": str(row["auth_provider"] or "entra"),
-        "is_admin": is_admin_user(str(row["email"] or "")),
+        "auth_provider": auth_provider,
+        "is_admin": resolved_is_admin,
         "can_manage_users": (
             bool(stored_can_manage_users)
             if stored_can_manage_users is not None
