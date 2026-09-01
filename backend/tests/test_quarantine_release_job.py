@@ -160,3 +160,15 @@ async def test_run_hourly_job_skips_if_already_ran_this_hour():
         await job.run_hourly_job()
 
     assert exchange.list_quarantine_messages.call_count == 1
+
+
+async def test_start_and_stop_background_runner_does_not_raise():
+    import asyncio
+
+    job = _fresh_job()
+    job.start_background_runner()
+    assert job._bg_task is not None
+    await asyncio.sleep(0)
+    job.stop_background_runner()
+    await asyncio.sleep(0)
+    assert job._bg_task.cancelled() or job._bg_task.done()

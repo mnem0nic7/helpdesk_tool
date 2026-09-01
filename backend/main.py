@@ -51,6 +51,7 @@ from routes_deactivation_schedule import router as deactivation_schedule_router
 from routes_password_expiry_notifier import router as password_expiry_notifier_router
 from deactivation_schedule import deactivation_schedule as _deactivation_schedule_store
 from password_expiry_notifier import password_expiry_notifier as _password_expiry_notifier
+from quarantine_release_job import quarantine_release_job as _quarantine_release_job
 from ai_work_scheduler import AIWorkScheduler
 from azure_alert_engine import start_azure_alert_loop, stop_azure_alert_loop
 from azure_cost_exports import azure_cost_export_service
@@ -146,6 +147,11 @@ async def _start_deferred_services(app: FastAPI) -> None:
     except Exception:
         logger.exception("Failed to start password expiry notifier")
 
+    try:
+        _quarantine_release_job.start_background_runner()
+    except Exception:
+        logger.exception("Failed to start quarantine release job")
+
     for label, starter in starters:
         try:
             await starter()
@@ -191,6 +197,7 @@ async def _stop_leader_services(app: FastAPI) -> None:
     await cache.stop_background_refresh()
     _deactivation_schedule_store.stop_background_runner()
     _password_expiry_notifier.stop_background_runner()
+    _quarantine_release_job.stop_background_runner()
     await _defender_agent.stop_worker()
     await _security_digest_service.stop_worker()
     await _security_lane_summary_service.stop_worker()

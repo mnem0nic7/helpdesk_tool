@@ -247,5 +247,28 @@ class QuarantineReleaseJob:
             run_hour, len(messages), released, failed,
         )
 
+    # ------------------------------------------------------------------
+    # Background runner
+    # ------------------------------------------------------------------
+
+    def start_background_runner(self) -> None:
+        loop = asyncio.get_event_loop()
+        self._bg_task = loop.create_task(self._run_loop())
+
+    def stop_background_runner(self) -> None:
+        if self._bg_task:
+            self._bg_task.cancel()
+
+    async def _run_loop(self) -> None:
+        while True:
+            try:
+                await self.run_hourly_job()
+                await asyncio.sleep(300)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("Quarantine release job loop error")
+                await asyncio.sleep(300)
+
 
 quarantine_release_job = QuarantineReleaseJob()
