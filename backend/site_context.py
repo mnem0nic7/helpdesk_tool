@@ -7,10 +7,10 @@ from typing import Any, Literal
 
 from fastapi import Request
 
-from config import AZURE_APP_HOST, OASISDEV_APP_HOST, PRIMARY_APP_HOST, SECURITY_APP_HOST
+from config import AZURE_APP_HOST, HRAPP_APP_HOST, OASISDEV_APP_HOST, PRIMARY_APP_HOST, SECURITY_APP_HOST
 from jira_client import JiraClient
 
-SiteScope = Literal["primary", "oasisdev", "azure", "security"]
+SiteScope = Literal["primary", "oasisdev", "azure", "security", "hrapp"]
 
 _site_scope_var: ContextVar[SiteScope] = ContextVar("site_scope", default="primary")
 
@@ -47,6 +47,14 @@ _SITE_PROFILES: dict[SiteScope, dict[str, str]] = {
         "alert_prefix": "Security",
         "report_prefix": "Security",
     },
+    "hrapp": {
+        "scope": "hrapp",
+        "host": HRAPP_APP_HOST,
+        "app_name": "AskHR Portal",
+        "dashboard_name": "AskHR Portal",
+        "alert_prefix": "HR",
+        "report_prefix": "HR",
+    },
 }
 
 
@@ -67,6 +75,8 @@ def get_site_scope_for_host(host: str | None) -> SiteScope:
         return "azure"
     if normalized == normalize_host(SECURITY_APP_HOST):
         return "security"
+    if normalized == normalize_host(HRAPP_APP_HOST):
+        return "hrapp"
     if normalized == normalize_host(OASISDEV_APP_HOST):
         return "oasisdev"
     return "primary"
@@ -103,7 +113,7 @@ def get_site_profile(scope: SiteScope | None = None) -> dict[str, str]:
 
 def issue_matches_scope(issue: dict[str, Any], scope: SiteScope) -> bool:
     """Return True when an issue belongs on the given site."""
-    if scope in ("azure", "security"):
+    if scope in ("azure", "security", "hrapp"):
         return False
     if not JiraClient.is_tracked_issue(issue):
         return False
@@ -133,7 +143,7 @@ def get_scoped_issues(*, include_excluded_on_primary: bool = False) -> list[dict
 
     all_issues = cache.get_all_issues()
     scope = get_current_site_scope()
-    if scope in ("azure", "security"):
+    if scope in ("azure", "security", "hrapp"):
         return []
     if scope == "primary" and include_excluded_on_primary:
         return [issue for issue in all_issues if JiraClient.is_tracked_issue(issue)]
