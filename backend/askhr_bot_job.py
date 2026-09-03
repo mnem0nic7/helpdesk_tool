@@ -242,6 +242,25 @@ class AskHrBotJob:
 
         exchange = _uap_module.user_admin_providers.mailbox.exchange_powershell
         domains = exchange.get_transport_rule_domains(_TRANSPORT_RULE_IDENTITY)
+        if not domains:
+            # Fail CLOSED. get_transport_rule_domains() returns [] both for a
+            # genuinely empty ExceptIfSenderDomainIs and for a degraded
+            # Exchange response with no `domains` key at all -- and an empty
+            # trusted_domains list means _should_process() treats *every*
+            # sender as external, so one Exchange hiccup would mass-file HRD
+            # tickets for internal mail for a full
+            # domain_refresh_interval_seconds. Treat empty as
+            # "refresh unavailable": keep the previous (possibly stale but
+            # non-empty) list AND the previous trusted_domains_refreshed_at, so
+            # the next cycle retries immediately and the staleness is visible
+            # on /api/askhr-bot/status without needing a new field.
+            logger.warning(
+                "AskHR bot: trusted-domain refresh returned no domains for transport rule %r; "
+                "keeping the previously cached list (last refreshed %r) and retrying next cycle",
+                _TRANSPORT_RULE_IDENTITY,
+                settings["trusted_domains_refreshed_at"] or "never",
+            )
+            return
         self._update_settings(
             trusted_domains=domains,
             trusted_domains_refreshed_at=_utcnow().isoformat(),

@@ -86,6 +86,46 @@ def test_refresh_trusted_domains_calls_exchange_when_stale(monkeypatch):
     assert settings["trusted_domains_refreshed_at"] == now.isoformat()
 
 
+def test_refresh_trusted_domains_keeps_previous_list_when_exchange_returns_empty(monkeypatch):
+    """Fail closed, not open. get_transport_rule_domains() returns [] both for
+    a genuinely empty rule and for a degraded Exchange response, and an empty
+    trusted_domains list makes _should_process() treat every sender as
+    external -- which would mass-file HRD tickets for internal mail for a
+    whole refresh interval. So an empty result must leave BOTH the cached
+    domain list and its refreshed-at stamp untouched, letting the next cycle
+    retry (and leaving the staleness visible on /api/askhr-bot/status).
+    """
+    import askhr_bot_job as job_module
+    from datetime import datetime, timezone
+
+    stale_at = "2026-09-01T00:00:00+00:00"
+    now = datetime(2026, 9, 3, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(job_module, "_utcnow", lambda: now)
+
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(
+        trusted_domains=["librasolutionsgroup.com", "movedocs.com"],
+        trusted_domains_refreshed_at=stale_at,
+        domain_refresh_interval_seconds=3600,
+    )
+    before = job._get_settings()
+
+    mock_uap_module = MagicMock()
+    exchange = mock_uap_module.user_admin_providers.mailbox.exchange_powershell
+    exchange.get_transport_rule_domains.return_value = []
+
+    with patch.dict("sys.modules", {"user_admin_providers": mock_uap_module}):
+        job._refresh_trusted_domains_if_needed()
+
+    # It did try (the cache was stale) ...
+    exchange.get_transport_rule_domains.assert_called_once_with(job_module._TRANSPORT_RULE_IDENTITY)
+    # ... but nothing was overwritten.
+    after = job._get_settings()
+    assert after["trusted_domains"] == before["trusted_domains"] == ["librasolutionsgroup.com", "movedocs.com"]
+    assert after["trusted_domains_refreshed_at"] == stale_at
+
+
 def test_refresh_trusted_domains_skips_when_still_fresh(monkeypatch):
     import askhr_bot_job as job_module
     from datetime import datetime, timezone
