@@ -105,3 +105,39 @@ def test_retry_creates_ticket_for_previously_failed_message(test_client, monkeyp
     data = resp.json()
     assert data["status"] == "created"
     assert data["jira_issue_key"] == "HRD-40"
+
+
+def test_retry_records_failure_when_create_or_attach_raises(test_client, monkeypatch, tmp_path):
+    job = _job_with_settings(tmp_path)
+    with job._sqlite_conn() as conn:
+        conn.execute(
+            "INSERT INTO askhr_bot_messages "
+            "(internet_message_id, mailbox, graph_message_id, subject, sender_email, received_at, "
+            "status, jira_issue_key, error, processed_at) "
+            "VALUES ('<m2@mail.example.com>', 'askhr', 'graph-2', 'Subject', 'a@example.com', "
+            "'2026-09-03T11:00:00+00:00', 'failed', 'HRD-41', 'attachment failed: boom', '2026-09-03T11:01:00+00:00')"
+        )
+    import routes_askhr_bot
+    monkeypatch.setattr(routes_askhr_bot, "askhr_bot_job", job)
+
+    def _raise(mailbox, message, existing_issue_key):
+        raise RuntimeError("jira api hiccup")
+
+    monkeypatch.setattr(job, "_create_or_attach_ticket", _raise)
+    monkeypatch.setattr(job, "_azure_client", lambda: __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock())
+
+    resp = test_client.post("/api/askhr-bot/messages/%3Cm2%40mail.example.com%3E/retry")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "failed"
+    assert data["jira_issue_key"] == "HRD-41"
+    assert "jira api hiccup" in data["error"]
+
+    with job._sqlite_conn() as conn:
+        row = conn.execute(
+            "SELECT status, jira_issue_key, error FROM askhr_bot_messages WHERE internet_message_id = ?",
+            ("<m2@mail.example.com>",),
+        ).fetchone()
+    assert row["status"] == "failed"
+    assert row["jira_issue_key"] == "HRD-41"
+    assert "jira api hiccup" in row["error"]

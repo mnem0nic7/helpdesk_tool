@@ -141,9 +141,13 @@ async def retry_message(internet_message_id: str) -> dict[str, Any]:
         "received_at": row["received_at"],
         "body": "",
     }
-    status, issue_key, error = askhr_bot_job._create_or_attach_ticket(
-        row["mailbox"], message, existing_issue_key=row["jira_issue_key"]
-    )
+    existing_issue_key = row["jira_issue_key"]
+    try:
+        status, issue_key, error = askhr_bot_job._create_or_attach_ticket(
+            row["mailbox"], message, existing_issue_key=existing_issue_key
+        )
+    except Exception as exc:
+        status, issue_key, error = "failed", existing_issue_key, str(exc)
     with askhr_bot_job._conn() as conn:
         askhr_bot_job._record_message(
             mailbox=row["mailbox"], message=message, status=status,
