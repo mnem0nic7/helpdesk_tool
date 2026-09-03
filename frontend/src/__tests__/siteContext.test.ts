@@ -14,4 +14,11 @@ describe("getSiteBranding", () => {
     window.history.replaceState({}, "", "/");
     expect(getSiteBranding().scope).toBe("primary");
   });
+
+  it("detects the hrapp host", () => {
+    document.documentElement.dataset.siteHostname = "hrapp.movedocs.com";
+    window.history.replaceState({}, "", "/");
+    expect(getSiteBranding().scope).toBe("hrapp");
+    expect(getSiteBranding().appName).toBe("AskHR Portal");
+  });
 });
