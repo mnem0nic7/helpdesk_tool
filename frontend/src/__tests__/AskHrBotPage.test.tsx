@@ -89,4 +89,67 @@ describe("AskHrBotPage", () => {
     fireEvent.click(screen.getByRole("switch"));
     await waitFor(() => expect(api.patchAskHrBotSettings).toHaveBeenCalledWith({ enabled: true }));
   });
+
+  it("passes the selected mailbox filter through to the messages query", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByLabelText("Filter by mailbox")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Filter by mailbox"), { target: { value: "benefits" } });
+    await waitFor(() =>
+      expect(api.getAskHrBotMessages).toHaveBeenCalledWith("benefits", undefined, 50, 0),
+    );
+  });
+
+  it("passes the selected status filter through to the messages query", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByLabelText("Filter by status")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Filter by status"), { target: { value: "failed" } });
+    await waitFor(() =>
+      expect(api.getAskHrBotMessages).toHaveBeenCalledWith(undefined, "failed", 50, 0),
+    );
+  });
+
+  it("combines both filters and resets paging when a filter changes", async () => {
+    // total > MESSAGES_LIMIT so the messages table's Next button is enabled.
+    vi.mocked(api.getAskHrBotMessages).mockResolvedValue({ items: [], total: 120 });
+    renderPage();
+    // Two "Next" buttons on the page (runs table, then messages table); the
+    // messages one only enables once its total has loaded.
+    const messagesNext = () => {
+      const buttons = screen.getAllByRole("button", { name: /^next$/i });
+      return buttons[buttons.length - 1];
+    };
+    await waitFor(() => expect(messagesNext()).not.toBeDisabled());
+    fireEvent.click(messagesNext());
+    await waitFor(() =>
+      expect(api.getAskHrBotMessages).toHaveBeenCalledWith(undefined, undefined, 50, 50),
+    );
+    fireEvent.change(screen.getByLabelText("Filter by mailbox"), { target: { value: "askhr" } });
+    fireEvent.change(screen.getByLabelText("Filter by status"), { target: { value: "failed" } });
+    await waitFor(() =>
+      // offset back to 0, not the paged-forward offset
+      expect(api.getAskHrBotMessages).toHaveBeenCalledWith("askhr", "failed", 50, 0),
+    );
+  });
+
+  it("prefills the interval settings from status and saves the edited values", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByLabelText("Poll interval seconds")).toHaveValue(120));
+    expect(screen.getByLabelText("Lookback minutes")).toHaveValue(15);
+    expect(screen.getByLabelText("Domain refresh interval seconds")).toHaveValue(3600);
+
+    fireEvent.change(screen.getByLabelText("Poll interval seconds"), { target: { value: "300" } });
+    fireEvent.change(screen.getByLabelText("Lookback minutes"), { target: { value: "30" } });
+    fireEvent.change(screen.getByLabelText("Domain refresh interval seconds"), {
+      target: { value: "7200" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save intervals/i }));
+
+    await waitFor(() =>
+      expect(api.patchAskHrBotSettings).toHaveBeenCalledWith({
+        poll_interval_seconds: 300,
+        lookback_minutes: 30,
+        domain_refresh_interval_seconds: 7200,
+      }),
+    );
+  });
 });

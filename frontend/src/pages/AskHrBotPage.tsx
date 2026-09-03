@@ -1,10 +1,26 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type AskHrBotMessage } from "../lib/api.ts";
 import { getPollingQueryOptions } from "../lib/queryPolling.ts";
 
 const RUNS_LIMIT = 30;
 const MESSAGES_LIMIT = 50;
+
+const MAILBOX_FILTERS = ["askhr", "benefits"] as const;
+const STATUS_FILTERS = ["created", "skipped_internal_domain", "failed"] as const;
+
+type SettingsPatch = {
+  enabled?: boolean;
+  poll_interval_seconds?: number;
+  lookback_minutes?: number;
+  domain_refresh_interval_seconds?: number;
+};
+
+function parsePositiveInt(value: string): number | undefined {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
 
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—";
@@ -17,6 +33,15 @@ export default function AskHrBotPage() {
   const queryClient = useQueryClient();
   const [runsOffset, setRunsOffset] = useState(0);
   const [messagesOffset, setMessagesOffset] = useState(0);
+  const [mailboxFilter, setMailboxFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [pollIntervalInput, setPollIntervalInput] = useState("");
+  const [lookbackInput, setLookbackInput] = useState("");
+  const [domainRefreshInput, setDomainRefreshInput] = useState("");
+  // Keep the interval inputs in sync with whatever the backend reports until
+  // the admin genuinely edits one, so an unedited Save can never submit a
+  // stale or empty value. Same guard as QuarantineReleaseTool's domains input.
+  const hasEditedIntervalsRef = useRef(false);
 
   const statusQuery = useQuery({
     queryKey: ["askhr-bot", "status"],
@@ -31,13 +56,19 @@ export default function AskHrBotPage() {
   });
 
   const messagesQuery = useQuery({
-    queryKey: ["askhr-bot", "messages", messagesOffset],
-    queryFn: () => api.getAskHrBotMessages(undefined, undefined, MESSAGES_LIMIT, messagesOffset),
+    queryKey: ["askhr-bot", "messages", mailboxFilter, statusFilter, messagesOffset],
+    queryFn: () =>
+      api.getAskHrBotMessages(
+        mailboxFilter || undefined,
+        statusFilter || undefined,
+        MESSAGES_LIMIT,
+        messagesOffset,
+      ),
     ...getPollingQueryOptions("slow_5m"),
   });
 
   const settingsMutation = useMutation({
-    mutationFn: (body: { enabled?: boolean }) => api.patchAskHrBotSettings(body),
+    mutationFn: (body: SettingsPatch) => api.patchAskHrBotSettings(body),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["askhr-bot", "status"] }),
   });
 
@@ -56,6 +87,41 @@ export default function AskHrBotPage() {
 
   const status = statusQuery.data;
   const enabled = status?.enabled ?? false;
+
+  useEffect(() => {
+    if (status && !hasEditedIntervalsRef.current) {
+      setPollIntervalInput(String(status.poll_interval_seconds));
+      setLookbackInput(String(status.lookback_minutes));
+      setDomainRefreshInput(String(status.domain_refresh_interval_seconds));
+    }
+  }, [status]);
+
+  function handleIntervalChange(setter: (value: string) => void, value: string) {
+    hasEditedIntervalsRef.current = true;
+    setter(value);
+  }
+
+  function handleSaveIntervals() {
+    const body: SettingsPatch = {};
+    const poll = parsePositiveInt(pollIntervalInput);
+    const lookback = parsePositiveInt(lookbackInput);
+    const domainRefresh = parsePositiveInt(domainRefreshInput);
+    if (poll !== undefined) body.poll_interval_seconds = poll;
+    if (lookback !== undefined) body.lookback_minutes = lookback;
+    if (domainRefresh !== undefined) body.domain_refresh_interval_seconds = domainRefresh;
+    if (Object.keys(body).length === 0) return;
+    settingsMutation.mutate(body);
+  }
+
+  function handleMailboxFilterChange(value: string) {
+    setMailboxFilter(value);
+    setMessagesOffset(0);
+  }
+
+  function handleStatusFilterChange(value: string) {
+    setStatusFilter(value);
+    setMessagesOffset(0);
+  }
 
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -108,6 +174,59 @@ export default function AskHrBotPage() {
       <div className="mt-4 grid grid-cols-2 gap-3 text-sm text-slate-600">
         <div>AskHR checkpoint: {formatDateTime(status?.askhr_checkpoint_at)}</div>
         <div>Benefits checkpoint: {formatDateTime(status?.benefits_checkpoint_at)}</div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-end gap-3">
+        <div>
+          <label htmlFor="askhr-poll-interval" className="text-sm font-medium text-slate-700">
+            Poll interval (seconds)
+          </label>
+          <input
+            id="askhr-poll-interval"
+            aria-label="Poll interval seconds"
+            type="number"
+            min={1}
+            value={pollIntervalInput}
+            onChange={(event) => handleIntervalChange(setPollIntervalInput, event.target.value)}
+            className="mt-1 w-40 rounded-xl border border-slate-300 px-3 py-2 text-sm"
+          />
+        </div>
+        <div>
+          <label htmlFor="askhr-lookback" className="text-sm font-medium text-slate-700">
+            Lookback (minutes)
+          </label>
+          <input
+            id="askhr-lookback"
+            aria-label="Lookback minutes"
+            type="number"
+            min={1}
+            value={lookbackInput}
+            onChange={(event) => handleIntervalChange(setLookbackInput, event.target.value)}
+            className="mt-1 w-40 rounded-xl border border-slate-300 px-3 py-2 text-sm"
+          />
+        </div>
+        <div>
+          <label htmlFor="askhr-domain-refresh" className="text-sm font-medium text-slate-700">
+            Domain refresh interval (seconds)
+          </label>
+          <input
+            id="askhr-domain-refresh"
+            aria-label="Domain refresh interval seconds"
+            type="number"
+            min={1}
+            value={domainRefreshInput}
+            onChange={(event) => handleIntervalChange(setDomainRefreshInput, event.target.value)}
+            className="mt-1 w-52 rounded-xl border border-slate-300 px-3 py-2 text-sm"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={handleSaveIntervals}
+          disabled={settingsMutation.isPending}
+          className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Save intervals
+        </button>
       </div>
 
       <div className="mt-6">
@@ -167,6 +286,46 @@ export default function AskHrBotPage() {
 
       <div className="mt-6">
         <h2 className="text-sm font-semibold text-slate-700">Messages</h2>
+        <div className="mt-2 flex flex-wrap items-end gap-3">
+          <div>
+            <label htmlFor="askhr-mailbox-filter" className="text-xs font-medium text-slate-600">
+              Mailbox
+            </label>
+            <select
+              id="askhr-mailbox-filter"
+              aria-label="Filter by mailbox"
+              value={mailboxFilter}
+              onChange={(event) => handleMailboxFilterChange(event.target.value)}
+              className="mt-1 block rounded-xl border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="">All</option>
+              {MAILBOX_FILTERS.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="askhr-status-filter" className="text-xs font-medium text-slate-600">
+              Status
+            </label>
+            <select
+              id="askhr-status-filter"
+              aria-label="Filter by status"
+              value={statusFilter}
+              onChange={(event) => handleStatusFilterChange(event.target.value)}
+              className="mt-1 block rounded-xl border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="">All</option>
+              {STATUS_FILTERS.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
         <div className="mt-2 overflow-x-auto rounded-2xl border border-slate-200">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50">
