@@ -225,6 +225,7 @@ These are durable rules and design contracts — not time-bound release notes. G
 ### Runbooks and playbooks
 
 - The repo carries a first-wave AI workflow suite: release/cutover, incident triage, Jira hotfix, Microsoft 365 Tools, closeout, and SLA/reporting review skills under `.codex/skills/`, plus matching human docs and agent playbooks under `docs/runbooks/ai/`. Prefer those playbooks over inventing ad-hoc operational flows.
+- The **TWG CLI** (`twg`, [docs](https://developer.atlassian.com/cloud/twg-cli/)) is installed and OAuth-authenticated in this environment against `keyjira.atlassian.net` (this repo's Jira/JSM site) as `gallison@librasolutionsgroup.com` — check with `twg whoami` / `twg doctor`. It's a general-purpose Atlassian Teamwork Graph CLI, not a repo-specific workflow like the `.codex/skills/` suite above: use it for ad hoc Jira/Confluence/company-context lookups (related tickets, owners, PR-to-issue links, status rollups) rather than for the raw REST calls this session used earlier via `requests`/`curl` inside the backend container. Bitbucket connectivity is not configured (this repo uses GitHub, not Bitbucket) — that's expected, not a setup error. Prefer it over ad hoc `curl`/Python REST calls for exploratory Jira/Confluence lookups; keep using this repo's own `JiraClient` (`backend/jira_client.py`) for anything the running application itself needs to do.
 
 ### Historical incidents
 
