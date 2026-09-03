@@ -353,3 +353,79 @@ def test_get_request_comments_raises_non_404_errors():
         pass
     else:
         raise AssertionError("Expected HTTPError for non-404 comment failure")
+
+
+def test_create_request_posts_raise_on_behalf_of_payload():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = {"issueKey": "HRD-1"}
+    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    result = client.create_request(
+        service_desk_id="73",
+        request_type_id="420",
+        raise_on_behalf_of="qm:tenant:askhr-account-id",
+        summary="Help with benefits",
+        description="Originally sent by: Jane Doe <jane@example.com> on 2026-09-03 09:00\n\nBody text",
+    )
+
+    assert result["issueKey"] == "HRD-1"
+    url = client.session.post.call_args.args[0]
+    payload = client.session.post.call_args.kwargs["json"]
+    assert url == "https://example.atlassian.net/rest/servicedeskapi/request"
+    assert payload["serviceDeskId"] == "73"
+    assert payload["requestTypeId"] == "420"
+    assert payload["raiseOnBehalfOf"] == "qm:tenant:askhr-account-id"
+    assert payload["requestFieldValues"]["summary"] == "Help with benefits"
+
+
+def test_create_issue_with_reporter_posts_classic_issue_payload():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = {"key": "HRD-2"}
+    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    result = client.create_issue_with_reporter(
+        project_key="hrd",
+        issue_type="Emailed request",
+        summary="Help with benefits",
+        description="Body text",
+        reporter_account_id="qm:tenant:askhr-account-id",
+    )
+
+    assert result["key"] == "HRD-2"
+    url = client.session.post.call_args.args[0]
+    payload = client.session.post.call_args.kwargs["json"]
+    assert url == "https://example.atlassian.net/rest/api/3/issue"
+    assert payload["fields"]["project"]["key"] == "HRD"
+    assert payload["fields"]["issuetype"]["name"] == "Emailed request"
+    assert payload["fields"]["reporter"]["id"] == "qm:tenant:askhr-account-id"
+
+
+def test_find_issue_by_internet_message_id_returns_key_when_found():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = {"issues": [{"key": "HRD-3"}]}
+    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    key = client.find_issue_by_internet_message_id("<abc123@mail.example.com>", project_key="HRD")
+
+    assert key == "HRD-3"
+    url = client.session.post.call_args.args[0]
+    payload = client.session.post.call_args.kwargs["json"]
+    assert url == "https://example.atlassian.net/rest/api/3/search/jql"
+    assert "HRD" in payload["jql"]
+    assert "abc123@mail.example.com" in payload["jql"]
+
+
+def test_find_issue_by_internet_message_id_returns_none_when_not_found():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = {"issues": []}
+    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    assert client.find_issue_by_internet_message_id("<missing@mail.example.com>", project_key="HRD") is None

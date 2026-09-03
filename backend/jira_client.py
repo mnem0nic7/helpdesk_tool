@@ -716,6 +716,77 @@ class JiraClient:
         self._raise_for_status(resp)
         return resp.json()
 
+    def create_request(
+        self,
+        *,
+        service_desk_id: str,
+        request_type_id: str,
+        raise_on_behalf_of: str,
+        summary: str,
+        description: str,
+    ) -> dict[str, Any]:
+        """POST /rest/servicedeskapi/request, raising the ticket on behalf of another account."""
+        url = f"{self.base_url}/rest/servicedeskapi/request"
+        payload = {
+            "serviceDeskId": service_desk_id,
+            "requestTypeId": request_type_id,
+            "raiseOnBehalfOf": raise_on_behalf_of,
+            "requestFieldValues": {
+                "summary": summary,
+                "description": description,
+            },
+        }
+        resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
+        self._raise_for_status(resp)
+        return resp.json()
+
+    def create_issue_with_reporter(
+        self,
+        *,
+        project_key: str,
+        issue_type: str,
+        summary: str,
+        description: str,
+        reporter_account_id: str,
+    ) -> dict[str, Any]:
+        """POST /rest/api/3/issue with an explicit reporter accountId.
+
+        Fallback path for raiseOnBehalfOf when the calling account isn't
+        recognized as a JSM agent on the target service desk.
+        """
+        payload_fields: dict[str, Any] = {
+            "project": {"key": project_key.strip().upper()},
+            "summary": summary,
+            "issuetype": {"name": issue_type},
+            "reporter": {"id": reporter_account_id},
+        }
+        if description.strip():
+            payload_fields["description"] = self._plain_text_to_adf(description)
+        url = f"{self.base_url}/rest/api/3/issue"
+        resp = self.session.post(url, json={"fields": payload_fields}, timeout=self._TIMEOUT)
+        self._raise_for_status(resp)
+        return resp.json()
+
+    def find_issue_by_internet_message_id(self, internet_message_id: str, *, project_key: str) -> str | None:
+        """Defensive idempotency check: does a ticket already reference this message?
+
+        Used as a fallback before creating a ticket, in case a prior run created
+        the ticket but failed to persist that fact locally.
+        """
+        message_id = internet_message_id.strip()
+        if not message_id:
+            return None
+        jql = f'project = {project_key.strip().upper()} AND text ~ "{message_id}"'
+        url = f"{self.base_url}/rest/api/3/search/jql"
+        resp = self.session.post(
+            url,
+            json={"jql": jql, "maxResults": 1, "fields": ["key"]},
+            timeout=self._TIMEOUT,
+        )
+        self._raise_for_status(resp)
+        issues = resp.json().get("issues") or []
+        return str(issues[0]["key"]) if issues else None
+
     def add_comment(self, key: str, body_text: str) -> dict[str, Any]:
         """POST /rest/api/3/issue/{key}/comment using ADF format."""
         validate_jira_key(key)
