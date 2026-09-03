@@ -429,3 +429,17 @@ def test_find_issue_by_internet_message_id_returns_none_when_not_found():
     client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
 
     assert client.find_issue_by_internet_message_id("<missing@mail.example.com>", project_key="HRD") is None
+
+
+def test_find_issue_by_internet_message_id_escapes_embedded_quotes():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = {"issues": []}
+    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    client.find_issue_by_internet_message_id('<abc"@mail.example.com>', project_key="HRD")
+
+    payload = client.session.post.call_args.kwargs["json"]
+    assert '\\"' in payload["jql"]
+    assert '<abc"@mail.example.com>' not in payload["jql"]

@@ -776,7 +776,10 @@ class JiraClient:
         message_id = internet_message_id.strip()
         if not message_id:
             return None
-        jql = f'project = {project_key.strip().upper()} AND text ~ "{message_id}"'
+        # Escape backslashes first, then double quotes, so a crafted Message-ID
+        # (fully sender-controlled) can never break out of the quoted JQL literal.
+        escaped_message_id = message_id.replace("\\", "\\\\").replace('"', '\\"')
+        jql = f'project = {project_key.strip().upper()} AND text ~ "{escaped_message_id}"'
         url = f"{self.base_url}/rest/api/3/search/jql"
         resp = self.session.post(
             url,
