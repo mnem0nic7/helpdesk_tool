@@ -218,3 +218,21 @@ class AskHrBotJob:
                 ),
             )
         return current
+
+    def _refresh_trusted_domains_if_needed(self) -> None:
+        settings = self._get_settings()
+        refreshed_at = settings["trusted_domains_refreshed_at"]
+        interval = settings["domain_refresh_interval_seconds"]
+        if refreshed_at:
+            elapsed = (_utcnow() - datetime.fromisoformat(refreshed_at)).total_seconds()
+            if elapsed < interval:
+                return
+
+        import user_admin_providers as _uap_module
+
+        exchange = _uap_module.user_admin_providers.mailbox.exchange_powershell
+        domains = exchange.get_transport_rule_domains(_TRANSPORT_RULE_IDENTITY)
+        self._update_settings(
+            trusted_domains=domains,
+            trusted_domains_refreshed_at=_utcnow().isoformat(),
+        )
