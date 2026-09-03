@@ -16,7 +16,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+import requests
+
 from config import ASKHR_BOT_ENABLED_DEFAULT, DATA_DIR
+from jira_client import JiraClient
 from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
 
@@ -76,6 +79,7 @@ class AskHrBotJob:
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._bg_task = None
         self._init_db()
+        self._jira = JiraClient()
 
     # ------------------------------------------------------------------
     # Connection helpers
@@ -236,3 +240,117 @@ class AskHrBotJob:
             trusted_domains=domains,
             trusted_domains_refreshed_at=_utcnow().isoformat(),
         )
+
+    # ------------------------------------------------------------------
+    # Ticket creation + attachment orchestration
+    # ------------------------------------------------------------------
+
+    def _azure_client(self):
+        import azure_cache
+
+        return azure_cache.azure_cache._client
+
+    def _build_description(self, message: dict[str, Any]) -> str:
+        return (
+            f"Originally sent by: {message['sender_name']} <{message['sender_email']}> "
+            f"on {message['received_at']}\n\n{message['body']}"
+        )
+
+    def _create_ticket(self, mailbox: str, message: dict[str, Any]) -> str:
+        settings = self._get_settings()
+        mode = settings["reporter_mode"]
+        service_desk_id = JSM_SERVICE_DESK_ID
+        request_type_id = MAILBOXES[mailbox]["request_type_id"]
+        reporter_account_id = REPORTER_ACCOUNT_IDS[mailbox]
+        summary = message["subject"]
+        description = self._build_description(message)
+
+        if mode == "classic_reporter_field":
+            issue = self._jira.create_issue_with_reporter(
+                project_key=JSM_PROJECT_KEY,
+                issue_type="Emailed request" if mailbox == "askhr" else "Benefits",
+                summary=summary,
+                description=description,
+                reporter_account_id=reporter_account_id,
+            )
+            return str(issue["key"])
+
+        if mode == "raise_on_behalf_of":
+            issue = self._jira.create_request(
+                service_desk_id=service_desk_id,
+                request_type_id=request_type_id,
+                raise_on_behalf_of=reporter_account_id,
+                summary=summary,
+                description=description,
+            )
+            return str(issue["issueKey"])
+
+        # mode == "unset": probe raiseOnBehalfOf once, cache whichever mode works.
+        try:
+            issue = self._jira.create_request(
+                service_desk_id=service_desk_id,
+                request_type_id=request_type_id,
+                raise_on_behalf_of=reporter_account_id,
+                summary=summary,
+                description=description,
+            )
+            self._update_settings(reporter_mode="raise_on_behalf_of")
+            return str(issue["issueKey"])
+        except requests.exceptions.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code not in (400, 403):
+                raise
+            issue = self._jira.create_issue_with_reporter(
+                project_key=JSM_PROJECT_KEY,
+                issue_type="Emailed request" if mailbox == "askhr" else "Benefits",
+                summary=summary,
+                description=description,
+                reporter_account_id=reporter_account_id,
+            )
+            self._update_settings(reporter_mode="classic_reporter_field")
+            return str(issue["key"])
+
+    def _attach_email(self, mailbox: str, message: dict[str, Any], issue_key: str) -> None:
+        mailbox_address = MAILBOXES[mailbox]["address"]
+        response = self._azure_client().graph_raw_request(
+            "GET", f"users/{mailbox_address}/messages/{message['graph_message_id']}/$value"
+        )
+        files = {"file": (f"{message['internet_message_id']}.eml", response.content, "message/rfc822")}
+        upload_url = f"{self._jira.base_url}/rest/api/3/issue/{issue_key}/attachments"
+        # The JiraClient session sets a *default* `Content-Type: application/json`
+        # header at construction. requests.Session.merge_setting() only fills in a
+        # per-call header from the session default when the per-call headers dict
+        # doesn't already mention that key at all — it does NOT get displaced later
+        # by the multipart encoder, because PreparedRequest.prepare_body() only sets
+        # its own auto-computed `multipart/form-data; boundary=...` Content-Type when
+        # no Content-Type header is already present after merging. So a bare
+        # `headers={"X-Atlassian-Token": "no-check"}` here would silently ship the
+        # session's stale `application/json` Content-Type on a multipart body,
+        # corrupting the upload (missing boundary). Explicitly setting
+        # `"Content-Type": None` in the per-call headers causes merge_setting() to
+        # drop the key entirely (it deletes any merged key whose value is None),
+        # so the multipart encoder can set the correct header. Verified empirically
+        # in tests/test_askhr_bot_job.py.
+        upload_response = self._jira.session.post(
+            upload_url,
+            files=files,
+            headers={"X-Atlassian-Token": "no-check", "Content-Type": None},
+            timeout=self._jira._TIMEOUT,
+        )
+        self._jira._raise_for_status(upload_response)
+
+    def _create_or_attach_ticket(
+        self, mailbox: str, message: dict[str, Any], *, existing_issue_key: str | None
+    ) -> tuple[str, str | None, str | None]:
+        issue_key = existing_issue_key
+        if not issue_key:
+            issue_key = self._jira.find_issue_by_internet_message_id(
+                message["internet_message_id"], project_key=JSM_PROJECT_KEY
+            )
+        if not issue_key:
+            issue_key = self._create_ticket(mailbox, message)
+        try:
+            self._attach_email(mailbox, message, issue_key)
+        except Exception as exc:
+            return "failed", issue_key, f"attachment failed: {exc}"
+        return "created", issue_key, None
