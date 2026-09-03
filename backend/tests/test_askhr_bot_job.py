@@ -307,3 +307,179 @@ def test_attach_email_does_not_send_json_content_type_for_multipart_upload(monke
     sent_content_type = captured["headers"].get("Content-Type", "")
     assert sent_content_type.startswith("multipart/form-data; boundary=")
     assert b"raw-eml-bytes" in captured["body"]
+
+
+def test_should_process_skips_trusted_domain_and_allows_payroll_bypass():
+    job = _fresh_job()
+    trusted = ["librasolutionsgroup.com", "movedocs.com"]
+
+    assert job._should_process("someone@librasolutionsgroup.com", trusted) is False
+    assert job._should_process("outsider@example.com", trusted) is True
+    assert job._should_process("payroll@librasolutionsgroup.com", trusted) is True
+
+
+async def test_run_cycle_skips_entirely_when_disabled():
+    job = _fresh_job()
+    job._get_settings()  # bootstrap, enabled=False by default
+
+    mock_azure = MagicMock()
+    with patch.object(job, "_azure_client", return_value=mock_azure):
+        await job.run_cycle()
+
+    mock_azure.graph_paged_get.assert_not_called()
+    with job._sqlite_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS c FROM askhr_bot_runs").fetchone()["c"] == 0
+
+
+async def test_run_cycle_creates_ticket_for_untrusted_sender_and_advances_checkpoint(monkeypatch):
+    import askhr_bot_job as job_module
+
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(
+        enabled=True,
+        trusted_domains=["librasolutionsgroup.com"],
+        trusted_domains_refreshed_at="2026-09-03T00:00:00+00:00",
+        domain_refresh_interval_seconds=3600,
+    )
+    monkeypatch.setattr(job_module, "_utcnow", lambda: __import__("datetime").datetime(
+        2026, 9, 3, 12, 0, 0, tzinfo=__import__("datetime").timezone.utc
+    ))
+    # _refresh_trusted_domains_if_needed is exercised in isolation elsewhere
+    # (test_refresh_trusted_domains_*); with the mocked "now" 12h past the
+    # refreshed_at above, it would otherwise consider itself stale and reach
+    # out to the real (unmocked, unavailable-in-CI) Exchange PowerShell path.
+    # Stub it out so this test stays focused on the polling/checkpoint behavior.
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
+
+    graph_message = {
+        "id": "graph-1",
+        "internetMessageId": "<abc@mail.example.com>",
+        "subject": "Need benefits help",
+        "receivedDateTime": "2026-09-03T11:00:00Z",
+        "from": {"emailAddress": {"address": "outsider@example.com", "name": "Outsider Person"}},
+        "body": {"content": "Please help"},
+    }
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = [graph_message]
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+    monkeypatch.setattr(
+        job, "_create_or_attach_ticket", lambda mailbox, message, existing_issue_key: ("created", "HRD-20", None)
+    )
+
+    await job.run_cycle()
+
+    with job._sqlite_conn() as conn:
+        runs = conn.execute("SELECT * FROM askhr_bot_runs").fetchall()
+        messages = conn.execute("SELECT * FROM askhr_bot_messages").fetchall()
+    # Two mailboxes polled (askhr, benefits) -> at least one run row per mailbox.
+    assert len(runs) == 2
+    assert any(m["jira_issue_key"] == "HRD-20" for m in messages)
+    settings = job._get_settings()
+    assert settings["askhr_checkpoint_at"] == "2026-09-03T11:00:00+00:00" or settings["benefits_checkpoint_at"] == "2026-09-03T11:00:00+00:00"
+
+
+async def test_run_cycle_records_skip_for_trusted_domain_sender(monkeypatch):
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(
+        enabled=True,
+        trusted_domains=["librasolutionsgroup.com"],
+        trusted_domains_refreshed_at="2026-09-03T00:00:00+00:00",
+    )
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
+
+    graph_message = {
+        "id": "graph-2",
+        "internetMessageId": "<internal@mail.example.com>",
+        "subject": "Internal note",
+        "receivedDateTime": "2026-09-03T11:05:00Z",
+        "from": {"emailAddress": {"address": "hr@librasolutionsgroup.com", "name": "HR Team"}},
+        "body": {"content": "FYI"},
+    }
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = [graph_message]
+    import unittest.mock as mock_lib
+    with mock_lib.patch.object(job, "_azure_client", return_value=mock_azure):
+        with mock_lib.patch.object(job, "_create_or_attach_ticket") as create_mock:
+            await job.run_cycle()
+            create_mock.assert_not_called()
+
+    with job._sqlite_conn() as conn:
+        row = conn.execute(
+            "SELECT status FROM askhr_bot_messages WHERE internet_message_id = ?",
+            ("<internal@mail.example.com>",),
+        ).fetchone()
+    assert row["status"] == "skipped_internal_domain"
+
+
+async def test_run_cycle_one_message_failure_does_not_abort_the_batch(monkeypatch):
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(enabled=True, trusted_domains=[], trusted_domains_refreshed_at="2026-09-03T00:00:00+00:00")
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
+
+    messages = [
+        {
+            "id": "graph-3", "internetMessageId": "<m1@mail.example.com>", "subject": "One",
+            "receivedDateTime": "2026-09-03T11:00:00Z",
+            "from": {"emailAddress": {"address": "a@example.com", "name": "A"}}, "body": {"content": "x"},
+        },
+        {
+            "id": "graph-4", "internetMessageId": "<m2@mail.example.com>", "subject": "Two",
+            "receivedDateTime": "2026-09-03T11:01:00Z",
+            "from": {"emailAddress": {"address": "b@example.com", "name": "B"}}, "body": {"content": "y"},
+        },
+    ]
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = messages
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+
+    def fake_create(mailbox, message, existing_issue_key):
+        if message["internet_message_id"] == "<m1@mail.example.com>":
+            raise RuntimeError("jira down")
+        return "created", "HRD-30", None
+
+    monkeypatch.setattr(job, "_create_or_attach_ticket", fake_create)
+
+    await job.run_cycle()
+
+    with job._sqlite_conn() as conn:
+        statuses = {
+            r["internet_message_id"]: r["status"]
+            for r in conn.execute("SELECT internet_message_id, status FROM askhr_bot_messages")
+        }
+    assert statuses["<m1@mail.example.com>"] == "failed"
+    assert statuses["<m2@mail.example.com>"] == "created"
+
+
+async def test_poll_mailbox_lookback_window_handles_z_suffixed_checkpoint(monkeypatch):
+    """Regression guard for the known Graph-timestamp risk: receivedDateTime (and
+    any checkpoint derived from it) is UTC with a literal 'Z' suffix. The repo's
+    backend venv is Python 3.12 (verified via `backend/.venv/bin/python --version`),
+    which parses 'Z' natively in datetime.fromisoformat(), but this test proves the
+    checkpoint/lookback-window math actually works end-to-end with a raw
+    'Z'-suffixed checkpoint value rather than assuming it from the version alone.
+    """
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(
+        enabled=True,
+        trusted_domains=[],
+        trusted_domains_refreshed_at="2026-09-03T00:00:00+00:00",
+        askhr_checkpoint_at="2026-09-03T10:00:00Z",
+        lookback_minutes=15,
+    )
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
+
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = []
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+
+    settings = job._get_settings()
+    await job._poll_mailbox("askhr", settings)
+
+    _, call_kwargs = mock_azure.graph_paged_get.call_args
+    filter_clause = call_kwargs["params"]["$filter"]
+    # since = checkpoint (10:00:00Z) - lookback (15m) = 09:45:00Z
+    assert "2026-09-03T09:45:00Z" in filter_clause

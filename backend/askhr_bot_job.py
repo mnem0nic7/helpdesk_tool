@@ -13,7 +13,7 @@ import logging
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -354,3 +354,176 @@ class AskHrBotJob:
         except Exception as exc:
             return "failed", issue_key, f"attachment failed: {exc}"
         return "created", issue_key, None
+
+    # ------------------------------------------------------------------
+    # Mailbox polling cycle
+    # ------------------------------------------------------------------
+
+    def _should_process(self, sender_email: str, trusted_domains: list[str]) -> bool:
+        sender = sender_email.strip().lower()
+        if sender == PAYROLL_BYPASS_SENDER:
+            return True
+        domain = sender.rsplit("@", 1)[-1] if "@" in sender else ""
+        return domain not in trusted_domains
+
+    def _record_message(
+        self,
+        *,
+        mailbox: str,
+        message: dict[str, Any],
+        status: str,
+        jira_issue_key: str | None,
+        error: str | None,
+        conn: sqlite3.Connection,
+    ) -> None:
+        ph = self._placeholder()
+        upsert = (
+            "INSERT INTO askhr_bot_messages "
+            "(internet_message_id, mailbox, graph_message_id, subject, sender_email, received_at, "
+            "status, jira_issue_key, error, processed_at) "
+            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph}) "
+            "ON CONFLICT (internet_message_id) DO UPDATE SET "
+            "status = excluded.status, jira_issue_key = excluded.jira_issue_key, "
+            "error = excluded.error, processed_at = excluded.processed_at"
+        )
+        conn.execute(
+            upsert,
+            (
+                message["internet_message_id"],
+                mailbox,
+                message["graph_message_id"],
+                message["subject"],
+                message["sender_email"],
+                message["received_at"],
+                status,
+                jira_issue_key,
+                error,
+                _utcnow().isoformat(),
+            ),
+        )
+
+    def _existing_message_row(self, internet_message_id: str, conn: sqlite3.Connection) -> dict[str, Any] | None:
+        ph = self._placeholder()
+        row = conn.execute(
+            f"SELECT status, jira_issue_key FROM askhr_bot_messages WHERE internet_message_id = {ph}",
+            (internet_message_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    async def _poll_mailbox(self, mailbox: str, settings: dict[str, Any]) -> None:
+        import asyncio
+
+        mailbox_address = MAILBOXES[mailbox]["address"]
+        checkpoint_key = f"{mailbox}_checkpoint_at"
+        checkpoint = settings[checkpoint_key]
+        lookback = settings["lookback_minutes"]
+        # NOTE on Z-suffix handling: Microsoft Graph's receivedDateTime (and any
+        # checkpoint value we derive from it below) is UTC with a literal "Z"
+        # suffix, e.g. "2026-09-03T11:00:00Z". datetime.fromisoformat() only
+        # gained native "Z" support in Python 3.11 -- this repo's backend venv is
+        # 3.12 (verified via `backend/.venv/bin/python --version`), so no
+        # `.replace("Z", "+00:00")` normalization is required here. See
+        # tests/test_askhr_bot_job.py::test_poll_mailbox_lookback_window_handles_z_suffixed_checkpoint
+        # for an end-to-end check of this exact path.
+        if checkpoint:
+            since = datetime.fromisoformat(checkpoint) - timedelta(minutes=lookback)
+        else:
+            since = _utcnow() - timedelta(minutes=lookback)
+        since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        loop = asyncio.get_event_loop()
+        azure = self._azure_client()
+        graph_messages = await loop.run_in_executor(
+            None,
+            lambda: azure.graph_paged_get(
+                f"users/{mailbox_address}/mailFolders/Inbox/messages",
+                params={
+                    "$filter": f"receivedDateTime ge {since_iso}",
+                    "$orderby": "receivedDateTime asc",
+                    "$select": "id,internetMessageId,subject,receivedDateTime,from,body",
+                    "$top": "50",
+                },
+            ),
+        )
+
+        trusted_domains = settings["trusted_domains"]
+        created = skipped = failed = 0
+        latest_received_dt: datetime | None = None
+
+        for graph_message in graph_messages:
+            internet_message_id = str(graph_message.get("internetMessageId") or "").strip()
+            if not internet_message_id:
+                continue
+            received_raw = str(graph_message.get("receivedDateTime") or "")
+            received_dt = datetime.fromisoformat(received_raw) if received_raw else None
+            # Normalize to "+00:00" (rather than storing the raw "Z" form) so a
+            # checkpoint written here parses identically however it's re-read.
+            received_at = received_dt.isoformat() if received_dt is not None else received_raw
+            if received_dt is not None and (latest_received_dt is None or received_dt > latest_received_dt):
+                latest_received_dt = received_dt
+
+            sender = graph_message.get("from", {}).get("emailAddress", {})
+            message = {
+                "internet_message_id": internet_message_id,
+                "graph_message_id": str(graph_message.get("id") or ""),
+                "subject": str(graph_message.get("subject") or ""),
+                "sender_email": str(sender.get("address") or ""),
+                "sender_name": str(sender.get("name") or ""),
+                "received_at": received_at,
+                "body": str((graph_message.get("body") or {}).get("content") or ""),
+            }
+
+            with self._conn() as conn:
+                existing = self._existing_message_row(internet_message_id, conn)
+
+            if existing and existing["status"] == "created":
+                continue
+
+            if not self._should_process(message["sender_email"], trusted_domains):
+                skipped += 1
+                with self._conn() as conn:
+                    self._record_message(
+                        mailbox=mailbox, message=message, status="skipped_internal_domain",
+                        jira_issue_key=None, error=None, conn=conn,
+                    )
+                continue
+
+            existing_issue_key = existing["jira_issue_key"] if existing else None
+            try:
+                status, issue_key, error = await loop.run_in_executor(
+                    None,
+                    lambda: self._create_or_attach_ticket(mailbox, message, existing_issue_key=existing_issue_key),
+                )
+            except Exception as exc:
+                status, issue_key, error = "failed", existing_issue_key, str(exc)
+
+            if status == "created":
+                created += 1
+            else:
+                failed += 1
+            with self._conn() as conn:
+                self._record_message(
+                    mailbox=mailbox, message=message, status=status,
+                    jira_issue_key=issue_key, error=error, conn=conn,
+                )
+
+        with self._conn() as conn:
+            conn.execute(
+                f"INSERT INTO askhr_bot_runs "
+                f"(id, mailbox, run_started_at, messages_scanned, created_count, skipped_count, failed_count) "
+                f"VALUES ({self._placeholder()},{self._placeholder()},{self._placeholder()},"
+                f"{self._placeholder()},{self._placeholder()},{self._placeholder()},{self._placeholder()})",
+                (uuid.uuid4().hex, mailbox, _utcnow().isoformat(), len(graph_messages), created, skipped, failed),
+            )
+
+        if latest_received_dt is not None:
+            self._update_settings(**{checkpoint_key: latest_received_dt.isoformat()})
+
+    async def run_cycle(self) -> None:
+        settings = self._get_settings()
+        if not settings["enabled"]:
+            return
+        self._refresh_trusted_domains_if_needed()
+        settings = self._get_settings()
+        for mailbox in MAILBOXES:
+            await self._poll_mailbox(mailbox, settings)
