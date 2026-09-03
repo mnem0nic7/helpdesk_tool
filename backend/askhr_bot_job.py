@@ -520,10 +520,21 @@ class AskHrBotJob:
             self._update_settings(**{checkpoint_key: latest_received_dt.isoformat()})
 
     async def run_cycle(self) -> None:
+        import asyncio
+
         settings = self._get_settings()
         if not settings["enabled"]:
             return
-        self._refresh_trusted_domains_if_needed()
+        # _refresh_trusted_domains_if_needed() can do blocking subprocess I/O
+        # (Exchange Online PowerShell via pwsh, up to the configured timeout,
+        # ~240s) when the cached trusted-domain list is stale. run_cycle is
+        # awaited directly from the shared FastAPI event loop, so calling it
+        # synchronously here would stall every other request and background
+        # service on that loop for the duration -- run it off-loop, matching
+        # the run_in_executor pattern quarantine_release_job.py's
+        # run_hourly_job already uses for the same class of blocking call.
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._refresh_trusted_domains_if_needed)
         settings = self._get_settings()
         for mailbox in MAILBOXES:
             await self._poll_mailbox(mailbox, settings)

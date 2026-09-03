@@ -483,3 +483,47 @@ async def test_poll_mailbox_lookback_window_handles_z_suffixed_checkpoint(monkey
     filter_clause = call_kwargs["params"]["$filter"]
     # since = checkpoint (10:00:00Z) - lookback (15m) = 09:45:00Z
     assert "2026-09-03T09:45:00Z" in filter_clause
+
+
+async def test_run_cycle_runs_domain_refresh_off_the_event_loop(monkeypatch):
+    """_refresh_trusted_domains_if_needed() can do blocking subprocess I/O
+    (Exchange Online PowerShell via pwsh, up to ~240s) when the trusted-domain
+    cache is stale. run_cycle() is awaited directly from the shared FastAPI
+    event loop, so it must schedule that call via run_in_executor rather than
+    calling it inline -- otherwise it would stall every other request and
+    background service sharing that loop for the duration. This spies on the
+    running loop's run_in_executor to prove the refresh call is actually
+    routed through it, not called synchronously.
+    """
+    import asyncio
+
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(enabled=True, trusted_domains=[])
+
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = []
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+
+    refresh_call_count = 0
+
+    def fake_refresh():
+        nonlocal refresh_call_count
+        refresh_call_count += 1
+
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", fake_refresh)
+
+    loop = asyncio.get_event_loop()
+    real_run_in_executor = loop.run_in_executor
+    executor_funcs = []
+
+    def spy_run_in_executor(executor, func, *args):
+        executor_funcs.append(func)
+        return real_run_in_executor(executor, func, *args)
+
+    monkeypatch.setattr(loop, "run_in_executor", spy_run_in_executor)
+
+    await job.run_cycle()
+
+    assert fake_refresh in executor_funcs
+    assert refresh_call_count == 1
