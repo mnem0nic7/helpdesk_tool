@@ -5214,6 +5214,75 @@ export const api = {
     }
     return res.json() as Promise<QuarantineReleaseStatus>;
   },
+
+  getAskHrBotStatus(): Promise<AskHrBotStatus> {
+    return fetchJSON<AskHrBotStatus>("/api/askhr-bot/status");
+  },
+
+  getAskHrBotRuns(
+    mailbox?: string,
+    limit = 30,
+    offset = 0,
+  ): Promise<{ items: AskHrBotRun[]; total: number }> {
+    const mailboxParam = mailbox ? `&mailbox=${encodeURIComponent(mailbox)}` : "";
+    return fetchJSON(`/api/askhr-bot/runs?limit=${limit}&offset=${offset}${mailboxParam}`);
+  },
+
+  getAskHrBotMessages(
+    mailbox?: string,
+    status?: string,
+    limit = 50,
+    offset = 0,
+  ): Promise<{ items: AskHrBotMessage[]; total: number }> {
+    const mailboxParam = mailbox ? `&mailbox=${encodeURIComponent(mailbox)}` : "";
+    const statusParam = status ? `&status=${encodeURIComponent(status)}` : "";
+    return fetchJSON(`/api/askhr-bot/messages?limit=${limit}&offset=${offset}${mailboxParam}${statusParam}`);
+  },
+
+  async patchAskHrBotSettings(
+    body: { enabled?: boolean; poll_interval_seconds?: number; lookback_minutes?: number; domain_refresh_interval_seconds?: number },
+  ): Promise<AskHrBotStatus> {
+    const res = await fetch("/api/askhr-bot/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("PATCH", "/api/askhr-bot/settings", res));
+    }
+    return res.json() as Promise<AskHrBotStatus>;
+  },
+
+  async resetAskHrBotReporterMode(): Promise<AskHrBotStatus> {
+    const res = await fetch("/api/askhr-bot/reporter-mode/reset", { method: "POST" });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("POST", "/api/askhr-bot/reporter-mode/reset", res));
+    }
+    return res.json() as Promise<AskHrBotStatus>;
+  },
+
+  async retryAskHrBotMessage(
+    internetMessageId: string,
+  ): Promise<{ internet_message_id: string; status: string; jira_issue_key: string | null; error: string | null }> {
+    const url = `/api/askhr-bot/messages/${encodeURIComponent(internetMessageId)}/retry`;
+    const res = await fetch(url, { method: "POST" });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("POST", url, res));
+    }
+    return res.json();
+  },
 };
 
 export default api;
@@ -5496,5 +5565,41 @@ export interface QuarantineReleaseStatus {
   enabled: boolean;
   allowed_domains: string[];
   last_run: QuarantineReleaseRun | null;
+}
+
+export interface AskHrBotRun {
+  id: string;
+  mailbox: "askhr" | "benefits";
+  run_started_at: string;
+  messages_scanned: number;
+  created_count: number;
+  skipped_count: number;
+  failed_count: number;
+}
+
+export interface AskHrBotMessage {
+  internet_message_id: string;
+  mailbox: "askhr" | "benefits";
+  graph_message_id: string;
+  subject: string;
+  sender_email: string;
+  received_at: string;
+  status: "created" | "skipped_internal_domain" | "failed";
+  jira_issue_key: string | null;
+  error: string | null;
+  processed_at: string;
+}
+
+export interface AskHrBotStatus {
+  enabled: boolean;
+  poll_interval_seconds: number;
+  lookback_minutes: number;
+  askhr_checkpoint_at: string;
+  benefits_checkpoint_at: string;
+  trusted_domains: string[];
+  trusted_domains_refreshed_at: string;
+  domain_refresh_interval_seconds: number;
+  reporter_mode: "unset" | "raise_on_behalf_of" | "classic_reporter_field";
+  last_runs: { askhr: AskHrBotRun | null; benefits: AskHrBotRun | null };
 }
 
