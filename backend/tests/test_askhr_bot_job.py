@@ -527,3 +527,15 @@ async def test_run_cycle_runs_domain_refresh_off_the_event_loop(monkeypatch):
 
     assert fake_refresh in executor_funcs
     assert refresh_call_count == 1
+
+
+async def test_start_and_stop_background_runner_does_not_raise():
+    import asyncio
+
+    job = _fresh_job()
+    job.start_background_runner()
+    assert job._bg_task is not None
+    await asyncio.sleep(0)
+    job.stop_background_runner()
+    await asyncio.sleep(0)
+    assert job._bg_task.cancelled() or job._bg_task.done()

@@ -538,3 +538,34 @@ class AskHrBotJob:
         settings = self._get_settings()
         for mailbox in MAILBOXES:
             await self._poll_mailbox(mailbox, settings)
+
+    # ------------------------------------------------------------------
+    # Background runner
+    # ------------------------------------------------------------------
+
+    def start_background_runner(self) -> None:
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        self._bg_task = loop.create_task(self._run_loop())
+
+    def stop_background_runner(self) -> None:
+        if self._bg_task:
+            self._bg_task.cancel()
+
+    async def _run_loop(self) -> None:
+        import asyncio
+
+        while True:
+            try:
+                interval = self._get_settings()["poll_interval_seconds"]
+                await self.run_cycle()
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("AskHR bot job loop error")
+                await asyncio.sleep(120)
+
+
+askhr_bot_job = AskHrBotJob()
