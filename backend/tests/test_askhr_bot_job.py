@@ -185,6 +185,34 @@ def test_create_or_attach_ticket_uses_cached_reporter_mode_without_probing(monke
     mock_jira.create_issue_with_reporter.assert_called_once()
 
 
+def test_create_or_attach_ticket_uses_jql_fallback_when_local_lookup_is_empty(monkeypatch):
+    """The 'other half' of the no-duplicate-ticket guarantee: even when the
+    caller has no locally-known issue key, the JQL-based
+    find_issue_by_internet_message_id fallback can still find a ticket a
+    prior run created (e.g. if that run failed to persist the key locally),
+    and ticket creation must be skipped in that case too.
+    """
+    job = _fresh_job()
+    job._get_settings()
+
+    mock_jira = MagicMock()
+    mock_jira.find_issue_by_internet_message_id.return_value = "HRD-99"
+    mock_azure = MagicMock()
+    mock_azure.graph_raw_request.return_value = MagicMock(status_code=200, content=b"raw-eml-bytes")
+    monkeypatch.setattr(job, "_jira", mock_jira)
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+
+    status, issue_key, error = job._create_or_attach_ticket("askhr", _sample_message(), existing_issue_key=None)
+
+    assert status == "created"
+    assert issue_key == "HRD-99"
+    assert error is None
+    mock_jira.create_request.assert_not_called()
+    mock_jira.create_issue_with_reporter.assert_not_called()
+    mock_jira.find_issue_by_internet_message_id.assert_called_once()
+    mock_azure.graph_raw_request.assert_called_once()
+
+
 def test_create_or_attach_ticket_skips_creation_when_issue_key_already_exists(monkeypatch):
     job = _fresh_job()
     job._get_settings()
