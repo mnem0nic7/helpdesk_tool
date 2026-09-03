@@ -203,7 +203,20 @@ def test_create_or_attach_ticket_falls_back_to_classic_reporter_on_403(monkeypat
     assert status == "created"
     assert issue_key == "HRD-11"
     mock_jira.create_issue_with_reporter.assert_called_once()
+    assert mock_jira.create_issue_with_reporter.call_args.kwargs["issue_type"] == "Email Request"
     assert job._get_settings()["reporter_mode"] == "classic_reporter_field"
+
+
+def test_classic_issue_types_match_live_hrd_project_names():
+    """Confirmed against HRD's real createmeta on 2026-09-03 — the original
+    placeholders ("Emailed request", "Benefits") did not exist as issue types
+    and caused every classic-fallback ticket to fail with a 400."""
+    import askhr_bot_job as job_module
+
+    assert job_module.CLASSIC_ISSUE_TYPES == {
+        "askhr": "Email Request",
+        "benefits": "Comp & Benefits",
+    }
 
 
 def test_create_or_attach_ticket_uses_cached_reporter_mode_without_probing(monkeypatch):

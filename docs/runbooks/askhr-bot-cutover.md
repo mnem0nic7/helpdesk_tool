@@ -52,39 +52,45 @@ read access to all mailboxes in the tenant.
 Until consent is granted, every poll cycle fails with a Graph 403 and no
 tickets are created.
 
-### 4. Verify the HRD issue-type names used by the classic-reporter fallback
+### 4. HRD issue-type names used by the classic-reporter fallback
 
-`backend/askhr_bot_job.py` has two hardcoded issue-type names used **only**
-on the `classic_reporter_field` fallback path (taken when
-`raiseOnBehalfOf` returns 400/403 and the bot caches the classic reporter
-mode instead):
+`backend/askhr_bot_job.py`'s `CLASSIC_ISSUE_TYPES` constant supplies the
+issue-type names used **only** on the `classic_reporter_field` fallback path
+(taken when `raiseOnBehalfOf` returns 400/403 and the bot caches the
+classic reporter mode instead):
 
-| Mailbox | Hardcoded issue type |
+| Mailbox | Issue type |
 |---|---|
-| `AskHR@librasolutionsgroup.com` | `Emailed request` |
-| `Benefits@librasolutionsgroup.com` | `Benefits` |
+| `AskHR@librasolutionsgroup.com` | `Email Request` |
+| `Benefits@librasolutionsgroup.com` | `Comp & Benefits` |
 
-**These names have never been verified against the live HRD project.** If
-`raiseOnBehalfOf` ever falls back to this path and either name does not
-exist as an issue type in project `HRD`, that mailbox's tickets fail with a
-400 from Jira (recorded as `failed` rows on the `/askhr-bot` messages
-table, retryable — but nothing gets filed until the name is fixed).
+**Confirmed against the live HRD project's createmeta on 2026-09-03.** The
+original placeholders (`Emailed request`, `Benefits`) did **not** match —
+this was caught and fixed after `it-ai@librasolutionsgroup.com` was granted
+Service Desk Team access on HRD and a live `raiseOnBehalfOf` create
+succeeded (`HRD-1326`, deleted immediately as a diagnostic). If HRD's issue
+types are ever renamed, re-verify via
+`GET /rest/api/3/issue/createmeta?projectKeys=HRD&expand=projects.issuetypes`
+and update `CLASSIC_ISSUE_TYPES` accordingly — though in practice this path
+is rarely exercised now that `raiseOnBehalfOf` works (see item 7 below).
 
-Before enabling, an operator with Jira access must confirm **both** names
-exist as issue types in project `HRD`, via either:
+### 5. Jira agent access for the shared service account
 
-- `GET /rest/api/2/issue/createmeta?projectKeys=HRD&expand=projects.issuetypes`
-  (check `projects[0].issuetypes[].name`), or
-- the JSM project admin UI → **Project settings → Issue types**.
+`raiseOnBehalfOf` requires the calling account
+(`it-ai@librasolutionsgroup.com`, the same account behind `JIRA_EMAIL`) to
+be a JSM agent on service desk `73`, not just have generic project access.
+**As of 2026-09-03, this account had neither `CREATE_ISSUES` nor
+`SERVICEDESK_AGENT` on HRD**, despite the original design notes claiming
+otherwise — both `raiseOnBehalfOf` (403) and the classic fallback (400,
+`createmeta` returned zero projects) failed until it was added to the
+**Service Desk Team** role (Project settings → Team → Add agent), which
+grants `BROWSE_PROJECTS` + `CREATE_ISSUES` + `SERVICEDESK_AGENT` together
+on this project's permission scheme. Confirm this role membership is still
+in place before relying on this bot — if it's ever removed, tickets will
+start failing with the same errors, recorded as `failed` rows on the
+`/askhr-bot` messages table (retryable once access is restored).
 
-Record the confirmation here when done:
-
-> Issue-type names confirmed in project HRD on ____________ by
-> ____________ (`Emailed request`: ☐ present, `Benefits`: ☐ present). If
-> either name differs, update the corresponding literal in
-> `backend/askhr_bot_job.py`'s `_create_ticket()` before enabling.
-
-### 5. Spot-check the other hardcoded Jira constants
+### 6. Spot-check the other hardcoded Jira constants
 
 Also in `backend/askhr_bot_job.py`, confirm each of these is still correct
 in the target Jira instance before the first enable:
@@ -102,7 +108,7 @@ A wrong service-desk id or request-type id fails every ticket on the
 `raiseOnBehalfOf` path; a wrong reporter account id files tickets under the
 wrong customer, which is worse than failing because it succeeds silently.
 
-### 6. Sanity checks after enabling, before the cutover below
+### 7. Sanity checks after enabling, before the cutover below
 
 - Watch `/askhr-bot` for the first couple of cycles: run rows should appear
   for both mailboxes, and `reporter_mode` should settle on

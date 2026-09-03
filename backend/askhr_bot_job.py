@@ -38,6 +38,13 @@ REPORTER_ACCOUNT_IDS: dict[str, str] = {
     "askhr": "qm:43cd1b99-1808-44a4-95b1-09e2c82c645a:9528d568-c455-4457-9ce4-edd8d58b218c",
     "benefits": "qm:43cd1b99-1808-44a4-95b1-09e2c82c645a:5f896e59-af49-457a-a456-edaa7515d98a",
 }
+# Classic-fallback issue type names, confirmed against the live HRD project's
+# createmeta on 2026-09-03 — these are display names, not IDs, and Jira has
+# no stable ID to key off here without a second lookup.
+CLASSIC_ISSUE_TYPES: dict[str, str] = {
+    "askhr": "Email Request",
+    "benefits": "Comp & Benefits",
+}
 
 _TRANSPORT_RULE_IDENTITY = "Forward External Mail to Jira - AskHR"
 
@@ -306,7 +313,7 @@ class AskHrBotJob:
         if mode == "classic_reporter_field":
             issue = self._jira.create_issue_with_reporter(
                 project_key=JSM_PROJECT_KEY,
-                issue_type="Emailed request" if mailbox == "askhr" else "Benefits",
+                issue_type=CLASSIC_ISSUE_TYPES[mailbox],
                 summary=summary,
                 description=description,
                 reporter_account_id=reporter_account_id,
@@ -340,7 +347,7 @@ class AskHrBotJob:
                 raise
             issue = self._jira.create_issue_with_reporter(
                 project_key=JSM_PROJECT_KEY,
-                issue_type="Emailed request" if mailbox == "askhr" else "Benefits",
+                issue_type=CLASSIC_ISSUE_TYPES[mailbox],
                 summary=summary,
                 description=description,
                 reporter_account_id=reporter_account_id,
