@@ -468,6 +468,14 @@ export default function Layout() {
               {branding.scope === "azure" && <AzureQuickJump />}
             </div>
           </>
+        ) : branding.scope === "hrapp" ? (
+          // hrapp is not a helpdesk queue (site_context.issue_matches_scope()
+          // returns False for it), so it must never render the Jira
+          // issue-cache widget — least of all its refresh-trigger controls for
+          // the shared Redis-backed cache. Same rationale as azure/security
+          // above, which get the Azure status bar instead; hrapp has no
+          // equivalent status widget today.
+          null
         ) : (
           <CacheStatusBar />
         )}
