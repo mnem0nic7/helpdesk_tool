@@ -5,7 +5,7 @@
 import /etc/caddy/active_upstreams.caddy
 import /etc/caddy/activity_active_upstreams.caddy
 
-it-app.movedocs.com, oasisdev.movedocs.com, azure.movedocs.com, security.movedocs.com {
+it-app.movedocs.com, oasisdev.movedocs.com, azure.movedocs.com, security.movedocs.com, hrapp.movedocs.com {
 	tls {
 		issuer acme {
 			dns cloudflare {env.CLOUDFLARE_API_TOKEN}
