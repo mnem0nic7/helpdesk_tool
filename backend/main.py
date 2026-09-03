@@ -50,6 +50,7 @@ from routes_ad import router as ad_router
 from routes_deactivation_schedule import router as deactivation_schedule_router
 from routes_password_expiry_notifier import router as password_expiry_notifier_router
 from routes_quarantine_release import router as quarantine_release_router
+from routes_askhr_bot import router as askhr_bot_router
 from deactivation_schedule import deactivation_schedule as _deactivation_schedule_store
 from password_expiry_notifier import password_expiry_notifier as _password_expiry_notifier
 from quarantine_release_job import quarantine_release_job as _quarantine_release_job
@@ -477,6 +478,7 @@ app.include_router(ad_router)
 app.include_router(deactivation_schedule_router)
 app.include_router(password_expiry_notifier_router)
 app.include_router(quarantine_release_router)
+app.include_router(askhr_bot_router)
 
 # ---------------------------------------------------------------------------
 # Routes
