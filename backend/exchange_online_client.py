@@ -143,6 +143,7 @@ Connect-ExchangeOnline `
     'Remove-DistributionGroupMember',
     'Get-QuarantineMessage',
     'Release-QuarantineMessage',
+    'Get-TransportRule',
     'Disconnect-ExchangeOnline'
   ) | Out-Null
 try {{
@@ -699,3 +700,32 @@ Release-QuarantineMessage -Identity $identity -ReleaseToAll -Confirm:$false
             "identity": message_identity,
             "released": bool(payload.get("released", True)),
         }
+
+    def get_transport_rule_domains(self, rule_identity: str) -> list[str]:
+        """Return the ExceptIfSenderDomainIs list for a transport rule.
+
+        This is the authoritative source for "internal/vanity domain" lists used
+        elsewhere (e.g. the AskHR bot's trusted-domain filter) so callers never
+        hardcode a copy that drifts from the real transport rule.
+        """
+        identity = str(rule_identity or "").strip()
+        if not identity:
+            raise ExchangeOnlinePowerShellError("rule_identity is required")
+        script = """
+$ruleIdentity = $env:TR_RULE_IDENTITY
+$rule = Get-TransportRule -Identity $ruleIdentity
+$domains = @($rule.ExceptIfSenderDomainIs)
+@{
+  domains = $domains
+} | ConvertTo-Json -Depth 4 -Compress
+"""
+        payload = self._run_script(script.strip(), extra_env={"TR_RULE_IDENTITY": identity})
+        domains = payload.get("domains") if isinstance(payload, dict) else []
+        if isinstance(domains, str):
+            domains = [domains]
+        seen: list[str] = []
+        for domain in domains or []:
+            normalized = str(domain or "").strip().lower()
+            if normalized and normalized not in seen:
+                seen.append(normalized)
+        return seen

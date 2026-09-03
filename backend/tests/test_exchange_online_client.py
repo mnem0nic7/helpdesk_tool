@@ -372,3 +372,49 @@ def test_sanitize_powershell_error_text_removes_ansi_sequences():
     cleaned = _sanitize_powershell_error_text(raw)
 
     assert cleaned == "Get-EXORecipientPermission: Something failed\n\nLine |"
+
+
+def test_run_script_command_name_allow_list_includes_get_transport_rule(monkeypatch):
+    client = ExchangeOnlinePowerShellClient(
+        azure_client=StubAzureClient(), organization_override="contoso.onmicrosoft.com"
+    )
+    monkeypatch.setattr("exchange_online_client.shutil.which", lambda name: "/usr/bin/pwsh")
+    captured: dict[str, str] = {}
+
+    def fake_popen(args, **kwargs):
+        captured["script"] = Path(args[-1]).read_text()
+        return FakeProcess()
+
+    monkeypatch.setattr("exchange_online_client.subprocess.Popen", fake_popen)
+
+    client._run_script("Get-Mailbox -Identity 'x'")
+
+    assert "'Get-TransportRule'" in captured["script"]
+
+
+def test_get_transport_rule_domains_builds_correct_script_and_normalizes(monkeypatch):
+    client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
+    captured: dict[str, object] = {}
+
+    def fake_run_script(script_body, *, extra_env=None, timeout_seconds=None, cancel_requested=None):
+        captured["script_body"] = script_body
+        captured["extra_env"] = extra_env or {}
+        return {"domains": ["Example.com", "PARTNER.org", "example.com"]}
+
+    monkeypatch.setattr(client, "_run_script", fake_run_script)
+
+    result = client.get_transport_rule_domains("Forward External Mail to Jira - AskHR")
+
+    assert result == ["example.com", "partner.org"]
+    assert captured["extra_env"] == {"TR_RULE_IDENTITY": "Forward External Mail to Jira - AskHR"}
+    assert "Get-TransportRule" in captured["script_body"]
+    assert "ExceptIfSenderDomainIs" in captured["script_body"]
+
+
+def test_get_transport_rule_domains_requires_rule_identity():
+    client = ExchangeOnlinePowerShellClient(azure_client=StubAzureClient())
+    try:
+        client.get_transport_rule_domains("")
+        assert False, "expected ExchangeOnlinePowerShellError"
+    except ExchangeOnlinePowerShellError:
+        pass
