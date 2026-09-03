@@ -422,3 +422,6 @@ PASSWORD_EXPIRY_NOTIFY_DAYS_BEFORE: int = int(os.getenv("PASSWORD_EXPIRY_NOTIFY_
 
 # Quarantine auto-release job
 QUARANTINE_RELEASE_DEFAULT_DOMAINS: str = os.getenv("QUARANTINE_RELEASE_DEFAULT_DOMAINS", "complexlegal.com").strip()
+
+# AskHR/Benefits bot
+ASKHR_BOT_ENABLED_DEFAULT: bool = _env_bool("ASKHR_BOT_ENABLED_DEFAULT", "0")
