@@ -173,6 +173,15 @@ class AskHrBotJob:
                 CREATE INDEX IF NOT EXISTS idx_askhr_bot_messages_mailbox_received
                     ON askhr_bot_messages (mailbox, received_at)
             """)
+            # Keep byte-for-byte identical to
+            # storage_migrations/0030_askhr_bot_customer_accounts.sql.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS askhr_bot_customer_accounts (
+                    sender_email    TEXT PRIMARY KEY,
+                    jira_account_id TEXT NOT NULL,
+                    created_at      TEXT NOT NULL
+                )
+            """)
 
     # ------------------------------------------------------------------
     # Settings
@@ -301,12 +310,74 @@ class AskHrBotJob:
             f"on {message['received_at']}\n\n{message['body']}"
         )
 
+    def _cached_customer_account_id(self, email: str, conn: sqlite3.Connection) -> str | None:
+        ph = self._placeholder()
+        row = conn.execute(
+            f"SELECT jira_account_id FROM askhr_bot_customer_accounts WHERE sender_email = {ph}",
+            (email,),
+        ).fetchone()
+        return str(row["jira_account_id"]) if row is not None else None
+
+    def _cache_customer_account_id(self, email: str, account_id: str, conn: sqlite3.Connection) -> None:
+        ph = self._placeholder()
+        conn.execute(
+            f"INSERT INTO askhr_bot_customer_accounts (sender_email, jira_account_id, created_at) "
+            f"VALUES ({ph},{ph},{ph}) "
+            f"ON CONFLICT (sender_email) DO UPDATE SET jira_account_id = excluded.jira_account_id",
+            (email, account_id, _utcnow().isoformat()),
+        )
+
+    def _resolve_customer_account_id(self, email: str, display_name: str) -> str:
+        """Get-or-create a JSM customer account for the sender, so they can be
+        set as the ticket reporter. Raises on any failure to resolve one --
+        callers fall back to the generic AskHR/Benefits reporter identity.
+        """
+        with self._conn() as conn:
+            cached = self._cached_customer_account_id(email, conn)
+        if cached:
+            return cached
+
+        try:
+            customer = self._jira.create_customer(
+                email=email, display_name=display_name, strict_conflict_status_code=True
+            )
+            account_id = str(customer["accountId"])
+        except requests.exceptions.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code != 409:
+                raise
+            # strict_conflict_status_code=True gets a clean 409 for "already
+            # exists", but the response doesn't include the existing
+            # accountId, so fall back to a best-effort search -- see
+            # find_user_account_id_by_email's docstring for why a miss here
+            # isn't conclusive.
+            account_id = self._jira.find_user_account_id_by_email(email)
+            if not account_id:
+                raise RuntimeError(
+                    f"customer already exists for {email!r} but could not be found via search"
+                ) from exc
+
+        with self._conn() as conn:
+            self._cache_customer_account_id(email, account_id, conn)
+        return account_id
+
     def _create_ticket(self, mailbox: str, message: dict[str, Any]) -> str:
         settings = self._get_settings()
         mode = settings["reporter_mode"]
         service_desk_id = JSM_SERVICE_DESK_ID
         request_type_id = MAILBOXES[mailbox]["request_type_id"]
-        reporter_account_id = REPORTER_ACCOUNT_IDS[mailbox]
+        try:
+            reporter_account_id = self._resolve_customer_account_id(
+                message["sender_email"], message["sender_name"]
+            )
+        except Exception:
+            logger.warning(
+                "AskHR bot: could not resolve a customer account for sender %r; "
+                "falling back to the %s reporter identity",
+                message["sender_email"],
+                mailbox,
+            )
+            reporter_account_id = REPORTER_ACCOUNT_IDS[mailbox]
         summary = message["subject"]
         description = self._build_description(message)
 

@@ -443,3 +443,50 @@ def test_find_issue_by_internet_message_id_escapes_embedded_quotes():
     payload = client.session.post.call_args.kwargs["json"]
     assert '\\"' in payload["jql"]
     assert '<abc"@mail.example.com>' not in payload["jql"]
+
+
+def test_create_customer_raises_http_error_with_strict_conflict_status_code():
+    """strict_conflict_status_code=True gets a clean 409 for "already
+    exists" instead of an ambiguous 400 -- confirmed against the real HRD
+    project on 2026-09-03."""
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = False
+    response.status_code = 409
+    response.reason = "Conflict"
+    response.json.return_value = {"errorMessage": "An account already exists for this email"}
+    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    try:
+        client.create_customer(email="jane@example.com", display_name="Jane Doe", strict_conflict_status_code=True)
+        assert False, "expected an HTTPError"
+    except requests.HTTPError as exc:
+        assert exc.response.status_code == 409
+    params = client.session.post.call_args.kwargs["params"]
+    assert params == {"strictConflictStatusCode": "true"}
+
+
+def test_find_user_account_id_by_email_returns_first_match():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = [{"accountId": "qm:tenant:existing-id", "emailAddress": "jane@example.com"}]
+    client.session.get = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    account_id = client.find_user_account_id_by_email("jane@example.com")
+
+    assert account_id == "qm:tenant:existing-id"
+    url = client.session.get.call_args.args[0]
+    params = client.session.get.call_args.kwargs["params"]
+    assert url == "https://example.atlassian.net/rest/api/3/user/search"
+    assert params == {"query": "jane@example.com"}
+
+
+def test_find_user_account_id_by_email_returns_none_when_empty():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = []
+    client.session.get = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    assert client.find_user_account_id_by_email("nobody@example.com") is None

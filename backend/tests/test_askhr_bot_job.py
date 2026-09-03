@@ -167,6 +167,7 @@ def test_create_or_attach_ticket_probes_and_caches_raise_on_behalf_of(monkeypatc
     mock_jira = MagicMock()
     mock_jira.find_issue_by_internet_message_id.return_value = None
     mock_jira.create_request.return_value = {"issueKey": "HRD-10"}
+    mock_jira.create_customer.side_effect = RuntimeError("customer resolution not under test here")
     mock_azure = MagicMock()
     mock_azure.graph_raw_request.return_value = MagicMock(status_code=200, content=b"raw-eml-bytes")
     monkeypatch.setattr(job, "_jira", mock_jira)
@@ -193,6 +194,7 @@ def test_create_or_attach_ticket_falls_back_to_classic_reporter_on_403(monkeypat
     forbidden = requests.exceptions.HTTPError(response=MagicMock(status_code=403))
     mock_jira.create_request.side_effect = forbidden
     mock_jira.create_issue_with_reporter.return_value = {"key": "HRD-11"}
+    mock_jira.create_customer.side_effect = RuntimeError("customer resolution not under test here")
     mock_azure = MagicMock()
     mock_azure.graph_raw_request.return_value = MagicMock(status_code=200, content=b"raw-eml-bytes")
     monkeypatch.setattr(job, "_jira", mock_jira)
@@ -227,6 +229,7 @@ def test_create_or_attach_ticket_uses_cached_reporter_mode_without_probing(monke
     mock_jira = MagicMock()
     mock_jira.find_issue_by_internet_message_id.return_value = None
     mock_jira.create_issue_with_reporter.return_value = {"key": "HRD-12"}
+    mock_jira.create_customer.side_effect = RuntimeError("customer resolution not under test here")
     mock_azure = MagicMock()
     mock_azure.graph_raw_request.return_value = MagicMock(status_code=200, content=b"raw-eml-bytes")
     monkeypatch.setattr(job, "_jira", mock_jira)
@@ -293,6 +296,7 @@ def test_create_or_attach_ticket_records_attachment_failure_but_keeps_issue_key(
     mock_jira = MagicMock()
     mock_jira.find_issue_by_internet_message_id.return_value = None
     mock_jira.create_request.return_value = {"issueKey": "HRD-13"}
+    mock_jira.create_customer.side_effect = RuntimeError("customer resolution not under test here")
     mock_azure = MagicMock()
     mock_azure.graph_raw_request.side_effect = RuntimeError("graph timeout")
     monkeypatch.setattr(job, "_jira", mock_jira)
@@ -360,6 +364,155 @@ def test_attach_email_does_not_send_json_content_type_for_multipart_upload(monke
     sent_content_type = captured["headers"].get("Content-Type", "")
     assert sent_content_type.startswith("multipart/form-data; boundary=")
     assert b"raw-eml-bytes" in captured["body"]
+
+
+def test_resolve_customer_account_id_creates_and_caches_new_sender():
+    job = _fresh_job()
+
+    mock_jira = MagicMock()
+    mock_jira.create_customer.return_value = {"accountId": "qm:tenant:new-customer-id"}
+    job._jira = mock_jira
+
+    account_id = job._resolve_customer_account_id("jane@example.com", "Jane Doe")
+
+    assert account_id == "qm:tenant:new-customer-id"
+    mock_jira.create_customer.assert_called_once_with(
+        email="jane@example.com", display_name="Jane Doe", strict_conflict_status_code=True
+    )
+    with job._sqlite_conn() as conn:
+        row = conn.execute(
+            "SELECT jira_account_id FROM askhr_bot_customer_accounts WHERE sender_email = ?",
+            ("jane@example.com",),
+        ).fetchone()
+    assert row["jira_account_id"] == "qm:tenant:new-customer-id"
+
+
+def test_resolve_customer_account_id_uses_local_cache_without_calling_jira():
+    job = _fresh_job()
+    with job._sqlite_conn() as conn:
+        conn.execute(
+            "INSERT INTO askhr_bot_customer_accounts (sender_email, jira_account_id, created_at) "
+            "VALUES ('jane@example.com', 'qm:tenant:cached-id', '2026-09-01T00:00:00+00:00')"
+        )
+
+    mock_jira = MagicMock()
+    job._jira = mock_jira
+
+    account_id = job._resolve_customer_account_id("jane@example.com", "Jane Doe")
+
+    assert account_id == "qm:tenant:cached-id"
+    mock_jira.create_customer.assert_not_called()
+
+
+def test_resolve_customer_account_id_falls_back_to_search_when_already_exists(monkeypatch):
+    import requests
+
+    job = _fresh_job()
+
+    mock_jira = MagicMock()
+    already_exists = requests.exceptions.HTTPError(response=MagicMock(status_code=409))
+    mock_jira.create_customer.side_effect = already_exists
+    mock_jira.find_user_account_id_by_email.return_value = "qm:tenant:existing-id"
+    job._jira = mock_jira
+
+    account_id = job._resolve_customer_account_id("jane@example.com", "Jane Doe")
+
+    assert account_id == "qm:tenant:existing-id"
+    mock_jira.find_user_account_id_by_email.assert_called_once_with("jane@example.com")
+    with job._sqlite_conn() as conn:
+        row = conn.execute(
+            "SELECT jira_account_id FROM askhr_bot_customer_accounts WHERE sender_email = ?",
+            ("jane@example.com",),
+        ).fetchone()
+    assert row["jira_account_id"] == "qm:tenant:existing-id"
+
+
+def test_resolve_customer_account_id_raises_when_already_exists_but_search_is_empty(monkeypatch):
+    """Jira Cloud's user-search index has eventual-consistency lag for
+    recently created accounts, so an "already exists" 409 combined with an
+    empty search is a real, expected outcome -- not a bug -- and must raise
+    so the caller (_create_ticket) falls back to the generic reporter."""
+    import requests
+
+    job = _fresh_job()
+
+    mock_jira = MagicMock()
+    already_exists = requests.exceptions.HTTPError(response=MagicMock(status_code=409))
+    mock_jira.create_customer.side_effect = already_exists
+    mock_jira.find_user_account_id_by_email.return_value = None
+    job._jira = mock_jira
+
+    try:
+        job._resolve_customer_account_id("jane@example.com", "Jane Doe")
+        assert False, "expected an exception"
+    except RuntimeError:
+        pass
+
+
+def test_resolve_customer_account_id_reraises_non_409_errors():
+    import requests
+
+    job = _fresh_job()
+
+    mock_jira = MagicMock()
+    server_error = requests.exceptions.HTTPError(response=MagicMock(status_code=500))
+    mock_jira.create_customer.side_effect = server_error
+    job._jira = mock_jira
+
+    try:
+        job._resolve_customer_account_id("jane@example.com", "Jane Doe")
+        assert False, "expected the 500 to propagate"
+    except requests.exceptions.HTTPError:
+        pass
+    mock_jira.find_user_account_id_by_email.assert_not_called()
+
+
+def test_create_ticket_uses_resolved_sender_as_reporter():
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(reporter_mode="raise_on_behalf_of")
+
+    mock_jira = MagicMock()
+    mock_jira.create_customer.return_value = {"accountId": "qm:tenant:sender-id"}
+    mock_jira.create_request.return_value = {"issueKey": "HRD-50"}
+    job._jira = mock_jira
+
+    issue_key = job._create_ticket("askhr", _sample_message())
+
+    assert issue_key == "HRD-50"
+    import askhr_bot_job as job_module
+
+    mock_jira.create_request.assert_called_once_with(
+        service_desk_id=job_module.JSM_SERVICE_DESK_ID,
+        request_type_id="420",
+        raise_on_behalf_of="qm:tenant:sender-id",
+        summary=_sample_message()["subject"],
+        description=job._build_description(_sample_message()),
+    )
+
+
+def test_create_ticket_falls_back_to_generic_reporter_when_resolution_fails():
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(reporter_mode="raise_on_behalf_of")
+
+    mock_jira = MagicMock()
+    mock_jira.create_customer.side_effect = RuntimeError("boom")
+    mock_jira.create_request.return_value = {"issueKey": "HRD-51"}
+    job._jira = mock_jira
+
+    issue_key = job._create_ticket("askhr", _sample_message())
+
+    assert issue_key == "HRD-51"
+    import askhr_bot_job as job_module
+
+    mock_jira.create_request.assert_called_once_with(
+        service_desk_id=job_module.JSM_SERVICE_DESK_ID,
+        request_type_id="420",
+        raise_on_behalf_of=job_module.REPORTER_ACCOUNT_IDS["askhr"],
+        summary=_sample_message()["subject"],
+        description=job._build_description(_sample_message()),
+    )
 
 
 def test_should_process_skips_trusted_domain_and_allows_payroll_bypass():

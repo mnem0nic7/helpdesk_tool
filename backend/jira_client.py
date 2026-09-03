@@ -790,6 +790,23 @@ class JiraClient:
         issues = resp.json().get("issues") or []
         return str(issues[0]["key"]) if issues else None
 
+    def find_user_account_id_by_email(self, email: str) -> str | None:
+        """GET /rest/api/3/user/search?query=email -- best-effort lookup.
+
+        Jira Cloud's user-search index has eventual-consistency lag for
+        recently created accounts, so a miss here does not prove the
+        account doesn't exist -- callers should treat None as "couldn't
+        confirm", not "definitely absent".
+        """
+        resp = self.session.get(
+            f"{self.base_url}/rest/api/3/user/search",
+            params={"query": email},
+            timeout=self._TIMEOUT,
+        )
+        self._raise_for_status(resp)
+        users = resp.json() or []
+        return str(users[0]["accountId"]) if users else None
+
     def add_comment(self, key: str, body_text: str) -> dict[str, Any]:
         """POST /rest/api/3/issue/{key}/comment using ADF format."""
         validate_jira_key(key)
