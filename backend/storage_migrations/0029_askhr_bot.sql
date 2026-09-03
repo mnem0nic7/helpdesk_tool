@@ -23,17 +23,21 @@ CREATE TABLE IF NOT EXISTS askhr_bot_runs (
     failed_count     INTEGER NOT NULL DEFAULT 0
 );
 
+-- The same email (same Message-ID) can be addressed to both AskHR@ and
+-- Benefits@, and each mailbox must get its own HRD ticket, so the identity of
+-- a row is (mailbox, internet_message_id) -- not internet_message_id alone.
 CREATE TABLE IF NOT EXISTS askhr_bot_messages (
-    internet_message_id TEXT PRIMARY KEY,
-    mailbox              TEXT NOT NULL,
-    graph_message_id     TEXT NOT NULL,
-    subject               TEXT NOT NULL DEFAULT '',
-    sender_email          TEXT NOT NULL DEFAULT '',
-    received_at           TEXT NOT NULL DEFAULT '',
-    status                TEXT NOT NULL,
-    jira_issue_key        TEXT,
-    error                 TEXT,
-    processed_at          TEXT NOT NULL
+    internet_message_id TEXT NOT NULL,
+    mailbox             TEXT NOT NULL,
+    graph_message_id    TEXT NOT NULL,
+    subject             TEXT NOT NULL DEFAULT '',
+    sender_email        TEXT NOT NULL DEFAULT '',
+    received_at         TEXT NOT NULL DEFAULT '',
+    status              TEXT NOT NULL,
+    jira_issue_key      TEXT,
+    error               TEXT,
+    processed_at        TEXT NOT NULL,
+    PRIMARY KEY (mailbox, internet_message_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_askhr_bot_messages_mailbox_received

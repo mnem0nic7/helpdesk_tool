@@ -47,7 +47,10 @@ export default function AskHrBotPage() {
   });
 
   const retryMutation = useMutation({
-    mutationFn: (internetMessageId: string) => api.retryAskHrBotMessage(internetMessageId),
+    // Both parts of the message identity are required: the same email can be
+    // addressed to both AskHR@ and Benefits@, each with its own ticket.
+    mutationFn: (target: { internetMessageId: string; mailbox: string }) =>
+      api.retryAskHrBotMessage(target.internetMessageId, target.mailbox),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["askhr-bot", "messages"] }),
   });
 
@@ -179,7 +182,10 @@ export default function AskHrBotPage() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {(messagesQuery.data?.items ?? []).map((message: AskHrBotMessage) => (
-                <tr key={message.internet_message_id} title={message.error ?? undefined}>
+                <tr
+                  key={`${message.mailbox}:${message.internet_message_id}`}
+                  title={message.error ?? undefined}
+                >
                   <td className="px-3 py-2">{message.mailbox}</td>
                   <td className="px-3 py-2">{message.subject}</td>
                   <td className="px-3 py-2">{message.sender_email}</td>
@@ -192,7 +198,12 @@ export default function AskHrBotPage() {
                     {message.status === "failed" ? (
                       <button
                         type="button"
-                        onClick={() => retryMutation.mutate(message.internet_message_id)}
+                        onClick={() =>
+                          retryMutation.mutate({
+                            internetMessageId: message.internet_message_id,
+                            mailbox: message.mailbox,
+                          })
+                        }
                         disabled={retryMutation.isPending}
                         className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                       >

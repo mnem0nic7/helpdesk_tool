@@ -100,11 +100,70 @@ def test_retry_creates_ticket_for_previously_failed_message(test_client, monkeyp
     )
     monkeypatch.setattr(job, "_azure_client", lambda: __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock())
 
-    resp = test_client.post("/api/askhr-bot/messages/%3Cm1%40mail.example.com%3E/retry")
+    resp = test_client.post("/api/askhr-bot/messages/%3Cm1%40mail.example.com%3E/retry?mailbox=askhr")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "created"
     assert data["jira_issue_key"] == "HRD-40"
+
+
+def test_retry_targets_the_named_mailbox_when_both_have_the_same_message_id(test_client, monkeypatch, tmp_path):
+    """The same email can be addressed to both AskHR@ and Benefits@, so a
+    Message-ID alone doesn't identify a row. The retry route must act on the
+    row for the mailbox the caller named, never the other mailbox's copy.
+    """
+    job = _job_with_settings(tmp_path)
+    with job._sqlite_conn() as conn:
+        for mailbox, graph_id, issue_key in (("askhr", "graph-a", "HRD-50"), ("benefits", "graph-b", "HRD-51")):
+            conn.execute(
+                "INSERT INTO askhr_bot_messages "
+                "(internet_message_id, mailbox, graph_message_id, subject, sender_email, received_at, "
+                "status, jira_issue_key, error, processed_at) "
+                "VALUES ('<dual@mail.example.com>', ?, ?, 'Subject', 'a@example.com', "
+                "'2026-09-03T11:00:00+00:00', 'failed', ?, 'attachment failed: boom', '2026-09-03T11:01:00+00:00')",
+                (mailbox, graph_id, issue_key),
+            )
+    import routes_askhr_bot
+    monkeypatch.setattr(routes_askhr_bot, "askhr_bot_job", job)
+
+    seen: list[tuple[str, str, str | None]] = []
+
+    def fake_create(mailbox, message, existing_issue_key):
+        seen.append((mailbox, message["graph_message_id"], existing_issue_key))
+        return "created", existing_issue_key, None
+
+    monkeypatch.setattr(job, "_create_or_attach_ticket", fake_create)
+
+    resp = test_client.post("/api/askhr-bot/messages/%3Cdual%40mail.example.com%3E/retry?mailbox=benefits")
+    assert resp.status_code == 200
+    assert resp.json()["mailbox"] == "benefits"
+    assert resp.json()["jira_issue_key"] == "HRD-51"
+    # Acted on the benefits row's Graph message, not the AskHR copy's.
+    assert seen == [("benefits", "graph-b", "HRD-51")]
+
+    # The AskHR row is untouched by the benefits retry.
+    with job._sqlite_conn() as conn:
+        rows = {
+            r["mailbox"]: (r["status"], r["jira_issue_key"])
+            for r in conn.execute(
+                "SELECT mailbox, status, jira_issue_key FROM askhr_bot_messages "
+                "WHERE internet_message_id = '<dual@mail.example.com>'"
+            )
+        }
+    assert rows["askhr"] == ("failed", "HRD-50")
+    assert rows["benefits"] == ("created", "HRD-51")
+
+
+def test_retry_requires_a_mailbox(test_client, monkeypatch, tmp_path):
+    job = _job_with_settings(tmp_path)
+    import routes_askhr_bot
+    monkeypatch.setattr(routes_askhr_bot, "askhr_bot_job", job)
+
+    resp = test_client.post("/api/askhr-bot/messages/%3Cm1%40mail.example.com%3E/retry")
+    assert resp.status_code == 422
+
+    resp = test_client.post("/api/askhr-bot/messages/%3Cm1%40mail.example.com%3E/retry?mailbox=nope")
+    assert resp.status_code == 400
 
 
 def test_retry_records_failure_when_create_or_attach_raises(test_client, monkeypatch, tmp_path):
@@ -126,7 +185,7 @@ def test_retry_records_failure_when_create_or_attach_raises(test_client, monkeyp
     monkeypatch.setattr(job, "_create_or_attach_ticket", _raise)
     monkeypatch.setattr(job, "_azure_client", lambda: __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock())
 
-    resp = test_client.post("/api/askhr-bot/messages/%3Cm2%40mail.example.com%3E/retry")
+    resp = test_client.post("/api/askhr-bot/messages/%3Cm2%40mail.example.com%3E/retry?mailbox=askhr")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "failed"

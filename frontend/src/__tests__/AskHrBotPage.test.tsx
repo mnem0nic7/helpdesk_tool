@@ -59,6 +59,7 @@ describe("AskHrBotPage", () => {
     });
     vi.spyOn(api, "retryAskHrBotMessage").mockResolvedValue({
       internet_message_id: "<m1@mail.example.com>",
+      mailbox: "askhr",
       status: "created",
       jira_issue_key: "HRD-1",
       error: null,
@@ -73,11 +74,13 @@ describe("AskHrBotPage", () => {
     expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
   });
 
-  it("calls retry when the Retry button is clicked", async () => {
+  it("calls retry with the row's mailbox so it can never hit the other mailbox's copy", async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
-    await waitFor(() => expect(api.retryAskHrBotMessage).toHaveBeenCalledWith("<m1@mail.example.com>"));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^retry$/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+    await waitFor(() =>
+      expect(api.retryAskHrBotMessage).toHaveBeenCalledWith("<m1@mail.example.com>", "askhr"),
+    );
   });
 
   it("toggles enabled via the settings mutation", async () => {

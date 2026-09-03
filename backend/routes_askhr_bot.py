@@ -121,13 +121,22 @@ async def reset_reporter_mode(user: dict[str, Any] = Depends(require_admin)) -> 
 
 
 @router.post("/messages/{internet_message_id}/retry", dependencies=[Depends(require_admin)])
-async def retry_message(internet_message_id: str) -> dict[str, Any]:
+async def retry_message(
+    internet_message_id: str,
+    # Required, not optional: a Message-ID alone does not identify a row --
+    # the same email can be addressed to both AskHR@ and Benefits@, each with
+    # its own ticket. Forcing the caller to name the mailbox is the only way a
+    # retry can never operate on the other mailbox's copy.
+    mailbox: str = Query(..., description="askhr | benefits"),
+) -> dict[str, Any]:
+    if mailbox not in MAILBOXES:
+        raise HTTPException(status_code=400, detail=f"Unknown mailbox: {mailbox}")
     ph = askhr_bot_job._placeholder()
     with askhr_bot_job._conn() as conn:
         row = conn.execute(
             f"SELECT mailbox, graph_message_id, subject, sender_email, received_at, jira_issue_key "
-            f"FROM askhr_bot_messages WHERE internet_message_id = {ph}",
-            (internet_message_id,),
+            f"FROM askhr_bot_messages WHERE mailbox = {ph} AND internet_message_id = {ph}",
+            (mailbox, internet_message_id),
         ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -155,6 +164,7 @@ async def retry_message(internet_message_id: str) -> dict[str, Any]:
         )
     return {
         "internet_message_id": internet_message_id,
+        "mailbox": row["mailbox"],
         "status": status,
         "jira_issue_key": issue_key,
         "error": error,

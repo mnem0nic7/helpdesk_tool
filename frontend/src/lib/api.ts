@@ -5271,8 +5271,17 @@ export const api = {
 
   async retryAskHrBotMessage(
     internetMessageId: string,
-  ): Promise<{ internet_message_id: string; status: string; jira_issue_key: string | null; error: string | null }> {
-    const url = `/api/askhr-bot/messages/${encodeURIComponent(internetMessageId)}/retry`;
+    // Required: (mailbox, internet_message_id) is the message identity, since
+    // the same email can be addressed to both AskHR@ and Benefits@.
+    mailbox: string,
+  ): Promise<{
+    internet_message_id: string;
+    mailbox: string;
+    status: string;
+    jira_issue_key: string | null;
+    error: string | null;
+  }> {
+    const url = `/api/askhr-bot/messages/${encodeURIComponent(internetMessageId)}/retry?mailbox=${encodeURIComponent(mailbox)}`;
     const res = await fetch(url, { method: "POST" });
     if (res.status === 401) {
       window.location.href = "/api/auth/login";

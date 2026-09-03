@@ -129,18 +129,24 @@ class AskHrBotJob:
                     failed_count     INTEGER NOT NULL DEFAULT 0
                 )
             """)
+            # Keep this schema byte-for-byte identical to
+            # storage_migrations/0029_askhr_bot.sql -- SQLite and Postgres
+            # schemas must never drift. The primary key is composite because
+            # the same email (same Message-ID) can be addressed to both
+            # AskHR@ and Benefits@, and each mailbox must get its own ticket.
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS askhr_bot_messages (
-                    internet_message_id TEXT PRIMARY KEY,
-                    mailbox              TEXT NOT NULL,
-                    graph_message_id     TEXT NOT NULL,
-                    subject               TEXT NOT NULL DEFAULT '',
-                    sender_email          TEXT NOT NULL DEFAULT '',
-                    received_at           TEXT NOT NULL DEFAULT '',
-                    status                TEXT NOT NULL,
-                    jira_issue_key        TEXT,
-                    error                 TEXT,
-                    processed_at          TEXT NOT NULL
+                    internet_message_id TEXT NOT NULL,
+                    mailbox             TEXT NOT NULL,
+                    graph_message_id    TEXT NOT NULL,
+                    subject             TEXT NOT NULL DEFAULT '',
+                    sender_email        TEXT NOT NULL DEFAULT '',
+                    received_at         TEXT NOT NULL DEFAULT '',
+                    status              TEXT NOT NULL,
+                    jira_issue_key      TEXT,
+                    error               TEXT,
+                    processed_at        TEXT NOT NULL,
+                    PRIMARY KEY (mailbox, internet_message_id)
                 )
             """)
             conn.execute("""
@@ -382,8 +388,9 @@ class AskHrBotJob:
             "(internet_message_id, mailbox, graph_message_id, subject, sender_email, received_at, "
             "status, jira_issue_key, error, processed_at) "
             f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph}) "
-            "ON CONFLICT (internet_message_id) DO UPDATE SET "
-            "status = excluded.status, jira_issue_key = excluded.jira_issue_key, "
+            "ON CONFLICT (mailbox, internet_message_id) DO UPDATE SET "
+            "graph_message_id = excluded.graph_message_id, status = excluded.status, "
+            "jira_issue_key = excluded.jira_issue_key, "
             "error = excluded.error, processed_at = excluded.processed_at"
         )
         conn.execute(
@@ -402,11 +409,18 @@ class AskHrBotJob:
             ),
         )
 
-    def _existing_message_row(self, internet_message_id: str, conn: sqlite3.Connection) -> dict[str, Any] | None:
+    def _existing_message_row(
+        self, mailbox: str, internet_message_id: str, conn: sqlite3.Connection
+    ) -> dict[str, Any] | None:
+        # Scoped by mailbox as well as Message-ID: the same email can land in
+        # both AskHR@ and Benefits@, and each mailbox tracks its own ticket, so
+        # a Message-ID-only lookup would let whichever mailbox is polled second
+        # see the first one's row and silently skip creating its own ticket.
         ph = self._placeholder()
         row = conn.execute(
-            f"SELECT status, jira_issue_key FROM askhr_bot_messages WHERE internet_message_id = {ph}",
-            (internet_message_id,),
+            f"SELECT status, jira_issue_key FROM askhr_bot_messages "
+            f"WHERE mailbox = {ph} AND internet_message_id = {ph}",
+            (mailbox, internet_message_id),
         ).fetchone()
         return dict(row) if row is not None else None
 
@@ -474,7 +488,7 @@ class AskHrBotJob:
             }
 
             with self._conn() as conn:
-                existing = self._existing_message_row(internet_message_id, conn)
+                existing = self._existing_message_row(mailbox, internet_message_id, conn)
 
             if existing and existing["status"] == "created":
                 continue

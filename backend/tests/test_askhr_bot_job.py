@@ -453,6 +453,80 @@ async def test_run_cycle_one_message_failure_does_not_abort_the_batch(monkeypatc
     assert statuses["<m2@mail.example.com>"] == "created"
 
 
+async def test_same_message_id_in_both_mailboxes_gets_independent_rows_and_attempts(monkeypatch):
+    """A message addressed to both AskHR@ and Benefits@ arrives in both
+    Inboxes with the same internetMessageId. Each mailbox must get its own
+    detail row and its own ticket-creation attempt -- with the old
+    Message-ID-only primary key, whichever mailbox was polled second saw the
+    first one's row (status='created') and silently skipped its own ticket.
+    """
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(enabled=True, trusted_domains=["librasolutionsgroup.com"])
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
+
+    # Same internetMessageId in both mailboxes, different Graph message ids
+    # (each mailbox stores its own copy of the mail).
+    def graph_paged_get(path, params=None):
+        graph_id = "graph-askhr" if "AskHR@" in path else "graph-benefits"
+        return [{
+            "id": graph_id,
+            "internetMessageId": "<dual@mail.example.com>",
+            "subject": "Question for HR",
+            "receivedDateTime": "2026-09-03T11:00:00Z",
+            "from": {"emailAddress": {"address": "outsider@example.com", "name": "Outsider"}},
+            "body": {"content": "Please help"},
+        }]
+
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.side_effect = graph_paged_get
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+
+    attempts = []
+
+    def fake_create(mailbox, message, existing_issue_key):
+        attempts.append((mailbox, message["graph_message_id"]))
+        return "created", f"HRD-{len(attempts)}", None
+
+    monkeypatch.setattr(job, "_create_or_attach_ticket", fake_create)
+
+    await job.run_cycle()
+
+    # One independent creation attempt per mailbox, each with that mailbox's
+    # own Graph message id.
+    assert sorted(attempts) == [("askhr", "graph-askhr"), ("benefits", "graph-benefits")]
+
+    with job._sqlite_conn() as conn:
+        rows = {
+            r["mailbox"]: (r["graph_message_id"], r["status"], r["jira_issue_key"])
+            for r in conn.execute(
+                "SELECT mailbox, graph_message_id, status, jira_issue_key FROM askhr_bot_messages "
+                "WHERE internet_message_id = '<dual@mail.example.com>'"
+            )
+        }
+    assert set(rows) == {"askhr", "benefits"}
+    assert rows["askhr"][0] == "graph-askhr"
+    assert rows["benefits"][0] == "graph-benefits"
+    assert rows["askhr"][2] != rows["benefits"][2]
+
+
+async def test_existing_message_row_is_scoped_to_the_mailbox():
+    job = _fresh_job()
+    job._get_settings()
+    message = _sample_message(internet_message_id="<dual@mail.example.com>")
+
+    with job._conn() as conn:
+        job._record_message(
+            mailbox="askhr", message=message, status="created",
+            jira_issue_key="HRD-60", error=None, conn=conn,
+        )
+
+    with job._conn() as conn:
+        assert job._existing_message_row("askhr", "<dual@mail.example.com>", conn)["jira_issue_key"] == "HRD-60"
+        # The benefits mailbox has never seen this message -> no row.
+        assert job._existing_message_row("benefits", "<dual@mail.example.com>", conn) is None
+
+
 async def test_poll_mailbox_lookback_window_handles_z_suffixed_checkpoint(monkeypatch):
     """Regression guard for the known Graph-timestamp risk: receivedDateTime (and
     any checkpoint derived from it) is UTC with a literal 'Z' suffix. The repo's
