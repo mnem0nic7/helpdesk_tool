@@ -41,6 +41,19 @@ REPORTER_ACCOUNT_IDS: dict[str, str] = {
 
 _TRANSPORT_RULE_IDENTITY = "Forward External Mail to Jira - AskHR"
 
+# Hard upper bound on how far back a single poll may reach. `since` is normally
+# checkpoint - lookback, which is a few minutes; but a checkpoint left far in
+# the past (bot disabled for days, leader down, long deploy freeze) would make
+# one cycle pull the entire intervening Inbox through graph_paged_get's
+# unbounded nextLink following and try to file a ticket for every message --
+# the same failure shape as the 2026-09-01 quarantine-sweep timeout (see
+# CLAUDE.md's Historical Incidents). 24h is chosen to comfortably cover a
+# same-day outage plus an overnight gap on these moderate-volume mailboxes
+# while still capping the worst case at roughly one day of mail; anything
+# older is deliberately NOT swept and is flagged in the logs for manual
+# handling instead of silently mass-filing.
+_MAX_CATCHUP_HOURS = 24
+
 _SETTINGS_FIELDS = (
     "enabled",
     "poll_interval_seconds",
@@ -458,10 +471,27 @@ class AskHrBotJob:
         # `.replace("Z", "+00:00")` normalization is required here. See
         # tests/test_askhr_bot_job.py::test_poll_mailbox_lookback_window_handles_z_suffixed_checkpoint
         # for an end-to-end check of this exact path.
+        now = _utcnow()
         if checkpoint:
             since = datetime.fromisoformat(checkpoint) - timedelta(minutes=lookback)
         else:
-            since = _utcnow() - timedelta(minutes=lookback)
+            since = now - timedelta(minutes=lookback)
+        if since.tzinfo is None:
+            # Checkpoints come from Graph receivedDateTime and are always UTC;
+            # a hand-edited or legacy naive value must not break the comparison
+            # against the tz-aware floor below.
+            since = since.replace(tzinfo=timezone.utc)
+        catchup_floor = now - timedelta(hours=_MAX_CATCHUP_HOURS)
+        if since < catchup_floor:
+            logger.warning(
+                "AskHR bot: %s catch-up window clamped from %s to %s (%s hour cap); mail older than "
+                "the cap was NOT swept and may need manual handling",
+                mailbox,
+                since.isoformat(),
+                catchup_floor.isoformat(),
+                _MAX_CATCHUP_HOURS,
+            )
+            since = catchup_floor
         since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         loop = asyncio.get_event_loop()

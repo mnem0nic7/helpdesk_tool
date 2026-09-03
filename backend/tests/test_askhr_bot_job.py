@@ -599,6 +599,76 @@ async def test_poll_mailbox_lookback_window_handles_z_suffixed_checkpoint(monkey
     assert "2026-09-03T09:45:00Z" in filter_clause
 
 
+async def test_poll_mailbox_clamps_a_far_past_checkpoint_to_the_catchup_cap(monkeypatch):
+    """A checkpoint left far in the past (bot disabled for days, leader down)
+    must not make one cycle sweep the whole intervening Inbox -- the same
+    failure shape as the 2026-09-01 quarantine-sweep timeout. The Graph
+    $filter must reflect the clamped window, not the real gap.
+    """
+    import askhr_bot_job as job_module
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 9, 3, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(job_module, "_utcnow", lambda: now)
+
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(
+        enabled=True,
+        trusted_domains=["librasolutionsgroup.com"],
+        trusted_domains_refreshed_at=now.isoformat(),
+        # 10 days stale.
+        askhr_checkpoint_at="2026-08-24T12:00:00+00:00",
+        lookback_minutes=15,
+    )
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
+
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = []
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+
+    await job._poll_mailbox("askhr", job._get_settings())
+
+    _, call_kwargs = mock_azure.graph_paged_get.call_args
+    filter_clause = call_kwargs["params"]["$filter"]
+    # Clamped to now - _MAX_CATCHUP_HOURS (24h) = 2026-09-02T12:00:00Z,
+    # NOT the raw checkpoint-minus-lookback of 2026-08-24T11:45:00Z.
+    assert job_module._MAX_CATCHUP_HOURS == 24
+    assert "2026-09-02T12:00:00Z" in filter_clause
+    assert "2026-08-24" not in filter_clause
+
+
+async def test_poll_mailbox_does_not_clamp_a_recent_checkpoint(monkeypatch):
+    """The cap is a floor, not a fixed window -- a normal recent checkpoint
+    must still produce its own checkpoint-minus-lookback `since`.
+    """
+    import askhr_bot_job as job_module
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 9, 3, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(job_module, "_utcnow", lambda: now)
+
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(
+        enabled=True,
+        trusted_domains=["librasolutionsgroup.com"],
+        trusted_domains_refreshed_at=now.isoformat(),
+        askhr_checkpoint_at="2026-09-03T11:50:00+00:00",
+        lookback_minutes=15,
+    )
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
+
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = []
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+
+    await job._poll_mailbox("askhr", job._get_settings())
+
+    _, call_kwargs = mock_azure.graph_paged_get.call_args
+    assert "2026-09-03T11:35:00Z" in call_kwargs["params"]["$filter"]
+
+
 async def test_run_cycle_runs_domain_refresh_off_the_event_loop(monkeypatch):
     """_refresh_trusted_domains_if_needed() can do blocking subprocess I/O
     (Exchange Online PowerShell via pwsh, up to ~240s) when the trusted-domain
