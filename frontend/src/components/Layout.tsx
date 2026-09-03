@@ -89,6 +89,16 @@ const securityNavGroups: NavGroup[] = [
   },
 ];
 
+const hrappNavGroups: NavGroup[] = [
+  {
+    label: "HR",
+    items: [
+      { to: "/", label: "Overview", icon: "hr", end: true },
+      { to: "/askhr-bot", label: "AskHR / Benefits Bot", icon: "hr" },
+    ],
+  },
+];
+
 const _NAV_GROUP_STORAGE_KEY = "security_nav_collapsed";
 
 function SecurityGroupedNav({ pathname }: { pathname: string }) {
@@ -163,6 +173,38 @@ function SecurityGroupedNav({ pathname }: { pathname: string }) {
           </div>
         );
       })}
+    </nav>
+  );
+}
+
+function HrAppGroupedNav({ pathname }: { pathname: string }) {
+  return (
+    <nav className="flex-1 space-y-3 px-3 py-4 overflow-y-auto">
+      {hrappNavGroups.map(group => (
+        <div key={group.label}>
+          <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+            {group.label}
+          </div>
+          <div className="mt-1 space-y-1">
+            {group.items.map(({ to, label, icon, end }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={end ?? (pathname === to)}
+                className={({ isActive }) =>
+                  [
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    isActive ? "bg-slate-700 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white",
+                  ].join(" ")
+                }
+              >
+                <span className="text-base leading-none">{icon}</span>
+                <span>{label}</span>
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      ))}
     </nav>
   );
 }
@@ -353,6 +395,8 @@ export default function Layout() {
         {/* Navigation */}
         {branding.scope === "security" ? (
           <SecurityGroupedNav pathname={location.pathname} />
+        ) : branding.scope === "hrapp" ? (
+          <HrAppGroupedNav pathname={location.pathname} />
         ) : (
           <nav className="flex-1 space-y-1 px-3 py-4">
             {navItems

@@ -46,6 +46,8 @@ const AzureAccountHealthPage = lazy(() => import("./pages/AzureAccountHealthPage
 const AzureVirtualDesktopsPage = lazy(() => import("./pages/AzureVirtualDesktopsPage"));
 const ADManagementPage = lazy(() => import("./pages/ADManagementPage"));
 const PasswordExpiryNotifierPage = lazy(() => import("./pages/PasswordExpiryNotifierPage"));
+const HrAppPage = lazy(() => import("./pages/HrAppPage"));
+const AskHrBotPage = lazy(() => import("./pages/AskHrBotPage"));
 
 function PageFallback() {
   return (
@@ -62,6 +64,7 @@ export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
   const branding = getSiteBranding();
   const isAzureSite = branding.scope === "azure";
   const isSecuritySite = branding.scope === "security";
+  const isHrappSite = branding.scope === "hrapp";
 
   const securityRoutes = (
     <>
@@ -95,6 +98,12 @@ export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
                 <Route path="tools" element={<ToolsPage />} />
                 <Route path="account-health" element={<Navigate to="/security/account-health" replace />} />
                 <Route path="*" element={<Navigate to="/security/agent" replace />} />
+              </>
+            ) : isHrappSite ? (
+              <>
+                <Route index element={<HrAppPage />} />
+                <Route path="askhr-bot" element={<AskHrBotPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
               </>
             ) : isAzureSite ? (
               <>
