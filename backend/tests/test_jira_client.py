@@ -404,6 +404,50 @@ def test_create_issue_with_reporter_posts_classic_issue_payload():
     assert payload["fields"]["reporter"]["id"] == "qm:tenant:askhr-account-id"
 
 
+def test_create_request_passes_an_adf_description_through_untouched():
+    """create_request must accept a pre-built ADF doc (e.g. from the AskHR
+    bot's HTML-to-ADF converter) and send it as-is, rather than treating it
+    as a plain string the way it does today.
+    """
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = {"issueKey": "HRD-3"}
+    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    adf_description = {"version": 1, "type": "doc", "content": [{"type": "paragraph", "content": []}]}
+    client.create_request(
+        service_desk_id="73",
+        request_type_id="420",
+        raise_on_behalf_of="qm:tenant:askhr-account-id",
+        summary="Help with benefits",
+        description=adf_description,
+    )
+
+    payload = client.session.post.call_args.kwargs["json"]
+    assert payload["requestFieldValues"]["description"] == adf_description
+
+
+def test_create_issue_with_reporter_passes_an_adf_description_through_untouched():
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = {"key": "HRD-4"}
+    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+
+    adf_description = {"version": 1, "type": "doc", "content": [{"type": "paragraph", "content": []}]}
+    client.create_issue_with_reporter(
+        project_key="hrd",
+        issue_type="Emailed request",
+        summary="Help with benefits",
+        description=adf_description,
+        reporter_account_id="qm:tenant:askhr-account-id",
+    )
+
+    payload = client.session.post.call_args.kwargs["json"]
+    assert payload["fields"]["description"] == adf_description
+
+
 def test_find_issue_by_internet_message_id_returns_key_when_found():
     client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
     response = MagicMock()

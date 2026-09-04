@@ -8,6 +8,7 @@ No test-mode/dry-run concept: enabled=false means the job does nothing.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ from typing import Any
 import requests
 
 from config import ASKHR_BOT_ENABLED_DEFAULT, DATA_DIR
+from email_html_to_adf import html_to_adf_nodes
 from jira_client import JiraClient
 from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
@@ -60,6 +62,17 @@ _TRANSPORT_RULE_IDENTITY = "Forward External Mail to Jira - AskHR"
 # older is deliberately NOT swept and is flagged in the logs for manual
 # handling instead of silently mass-filing.
 _MAX_CATCHUP_HOURS = 24
+
+# Inline attachments (isInline=True, referenced via cid: in the HTML body) cover
+# both signature-style decoration (small company logos) and real pasted content
+# (screenshots). Only the former should be dropped -- there's no reliable
+# structural signal to tell them apart, so this uses size as a heuristic:
+# signature logos are typically a few KB, pasted screenshots are usually much
+# larger.
+_INLINE_SIGNATURE_MAX_BYTES = 20 * 1024
+# Defensive cap so one oversized attachment can't be decoded into a huge
+# in-memory buffer and thrown at an upload Jira would reject anyway.
+_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 _SETTINGS_FIELDS = (
     "enabled",
@@ -304,11 +317,22 @@ class AskHrBotJob:
 
         return azure_cache.azure_cache._client
 
-    def _build_description(self, message: dict[str, Any]) -> str:
-        return (
+    def _build_description(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Build an ADF description doc: a plain-text header paragraph followed
+        by the email body, converted from HTML (via email_html_to_adf) when
+        Graph reports an HTML body -- see HRD-1333, where the raw HTML string
+        was previously dumped verbatim into the ticket description.
+        """
+        header_text = (
             f"Originally sent by: {message['sender_name']} <{message['sender_email']}> "
-            f"on {message['received_at']}\n\n{message['body']}"
+            f"on {message['received_at']}"
         )
+        header_nodes = self._jira._plain_text_to_adf(header_text)["content"]
+        if message.get("body_content_type") == "html":
+            body_nodes = html_to_adf_nodes(message["body"])
+        else:
+            body_nodes = self._jira._plain_text_to_adf(message["body"])["content"]
+        return {"version": 1, "type": "doc", "content": header_nodes + body_nodes}
 
     def _cached_customer_account_id(self, email: str, conn: sqlite3.Connection) -> str | None:
         ph = self._placeholder()
@@ -426,12 +450,8 @@ class AskHrBotJob:
             self._update_settings(reporter_mode="classic_reporter_field")
             return str(issue["key"])
 
-    def _attach_email(self, mailbox: str, message: dict[str, Any], issue_key: str) -> None:
-        mailbox_address = MAILBOXES[mailbox]["address"]
-        response = self._azure_client().graph_raw_request(
-            "GET", f"users/{mailbox_address}/messages/{message['graph_message_id']}/$value"
-        )
-        files = {"file": (f"{message['internet_message_id']}.eml", response.content, "message/rfc822")}
+    def _upload_attachment(self, issue_key: str, filename: str, content: bytes, content_type: str) -> None:
+        files = {"file": (filename, content, content_type)}
         upload_url = f"{self._jira.base_url}/rest/api/3/issue/{issue_key}/attachments"
         # The JiraClient session sets a *default* `Content-Type: application/json`
         # header at construction. requests.Session.merge_setting() only fills in a
@@ -455,6 +475,68 @@ class AskHrBotJob:
         )
         self._jira._raise_for_status(upload_response)
 
+    def _attach_email(self, mailbox: str, message: dict[str, Any], issue_key: str) -> None:
+        mailbox_address = MAILBOXES[mailbox]["address"]
+        response = self._azure_client().graph_raw_request(
+            "GET", f"users/{mailbox_address}/messages/{message['graph_message_id']}/$value"
+        )
+        self._upload_attachment(issue_key, f"{message['internet_message_id']}.eml", response.content, "message/rfc822")
+
+    def _fetch_real_attachments(self, mailbox: str, message: dict[str, Any]) -> list[dict[str, Any]]:
+        """Download and decode the sender's actual attachments (not the raw
+        .eml) so they show up on the ticket as their own files -- e.g. the
+        receipt PDF/image a requester attached, rather than something only
+        recoverable by opening the .eml audit copy in an email client.
+        Everything happens in memory; nothing is written to local disk, so
+        there's nothing to clean up afterward.
+        """
+        mailbox_address = MAILBOXES[mailbox]["address"]
+        graph_attachments = self._azure_client().graph_paged_get(
+            f"users/{mailbox_address}/messages/{message['graph_message_id']}/attachments"
+        )
+        results: list[dict[str, Any]] = []
+        for attachment in graph_attachments:
+            if attachment.get("@odata.type") != "#microsoft.graph.fileAttachment":
+                # itemAttachment (a forwarded email) and referenceAttachment
+                # (a cloud-storage link) aren't a downloadable file the same
+                # way -- skip rather than guess at handling them.
+                continue
+            content_bytes_b64 = attachment.get("contentBytes")
+            if not content_bytes_b64:
+                continue
+            size = int(attachment.get("size") or 0)
+            if bool(attachment.get("isInline")) and size <= _INLINE_SIGNATURE_MAX_BYTES:
+                continue
+            if size > _MAX_ATTACHMENT_BYTES:
+                logger.warning(
+                    "AskHR bot: skipping oversized attachment %r (%d bytes) for message %r",
+                    attachment.get("name"), size, message["internet_message_id"],
+                )
+                continue
+            results.append({
+                "name": str(attachment.get("name") or "attachment"),
+                "content_type": str(attachment.get("contentType") or "application/octet-stream"),
+                "content": base64.b64decode(content_bytes_b64),
+            })
+        return results
+
+    def _attach_real_attachments(self, mailbox: str, message: dict[str, Any], issue_key: str) -> None:
+        """Best-effort: one failed upload is logged and skipped rather than
+        raised, so a partial failure doesn't mark the whole message 'failed'
+        -- a retry-from-scratch next cycle would re-upload the attachments
+        that already succeeded, duplicating them on the ticket. The .eml
+        audit copy (attached separately in _attach_email) remains the
+        fallback if a specific attachment silently drops here.
+        """
+        for attachment in self._fetch_real_attachments(mailbox, message):
+            try:
+                self._upload_attachment(issue_key, attachment["name"], attachment["content"], attachment["content_type"])
+            except Exception:
+                logger.warning(
+                    "AskHR bot: failed to upload attachment %r to %s; the .eml audit copy still has it",
+                    attachment["name"], issue_key, exc_info=True,
+                )
+
     def _create_or_attach_ticket(
         self, mailbox: str, message: dict[str, Any], *, existing_issue_key: str | None
     ) -> tuple[str, str | None, str | None]:
@@ -469,6 +551,7 @@ class AskHrBotJob:
             self._attach_email(mailbox, message, issue_key)
         except Exception as exc:
             return "failed", issue_key, f"attachment failed: {exc}"
+        self._attach_real_attachments(mailbox, message, issue_key)
         return "created", issue_key, None
 
     # ------------------------------------------------------------------
@@ -584,6 +667,13 @@ class AskHrBotJob:
                     "$select": "id,internetMessageId,subject,receivedDateTime,from,body",
                     "$top": "50",
                 },
+                # Graph defaults body.content to HTML, which _build_description()
+                # now converts into real ADF formatting (see email_html_to_adf.py)
+                # instead of dumping it verbatim -- the earlier fix for HRD-1333
+                # asked Graph for a stripped plain-text body via a `Prefer` header,
+                # but that throws away the formatting entirely, which defeats the
+                # point once we can convert HTML properly. Let Graph's default
+                # (HTML) through so real formatting survives.
             ),
         )
 
@@ -604,6 +694,7 @@ class AskHrBotJob:
                 latest_received_dt = received_dt
 
             sender = graph_message.get("from", {}).get("emailAddress", {})
+            body = graph_message.get("body") or {}
             message = {
                 "internet_message_id": internet_message_id,
                 "graph_message_id": str(graph_message.get("id") or ""),
@@ -611,7 +702,8 @@ class AskHrBotJob:
                 "sender_email": str(sender.get("address") or ""),
                 "sender_name": str(sender.get("name") or ""),
                 "received_at": received_at,
-                "body": str((graph_message.get("body") or {}).get("content") or ""),
+                "body": str(body.get("content") or ""),
+                "body_content_type": str(body.get("contentType") or "text"),
             }
 
             with self._conn() as conn:

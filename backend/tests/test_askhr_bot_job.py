@@ -309,6 +309,63 @@ def test_create_or_attach_ticket_records_attachment_failure_but_keeps_issue_key(
     assert "graph timeout" in error
 
 
+def test_create_or_attach_ticket_uploads_real_attachments_after_the_eml(monkeypatch):
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(reporter_mode="raise_on_behalf_of")
+
+    mock_jira = MagicMock()
+    mock_jira.find_issue_by_internet_message_id.return_value = None
+    mock_jira.create_request.return_value = {"issueKey": "HRD-14"}
+    mock_jira.create_customer.side_effect = RuntimeError("customer resolution not under test here")
+    mock_azure = MagicMock()
+    mock_azure.graph_raw_request.return_value = MagicMock(status_code=200, content=b"raw-eml-bytes")
+    monkeypatch.setattr(job, "_jira", mock_jira)
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+    monkeypatch.setattr(
+        job, "_fetch_real_attachments",
+        lambda mailbox, message: [{"name": "receipt.pdf", "content_type": "application/pdf", "content": b"x"}],
+    )
+
+    status, issue_key, error = job._create_or_attach_ticket("askhr", _sample_message(), existing_issue_key=None)
+
+    assert status == "created"
+    assert issue_key == "HRD-14"
+    assert error is None
+    # One upload for the .eml, one for the real attachment.
+    assert mock_jira.session.post.call_count == 2
+
+
+def test_create_or_attach_ticket_still_reports_created_when_a_real_attachment_fails(monkeypatch):
+    """A failing real-attachment upload is non-fatal to the message status --
+    see _attach_real_attachments' docstring for why a raise here would risk
+    duplicate attachments on retry.
+    """
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(reporter_mode="raise_on_behalf_of")
+
+    mock_jira = MagicMock()
+    mock_jira.find_issue_by_internet_message_id.return_value = None
+    mock_jira.create_request.return_value = {"issueKey": "HRD-15"}
+    mock_jira.create_customer.side_effect = RuntimeError("customer resolution not under test here")
+    mock_azure = MagicMock()
+    mock_azure.graph_raw_request.return_value = MagicMock(status_code=200, content=b"raw-eml-bytes")
+    monkeypatch.setattr(job, "_jira", mock_jira)
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+    monkeypatch.setattr(
+        job, "_fetch_real_attachments",
+        lambda mailbox, message: [{"name": "bad.pdf", "content_type": "application/pdf", "content": b"x"}],
+    )
+    monkeypatch.setattr(job, "_upload_attachment", MagicMock(side_effect=[None, RuntimeError("boom")]))
+
+    status, issue_key, error = job._create_or_attach_ticket("askhr", _sample_message(), existing_issue_key=None)
+
+    assert status == "created"
+    assert issue_key == "HRD-15"
+    assert error is None
+
+
 def test_attach_email_does_not_send_json_content_type_for_multipart_upload(monkeypatch):
     """Guards against the JiraClient session's default Content-Type: application/json
     header corrupting the multipart attachment upload.
@@ -364,6 +421,116 @@ def test_attach_email_does_not_send_json_content_type_for_multipart_upload(monke
     sent_content_type = captured["headers"].get("Content-Type", "")
     assert sent_content_type.startswith("multipart/form-data; boundary=")
     assert b"raw-eml-bytes" in captured["body"]
+
+
+def _fake_file_attachment(**overrides):
+    import base64
+
+    base = {
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        "name": "receipt.pdf",
+        "contentType": "application/pdf",
+        "size": 50_000,
+        "isInline": False,
+        "contentBytes": base64.b64encode(b"pdf-bytes").decode("ascii"),
+    }
+    base.update(overrides)
+    return base
+
+
+def test_fetch_real_attachments_decodes_a_normal_file_attachment():
+    job = _fresh_job()
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = [_fake_file_attachment()]
+
+    with patch.object(job, "_azure_client", return_value=mock_azure):
+        attachments = job._fetch_real_attachments("askhr", _sample_message())
+
+    assert attachments == [{"name": "receipt.pdf", "content_type": "application/pdf", "content": b"pdf-bytes"}]
+
+
+def test_fetch_real_attachments_skips_small_inline_signature_images():
+    job = _fresh_job()
+    small_logo = _fake_file_attachment(name="logo.png", isInline=True, size=5_000)
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = [small_logo]
+
+    with patch.object(job, "_azure_client", return_value=mock_azure):
+        attachments = job._fetch_real_attachments("askhr", _sample_message())
+
+    assert attachments == []
+
+
+def test_fetch_real_attachments_keeps_large_inline_images():
+    """A pasted screenshot is also isInline=True, but it's real content --
+    only small, signature-sized inline images should be dropped.
+    """
+    job = _fresh_job()
+    pasted_screenshot = _fake_file_attachment(name="screenshot.png", isInline=True, size=500_000)
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = [pasted_screenshot]
+
+    with patch.object(job, "_azure_client", return_value=mock_azure):
+        attachments = job._fetch_real_attachments("askhr", _sample_message())
+
+    assert [a["name"] for a in attachments] == ["screenshot.png"]
+
+
+def test_fetch_real_attachments_skips_non_file_attachment_types():
+    job = _fresh_job()
+    item_attachment = {"@odata.type": "#microsoft.graph.itemAttachment", "name": "forwarded.eml"}
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = [item_attachment]
+
+    with patch.object(job, "_azure_client", return_value=mock_azure):
+        attachments = job._fetch_real_attachments("askhr", _sample_message())
+
+    assert attachments == []
+
+
+def test_attach_real_attachments_uploads_each_one():
+    job = _fresh_job()
+    mock_jira = MagicMock()
+    mock_jira.base_url = "https://example.atlassian.net"
+    mock_jira._TIMEOUT = (10, 30)
+    response = MagicMock(status_code=200)
+    mock_jira.session.post.return_value = response
+    mock_jira._raise_for_status = MagicMock()
+    job._jira = mock_jira
+
+    monkeypatch_attachments = [
+        {"name": "receipt.pdf", "content_type": "application/pdf", "content": b"pdf-bytes"},
+        {"name": "receipt2.pdf", "content_type": "application/pdf", "content": b"more-bytes"},
+    ]
+    with patch.object(job, "_fetch_real_attachments", return_value=monkeypatch_attachments):
+        job._attach_real_attachments("askhr", _sample_message(), "HRD-70")
+
+    assert mock_jira.session.post.call_count == 2
+    uploaded_names = [call.kwargs["files"]["file"][0] for call in mock_jira.session.post.call_args_list]
+    assert uploaded_names == ["receipt.pdf", "receipt2.pdf"]
+
+
+def test_attach_real_attachments_skips_a_failing_upload_without_raising():
+    """One bad attachment must not block the rest -- and must not raise,
+    since a raise here would mark the whole message 'failed' and retry from
+    scratch next cycle, re-uploading attachments that already succeeded.
+    """
+    job = _fresh_job()
+    mock_jira = MagicMock()
+    mock_jira.base_url = "https://example.atlassian.net"
+    mock_jira._TIMEOUT = (10, 30)
+    mock_jira.session.post.return_value = MagicMock(status_code=200)
+    mock_jira._raise_for_status = MagicMock(side_effect=[RuntimeError("upload failed"), None])
+    job._jira = mock_jira
+
+    attachments = [
+        {"name": "bad.pdf", "content_type": "application/pdf", "content": b"x"},
+        {"name": "good.pdf", "content_type": "application/pdf", "content": b"y"},
+    ]
+    with patch.object(job, "_fetch_real_attachments", return_value=attachments):
+        job._attach_real_attachments("askhr", _sample_message(), "HRD-71")
+
+    assert mock_jira.session.post.call_count == 2
 
 
 def test_resolve_customer_account_id_creates_and_caches_new_sender():
@@ -465,6 +632,52 @@ def test_resolve_customer_account_id_reraises_non_409_errors():
     except requests.exceptions.HTTPError:
         pass
     mock_jira.find_user_account_id_by_email.assert_not_called()
+
+
+def test_build_description_converts_html_body_to_adf_instead_of_dumping_raw_markup():
+    """Regression guard for HRD-1333: an HTML body must not end up as a
+    literal '<html><head>...' string in the ticket description.
+    """
+    job = _fresh_job()
+    message = _sample_message(
+        body="<p>plain <b>bold</b> text</p>", body_content_type="html",
+        sender_name="Jane Doe", sender_email="jane@example.com", received_at="2026-09-03T09:00:00+00:00",
+    )
+
+    description = job._build_description(message)
+
+    assert description["type"] == "doc"
+    header_paragraph, body_paragraph = description["content"]
+    header_text = "".join(n["text"] for n in header_paragraph["content"] if n["type"] == "text")
+    assert header_text == "Originally sent by: Jane Doe <jane@example.com> on 2026-09-03T09:00:00+00:00"
+    assert body_paragraph == {
+        "type": "paragraph",
+        "content": [
+            {"type": "text", "text": "plain "},
+            {"type": "text", "text": "bold", "marks": [{"type": "strong"}]},
+            {"type": "text", "text": " text"},
+        ],
+    }
+    # No raw HTML tags leaked into the converted body text (the header's
+    # "<jane@example.com>" is expected and not part of what's being guarded).
+    body_text = "".join(n["text"] for n in body_paragraph["content"] if n["type"] == "text")
+    assert "<" not in body_text and ">" not in body_text
+
+
+def test_build_description_treats_plain_text_body_as_plain_text():
+    """Graph reports contentType 'text' for plain-text mail -- that path must
+    keep working exactly like before (no HTML parsing attempted).
+    """
+    job = _fresh_job()
+    message = _sample_message(body="Can someone help me with open enrollment?", body_content_type="text")
+
+    description = job._build_description(message)
+
+    _, body_paragraph = description["content"]
+    assert body_paragraph == {
+        "type": "paragraph",
+        "content": [{"type": "text", "text": "Can someone help me with open enrollment?"}],
+    }
 
 
 def test_create_ticket_uses_resolved_sender_as_reporter():
@@ -673,7 +886,7 @@ async def test_same_message_id_in_both_mailboxes_gets_independent_rows_and_attem
 
     # Same internetMessageId in both mailboxes, different Graph message ids
     # (each mailbox stores its own copy of the mail).
-    def graph_paged_get(path, params=None):
+    def graph_paged_get(path, params=None, headers=None):
         graph_id = "graph-askhr" if "AskHR@" in path else "graph-benefits"
         return [{
             "id": graph_id,
@@ -833,6 +1046,63 @@ async def test_poll_mailbox_does_not_clamp_a_recent_checkpoint(monkeypatch):
 
     _, call_kwargs = mock_azure.graph_paged_get.call_args
     assert "2026-09-03T11:35:00Z" in call_kwargs["params"]["$filter"]
+
+
+async def test_poll_mailbox_does_not_force_graph_to_strip_html_body(monkeypatch):
+    """An earlier fix for HRD-1333 asked Graph for a stripped plain-text body
+    via `Prefer: outlook.body-content-type="text"`. That was reverted once
+    _build_description gained a real HTML-to-ADF converter (email_html_to_adf)
+    -- forcing plain text would throw away formatting entirely, defeating the
+    point. Graph's default (HTML) must be allowed through untouched.
+    """
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(enabled=True, trusted_domains=[], trusted_domains_refreshed_at="2026-09-03T00:00:00+00:00")
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
+
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = []
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+
+    await job._poll_mailbox("askhr", job._get_settings())
+
+    _, call_kwargs = mock_azure.graph_paged_get.call_args
+    assert call_kwargs.get("headers") in (None, {})
+
+
+async def test_poll_mailbox_threads_graph_content_type_into_the_message(monkeypatch):
+    """_create_or_attach_ticket (and therefore _build_description) needs to
+    know whether Graph reported the body as html or text -- verify
+    _poll_mailbox actually passes that through rather than dropping it.
+    """
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(enabled=True, trusted_domains=[], trusted_domains_refreshed_at="2026-09-03T00:00:00+00:00")
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
+
+    graph_message = {
+        "id": "graph-html-1",
+        "internetMessageId": "<html-body@mail.example.com>",
+        "subject": "Receipt",
+        "receivedDateTime": "2026-09-03T11:00:00Z",
+        "from": {"emailAddress": {"address": "outsider@example.com", "name": "Outsider"}},
+        "body": {"contentType": "html", "content": "<p>hi</p>"},
+    }
+    mock_azure = MagicMock()
+    mock_azure.graph_paged_get.return_value = [graph_message]
+    monkeypatch.setattr(job, "_azure_client", lambda: mock_azure)
+
+    seen_messages = []
+
+    def fake_create(mailbox, message, existing_issue_key):
+        seen_messages.append(message)
+        return "created", "HRD-40", None
+
+    monkeypatch.setattr(job, "_create_or_attach_ticket", fake_create)
+
+    await job._poll_mailbox("askhr", job._get_settings())
+
+    assert seen_messages[0]["body_content_type"] == "html"
 
 
 async def test_run_cycle_runs_domain_refresh_off_the_event_loop(monkeypatch):

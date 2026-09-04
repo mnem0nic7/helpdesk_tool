@@ -723,9 +723,14 @@ class JiraClient:
         request_type_id: str,
         raise_on_behalf_of: str,
         summary: str,
-        description: str,
+        description: str | dict[str, Any],
     ) -> dict[str, Any]:
-        """POST /rest/servicedeskapi/request, raising the ticket on behalf of another account."""
+        """POST /rest/servicedeskapi/request, raising the ticket on behalf of another account.
+
+        `description` is sent through untouched, so a pre-built ADF document
+        (e.g. from the AskHR bot's HTML-to-ADF converter) works the same as a
+        plain string.
+        """
         url = f"{self.base_url}/rest/servicedeskapi/request"
         payload = {
             "serviceDeskId": service_desk_id,
@@ -746,13 +751,17 @@ class JiraClient:
         project_key: str,
         issue_type: str,
         summary: str,
-        description: str,
+        description: str | dict[str, Any],
         reporter_account_id: str,
     ) -> dict[str, Any]:
         """POST /rest/api/3/issue with an explicit reporter accountId.
 
         Fallback path for raiseOnBehalfOf when the calling account isn't
         recognized as a JSM agent on the target service desk.
+
+        `description` may be a plain string (converted to a minimal ADF
+        paragraph, as before) or a pre-built ADF document -- e.g. from the
+        AskHR bot's HTML-to-ADF converter -- which is sent through untouched.
         """
         payload_fields: dict[str, Any] = {
             "project": {"key": project_key.strip().upper()},
@@ -760,7 +769,9 @@ class JiraClient:
             "issuetype": {"name": issue_type},
             "reporter": {"id": reporter_account_id},
         }
-        if description.strip():
+        if isinstance(description, dict):
+            payload_fields["description"] = description
+        elif description.strip():
             payload_fields["description"] = self._plain_text_to_adf(description)
         url = f"{self.base_url}/rest/api/3/issue"
         resp = self.session.post(url, json={"fields": payload_fields}, timeout=self._TIMEOUT)
