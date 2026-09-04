@@ -91,12 +91,37 @@ class _EmailHtmlParser(HTMLParser):
         self._flush_paragraph()
 
 
+def _sanitize_list_nesting(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """ADF requires bulletList/orderedList content to consist solely of
+    listItem nodes. Word/Outlook HTML exports sometimes emit a nested <ol>
+    directly inside another <ol> with no intervening <li> -- valid-ish HTML
+    browsers tolerate, but Jira's ADF validator rejects a list that directly
+    contains another list outright (confirmed against HRD-1299/McMorris,
+    where this failed ticket creation with "not valid Atlassian Document
+    Format (ADF) content" -- and since that happens before an issue key
+    exists, no ticket and no .eml audit copy got created either). Wrap any
+    non-listItem child of a list node in a synthetic listItem.
+    """
+    sanitized: list[dict[str, Any]] = []
+    for node in nodes:
+        node = dict(node)
+        if "content" in node:
+            node["content"] = _sanitize_list_nesting(node["content"])
+        if node.get("type") in ("bulletList", "orderedList"):
+            node["content"] = [
+                child if child.get("type") == "listItem" else {"type": "listItem", "content": [child]}
+                for child in node["content"]
+            ]
+        sanitized.append(node)
+    return sanitized
+
+
 def html_to_adf_nodes(html: str) -> list[dict[str, Any]]:
     """Parse an HTML email body into a list of ADF block nodes."""
     parser = _EmailHtmlParser()
     parser.feed(html)
     parser.close()
-    return parser.blocks
+    return _sanitize_list_nesting(parser.blocks)
 
 
 def adf_text_length(nodes: list[dict[str, Any]]) -> int:
