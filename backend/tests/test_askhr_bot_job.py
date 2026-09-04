@@ -680,6 +680,44 @@ def test_build_description_treats_plain_text_body_as_plain_text():
     }
 
 
+def test_build_description_truncates_an_oversized_body_instead_of_failing_jira():
+    """Regression guard for HRD-1299/McMorris: a reply that quotes an entire
+    negotiation thread can exceed Jira's ~32,767-character field limit,
+    which makes ticket creation fail outright with a 400 -- and because
+    creation never got an issue key, the .eml audit copy never gets attached
+    either, so the message is lost until someone manually recovers it from
+    the mailbox. The description body must be capped well under that limit,
+    with a note that the full message wasn't lost (once the ticket exists,
+    _attach_email still attaches the untruncated original).
+    """
+    import askhr_bot_job as job_module
+
+    job = _fresh_job()
+    huge_body = "x" * (job_module._MAX_DESCRIPTION_BODY_CHARS + 5_000)
+    message = _sample_message(body=huge_body, body_content_type="text")
+
+    description = job._build_description(message)
+
+    header_paragraph, *body_paragraphs = description["content"]
+    body_text = "".join(
+        n["text"] for paragraph in body_paragraphs for n in paragraph["content"] if n["type"] == "text"
+    )
+    assert len(body_text) < job_module._MAX_DESCRIPTION_BODY_CHARS + 200
+    assert "truncated" in body_text.lower()
+    assert body_text.startswith("x" * 100)
+
+
+def test_build_description_does_not_truncate_a_normal_sized_body():
+    job = _fresh_job()
+    message = _sample_message(body="A perfectly normal, short message.", body_content_type="text")
+
+    description = job._build_description(message)
+
+    _, body_paragraph = description["content"]
+    body_text = "".join(n["text"] for n in body_paragraph["content"] if n["type"] == "text")
+    assert body_text == "A perfectly normal, short message."
+
+
 def test_create_ticket_uses_resolved_sender_as_reporter():
     job = _fresh_job()
     job._get_settings()
@@ -725,6 +763,42 @@ def test_create_ticket_falls_back_to_generic_reporter_when_resolution_fails():
         raise_on_behalf_of=job_module.REPORTER_ACCOUNT_IDS["askhr"],
         summary=_sample_message()["subject"],
         description=job._build_description(_sample_message()),
+    )
+
+
+def test_fetch_message_from_graph_builds_a_full_message_dict():
+    """Regression guard for the retry route: the DB only stores metadata
+    (subject/sender/timestamps), never the body -- so retrying a
+    previously-failed message must re-fetch the real body (and sender name)
+    from Graph rather than retrying with an empty description.
+    """
+    job = _fresh_job()
+    mock_azure = MagicMock()
+    mock_azure.graph_request.return_value = {
+        "id": "graph-99",
+        "internetMessageId": "<m1@mail.example.com>",
+        "subject": "Re: Separation Information",
+        "receivedDateTime": "2026-09-04T14:14:18Z",
+        "from": {"emailAddress": {"address": "jenny@example.com", "name": "Jenny McMorris"}},
+        "body": {"contentType": "html", "content": "<p>still waiting to hear back</p>"},
+    }
+
+    with patch.object(job, "_azure_client", return_value=mock_azure):
+        message = job._fetch_message_from_graph("askhr", "graph-99")
+
+    assert message == {
+        "internet_message_id": "<m1@mail.example.com>",
+        "graph_message_id": "graph-99",
+        "subject": "Re: Separation Information",
+        "sender_email": "jenny@example.com",
+        "sender_name": "Jenny McMorris",
+        "received_at": "2026-09-04T14:14:18+00:00",
+        "body": "<p>still waiting to hear back</p>",
+        "body_content_type": "html",
+    }
+    mock_azure.graph_request.assert_called_once_with(
+        "GET", "users/AskHR@librasolutionsgroup.com/messages/graph-99",
+        params={"$select": "id,internetMessageId,subject,receivedDateTime,from,body"},
     )
 
 

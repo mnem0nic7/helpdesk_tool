@@ -141,21 +141,24 @@ async def retry_message(
     if row is None:
         raise HTTPException(status_code=404, detail="Message not found")
 
-    message = {
-        "internet_message_id": internet_message_id,
-        "graph_message_id": row["graph_message_id"],
-        "subject": row["subject"],
-        "sender_email": row["sender_email"],
-        "sender_name": row["sender_email"],
-        "received_at": row["received_at"],
-        "body": "",
-    }
     existing_issue_key = row["jira_issue_key"]
     try:
+        # askhr_bot_messages only ever stores metadata, never the body, so a
+        # retry has to re-fetch the live message from Graph -- a stale
+        # in-DB stand-in (previously an empty body) would silently create a
+        # ticket with none of the sender's actual content.
+        message = askhr_bot_job._fetch_message_from_graph(row["mailbox"], row["graph_message_id"])
         status, issue_key, error = askhr_bot_job._create_or_attach_ticket(
             row["mailbox"], message, existing_issue_key=existing_issue_key
         )
     except Exception as exc:
+        message = {
+            "internet_message_id": internet_message_id,
+            "graph_message_id": row["graph_message_id"],
+            "subject": row["subject"],
+            "sender_email": row["sender_email"],
+            "received_at": row["received_at"],
+        }
         status, issue_key, error = "failed", existing_issue_key, str(exc)
     with askhr_bot_job._conn() as conn:
         askhr_bot_job._record_message(

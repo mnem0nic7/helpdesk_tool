@@ -1,7 +1,12 @@
 """Tests for the email HTML -> ADF converter used by the AskHR bot connector."""
 from __future__ import annotations
 
-from email_html_to_adf import html_to_adf_nodes
+from email_html_to_adf import adf_text_length, html_to_adf_nodes
+
+
+def test_adf_text_length_counts_text_across_paragraphs_and_lists():
+    nodes = html_to_adf_nodes("<p>ab</p><ul><li>cde</li></ul>")
+    assert adf_text_length(nodes) == 5
 
 
 def test_plain_paragraph_becomes_a_single_text_node():

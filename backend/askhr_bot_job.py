@@ -20,7 +20,7 @@ from typing import Any
 import requests
 
 from config import ASKHR_BOT_ENABLED_DEFAULT, DATA_DIR
-from email_html_to_adf import html_to_adf_nodes
+from email_html_to_adf import adf_text_length, html_to_adf_nodes
 from jira_client import JiraClient
 from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
 from sqlite_utils import connect_sqlite
@@ -74,6 +74,17 @@ _INLINE_SIGNATURE_MAX_BYTES = 20 * 1024
 # in-memory buffer and thrown at an upload Jira would reject anyway.
 _MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
+# Jira's requestFieldValues.description (and the classic issue description
+# field) reject a body over 32,767 characters with a 400 -- confirmed against
+# HRD-1299/McMorris, where a reply quoting an entire negotiation thread
+# tripped this and silently dropped the message (ticket creation itself
+# failed, so there was no issue key to attach the .eml audit copy to
+# either). Cap well under that limit -- the header paragraph and truncation
+# note need headroom too -- and note the cut so a truncated ticket doesn't
+# read as the complete message.
+_MAX_DESCRIPTION_BODY_CHARS = 30_000
+_TRUNCATION_NOTE = "\n\n[Message truncated -- see the attached .eml for the full original email.]"
+
 _SETTINGS_FIELDS = (
     "enabled",
     "poll_interval_seconds",
@@ -89,6 +100,33 @@ _SETTINGS_FIELDS = (
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _message_dict_from_graph(graph_message: dict[str, Any]) -> dict[str, Any]:
+    """Build the internal message dict from a raw Graph message payload.
+
+    Shared by _poll_mailbox (live polling) and _fetch_message_from_graph (the
+    retry route) so the two paths can't drift apart on which fields get
+    extracted -- that drift is exactly how the retry route ended up retrying
+    with an empty body and the sender's email standing in for their name.
+    """
+    received_raw = str(graph_message.get("receivedDateTime") or "")
+    received_dt = datetime.fromisoformat(received_raw) if received_raw else None
+    # Normalize to "+00:00" (rather than storing the raw "Z" form) so a
+    # checkpoint written here parses identically however it's re-read.
+    received_at = received_dt.isoformat() if received_dt is not None else received_raw
+    sender = graph_message.get("from", {}).get("emailAddress", {})
+    body = graph_message.get("body") or {}
+    return {
+        "internet_message_id": str(graph_message.get("internetMessageId") or "").strip(),
+        "graph_message_id": str(graph_message.get("id") or ""),
+        "subject": str(graph_message.get("subject") or ""),
+        "sender_email": str(sender.get("address") or ""),
+        "sender_name": str(sender.get("name") or ""),
+        "received_at": received_at,
+        "body": str(body.get("content") or ""),
+        "body_content_type": str(body.get("contentType") or "text"),
+    }
 
 
 def _settings_row_to_dict(row: Any) -> dict[str, Any]:
@@ -332,7 +370,28 @@ class AskHrBotJob:
             body_nodes = html_to_adf_nodes(message["body"])
         else:
             body_nodes = self._jira._plain_text_to_adf(message["body"])["content"]
+        if adf_text_length(body_nodes) > _MAX_DESCRIPTION_BODY_CHARS:
+            flat_text = self._flatten_adf_text(body_nodes)
+            truncated_text = flat_text[:_MAX_DESCRIPTION_BODY_CHARS] + _TRUNCATION_NOTE
+            body_nodes = self._jira._plain_text_to_adf(truncated_text)["content"]
         return {"version": 1, "type": "doc", "content": header_nodes + body_nodes}
+
+    @staticmethod
+    def _flatten_adf_text(nodes: list[dict[str, Any]]) -> str:
+        """Collapse ADF block nodes back to plain text for truncation -- once a
+        body is too long to keep formatting is a lost cause anyway, and the
+        untruncated original is still preserved in the .eml attachment.
+        """
+        parts: list[str] = []
+        for node in nodes:
+            node_type = node.get("type")
+            if node_type == "text":
+                parts.append(node.get("text", ""))
+            elif node_type == "hardBreak":
+                parts.append("\n")
+            elif "content" in node:
+                parts.append(AskHrBotJob._flatten_adf_text(node["content"]))
+        return "".join(parts)
 
     def _cached_customer_account_id(self, email: str, conn: sqlite3.Connection) -> str | None:
         ph = self._placeholder()
@@ -537,6 +596,22 @@ class AskHrBotJob:
                     attachment["name"], issue_key, exc_info=True,
                 )
 
+    def _fetch_message_from_graph(self, mailbox: str, graph_message_id: str) -> dict[str, Any]:
+        """Re-fetch a message's current fields, including body, from Graph.
+
+        askhr_bot_messages only ever stores metadata (subject/sender/status),
+        never the body -- the manual /retry route used to hardcode an empty
+        body for exactly that reason, silently producing a ticket with no
+        real description on retry. This rebuilds a real message dict the same
+        way _poll_mailbox does (via _message_dict_from_graph).
+        """
+        mailbox_address = MAILBOXES[mailbox]["address"]
+        graph_message = self._azure_client().graph_request(
+            "GET", f"users/{mailbox_address}/messages/{graph_message_id}",
+            params={"$select": "id,internetMessageId,subject,receivedDateTime,from,body"},
+        )
+        return _message_dict_from_graph(graph_message)
+
     def _create_or_attach_ticket(
         self, mailbox: str, message: dict[str, Any], *, existing_issue_key: str | None
     ) -> tuple[str, str | None, str | None]:
@@ -682,29 +757,14 @@ class AskHrBotJob:
         latest_received_dt: datetime | None = None
 
         for graph_message in graph_messages:
-            internet_message_id = str(graph_message.get("internetMessageId") or "").strip()
+            message = _message_dict_from_graph(graph_message)
+            internet_message_id = message["internet_message_id"]
             if not internet_message_id:
                 continue
             received_raw = str(graph_message.get("receivedDateTime") or "")
             received_dt = datetime.fromisoformat(received_raw) if received_raw else None
-            # Normalize to "+00:00" (rather than storing the raw "Z" form) so a
-            # checkpoint written here parses identically however it's re-read.
-            received_at = received_dt.isoformat() if received_dt is not None else received_raw
             if received_dt is not None and (latest_received_dt is None or received_dt > latest_received_dt):
                 latest_received_dt = received_dt
-
-            sender = graph_message.get("from", {}).get("emailAddress", {})
-            body = graph_message.get("body") or {}
-            message = {
-                "internet_message_id": internet_message_id,
-                "graph_message_id": str(graph_message.get("id") or ""),
-                "subject": str(graph_message.get("subject") or ""),
-                "sender_email": str(sender.get("address") or ""),
-                "sender_name": str(sender.get("name") or ""),
-                "received_at": received_at,
-                "body": str(body.get("content") or ""),
-                "body_content_type": str(body.get("contentType") or "text"),
-            }
 
             with self._conn() as conn:
                 existing = self._existing_message_row(mailbox, internet_message_id, conn)

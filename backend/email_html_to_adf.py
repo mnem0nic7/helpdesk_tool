@@ -97,3 +97,14 @@ def html_to_adf_nodes(html: str) -> list[dict[str, Any]]:
     parser.feed(html)
     parser.close()
     return parser.blocks
+
+
+def adf_text_length(nodes: list[dict[str, Any]]) -> int:
+    """Total length of the visible text across a list of ADF block nodes."""
+    total = 0
+    for node in nodes:
+        if node.get("type") == "text":
+            total += len(node.get("text", ""))
+        elif "content" in node:
+            total += adf_text_length(node["content"])
+    return total
