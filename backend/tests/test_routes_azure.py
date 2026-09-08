@@ -168,7 +168,7 @@ def test_directory_users_returns_cached_payload_on_azure_host(test_client, monke
 
     assert resp.status_code == 200
     assert resp.json()[0]["display_name"] == "Ada Lovelace"
-    mock_cache.list_directory_objects.assert_called_once_with("users", search="")
+    mock_cache.list_directory_objects.assert_called_once_with("users", search="", focus="")
 
 
 def test_directory_users_returns_cached_payload_on_primary_host(test_client, monkeypatch):
@@ -193,7 +193,7 @@ def test_directory_users_returns_cached_payload_on_primary_host(test_client, mon
 
     assert resp.status_code == 200
     assert resp.json()[0]["display_name"] == "Grace Hopper"
-    mock_cache.list_directory_objects.assert_called_once_with("users", search="")
+    mock_cache.list_directory_objects.assert_called_once_with("users", search="", focus="")
 
 
 def test_directory_users_preserve_license_and_sign_in_reporting_fields(test_client, monkeypatch):

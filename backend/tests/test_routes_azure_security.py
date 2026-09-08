@@ -34,7 +34,9 @@ from models import (
 )
 
 
-def _response() -> SecurityAccessReviewResponse:
+def _response(
+    *, search: str = "", principal_type: str = "", privilege_level: str = "", flagged_only: bool = False
+) -> SecurityAccessReviewResponse:
     return SecurityAccessReviewResponse(
         generated_at="2026-04-02T02:00:00Z",
         inventory_last_refresh="2026-04-02T01:55:00Z",

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import security_device_compliance
+
+
+def _iso(delta_days: int) -> str:
+    """Timestamp relative to now, so sync-staleness-window assertions don't drift as real time passes."""
+    return (datetime.now(timezone.utc) + timedelta(days=delta_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class _StubAzureCache:
@@ -38,7 +45,7 @@ def test_build_security_device_compliance_review_flags_risky_devices(monkeypatch
                 "management_state": "managed",
                 "owner_type": "company",
                 "enrollment_type": "windowsAzureADJoin",
-                "last_sync_date_time": "2026-04-03T10:00:00Z",
+                "last_sync_date_time": _iso(-1),
                 "azure_ad_device_id": "aad-1",
                 "primary_users": [
                     {
@@ -58,7 +65,7 @@ def test_build_security_device_compliance_review_flags_risky_devices(monkeypatch
                 "management_state": "managed",
                 "owner_type": "personal",
                 "enrollment_type": "appleUserEnrollment",
-                "last_sync_date_time": "2026-03-20T10:00:00Z",
+                "last_sync_date_time": _iso(-14),
                 "azure_ad_device_id": "aad-2",
                 "primary_users": [],
             },
@@ -140,7 +147,7 @@ def test_build_security_device_fix_plan_groups_actions_and_skips(monkeypatch):
                 "management_state": "managed",
                 "owner_type": "company",
                 "enrollment_type": "windowsAzureADJoin",
-                "last_sync_date_time": "2026-04-03T10:00:00Z",
+                "last_sync_date_time": _iso(-1),
                 "azure_ad_device_id": "aad-1",
                 "primary_users": [
                     {
@@ -160,7 +167,7 @@ def test_build_security_device_fix_plan_groups_actions_and_skips(monkeypatch):
                 "management_state": "managed",
                 "owner_type": "personal",
                 "enrollment_type": "appleUserEnrollment",
-                "last_sync_date_time": "2026-03-20T10:00:00Z",
+                "last_sync_date_time": _iso(-14),
                 "azure_ad_device_id": "aad-2",
                 "primary_users": [],
             },

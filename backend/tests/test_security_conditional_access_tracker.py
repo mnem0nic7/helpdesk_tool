@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import security_conditional_access_tracker
+
+
+def _iso(delta_days: int) -> str:
+    """Timestamp relative to now, so the recent-change window assertion doesn't drift as real time passes."""
+    return (datetime.now(timezone.utc) + timedelta(days=delta_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class _StubAzureCache:
@@ -79,7 +86,7 @@ def test_build_security_conditional_access_tracker_flags_broad_policy_and_recent
         "conditional_access_audit_events": [
             {
                 "id": "event-1",
-                "activity_date_time": "2026-04-03T02:15:00Z",
+                "activity_date_time": _iso(-2),
                 "activity_display_name": "Update conditional access policy",
                 "result": "success",
                 "initiated_by_display_name": "Ada Lovelace",
@@ -91,7 +98,7 @@ def test_build_security_conditional_access_tracker_flags_broad_policy_and_recent
             },
             {
                 "id": "event-2",
-                "activity_date_time": "2026-04-02T18:00:00Z",
+                "activity_date_time": _iso(-3),
                 "activity_display_name": "Add conditional access policy",
                 "result": "success",
                 "initiated_by_display_name": "Automation App",

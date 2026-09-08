@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import security_application_hygiene
+
+
+def _iso(delta_days: int) -> str:
+    """Timestamp relative to now, so expiry-window assertions don't drift stale as real time passes."""
+    return (datetime.now(timezone.utc) + timedelta(days=delta_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class _StubAzureCache:
@@ -43,21 +50,21 @@ def test_build_security_application_hygiene_flags_expired_credentials_and_missin
                 "credential_count": 2,
                 "password_credential_count": 1,
                 "key_credential_count": 1,
-                "next_credential_expiry": "2026-07-05T00:00:00Z",
+                "next_credential_expiry": _iso(120),
                 "credentials": [
                     {
                         "credential_type": "secret",
                         "display_name": "Prod secret",
                         "key_id": "secret-1",
                         "start_date_time": "2025-01-01T00:00:00Z",
-                        "end_date_time": "2026-03-01T00:00:00Z",
+                        "end_date_time": _iso(-45),
                     },
                     {
                         "credential_type": "certificate",
                         "display_name": "Prod cert",
                         "key_id": "cert-1",
                         "start_date_time": "2025-01-01T00:00:00Z",
-                        "end_date_time": "2026-07-05T00:00:00Z",
+                        "end_date_time": _iso(120),
                     },
                 ],
             },
@@ -75,14 +82,14 @@ def test_build_security_application_hygiene_flags_expired_credentials_and_missin
                 "credential_count": 1,
                 "password_credential_count": 1,
                 "key_credential_count": 0,
-                "next_credential_expiry": "2026-04-20T00:00:00Z",
+                "next_credential_expiry": _iso(18),
                 "credentials": [
                     {
                         "credential_type": "secret",
                         "display_name": "External secret",
                         "key_id": "secret-2",
                         "start_date_time": "2025-01-01T00:00:00Z",
-                        "end_date_time": "2026-04-20T00:00:00Z",
+                        "end_date_time": _iso(18),
                     }
                 ],
             },

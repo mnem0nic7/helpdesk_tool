@@ -6,9 +6,13 @@ from auth import create_session
 from user_admin_providers import UserAdminProviderError
 
 
-def test_tools_routes_are_not_available_on_oasis(test_client):
+def test_tools_routes_are_available_on_oasis(test_client):
+    """Tools routes were deliberately opened up to the oasisdev scope (see
+    ffa96a5): the shared Tools surface is available to all signed-in users,
+    not gated to a primary/azure allowlist.
+    """
     resp = test_client.get("/api/tools/onedrive-copy/jobs", headers={"host": "oasisdev.movedocs.com"})
-    assert resp.status_code == 404
+    assert resp.status_code == 200
 
 
 def test_search_onedrive_copy_users_returns_directory_matches(test_client, monkeypatch):
@@ -43,8 +47,11 @@ def test_search_onedrive_copy_users_returns_directory_matches(test_client, monke
             "source": "saved",
         },
     ]
+    mock_ad = MagicMock()
+    mock_ad.find_user_by_upn_or_email.return_value = None
     monkeypatch.setattr(routes_tools, "azure_cache", mock_cache)
     monkeypatch.setattr(routes_tools, "onedrive_copy_jobs", mock_jobs)
+    monkeypatch.setattr(routes_tools, "ad", mock_ad)
 
     resp = test_client.get(
         "/api/tools/onedrive-copy/users?search=ada&limit=10",
@@ -77,8 +84,11 @@ def test_search_onedrive_copy_users_returns_recent_saved_matches_for_empty_searc
             "source": "saved",
         }
     ]
+    mock_ad = MagicMock()
+    mock_ad.find_user_by_upn_or_email.return_value = None
     monkeypatch.setattr(routes_tools, "azure_cache", mock_cache)
     monkeypatch.setattr(routes_tools, "onedrive_copy_jobs", mock_jobs)
+    monkeypatch.setattr(routes_tools, "ad", mock_ad)
 
     resp = test_client.get(
         "/api/tools/onedrive-copy/users?search=&limit=10",
@@ -202,8 +212,11 @@ def test_create_onedrive_copy_job_is_available_on_primary_and_azure(test_client,
             }
         ],
     ]
+    mock_ad = MagicMock()
+    mock_ad.find_user_by_upn_or_email.return_value = None
     monkeypatch.setattr(routes_tools, "azure_cache", mock_cache)
     monkeypatch.setattr(routes_tools, "onedrive_copy_jobs", mock_jobs)
+    monkeypatch.setattr(routes_tools, "ad", mock_ad)
 
     primary = test_client.post(
         "/api/tools/onedrive-copy/jobs",

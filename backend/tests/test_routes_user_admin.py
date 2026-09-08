@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from unittest.mock import MagicMock
 
@@ -398,8 +399,8 @@ def test_user_export_csv_applies_license_and_activity_filters(test_client, monke
                 "is_licensed": "true",
                 "license_count": "1",
                 "sku_part_numbers": "M365_BUSINESS_BASIC",
-                "last_successful_utc": "2026-03-18T00:00:00+00:00",
-                "last_successful_local": "2026-03-17 17:00 PT",
+                "last_successful_utc": (datetime.now(timezone.utc) - timedelta(days=5)).isoformat(),
+                "last_successful_local": "recent PT",
             },
         },
     ]

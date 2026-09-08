@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import security_break_glass_validation
+
+
+def _iso(delta_days: int) -> str:
+    """Timestamp relative to now, so staleness-window assertions don't drift as real time passes."""
+    return (datetime.now(timezone.utc) + timedelta(days=delta_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class _StubAzureCache:
@@ -39,8 +46,8 @@ def test_build_security_break_glass_validation_flags_unvalidated_accounts(monkey
                 "extra": {
                     "user_type": "Member",
                     "account_class": "person_cloud",
-                    "last_successful_utc": "2026-04-01T03:00:00Z",
-                    "last_password_change": "2026-03-01T00:00:00Z",
+                    "last_successful_utc": _iso(-1),
+                    "last_password_change": _iso(-32),
                     "is_licensed": "false",
                     "license_count": "0",
                     "on_prem_sync": "",

@@ -1010,6 +1010,7 @@ class TestReportTemplates:
                 "comment": {"total": 0, "comments": []},
             },
         }
+        recent_day = (date.today() - timedelta(days=3)).isoformat()
         recent_issue = {
             "key": "OIT-102",
             "fields": {
@@ -1020,9 +1021,9 @@ class TestReportTemplates:
                 "reporter": {"displayName": "Riley Requester", "accountId": "acc-riley"},
                 "issuetype": {"name": "[System] Service request"},
                 "resolution": {"name": "Done"},
-                "created": "2026-03-23T08:00:00+00:00",
-                "updated": "2026-03-23T12:00:00+00:00",
-                "resolutiondate": "2026-03-23T12:00:00+00:00",
+                "created": f"{recent_day}T08:00:00+00:00",
+                "updated": f"{recent_day}T12:00:00+00:00",
+                "resolutiondate": f"{recent_day}T12:00:00+00:00",
                 "labels": [],
                 "components": [],
                 "customfield_10010": {"requestType": {"name": "Laptop"}},
@@ -1030,7 +1031,7 @@ class TestReportTemplates:
                 "customfield_11266": {"completedCycles": [{"breached": False}]},
                 "customfield_11264": None,
                 "_movedocs_followup_status": "Met",
-                "_movedocs_followup_last_touch_at": "2026-03-23T10:00:00+00:00",
+                "_movedocs_followup_last_touch_at": f"{recent_day}T10:00:00+00:00",
                 "_movedocs_followup_touch_count": 1,
                 "customfield_10700": [],
                 "attachment": [],

@@ -1028,13 +1028,22 @@ async def test_poll_mailbox_lookback_window_handles_z_suffixed_checkpoint(monkey
     checkpoint/lookback-window math actually works end-to-end with a raw
     'Z'-suffixed checkpoint value rather than assuming it from the version alone.
     """
+    from datetime import datetime, timedelta, timezone
+
+    # Checkpoint must stay within the 24h catch-up cap (_MAX_CATCHUP_HOURS) or
+    # _poll_mailbox clamps `since` to `now - 24h`, which would replace the
+    # literal checkpoint-derived filter clause this test is asserting on.
+    checkpoint_dt = datetime.now(timezone.utc) - timedelta(hours=2)
+    checkpoint_at = checkpoint_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    expected_since = (checkpoint_dt - timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     job = _fresh_job()
     job._get_settings()
     job._update_settings(
         enabled=True,
         trusted_domains=[],
-        trusted_domains_refreshed_at="2026-09-03T00:00:00+00:00",
-        askhr_checkpoint_at="2026-09-03T10:00:00Z",
+        trusted_domains_refreshed_at=datetime.now(timezone.utc).isoformat(),
+        askhr_checkpoint_at=checkpoint_at,
         lookback_minutes=15,
     )
     monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
@@ -1048,8 +1057,8 @@ async def test_poll_mailbox_lookback_window_handles_z_suffixed_checkpoint(monkey
 
     _, call_kwargs = mock_azure.graph_paged_get.call_args
     filter_clause = call_kwargs["params"]["$filter"]
-    # since = checkpoint (10:00:00Z) - lookback (15m) = 09:45:00Z
-    assert "2026-09-03T09:45:00Z" in filter_clause
+    # since = checkpoint - lookback (15m)
+    assert expected_since in filter_clause
 
 
 async def test_poll_mailbox_clamps_a_far_past_checkpoint_to_the_catchup_cap(monkeypatch):
