@@ -783,6 +783,25 @@ class JiraClient:
 
         Used as a fallback before creating a ticket, in case a prior run created
         the ticket but failed to persist that fact locally.
+
+        Jira's `text ~ "..."` is a tokenized/fuzzy match, not an exact-phrase
+        match -- confirmed against HRD-1336/McMorris, where a Message-ID like
+        `<OSNPR04MB934925473C4875F55AFC8CB0D5B52@OSNPR04MB9349.apcprd04.prod.outlook.com>`
+        tokenizes on `@`/`.` into terms like `apcprd04`/`prod`/`outlook`/`com`
+        that are common to *any* mail routed through that Microsoft Exchange
+        backend, not unique to one conversation. Once an issue already had one
+        such Message-ID indexed on an attachment, every *unrelated* incoming
+        message sharing that mail-server domain kept matching it via `text ~`
+        and got attached there instead of filing its own ticket -- 22 unrelated
+        external notification emails landed on HRD-1336 in one incident,
+        and the effect is self-reinforcing (each wrong attachment adds more of
+        that same shared token to the ticket, making it an even likelier future
+        fuzzy match). So a JQL hit here is only a *candidate*: it is verified by
+        confirming the candidate issue actually has an attachment whose filename
+        contains this exact Message-ID (the `_attach_email` filename convention
+        is `f"{internet_message_id}.eml"`, so a real prior run leaves an exact,
+        unambiguous trace) before it's trusted. An unverified candidate is
+        treated the same as no match, so the caller creates a new ticket.
         """
         message_id = internet_message_id.strip()
         if not message_id:
@@ -794,12 +813,29 @@ class JiraClient:
         url = f"{self.base_url}/rest/api/3/search/jql"
         resp = self.session.post(
             url,
-            json={"jql": jql, "maxResults": 1, "fields": ["key"]},
+            json={"jql": jql, "maxResults": 5, "fields": ["key"]},
             timeout=self._TIMEOUT,
         )
         self._raise_for_status(resp)
         issues = resp.json().get("issues") or []
-        return str(issues[0]["key"]) if issues else None
+        # The Message-ID's angle brackets get sanitized (observed as `<`/`>` ->
+        # `_`) somewhere in Jira's attachment storage, so match on the
+        # bracket-free core -- the random per-message hex/domain text that
+        # actually identifies this one message -- rather than trying to
+        # reproduce Jira's exact sanitization rule.
+        needle = message_id.strip("<>")
+        for issue in issues:
+            key = str(issue["key"])
+            if self._issue_has_attachment_matching(key, needle):
+                return key
+        return None
+
+    def _issue_has_attachment_matching(self, key: str, needle: str) -> bool:
+        url = f"{self.base_url}/rest/api/3/issue/{key}"
+        resp = self.session.get(url, params={"fields": "attachment"}, timeout=self._TIMEOUT)
+        self._raise_for_status(resp)
+        attachments = resp.json().get("fields", {}).get("attachment") or []
+        return any(needle in str(attachment.get("filename") or "") for attachment in attachments)
 
     def find_user_account_id_by_email(self, email: str) -> str | None:
         """GET /rest/api/3/user/search?query=email -- best-effort lookup.

@@ -448,12 +448,16 @@ def test_create_issue_with_reporter_passes_an_adf_description_through_untouched(
     assert payload["fields"]["description"] == adf_description
 
 
-def test_find_issue_by_internet_message_id_returns_key_when_found():
+def test_find_issue_by_internet_message_id_returns_key_when_attachment_confirms_it():
     client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
-    response = MagicMock()
-    response.ok = True
-    response.json.return_value = {"issues": [{"key": "HRD-3"}]}
-    client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
+    search_response = MagicMock()
+    search_response.ok = True
+    search_response.json.return_value = {"issues": [{"key": "HRD-3"}]}
+    client.session.post = MagicMock(return_value=search_response)  # type: ignore[method-assign]
+    issue_response = MagicMock()
+    issue_response.ok = True
+    issue_response.json.return_value = {"fields": {"attachment": [{"filename": "abc123@mail.example.com.eml"}]}}
+    client.session.get = MagicMock(return_value=issue_response)  # type: ignore[method-assign]
 
     key = client.find_issue_by_internet_message_id("<abc123@mail.example.com>", project_key="HRD")
 
@@ -473,6 +477,32 @@ def test_find_issue_by_internet_message_id_returns_none_when_not_found():
     client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
 
     assert client.find_issue_by_internet_message_id("<missing@mail.example.com>", project_key="HRD") is None
+
+
+def test_find_issue_by_internet_message_id_rejects_fuzzy_jql_hit_without_matching_attachment():
+    """Regression for the HRD-1336/McMorris incident: Jira's `text ~` search is
+    tokenized/fuzzy, so a shared mail-server domain in the Message-ID (e.g.
+    `apcprd04.prod.outlook.com`) can return an unrelated issue as a JQL 'hit'.
+    That candidate must be rejected -- and a new ticket created instead --
+    unless it actually has an attachment for this exact Message-ID.
+    """
+    client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
+    search_response = MagicMock()
+    search_response.ok = True
+    search_response.json.return_value = {"issues": [{"key": "HRD-1336"}]}
+    client.session.post = MagicMock(return_value=search_response)  # type: ignore[method-assign]
+    issue_response = MagicMock()
+    issue_response.ok = True
+    issue_response.json.return_value = {
+        "fields": {"attachment": [{"filename": "_some-other-message-id@apcprd04.prod.outlook.com_.eml"}]}
+    }
+    client.session.get = MagicMock(return_value=issue_response)  # type: ignore[method-assign]
+
+    key = client.find_issue_by_internet_message_id(
+        "<newmsg123@OSNPR04MB9349.apcprd04.prod.outlook.com>", project_key="HRD"
+    )
+
+    assert key is None
 
 
 def test_find_issue_by_internet_message_id_escapes_embedded_quotes():
