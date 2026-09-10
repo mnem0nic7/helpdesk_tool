@@ -31,6 +31,7 @@ from config import (
     ENTRA_CLIENT_SECRET,
     ALLOWED_USERS,
     ADMIN_USERS,
+    RETENTION_ALLOWED_USERS,
 )
 
 logger = logging.getLogger(__name__)
@@ -585,6 +586,15 @@ def is_allowed_user(email: str) -> bool:
     return email.lower() in allowed
 
 
+def is_retention_allowed_user(email: str) -> bool:
+    """Check RETENTION_ALLOWED_USERS. Empty = deny all (fail closed) — unlike
+    is_allowed_user, this host can trigger tenant-wide Teams message deletion."""
+    allowed = {e.strip().lower() for e in RETENTION_ALLOWED_USERS.split(",") if e.strip()}
+    if not allowed:
+        return False
+    return email.lower() in allowed
+
+
 def is_admin_user(email: str) -> bool:
     """All authenticated users are admins."""
     return True
@@ -629,6 +639,19 @@ def require_admin(request: Request) -> dict[str, Any]:
         raise _HTTPException(status_code=401, detail="Not authenticated")
     if not session_is_admin(session):
         raise _HTTPException(status_code=403, detail="Admin access required")
+    return session
+
+
+def require_retention_access(request: Request) -> dict[str, Any]:
+    """FastAPI dependency: require an authenticated session allowlisted for retention.movedocs.com."""
+    from fastapi import HTTPException as _HTTPException
+
+    sid = request.cookies.get("session_id", "")
+    session = get_session(sid) if sid else None
+    if not session:
+        raise _HTTPException(status_code=401, detail="Not authenticated")
+    if not is_retention_allowed_user(str(session.get("email") or "")):
+        raise _HTTPException(status_code=403, detail="Retention access required")
     return session
 
 

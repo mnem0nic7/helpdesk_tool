@@ -107,6 +107,27 @@ class TestAllowedUsers:
 
 
 # ---------------------------------------------------------------------------
+# Retention allowlist tests
+# ---------------------------------------------------------------------------
+
+class TestRetentionAllowedUsers:
+
+    def test_is_retention_allowed_user_denies_all_when_unset(self, monkeypatch):
+        import auth
+        import config
+        monkeypatch.setattr(config, "RETENTION_ALLOWED_USERS", "")
+        monkeypatch.setattr(auth, "RETENTION_ALLOWED_USERS", "")
+        assert auth.is_retention_allowed_user("anyone@example.com") is False
+
+    def test_is_retention_allowed_user_allows_listed_email(self, monkeypatch):
+        import auth
+        monkeypatch.setattr(auth, "RETENTION_ALLOWED_USERS", "ops@example.com, Other@Example.com")
+        assert auth.is_retention_allowed_user("ops@example.com") is True
+        assert auth.is_retention_allowed_user("other@example.com") is True
+        assert auth.is_retention_allowed_user("nope@example.com") is False
+
+
+# ---------------------------------------------------------------------------
 # Auth middleware tests
 # ---------------------------------------------------------------------------
 
