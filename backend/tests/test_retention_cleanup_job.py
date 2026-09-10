@@ -534,6 +534,75 @@ async def test_already_deleted_attachment_resolving_to_none_is_not_a_failure_and
     assert attachment_rows == {"a1": "deleted", "drive-https://sp/file2": "deleted"}
 
 
+async def test_reply_delete_call_failure_blocks_parent_message():
+    # Distinct from test_reply_is_not_deleted_when_its_attachment_fails: here the
+    # reply's attachment succeeds but delete_reply() itself raises. any_reply_blocked
+    # must still be set so the parent message is not soft-deleted out from under it.
+    job, policy_store, _connection_store, graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    graph_module.list_messages_older_than.return_value = [
+        {"id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Alice", "attachments": []},
+    ]
+    graph_module.list_replies_older_than.return_value = [
+        {"id": "r1", "parent_id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Bob", "attachments": []},
+    ]
+    graph_module.delete_reply.side_effect = RuntimeError("429 Too Many Requests")
+
+    await job.run_cycle()
+
+    graph_module.delete_reply.assert_called_once_with("token", "team-1", "chan-1", "m1", "r1")
+    graph_module.delete_message.assert_not_called()
+    runs, _total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    assert runs[0]["outcome"] == "partial"
+    assert runs[0]["messages_deleted"] == 0
+    deletions, _t = policy_store.list_deletions(run_id=runs[0]["id"], limit=10, offset=0)
+    assert [(d["item_id"], d["status"]) for d in deletions] == [("r1", "failed")]
+
+
+async def test_any_reply_blocked_does_not_leak_across_message_groups():
+    # any_reply_blocked is set inside the per-message loop, so a blocked reply on one
+    # message must not prevent an unrelated message (with its own clean replies) from
+    # being deleted in the same run.
+    job, policy_store, _connection_store, graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    graph_module.list_messages_older_than.return_value = [
+        {"id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Alice", "attachments": []},
+        {"id": "m2", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Bob", "attachments": []},
+    ]
+
+    def _replies_for(_token, _team_id, _channel_id, message_id, _cutoff):
+        if message_id == "m1":
+            return [{"id": "r1", "parent_id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Cara", "attachments": []}]
+        return [{"id": "r2", "parent_id": "m2", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Dee", "attachments": []}]
+
+    graph_module.list_replies_older_than.side_effect = _replies_for
+    graph_module.delete_reply.side_effect = (
+        lambda _t, _tm, _c, _p, reply_id: (_ for _ in ()).throw(RuntimeError("locked")) if reply_id == "r1" else None
+    )
+
+    await job.run_cycle()
+
+    # m1's group stays blocked: its reply and its own message are never deleted.
+    graph_module.delete_message.assert_called_once_with("token", "team-1", "chan-1", "m2")
+    runs, _total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    assert runs[0]["outcome"] == "partial"
+    assert runs[0]["messages_deleted"] == 2  # r2 and m2
+    deletions, _t = policy_store.list_deletions(run_id=runs[0]["id"], limit=10, offset=0)
+    statuses = {d["item_id"]: d["status"] for d in deletions}
+    assert statuses["r1"] == "failed"
+    assert statuses["r2"] == "deleted"
+    assert statuses["m2"] == "deleted"
+    assert "m1" not in statuses
+
+
 async def test_run_cycle_skips_policy_already_run_this_hour():
     job, policy_store, _connection_store, graph_module = _job_with_stores()
     policy = policy_store.create_policy(

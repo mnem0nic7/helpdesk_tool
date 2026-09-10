@@ -2,12 +2,17 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type RetentionChannel, type RetentionTeam } from "../lib/api.ts";
 
+const TEAMS_LIMIT = 50;
+const CHANNELS_LIMIT = 50;
+
 export default function RetentionTeamsPage() {
   const queryClient = useQueryClient();
   const [expandedTeamId, setExpandedTeamId] = useState<string | null>(null);
   const [configuringChannel, setConfiguringChannel] = useState<{ team: RetentionTeam; channel: RetentionChannel } | null>(null);
   const [days, setDays] = useState(30);
   const [previewPolicyId, setPreviewPolicyId] = useState<string | null>(null);
+  const [teamsOffset, setTeamsOffset] = useState(0);
+  const [channelsOffset, setChannelsOffset] = useState(0);
 
   const statusQuery = useQuery({
     queryKey: ["retention", "connection-status"],
@@ -15,16 +20,21 @@ export default function RetentionTeamsPage() {
   });
 
   const teamsQuery = useQuery({
-    queryKey: ["retention", "teams"],
-    queryFn: () => api.getRetentionTeams(100, 0),
+    queryKey: ["retention", "teams", teamsOffset],
+    queryFn: () => api.getRetentionTeams(TEAMS_LIMIT, teamsOffset),
     enabled: statusQuery.data?.status === "connected",
   });
 
   const channelsQuery = useQuery({
-    queryKey: ["retention", "channels", expandedTeamId],
-    queryFn: () => api.getRetentionChannels(expandedTeamId as string, 100, 0),
+    queryKey: ["retention", "channels", expandedTeamId, channelsOffset],
+    queryFn: () => api.getRetentionChannels(expandedTeamId as string, CHANNELS_LIMIT, channelsOffset),
     enabled: !!expandedTeamId,
   });
+
+  function toggleTeam(teamId: string) {
+    setExpandedTeamId((current) => (current === teamId ? null : teamId));
+    setChannelsOffset(0);
+  }
 
   const createMutation = useMutation({
     mutationFn: (input: { team: RetentionTeam; channel: RetentionChannel; retentionDays: number }) => {
@@ -95,7 +105,7 @@ export default function RetentionTeamsPage() {
         {(teamsQuery.data?.items ?? []).map((team) => (
           <div key={team.id}>
             <button
-              onClick={() => setExpandedTeamId(expandedTeamId === team.id ? null : team.id)}
+              onClick={() => toggleTeam(team.id)}
               className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium hover:bg-slate-50"
             >
               <span>{team.name}</span>
@@ -128,11 +138,51 @@ export default function RetentionTeamsPage() {
                     </div>
                   </div>
                 ))}
+                {!channelsQuery.isError && (
+                  <div className="flex items-center justify-end gap-2 py-2 text-xs text-slate-500">
+                    <button
+                      type="button"
+                      onClick={() => setChannelsOffset((offset) => Math.max(0, offset - CHANNELS_LIMIT))}
+                      disabled={channelsOffset === 0}
+                      className="rounded border border-slate-200 px-2 py-1 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setChannelsOffset((offset) => offset + CHANNELS_LIMIT)}
+                      disabled={channelsOffset + CHANNELS_LIMIT >= (channelsQuery.data?.total ?? 0)}
+                      className="rounded border border-slate-200 px-2 py-1 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
         ))}
       </div>
+      {teamsQuery.data && teamsQuery.data.total > 0 && (
+        <div className="flex items-center justify-end gap-2 text-xs text-slate-500">
+          <button
+            type="button"
+            onClick={() => setTeamsOffset((offset) => Math.max(0, offset - TEAMS_LIMIT))}
+            disabled={teamsOffset === 0}
+            className="rounded border border-slate-200 px-2 py-1 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            onClick={() => setTeamsOffset((offset) => offset + TEAMS_LIMIT)}
+            disabled={teamsOffset + TEAMS_LIMIT >= teamsQuery.data.total}
+            className="rounded border border-slate-200 px-2 py-1 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Next
+          </button>
+        </div>
+      )}
 
       {configuringChannel && (
         <div className="rounded-md border border-slate-300 bg-white p-4 shadow-sm">
