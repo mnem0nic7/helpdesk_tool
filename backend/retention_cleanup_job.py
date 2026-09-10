@@ -25,11 +25,16 @@ class RetentionCleanupJob:
         self._bg_task: asyncio.Task | None = None
 
     async def _collect_items(self, policy: dict, token: str, cutoff: datetime) -> list[tuple[dict, bool]]:
+        # Ordering matters: each message's aged replies are appended BEFORE the
+        # message itself so replies are always deleted while their parent still
+        # exists. Deleting a reply whose root message is already gone is fragile
+        # (Graph can reject the reply-scoped path), so never flatten this back to
+        # "all roots first, then all replies".
         loop = asyncio.get_event_loop()
         messages = await loop.run_in_executor(
             None, lambda: self._graph.list_messages_older_than(token, policy["team_id"], policy["channel_id"], cutoff),
         )
-        items: list[tuple[dict, bool]] = [(m, False) for m in messages]
+        items: list[tuple[dict, bool]] = []
         for message in messages:
             replies = await loop.run_in_executor(
                 None,
@@ -38,6 +43,7 @@ class RetentionCleanupJob:
                 ),
             )
             items.extend((r, True) for r in replies)
+            items.append((message, False))
         return items
 
     async def compute_preview(self, policy_id: str) -> dict[str, Any]:
@@ -87,15 +93,27 @@ class RetentionCleanupJob:
                     site_id = await loop.run_in_executor(
                         None, lambda: self._graph.resolve_team_site_id(token, policy["team_id"]),
                     )
+                # attachment["id"] is the Teams chatMessageAttachment id, which is NOT a
+                # SharePoint driveItem id. Deleting it directly would target a
+                # non-existent resource, and delete_drive_item tolerates 404s, so the
+                # audit row would claim "deleted" while nothing was touched. Resolve the
+                # attachment's sharing contentUrl to the real driveItem first. This call
+                # is deliberately inside the same try/except as the delete, so a
+                # resolution failure is recorded as status="failed" rather than swallowed.
+                real_item_id = await loop.run_in_executor(
+                    None, lambda: self._graph.resolve_drive_item_from_content_url(token, attachment["content_url"]),
+                )
                 await loop.run_in_executor(
-                    None, lambda: self._graph.delete_drive_item(token, site_id, attachment["id"]),
+                    None, lambda: self._graph.delete_drive_item(token, site_id, real_item_id),
                 )
                 self._policy_store.record_deletion(
-                    run_id=run_id, item_type="attachment", item_id=attachment["id"],
+                    run_id=run_id, item_type="attachment", item_id=real_item_id,
                     sender_or_author=item["sender_or_author"], original_created_at=item["created_at"], status="deleted",
                 )
                 deleted += 1
             except Exception as exc:
+                # On failure the driveItem id may never have been resolved, so fall back
+                # to the Teams attachment id — it still identifies the item for audit.
                 had_failure = True
                 self._policy_store.record_deletion(
                     run_id=run_id, item_type="attachment", item_id=attachment["id"],
@@ -144,6 +162,26 @@ class RetentionCleanupJob:
             run_id, outcome=outcome, messages_deleted=messages_deleted, attachments_deleted=attachments_deleted,
         )
 
+    def _already_ran_this_hour(self, policy_id: str) -> bool:
+        """Persisted per-policy hour gate, reusing the retention_runs table.
+
+        Without this, a leader re-election or blue/green cutover restarts the job
+        and immediately re-fires a full deletion pass for every active policy,
+        because _run_loop's only pacing is an in-process sleep(3600). The most
+        recent run row's started_at is the durable record of "this policy already
+        ran in this UTC clock hour".
+        """
+        runs, _total = self._policy_store.list_runs(policy_id=policy_id, limit=1, offset=0)
+        if not runs:
+            return False
+        started_at = str(runs[0].get("started_at") or "")
+        try:
+            started = datetime.fromisoformat(started_at)
+        except ValueError:
+            return False
+        now = datetime.now(timezone.utc)
+        return (started.year, started.month, started.day, started.hour) == (now.year, now.month, now.day, now.hour)
+
     async def run_cycle(self) -> None:
         policies = self._policy_store.list_active_policies()
         if not policies:
@@ -167,6 +205,8 @@ class RetentionCleanupJob:
                 )
             return
         for policy in policies:
+            if self._already_ran_this_hour(policy["id"]):
+                continue
             await self._run_policy(policy, token)
 
     def start_background_runner(self) -> None:

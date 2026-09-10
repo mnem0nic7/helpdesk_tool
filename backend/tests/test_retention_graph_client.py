@@ -60,6 +60,102 @@ def test_delete_message_raises_retention_graph_error_on_failure():
             assert exc.status_code == 403
 
 
+def test_list_messages_older_than_excludes_already_soft_deleted():
+    # Graph keeps returning soft-deleted messages forever; without this filter the
+    # hourly job re-attempts deletes it already performed and never converges to 'ok'.
+    import retention_graph_client as g
+    deleted_msg = {
+        "id": "m1", "createdDateTime": "2025-01-01T00:00:00Z", "deletedDateTime": "2025-06-01T00:00:00Z",
+        "from": {"user": {"displayName": "Alice"}}, "attachments": [],
+    }
+    live_msg = {
+        "id": "m2", "createdDateTime": "2025-01-01T00:00:00Z",
+        "from": {"user": {"displayName": "Bob"}}, "attachments": [],
+    }
+    resp = _ok_response({"value": [deleted_msg, live_msg]})
+    cutoff = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with patch("retention_graph_client.requests.request", return_value=resp):
+        messages = g.list_messages_older_than("token", "team-1", "chan-1", cutoff)
+    assert [m["id"] for m in messages] == ["m2"]
+
+
+def test_list_messages_older_than_excludes_system_event_messages():
+    import retention_graph_client as g
+    system_msg = {
+        "id": "m1", "createdDateTime": "2025-01-01T00:00:00Z", "messageType": "systemEventMessage",
+        "from": None, "attachments": [],
+    }
+    live_msg = {
+        "id": "m2", "createdDateTime": "2025-01-01T00:00:00Z", "messageType": "message",
+        "from": {"user": {"displayName": "Bob"}}, "attachments": [],
+    }
+    resp = _ok_response({"value": [system_msg, live_msg]})
+    cutoff = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with patch("retention_graph_client.requests.request", return_value=resp):
+        messages = g.list_messages_older_than("token", "team-1", "chan-1", cutoff)
+    assert [m["id"] for m in messages] == ["m2"]
+
+
+def test_list_replies_older_than_excludes_deleted_and_system_replies():
+    import retention_graph_client as g
+    deleted_reply = {
+        "id": "r1", "createdDateTime": "2025-01-01T00:00:00Z", "deletedDateTime": "2025-06-01T00:00:00Z",
+        "from": {"user": {"displayName": "Alice"}}, "attachments": [],
+    }
+    system_reply = {
+        "id": "r2", "createdDateTime": "2025-01-01T00:00:00Z", "messageType": "systemEventMessage",
+        "from": None, "attachments": [],
+    }
+    live_reply = {
+        "id": "r3", "createdDateTime": "2025-01-01T00:00:00Z",
+        "from": {"user": {"displayName": "Bob"}}, "attachments": [],
+    }
+    resp = _ok_response({"value": [deleted_reply, system_reply, live_reply]})
+    cutoff = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with patch("retention_graph_client.requests.request", return_value=resp):
+        replies = g.list_replies_older_than("token", "team-1", "chan-1", "m1", cutoff)
+    assert [r["id"] for r in replies] == ["r3"]
+
+
+def test_encode_sharing_url_matches_microsofts_documented_encoding():
+    import base64
+    import retention_graph_client as g
+    url = "https://contoso.sharepoint.com/sites/Eng/Shared Documents/report+final/a?b=c"
+    encoded = g._encode_sharing_url(url)
+    assert encoded.startswith("u!")
+    assert "=" not in encoded
+    assert "/" not in encoded[2:]
+    assert "+" not in encoded[2:]
+    # Round-trips back to the original URL once the substitutions/padding are undone.
+    body = encoded[2:].replace("_", "/").replace("-", "+")
+    body += "=" * (-len(body) % 4)
+    assert base64.b64decode(body).decode("utf-8") == url
+
+
+def test_resolve_drive_item_from_content_url_calls_shares_endpoint():
+    import retention_graph_client as g
+    resp = _ok_response({"id": "drive-item-99"})
+    with patch("retention_graph_client.requests.request", return_value=resp) as mock_request:
+        item_id = g.resolve_drive_item_from_content_url("token", "https://sp/file1")
+    assert item_id == "drive-item-99"
+    called_url = mock_request.call_args[0][1]
+    expected_share_id = g._encode_sharing_url("https://sp/file1")
+    assert f"/shares/{expected_share_id}/driveItem" in called_url
+    assert "$select=id" in called_url
+
+
+def test_resolve_drive_item_from_content_url_raises_on_failure():
+    import retention_graph_client as g
+    resp = MagicMock(ok=False, status_code=404, text="Not found")
+    resp.headers = {}
+    with patch("retention_graph_client.requests.request", return_value=resp):
+        try:
+            g.resolve_drive_item_from_content_url("token", "https://sp/missing")
+            assert False, "expected RetentionGraphError"
+        except g.RetentionGraphError as exc:
+            assert exc.status_code == 404
+
+
 def test_request_retries_on_429_then_succeeds(monkeypatch):
     import retention_graph_client as g
     monkeypatch.setattr(g.time, "sleep", lambda _seconds: None)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 
@@ -171,14 +171,196 @@ async def test_run_cycle_resolves_site_id_once_per_run_across_multiple_attachmen
     ]
     graph_module.list_replies_older_than.return_value = []
     graph_module.resolve_team_site_id.return_value = "site-1"
+    graph_module.resolve_drive_item_from_content_url.side_effect = lambda _t, url: f"drive-{url}"
 
     await job.run_cycle()
 
     assert graph_module.resolve_team_site_id.call_count == 1
     assert graph_module.delete_drive_item.call_count == 3
-    graph_module.delete_drive_item.assert_any_call("token", "site-1", "a1")
-    graph_module.delete_drive_item.assert_any_call("token", "site-1", "a2")
-    graph_module.delete_drive_item.assert_any_call("token", "site-1", "a3")
+    graph_module.delete_drive_item.assert_any_call("token", "site-1", "drive-u1")
+    graph_module.delete_drive_item.assert_any_call("token", "site-1", "drive-u2")
+    graph_module.delete_drive_item.assert_any_call("token", "site-1", "drive-u3")
     runs, _total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
     assert runs[0]["outcome"] == "ok"
     assert runs[0]["attachments_deleted"] == 3
+
+
+async def test_attachment_deletion_resolves_content_url_before_deleting_drive_item():
+    # attachment["id"] is a Teams chatMessageAttachment id, not a SharePoint
+    # driveItem id. delete_drive_item() swallows 404s, so deleting the wrong id
+    # would look like a success and write a lying status="deleted" audit row.
+    job, policy_store, _connection_store, graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    graph_module.list_messages_older_than.return_value = [
+        {
+            "id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Alice",
+            "attachments": [{"id": "attachment-id-1", "content_url": "https://sp/file1"}],
+        },
+    ]
+    graph_module.list_replies_older_than.return_value = []
+    graph_module.resolve_team_site_id.return_value = "site-1"
+    graph_module.resolve_drive_item_from_content_url.return_value = "real-drive-item-1"
+
+    call_order: list[str] = []
+    graph_module.resolve_drive_item_from_content_url.side_effect = (
+        lambda *_a, **_k: call_order.append("resolve") or "real-drive-item-1"
+    )
+    graph_module.delete_drive_item.side_effect = lambda *_a, **_k: call_order.append("delete")
+
+    await job.run_cycle()
+
+    graph_module.resolve_drive_item_from_content_url.assert_called_once_with("token", "https://sp/file1")
+    graph_module.delete_drive_item.assert_called_once_with("token", "site-1", "real-drive-item-1")
+    assert call_order == ["resolve", "delete"]
+    # The attachment id must never be passed to delete_drive_item.
+    assert "attachment-id-1" not in graph_module.delete_drive_item.call_args[0]
+    runs, _total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    deletions, _t = policy_store.list_deletions(run_id=runs[0]["id"], limit=10, offset=0)
+    attachment_rows = [d for d in deletions if d["item_type"] == "attachment"]
+    assert [(d["item_id"], d["status"]) for d in attachment_rows] == [("real-drive-item-1", "deleted")]
+
+
+async def test_attachment_content_url_resolution_failure_is_recorded_as_failed():
+    job, policy_store, _connection_store, graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    graph_module.list_messages_older_than.return_value = [
+        {
+            "id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Alice",
+            "attachments": [{"id": "attachment-id-1", "content_url": "https://sp/file1"}],
+        },
+    ]
+    graph_module.list_replies_older_than.return_value = []
+    graph_module.resolve_team_site_id.return_value = "site-1"
+    graph_module.resolve_drive_item_from_content_url.side_effect = RuntimeError("403 Forbidden")
+
+    await job.run_cycle()
+
+    graph_module.delete_drive_item.assert_not_called()
+    runs, _total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    assert runs[0]["outcome"] == "partial"
+    assert runs[0]["attachments_deleted"] == 0
+    deletions, _t = policy_store.list_deletions(run_id=runs[0]["id"], limit=10, offset=0)
+    attachment_rows = [d for d in deletions if d["item_type"] == "attachment"]
+    assert len(attachment_rows) == 1
+    assert attachment_rows[0]["status"] == "failed"
+    assert "403 Forbidden" in (attachment_rows[0]["error"] or "")
+
+
+async def test_replies_are_deleted_before_their_parent_message():
+    # Deleting a reply whose root message is already gone is fragile, so each
+    # message's aged replies must be purged before the message itself.
+    job, policy_store, _connection_store, graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    graph_module.list_messages_older_than.return_value = [
+        {"id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Alice", "attachments": []},
+    ]
+    graph_module.list_replies_older_than.return_value = [
+        {"id": "r1", "parent_id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Bob", "attachments": []},
+        {"id": "r2", "parent_id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Cara", "attachments": []},
+    ]
+    order: list[str] = []
+    graph_module.delete_reply.side_effect = lambda _t, _tm, _c, _p, reply_id: order.append(f"reply:{reply_id}")
+    graph_module.delete_message.side_effect = lambda _t, _tm, _c, message_id: order.append(f"message:{message_id}")
+
+    await job.run_cycle()
+
+    assert order == ["reply:r1", "reply:r2", "message:m1"]
+    assert graph_module.delete_reply.call_count == 2
+    assert graph_module.delete_message.call_count == 1
+
+
+async def test_run_cycle_skips_policy_already_run_this_hour():
+    job, policy_store, _connection_store, graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    graph_module.list_messages_older_than.return_value = []
+    graph_module.list_replies_older_than.return_value = []
+
+    # Simulate a run that already happened during this UTC clock hour, exactly as a
+    # previous leader would have left it behind before a re-election/cutover.
+    run_id = policy_store.start_run(policy["id"])
+    policy_store.finish_run(run_id, outcome="ok", messages_deleted=0, attachments_deleted=0)
+
+    await job.run_cycle()
+
+    runs, total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    assert total == 1
+    assert runs[0]["id"] == run_id
+    graph_module.list_messages_older_than.assert_not_called()
+
+
+async def test_run_cycle_runs_policy_with_no_previous_runs():
+    job, policy_store, _connection_store, graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    graph_module.list_messages_older_than.return_value = []
+    graph_module.list_replies_older_than.return_value = []
+
+    assert job._already_ran_this_hour(policy["id"]) is False
+    await job.run_cycle()
+
+    _runs, total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    assert total == 1
+
+
+async def test_run_cycle_runs_policy_whose_last_run_was_a_previous_hour(monkeypatch):
+    import retention_cleanup_job as job_module
+    job, policy_store, _connection_store, graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    graph_module.list_messages_older_than.return_value = []
+    graph_module.list_replies_older_than.return_value = []
+
+    run_id = policy_store.start_run(policy["id"])
+    policy_store.finish_run(run_id, outcome="ok", messages_deleted=0, attachments_deleted=0)
+
+    # Move "now" forward two hours so the seeded run falls in a previous clock hour.
+    real_datetime = job_module.datetime
+    later = real_datetime.now(timezone.utc) + timedelta(hours=2)
+
+    class _ShiftedDatetime(real_datetime):  # type: ignore[misc, valid-type]
+        @classmethod
+        def now(cls, tz=None):
+            return later
+
+    monkeypatch.setattr(job_module, "datetime", _ShiftedDatetime)
+
+    assert job._already_ran_this_hour(policy["id"]) is False
+    await job.run_cycle()
+
+    _runs, total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    assert total == 2
+
+
+async def test_already_ran_this_hour_is_false_for_unparseable_started_at():
+    job, policy_store, _connection_store, _graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    job._policy_store = MagicMock()
+    job._policy_store.list_runs.return_value = ([{"started_at": "not-a-timestamp"}], 1)
+
+    assert job._already_ran_this_hour(policy["id"]) is False
