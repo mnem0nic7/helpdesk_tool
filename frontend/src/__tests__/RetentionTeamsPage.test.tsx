@@ -6,7 +6,11 @@ import RetentionTeamsPage from "../pages/RetentionTeamsPage.tsx";
 import { api } from "../lib/api.ts";
 
 function renderWithClient() {
-  const queryClient = new QueryClient();
+  // retry: false so the error-path tests resolve immediately instead of waiting
+  // out React Query's default exponential backoff.
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <RetentionTeamsPage />
@@ -150,5 +154,115 @@ describe("RetentionTeamsPage", () => {
 
     await waitFor(() => expect(patchSpy).toHaveBeenCalledWith("p1", { retention_days: 45 }));
     expect(api.createRetentionPolicy).not.toHaveBeenCalled();
+  });
+
+  it("never offers Confirm & Enable when the preview call fails", async () => {
+    // A failed preview used to fall through to the success branch, rendering a
+    // fabricated "0 message(s) / 0 attachment(s)" next to a live red Confirm
+    // button — clicking it would arm a policy that purges the real backlog on the
+    // next hourly pass, defeating the pending_preview -> active safety gate.
+    vi.spyOn(api, "getRetentionConnectionStatus").mockResolvedValue({
+      status: "connected", service_account_upn: "bot@x.com", last_refreshed_at: "now", last_error: null,
+    });
+    vi.spyOn(api, "getRetentionTeams").mockResolvedValue({ items: [{ id: "t1", name: "Engineering", policy_count: 0 }], total: 1 });
+    vi.spyOn(api, "getRetentionChannels").mockResolvedValue({
+      items: [{ id: "c1", name: "General", policy: null }], total: 1,
+    });
+    vi.spyOn(api, "createRetentionPolicy").mockResolvedValue({
+      id: "p1", team_id: "t1", team_name: "Engineering", channel_id: "c1", channel_name: "General",
+      retention_days: 30, status: "pending_preview", created_by: "x", created_at: "now", updated_at: "now",
+    });
+    vi.spyOn(api, "getRetentionPolicyPreview").mockRejectedValue(new Error("Graph GET messages failed: 403 Forbidden"));
+
+    renderWithClient();
+
+    fireEvent.click(await screen.findByText("Engineering"));
+    fireEvent.click(await screen.findByText("Configure retention"));
+    fireEvent.click(screen.getByText("Preview"));
+
+    await waitFor(() => expect(screen.getByText(/Unable to compute preview/i)).toBeInTheDocument());
+    expect(screen.getByText(/403 Forbidden/)).toBeInTheDocument();
+    expect(screen.queryByText("Confirm & Enable")).not.toBeInTheDocument();
+    expect(screen.queryByText(/approximately/i)).not.toBeInTheDocument();
+    // Recovery paths are offered instead.
+    expect(screen.getByText("Retry")).toBeInTheDocument();
+    expect(screen.getByText("Cancel")).toBeInTheDocument();
+  });
+
+  it("retries the preview from the error branch", async () => {
+    vi.spyOn(api, "getRetentionConnectionStatus").mockResolvedValue({
+      status: "connected", service_account_upn: "bot@x.com", last_refreshed_at: "now", last_error: null,
+    });
+    vi.spyOn(api, "getRetentionTeams").mockResolvedValue({ items: [{ id: "t1", name: "Engineering", policy_count: 0 }], total: 1 });
+    vi.spyOn(api, "getRetentionChannels").mockResolvedValue({
+      items: [{ id: "c1", name: "General", policy: null }], total: 1,
+    });
+    vi.spyOn(api, "createRetentionPolicy").mockResolvedValue({
+      id: "p1", team_id: "t1", team_name: "Engineering", channel_id: "c1", channel_name: "General",
+      retention_days: 30, status: "pending_preview", created_by: "x", created_at: "now", updated_at: "now",
+    });
+    vi.spyOn(api, "getRetentionPolicyPreview")
+      .mockRejectedValueOnce(new Error("throttled"))
+      .mockResolvedValue({ messages_count: 7, attachments_count: 2, oldest_message_at: "2026-01-01" });
+
+    renderWithClient();
+
+    fireEvent.click(await screen.findByText("Engineering"));
+    fireEvent.click(await screen.findByText("Configure retention"));
+    fireEvent.click(screen.getByText("Preview"));
+
+    await waitFor(() => expect(screen.getByText(/Unable to compute preview/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByText("Retry"));
+
+    await waitFor(() => expect(screen.getByText(/approximately/i)).toBeInTheDocument());
+    expect(screen.getByText("Confirm & Enable")).toBeInTheDocument();
+  });
+
+  it("renders an error banner when the teams list fails to load", async () => {
+    vi.spyOn(api, "getRetentionConnectionStatus").mockResolvedValue({
+      status: "connected", service_account_upn: "bot@x.com", last_refreshed_at: "now", last_error: null,
+    });
+    vi.spyOn(api, "getRetentionTeams").mockRejectedValue(new Error("Retention Graph connection is disconnected"));
+
+    renderWithClient();
+
+    await waitFor(() =>
+      expect(screen.getByText(/Retention Graph connection is disconnected/i)).toBeInTheDocument(),
+    );
+  });
+
+  it("renders an inline error when an expanded team's channels fail to load", async () => {
+    vi.spyOn(api, "getRetentionConnectionStatus").mockResolvedValue({
+      status: "connected", service_account_upn: "bot@x.com", last_refreshed_at: "now", last_error: null,
+    });
+    vi.spyOn(api, "getRetentionTeams").mockResolvedValue({ items: [{ id: "t1", name: "Engineering", policy_count: 0 }], total: 1 });
+    vi.spyOn(api, "getRetentionChannels").mockRejectedValue(new Error("Graph channels lookup failed: 429"));
+
+    renderWithClient();
+
+    fireEvent.click(await screen.findByText("Engineering"));
+
+    await waitFor(() => expect(screen.getByText(/Graph channels lookup failed: 429/i)).toBeInTheDocument());
+  });
+
+  it("surfaces a create-policy failure next to the Preview button", async () => {
+    vi.spyOn(api, "getRetentionConnectionStatus").mockResolvedValue({
+      status: "connected", service_account_upn: "bot@x.com", last_refreshed_at: "now", last_error: null,
+    });
+    vi.spyOn(api, "getRetentionTeams").mockResolvedValue({ items: [{ id: "t1", name: "Engineering", policy_count: 0 }], total: 1 });
+    vi.spyOn(api, "getRetentionChannels").mockResolvedValue({
+      items: [{ id: "c1", name: "General", policy: null }], total: 1,
+    });
+    vi.spyOn(api, "createRetentionPolicy").mockRejectedValue(new Error("A policy already exists for this channel"));
+
+    renderWithClient();
+
+    fireEvent.click(await screen.findByText("Engineering"));
+    fireEvent.click(await screen.findByText("Configure retention"));
+    fireEvent.click(screen.getByText("Preview"));
+
+    await waitFor(() =>
+      expect(screen.getByText(/A policy already exists for this channel/i)).toBeInTheDocument(),
+    );
   });
 });

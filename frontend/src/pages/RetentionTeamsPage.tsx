@@ -86,6 +86,11 @@ export default function RetentionTeamsPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Teams &amp; Channels</h1>
+      {teamsQuery.isError && (
+        <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
+          {teamsQuery.error instanceof Error ? teamsQuery.error.message : "Failed to load teams"}
+        </div>
+      )}
       <div className="divide-y divide-slate-200 rounded-md border border-slate-200">
         {(teamsQuery.data?.items ?? []).map((team) => (
           <div key={team.id}>
@@ -100,7 +105,12 @@ export default function RetentionTeamsPage() {
             </button>
             {expandedTeamId === team.id && (
               <div className="divide-y divide-slate-100 bg-slate-50 px-4">
-                {(channelsQuery.data?.items ?? []).map((channel) => (
+                {channelsQuery.isError ? (
+                  <p className="py-2 text-sm text-red-700">
+                    {channelsQuery.error instanceof Error ? channelsQuery.error.message : "Failed to load channels"}
+                  </p>
+                ) : null}
+                {(channelsQuery.isError ? [] : channelsQuery.data?.items ?? []).map((channel) => (
                   <div key={channel.id} className="flex items-center justify-between py-2 text-sm">
                     <span>{channel.name}</span>
                     <div className="flex items-center gap-2">
@@ -150,11 +160,46 @@ export default function RetentionTeamsPage() {
               >
                 Preview
               </button>
+              {createMutation.isError && (
+                <span className="text-sm text-red-700">
+                  {createMutation.error instanceof Error ? createMutation.error.message : "Failed to save policy"}
+                </span>
+              )}
             </div>
           ) : (
             <div className="mt-3 space-y-2 text-sm">
               {previewQuery.isLoading ? (
                 <p>Computing preview...</p>
+              ) : previewQuery.isError ? (
+                // Never fall through to the success branch on error: `data` would be
+                // undefined, rendering a fabricated "0 messages / 0 attachments" next to
+                // a live Confirm & Enable button, which would arm a policy that purges
+                // the real backlog on the next hourly pass. Confirm is only reachable
+                // from the success branch below.
+                <div className="space-y-2">
+                  <p className="text-red-700">
+                    Unable to compute preview:{" "}
+                    {previewQuery.error instanceof Error ? previewQuery.error.message : "Unknown error"}
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => previewQuery.refetch()}
+                      className="rounded bg-blue-600 px-3 py-1.5 text-white"
+                    >
+                      Retry
+                    </button>
+                    <button
+                      onClick={() => {
+                        cancelMutation.mutate(previewPolicyId);
+                        setConfiguringChannel(null);
+                        setPreviewPolicyId(null);
+                      }}
+                      className="rounded border border-slate-300 px-3 py-1.5"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
               ) : (
                 <>
                   <p>
@@ -181,6 +226,13 @@ export default function RetentionTeamsPage() {
                       Cancel
                     </button>
                   </div>
+                  {confirmMutation.isError && (
+                    <p className="text-red-700">
+                      {confirmMutation.error instanceof Error
+                        ? confirmMutation.error.message
+                        : "Failed to enable policy"}
+                    </p>
+                  )}
                 </>
               )}
             </div>
