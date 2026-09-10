@@ -256,7 +256,7 @@ def test_get_teams_filters_by_case_insensitive_name_substring(test_client, monke
             {"id": "t3", "name": "engineering leadership"},
         ],
     )
-    monkeypatch.setattr(routes_retention, "_list_channels_for_teams_batch", lambda _token, _team_ids: {})
+    monkeypatch.setattr(routes_retention.retention_directory_cache, "channels_by_team_snapshot", lambda: {})
 
     resp = test_client.get("/api/retention/teams", params={"q": "ENGINEER"}, headers=RETENTION_HOST)
     assert resp.status_code == 200
@@ -265,9 +265,9 @@ def test_get_teams_filters_by_case_insensitive_name_substring(test_client, monke
     assert {t["id"] for t in body["items"]} == {"t1", "t3"}
 
 
-def test_get_teams_matches_on_a_channel_name_via_the_batched_fan_out(test_client, monkeypatch):
+def test_get_teams_matches_on_a_channel_name_via_the_directory_cache(test_client, monkeypatch):
     # Graph has no "search channels across every team" endpoint, so a team with no
-    # name match but a matching channel must still surface via the batched fan-out.
+    # name match but a matching channel must still surface via the cached directory.
     import routes_retention
 
     _allow_retention(monkeypatch)
@@ -276,40 +276,55 @@ def test_get_teams_matches_on_a_channel_name_via_the_batched_fan_out(test_client
         routes_retention, "_list_teams",
         lambda _token: [{"id": "t1", "name": "Libra Production Support"}, {"id": "t2", "name": "Sales"}],
     )
-    fan_out_calls: list[list[str]] = []
-
-    def _fake_batch(_token, team_ids):
-        fan_out_calls.append(team_ids)
-        return {
+    monkeypatch.setattr(
+        routes_retention.retention_directory_cache, "channels_by_team_snapshot",
+        lambda: {
             "t1": [{"id": "c1", "name": "Incident Response"}, {"id": "c2", "name": "General"}],
             "t2": [{"id": "c3", "name": "General"}],
-        }
-
-    monkeypatch.setattr(routes_retention, "_list_channels_for_teams_batch", _fake_batch)
+        },
+    )
 
     resp = test_client.get("/api/retention/teams", params={"q": "incident"}, headers=RETENTION_HOST)
     assert resp.status_code == 200
     body = resp.json()
     assert body["total"] == 1
     assert body["items"][0]["id"] == "t1"
-    assert fan_out_calls == [["t1", "t2"]]
 
 
-def test_get_teams_does_not_fan_out_to_channels_when_search_is_empty(test_client, monkeypatch):
+def test_get_teams_channel_match_tolerates_a_team_missing_from_the_cache(test_client, monkeypatch):
+    # A team created since the cache's last refresh (or before it has ever run) is
+    # absent from the snapshot entirely — that must not error, just not match on
+    # channel name for that one team until the next refresh.
+    import routes_retention
+
+    _allow_retention(monkeypatch)
+    monkeypatch.setattr(routes_retention.retention_graph_connection, "get_valid_token", lambda: "token")
+    monkeypatch.setattr(
+        routes_retention, "_list_teams",
+        lambda _token: [{"id": "t1", "name": "Brand New Team"}],
+    )
+    monkeypatch.setattr(routes_retention.retention_directory_cache, "channels_by_team_snapshot", lambda: {})
+
+    resp = test_client.get("/api/retention/teams", params={"q": "incident"}, headers=RETENTION_HOST)
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 0
+
+
+def test_get_teams_does_not_read_the_directory_cache_when_search_is_empty(test_client, monkeypatch):
     import routes_retention
 
     _allow_retention(monkeypatch)
     monkeypatch.setattr(routes_retention.retention_graph_connection, "get_valid_token", lambda: "token")
     monkeypatch.setattr(routes_retention, "_list_teams", lambda _token: [{"id": "t1", "name": "Sales"}])
-    fan_out_calls: list[list[str]] = []
+    snapshot_calls: list[None] = []
     monkeypatch.setattr(
-        routes_retention, "_list_channels_for_teams_batch",
-        lambda _token, team_ids: fan_out_calls.append(team_ids) or {},
+        routes_retention.retention_directory_cache, "channels_by_team_snapshot",
+        lambda: snapshot_calls.append(None) or {},
     )
 
     resp = test_client.get("/api/retention/teams", headers=RETENTION_HOST)
     assert resp.status_code == 200
-    assert fan_out_calls == []
+    assert snapshot_calls == []
 
 
 def test_get_teams_search_composes_with_pagination(test_client, monkeypatch):
@@ -328,7 +343,7 @@ def test_get_teams_search_composes_with_pagination(test_client, monkeypatch):
             {"id": "t4", "name": "Engineering Gamma"},
         ],
     )
-    monkeypatch.setattr(routes_retention, "_list_channels_for_teams_batch", lambda _token, _team_ids: {})
+    monkeypatch.setattr(routes_retention.retention_directory_cache, "channels_by_team_snapshot", lambda: {})
 
     resp = test_client.get(
         "/api/retention/teams", params={"q": "engineering", "limit": 2, "offset": 1}, headers=RETENTION_HOST,

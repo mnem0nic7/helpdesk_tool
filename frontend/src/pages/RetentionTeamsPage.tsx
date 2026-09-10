@@ -127,20 +127,22 @@ export default function RetentionTeamsPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Teams &amp; Channels</h1>
-      <div className="flex max-w-sm items-center gap-2">
-        <input
-          type="search"
-          value={teamsSearch}
-          onChange={(e) => handleTeamsSearchChange(e.target.value)}
-          placeholder="Search teams and channels..."
-          aria-label="Search teams"
-          className="block w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
-        />
-        {isSearchingTeams && (
-          <span className="whitespace-nowrap text-xs text-slate-500">
-            Searching... (channel matches can take a while across every team)
-          </span>
-        )}
+      <div>
+        <div className="flex max-w-sm items-center gap-2">
+          <input
+            type="search"
+            value={teamsSearch}
+            onChange={(e) => handleTeamsSearchChange(e.target.value)}
+            placeholder="Search teams and channels..."
+            aria-label="Search teams"
+            className="block w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
+          />
+          {isSearchingTeams && <span className="whitespace-nowrap text-xs text-slate-500">Searching...</span>}
+        </div>
+        <p className="mt-1 text-xs text-slate-400">
+          Team names are always live. Channel-name matches use a periodically refreshed cached snapshot, so a
+          just-renamed or just-created channel may not show up immediately.
+        </p>
       </div>
       {teamsQuery.isError && (
         <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">

@@ -56,6 +56,7 @@ from deactivation_schedule import deactivation_schedule as _deactivation_schedul
 from password_expiry_notifier import password_expiry_notifier as _password_expiry_notifier
 from quarantine_release_job import quarantine_release_job as _quarantine_release_job
 from retention_cleanup_job import retention_cleanup_job as _retention_cleanup_job
+from retention_directory_cache import retention_directory_cache as _retention_directory_cache
 from askhr_bot_job import askhr_bot_job as _askhr_bot_job
 from ai_work_scheduler import AIWorkScheduler
 from azure_alert_engine import start_azure_alert_loop, stop_azure_alert_loop
@@ -163,6 +164,11 @@ async def _start_deferred_services(app: FastAPI) -> None:
         logger.exception("Failed to start retention cleanup job")
 
     try:
+        _retention_directory_cache.start_background_runner()
+    except Exception:
+        logger.exception("Failed to start retention directory cache")
+
+    try:
         _askhr_bot_job.start_background_runner()
     except Exception:
         logger.exception("Failed to start AskHR bot job")
@@ -214,6 +220,7 @@ async def _stop_leader_services(app: FastAPI) -> None:
     _password_expiry_notifier.stop_background_runner()
     _quarantine_release_job.stop_background_runner()
     _retention_cleanup_job.stop_background_runner()
+    _retention_directory_cache.stop_background_runner()
     _askhr_bot_job.stop_background_runner()
     await _defender_agent.stop_worker()
     await _security_digest_service.stop_worker()

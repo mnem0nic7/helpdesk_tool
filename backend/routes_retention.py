@@ -10,10 +10,10 @@ from pydantic import BaseModel
 
 from auth import oauth, require_retention_access
 from retention_cleanup_job import retention_cleanup_job
+from retention_directory_cache import retention_directory_cache
 from retention_graph_client import (
     RetentionGraphError,
     list_channels as _list_channels,
-    list_channels_for_teams_batch as _list_channels_for_teams_batch,
     list_teams as _list_teams,
 )
 from retention_graph_connection import (
@@ -125,12 +125,15 @@ def get_teams(
     needle = q.strip().lower()
     if needle:
         # Graph has no "search channels across every team" endpoint, so matching a
-        # channel name at this top level means fanning out to every team's channel
-        # list. Batched (20 teams per Graph $batch call) to keep this from being 347+
-        # sequential round trips, but it is still a live, uncached fan-out on every
-        # search — a deliberate tradeoff for always-fresh results over an index that
-        # could show a just-renamed/just-created channel late.
-        channels_by_team = _list_channels_for_teams_batch(token, [t["id"] for t in teams])
+        # channel name at this top level means checking every team's channel list.
+        # A live fan-out (even batched 20-teams-per-call) took 30-60+ seconds against
+        # this tenant's 300+ teams, so this reads retention_directory_cache's
+        # periodically-refreshed snapshot instead — results can lag actual Teams state
+        # by up to the cache's refresh interval, a deliberate tradeoff for a usable
+        # search box. A team missing from the snapshot (cache not warmed up yet, or a
+        # team created since the last refresh) is treated as having no known channels
+        # rather than failing the search.
+        channels_by_team = retention_directory_cache.channels_by_team_snapshot()
         teams = [
             t for t in teams
             if needle in t["name"].lower()
