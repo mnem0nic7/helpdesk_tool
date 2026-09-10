@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import retention_graph_client as _graph_module
-from retention_graph_connection import RetentionGraphConnectionError, retention_graph_connection
+from retention_graph_connection import retention_graph_connection
 from retention_policy_store import retention_policy_store
 
 logger = logging.getLogger(__name__)
@@ -70,15 +70,23 @@ class RetentionCleanupJob:
                 None, lambda: self._graph.delete_message(token, policy["team_id"], policy["channel_id"], item["id"]),
             )
 
-    async def _delete_attachments(self, item: dict, policy: dict, token: str, run_id: str) -> tuple[int, bool]:
+    async def _delete_attachments(
+        self, item: dict, policy: dict, token: str, run_id: str, site_id: str | None,
+    ) -> tuple[int, bool, str | None]:
+        # site_id is constant for the whole run (it's derived from policy["team_id"]
+        # alone), so it's resolved at most once per run and threaded back to the
+        # caller for reuse across every remaining message/attachment instead of being
+        # re-resolved per attachment — avoids multiplying Graph calls (and 429
+        # exposure) for channels with many aged attachments.
         loop = asyncio.get_event_loop()
         deleted = 0
         had_failure = False
         for attachment in item["attachments"]:
             try:
-                site_id = await loop.run_in_executor(
-                    None, lambda: self._graph.resolve_team_site_id(token, policy["team_id"]),
-                )
+                if site_id is None:
+                    site_id = await loop.run_in_executor(
+                        None, lambda: self._graph.resolve_team_site_id(token, policy["team_id"]),
+                    )
                 await loop.run_in_executor(
                     None, lambda: self._graph.delete_drive_item(token, site_id, attachment["id"]),
                 )
@@ -94,7 +102,7 @@ class RetentionCleanupJob:
                     sender_or_author=item["sender_or_author"], original_created_at=item["created_at"],
                     status="failed", error=str(exc),
                 )
-        return deleted, had_failure
+        return deleted, had_failure, site_id
 
     async def _run_policy(self, policy: dict, token: str) -> None:
         run_id = self._policy_store.start_run(policy["id"])
@@ -102,6 +110,7 @@ class RetentionCleanupJob:
         messages_deleted = 0
         attachments_deleted = 0
         had_failure = False
+        site_id: str | None = None
 
         try:
             items = await self._collect_items(policy, token, cutoff)
@@ -126,7 +135,7 @@ class RetentionCleanupJob:
                 sender_or_author=item["sender_or_author"], original_created_at=item["created_at"], status="deleted",
             )
             messages_deleted += 1
-            deleted, attachment_failure = await self._delete_attachments(item, policy, token, run_id)
+            deleted, attachment_failure, site_id = await self._delete_attachments(item, policy, token, run_id, site_id)
             attachments_deleted += deleted
             had_failure = had_failure or attachment_failure
 
@@ -141,7 +150,15 @@ class RetentionCleanupJob:
             return
         try:
             token = self._connection_store.get_valid_token()
-        except RetentionGraphConnectionError as exc:
+        except Exception as exc:
+            # get_valid_token() is documented to raise RetentionGraphConnectionError on a
+            # known-bad connection, but the underlying refresh call in
+            # retention_graph_connection.py is a raw `requests.post(...)` with no
+            # try/except of its own, so a transient network error (ConnectionError,
+            # Timeout, ...) can also escape as a plain exception. Treat any failure to
+            # obtain a token the same way: fail every active policy closed for this
+            # cycle rather than letting it bubble up and silently skip writing any run
+            # rows at all.
             logger.warning("Retention job: no valid Graph token, skipping cycle: %s", exc)
             for policy in policies:
                 run_id = self._policy_store.start_run(policy["id"])
