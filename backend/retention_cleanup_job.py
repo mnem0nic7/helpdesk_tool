@@ -1,0 +1,175 @@
+"""Hourly leader-only background job enforcing per-channel Teams message
+retention: deletes aged messages/replies (delegated Graph call) and their
+attachments (SharePoint driveItem) for every 'active' policy. Also exposes
+compute_preview(), reused synchronously by the API's dry-run step so preview
+and enforcement can never drift on selection logic."""
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+import retention_graph_client as _graph_module
+from retention_graph_connection import RetentionGraphConnectionError, retention_graph_connection
+from retention_policy_store import retention_policy_store
+
+logger = logging.getLogger(__name__)
+
+
+class RetentionCleanupJob:
+    def __init__(self, *, connection_store: Any = None, policy_store: Any = None, graph_module: Any = None) -> None:
+        self._connection_store = connection_store or retention_graph_connection
+        self._policy_store = policy_store or retention_policy_store
+        self._graph = graph_module or _graph_module
+        self._bg_task: asyncio.Task | None = None
+
+    async def _collect_items(self, policy: dict, token: str, cutoff: datetime) -> list[tuple[dict, bool]]:
+        loop = asyncio.get_event_loop()
+        messages = await loop.run_in_executor(
+            None, lambda: self._graph.list_messages_older_than(token, policy["team_id"], policy["channel_id"], cutoff),
+        )
+        items: list[tuple[dict, bool]] = [(m, False) for m in messages]
+        for message in messages:
+            replies = await loop.run_in_executor(
+                None,
+                lambda m=message: self._graph.list_replies_older_than(
+                    token, policy["team_id"], policy["channel_id"], m["id"], cutoff,
+                ),
+            )
+            items.extend((r, True) for r in replies)
+        return items
+
+    async def compute_preview(self, policy_id: str) -> dict[str, Any]:
+        policy = self._policy_store.get_policy(policy_id)
+        if not policy:
+            raise ValueError(f"Unknown policy {policy_id}")
+        token = self._connection_store.get_valid_token()
+        cutoff = datetime.now(timezone.utc) - timedelta(days=policy["retention_days"])
+        items = await self._collect_items(policy, token, cutoff)
+        all_items = [item for item, _is_reply in items]
+        attachments_count = sum(len(item["attachments"]) for item in all_items)
+        oldest = min((item["created_at"] for item in all_items), default=None)
+        return {
+            "messages_count": len(all_items),
+            "attachments_count": attachments_count,
+            "oldest_message_at": oldest,
+        }
+
+    async def _delete_item(self, item: dict, is_reply: bool, policy: dict, token: str) -> None:
+        loop = asyncio.get_event_loop()
+        if is_reply:
+            await loop.run_in_executor(
+                None,
+                lambda: self._graph.delete_reply(
+                    token, policy["team_id"], policy["channel_id"], item["parent_id"], item["id"],
+                ),
+            )
+        else:
+            await loop.run_in_executor(
+                None, lambda: self._graph.delete_message(token, policy["team_id"], policy["channel_id"], item["id"]),
+            )
+
+    async def _delete_attachments(self, item: dict, policy: dict, token: str, run_id: str) -> tuple[int, bool]:
+        loop = asyncio.get_event_loop()
+        deleted = 0
+        had_failure = False
+        for attachment in item["attachments"]:
+            try:
+                site_id = await loop.run_in_executor(
+                    None, lambda: self._graph.resolve_team_site_id(token, policy["team_id"]),
+                )
+                await loop.run_in_executor(
+                    None, lambda: self._graph.delete_drive_item(token, site_id, attachment["id"]),
+                )
+                self._policy_store.record_deletion(
+                    run_id=run_id, item_type="attachment", item_id=attachment["id"],
+                    sender_or_author=item["sender_or_author"], original_created_at=item["created_at"], status="deleted",
+                )
+                deleted += 1
+            except Exception as exc:
+                had_failure = True
+                self._policy_store.record_deletion(
+                    run_id=run_id, item_type="attachment", item_id=attachment["id"],
+                    sender_or_author=item["sender_or_author"], original_created_at=item["created_at"],
+                    status="failed", error=str(exc),
+                )
+        return deleted, had_failure
+
+    async def _run_policy(self, policy: dict, token: str) -> None:
+        run_id = self._policy_store.start_run(policy["id"])
+        cutoff = datetime.now(timezone.utc) - timedelta(days=policy["retention_days"])
+        messages_deleted = 0
+        attachments_deleted = 0
+        had_failure = False
+
+        try:
+            items = await self._collect_items(policy, token, cutoff)
+        except Exception as exc:
+            logger.exception("Retention job: failed to list content for policy %s", policy["id"])
+            self._policy_store.finish_run(run_id, outcome="failed", messages_deleted=0, attachments_deleted=0, error=str(exc))
+            return
+
+        for item, is_reply in items:
+            try:
+                await self._delete_item(item, is_reply, policy, token)
+            except Exception as exc:
+                had_failure = True
+                self._policy_store.record_deletion(
+                    run_id=run_id, item_type="message", item_id=item["id"],
+                    sender_or_author=item["sender_or_author"], original_created_at=item["created_at"],
+                    status="failed", error=str(exc),
+                )
+                continue
+            self._policy_store.record_deletion(
+                run_id=run_id, item_type="message", item_id=item["id"],
+                sender_or_author=item["sender_or_author"], original_created_at=item["created_at"], status="deleted",
+            )
+            messages_deleted += 1
+            deleted, attachment_failure = await self._delete_attachments(item, policy, token, run_id)
+            attachments_deleted += deleted
+            had_failure = had_failure or attachment_failure
+
+        outcome = "partial" if had_failure else "ok"
+        self._policy_store.finish_run(
+            run_id, outcome=outcome, messages_deleted=messages_deleted, attachments_deleted=attachments_deleted,
+        )
+
+    async def run_cycle(self) -> None:
+        policies = self._policy_store.list_active_policies()
+        if not policies:
+            return
+        try:
+            token = self._connection_store.get_valid_token()
+        except RetentionGraphConnectionError as exc:
+            logger.warning("Retention job: no valid Graph token, skipping cycle: %s", exc)
+            for policy in policies:
+                run_id = self._policy_store.start_run(policy["id"])
+                self._policy_store.finish_run(
+                    run_id, outcome="failed", messages_deleted=0, attachments_deleted=0, error="token_invalid",
+                )
+            return
+        for policy in policies:
+            await self._run_policy(policy, token)
+
+    def start_background_runner(self) -> None:
+        loop = asyncio.get_event_loop()
+        self._bg_task = loop.create_task(self._run_loop())
+
+    def stop_background_runner(self) -> None:
+        if self._bg_task:
+            self._bg_task.cancel()
+
+    async def _run_loop(self) -> None:
+        while True:
+            try:
+                await self.run_cycle()
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("Retention cleanup job loop error")
+                await asyncio.sleep(3600)
+
+
+retention_cleanup_job = RetentionCleanupJob()
