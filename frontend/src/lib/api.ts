@@ -5258,7 +5258,7 @@ export const api = {
       throw new Error("Not authenticated");
     }
     if (!res.ok) {
-      throw new Error(await buildErrorMessage("POST", "/api/retention/policies/confirm", res));
+      throw new Error(await buildErrorMessage("POST", `/api/retention/policies/${encodeURIComponent(policyId)}/confirm`, res));
     }
     return res.json() as Promise<RetentionPolicySummary>;
   },
@@ -5276,7 +5276,7 @@ export const api = {
       throw new Error("Not authenticated");
     }
     if (!res.ok) {
-      throw new Error(await buildErrorMessage("PATCH", `/api/retention/policies/${policyId}`, res));
+      throw new Error(await buildErrorMessage("PATCH", `/api/retention/policies/${encodeURIComponent(policyId)}`, res));
     }
     return res.json() as Promise<RetentionPolicySummary>;
   },
