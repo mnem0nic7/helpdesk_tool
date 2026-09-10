@@ -50,7 +50,13 @@ class RetentionCleanupJob:
         policy = self._policy_store.get_policy(policy_id)
         if not policy:
             raise ValueError(f"Unknown policy {policy_id}")
-        token = self._connection_store.get_valid_token()
+        # get_valid_token() is synchronous and can block for the duration of a
+        # token refresh (a raw requests.post under a threading.Lock), so it must
+        # not run inline on the event loop — compute_preview is awaited straight
+        # from an async FastAPI route, and blocking here freezes every other host
+        # served by this backend process.
+        loop = asyncio.get_event_loop()
+        token = await loop.run_in_executor(None, self._connection_store.get_valid_token)
         cutoff = datetime.now(timezone.utc) - timedelta(days=policy["retention_days"])
         items = await self._collect_items(policy, token, cutoff)
         all_items = [item for item, _is_reply in items]
@@ -138,6 +144,20 @@ class RetentionCleanupJob:
             return
 
         for item, is_reply in items:
+            # Attachments MUST be deleted before the message/reply itself, and the
+            # message delete is gated on every attachment succeeding. Reason:
+            # list_messages_older_than/list_replies_older_than deliberately filter
+            # out anything with deletedDateTime set, so a soft-deleted message never
+            # reappears in a later cycle's aged list. If we deleted the message first
+            # and an attachment delete then failed, that SharePoint file would never
+            # be retried — it would leak permanently while the next run reported
+            # outcome="ok". Leaving the message undeleted keeps the whole item in
+            # next cycle's aged list so message + attachment are retried together.
+            deleted, attachment_failure, site_id = await self._delete_attachments(item, policy, token, run_id, site_id)
+            attachments_deleted += deleted
+            if attachment_failure:
+                had_failure = True
+                continue
             try:
                 await self._delete_item(item, is_reply, policy, token)
             except Exception as exc:
@@ -153,9 +173,6 @@ class RetentionCleanupJob:
                 sender_or_author=item["sender_or_author"], original_created_at=item["created_at"], status="deleted",
             )
             messages_deleted += 1
-            deleted, attachment_failure, site_id = await self._delete_attachments(item, policy, token, run_id, site_id)
-            attachments_deleted += deleted
-            had_failure = had_failure or attachment_failure
 
         outcome = "partial" if had_failure else "ok"
         self._policy_store.finish_run(
@@ -186,8 +203,13 @@ class RetentionCleanupJob:
         policies = self._policy_store.list_active_policies()
         if not policies:
             return
+        # Offloaded to a worker thread: get_valid_token() is synchronous and can
+        # block on a token refresh (raw requests.post under a threading.Lock).
+        # run_cycle shares this event loop with the rest of the backend, so calling
+        # it inline would stall every other request during a refresh.
+        loop = asyncio.get_event_loop()
         try:
-            token = self._connection_store.get_valid_token()
+            token = await loop.run_in_executor(None, self._connection_store.get_valid_token)
         except Exception as exc:
             # get_valid_token() is documented to raise RetentionGraphConnectionError on a
             # known-bad connection, but the underlying refresh call in
