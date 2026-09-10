@@ -138,6 +138,8 @@ OASISDEV_AUTH_PROVIDER: str = _env_auth_provider("OASISDEV_AUTH_PROVIDER", "atla
 AZURE_AUTH_PROVIDER: str = _env_auth_provider("AZURE_AUTH_PROVIDER", "entra")
 SECURITY_AUTH_PROVIDER: str = _env_auth_provider("SECURITY_AUTH_PROVIDER", "entra")
 HRAPP_AUTH_PROVIDER: str = _env_auth_provider("HRAPP_AUTH_PROVIDER", "entra")
+RETENTION_APP_HOST: str = os.getenv("RETENTION_APP_HOST", "retention.movedocs.com")
+RETENTION_AUTH_PROVIDER: str = _env_auth_provider("RETENTION_AUTH_PROVIDER", "entra")
 
 # AI provider API keys
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
@@ -181,6 +183,7 @@ EMAILGISTICS_SYNC_SECURITY_GROUPS: bool = os.getenv("EMAILGISTICS_SYNC_SECURITY_
     "on",
 }
 ALLOWED_USERS: str = os.getenv("ALLOWED_USERS", "")  # comma-separated emails, empty = all
+RETENTION_ALLOWED_USERS: str = os.getenv("RETENTION_ALLOWED_USERS", "")  # comma-separated emails; empty = deny all (fail closed — this host can delete tenant Teams data)
 ADMIN_USERS: str = os.getenv("ADMIN_USERS", "")  # comma-separated emails for write operations, empty = all authenticated
 
 # Atlassian OAuth for user-on-behalf-of Jira writes
@@ -190,6 +193,12 @@ ATLASSIAN_ALLOWED_SITE_URL: str = (
     os.getenv("ATLASSIAN_ALLOWED_SITE_URL", JIRA_BASE_URL).strip().rstrip("/") or JIRA_BASE_URL
 )
 ATLASSIAN_TOKEN_ENCRYPTION_KEY: str = os.getenv("ATLASSIAN_TOKEN_ENCRYPTION_KEY", "").strip()
+# Delegated Microsoft Graph OAuth for the Teams-retention service account
+# (deleting channel messages has no supported application-permission path).
+RETENTION_GRAPH_CLIENT_ID: str = os.getenv("RETENTION_GRAPH_CLIENT_ID", "").strip()
+RETENTION_GRAPH_CLIENT_SECRET: str = os.getenv("RETENTION_GRAPH_CLIENT_SECRET", "").strip()
+RETENTION_GRAPH_TENANT_ID: str = os.getenv("RETENTION_GRAPH_TENANT_ID", "").strip()
+RETENTION_TOKEN_ENCRYPTION_KEY: str = os.getenv("RETENTION_TOKEN_ENCRYPTION_KEY", "").strip()
 ATLASSIAN_ACCESS_GROUPS: list[str] = _env_csv("ATLASSIAN_ACCESS_GROUPS") or [
     "jira-servicemanagement-users-keyjira",
     "MoveDocs Service Desk Agents",
@@ -239,6 +248,8 @@ def get_auth_provider_for_scope(scope: str) -> AuthProvider:
         return SECURITY_AUTH_PROVIDER  # type: ignore[return-value]
     if normalized == "hrapp":
         return HRAPP_AUTH_PROVIDER  # type: ignore[return-value]
+    if normalized == "retention":
+        return RETENTION_AUTH_PROVIDER  # type: ignore[return-value]
     if normalized == "oasisdev":
         return OASISDEV_AUTH_PROVIDER  # type: ignore[return-value]
     return PRIMARY_AUTH_PROVIDER  # type: ignore[return-value]

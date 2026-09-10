@@ -38,3 +38,15 @@ def test_get_auth_provider_for_scope_hrapp_defaults_to_entra():
     import config
 
     assert config.get_auth_provider_for_scope("hrapp") == "entra"
+
+
+def test_retention_host_maps_to_retention_scope():
+    from site_context import get_site_scope_for_host
+    from config import RETENTION_APP_HOST
+    assert get_site_scope_for_host(RETENTION_APP_HOST) == "retention"
+
+
+def test_retention_scope_excluded_from_scoped_issues():
+    from site_context import issue_matches_scope
+    issue = {"key": "OIT-1", "fields": {"project": {"key": "OIT"}}}
+    assert issue_matches_scope(issue, "retention") is False
