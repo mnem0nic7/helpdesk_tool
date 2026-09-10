@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { api, type RetentionImportResultRow, type RetentionImportRow } from "../lib/api.ts";
+import { api, type RetentionImportRow } from "../lib/api.ts";
 
 function summarize(rows: RetentionImportRow[]) {
   const counts = { create: 0, update: 0, skip: 0, error: 0 };
@@ -13,7 +13,7 @@ function summarize(rows: RetentionImportRow[]) {
 export default function RetentionImportExportPage() {
   const [file, setFile] = useState<File | null>(null);
   const [previewRows, setPreviewRows] = useState<RetentionImportRow[] | null>(null);
-  const [resultRows, setResultRows] = useState<RetentionImportResultRow[] | null>(null);
+  const [resultRows, setResultRows] = useState<RetentionImportRow[] | null>(null);
 
   const previewMutation = useMutation({
     mutationFn: (uploaded: File) => api.previewRetentionImport(uploaded),
@@ -134,7 +134,7 @@ export default function RetentionImportExportPage() {
                     {row.current_status ? `${row.current_status}${row.current_retention_days ? `, ${row.current_retention_days}d` : ""}` : "none"}
                   </td>
                   <td>{row.retention_days ?? "—"}</td>
-                  <td>{"result" in row ? row.result : row.action}</td>
+                  <td>{row.result ?? row.action}</td>
                   <td className="text-red-600">{row.error ?? ""}</td>
                 </tr>
               ))}

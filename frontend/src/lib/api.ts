@@ -5317,7 +5317,7 @@ export const api = {
     return res.json() as Promise<{ rows: RetentionImportRow[] }>;
   },
 
-  async applyRetentionImport(file: File): Promise<{ rows: RetentionImportResultRow[] }> {
+  async applyRetentionImport(file: File): Promise<{ rows: RetentionImportRow[] }> {
     const body = new FormData();
     body.append("file", file);
     const res = await fetch("/api/retention/import/apply", { method: "POST", body });
@@ -5328,7 +5328,7 @@ export const api = {
     if (!res.ok) {
       throw new Error(await buildErrorMessage("POST", "/api/retention/import/apply", res));
     }
-    return res.json() as Promise<{ rows: RetentionImportResultRow[] }>;
+    return res.json() as Promise<{ rows: RetentionImportRow[] }>;
   },
 
   getAskHrBotStatus(): Promise<AskHrBotStatus> {
@@ -5763,10 +5763,10 @@ export interface RetentionImportRow {
   retention_days: number | null;
   action: "create" | "update" | "skip" | "error";
   error: string | null;
-}
-
-export interface RetentionImportResultRow extends RetentionImportRow {
-  result: "created" | "updated" | "skipped" | "failed";
+  // Present only in the response from applyRetentionImport, not previewRetentionImport
+  // — kept on the same type (rather than a separate extends-interface) so a page that
+  // renders either response's rows through one array doesn't have to deal with a union.
+  result?: "created" | "updated" | "skipped" | "failed";
 }
 
 export interface AskHrBotRun {
