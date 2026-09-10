@@ -256,13 +256,13 @@ describe("RetentionTeamsPage", () => {
     renderWithClient();
 
     await screen.findByText("Engineering");
-    expect(teamsSpy).toHaveBeenCalledWith(50, 0);
+    expect(teamsSpy).toHaveBeenCalledWith(50, 0, "");
     const prevButtons = screen.getAllByText("Previous");
     expect(prevButtons[0]).toBeDisabled();
 
     fireEvent.click(screen.getAllByText("Next")[0]);
 
-    await waitFor(() => expect(teamsSpy).toHaveBeenCalledWith(50, 50));
+    await waitFor(() => expect(teamsSpy).toHaveBeenCalledWith(50, 50, ""));
   });
 
   it("paginates the channels list and resets to the first page when switching teams", async () => {
@@ -292,10 +292,35 @@ describe("RetentionTeamsPage", () => {
     // own pagination (rendered first, nested inside the expanded team) and the
     // teams list's pagination below it.
     fireEvent.click(screen.getAllByText("Next")[0]);
-    await waitFor(() => expect(channelsSpy).toHaveBeenCalledWith("t1", 50, 50));
+    await waitFor(() => expect(channelsSpy).toHaveBeenCalledWith("t1", 50, 50, ""));
 
     fireEvent.click(screen.getByText("Sales"));
-    await waitFor(() => expect(channelsSpy).toHaveBeenCalledWith("t2", 50, 0));
+    await waitFor(() => expect(channelsSpy).toHaveBeenCalledWith("t2", 50, 0, ""));
+  });
+
+  it("searches teams and channels, resetting to the first page on each change", async () => {
+    vi.spyOn(api, "getRetentionConnectionStatus").mockResolvedValue({
+      status: "connected", service_account_upn: "bot@x.com", last_refreshed_at: "now", last_error: null,
+    });
+    const teamsSpy = vi.spyOn(api, "getRetentionTeams").mockResolvedValue({
+      items: [{ id: "t1", name: "Engineering", policy_count: 0 }], total: 1,
+    });
+    const channelsSpy = vi.spyOn(api, "getRetentionChannels").mockResolvedValue({
+      items: [{ id: "c1", name: "General", policy: null }], total: 1,
+    });
+
+    renderWithClient();
+
+    await screen.findByText("Engineering");
+    fireEvent.change(screen.getByLabelText("Search teams"), { target: { value: "eng" } });
+    await waitFor(() => expect(teamsSpy).toHaveBeenCalledWith(50, 0, "eng"));
+    await screen.findByText("Engineering");
+
+    fireEvent.click(screen.getByText("Engineering"));
+    await screen.findByText("General");
+    fireEvent.change(screen.getByLabelText("Search channels"), { target: { value: "gen" } });
+    await waitFor(() => expect(channelsSpy).toHaveBeenCalledWith("t1", 50, 0, "gen"));
+    await screen.findByText("General");
   });
 
   it("surfaces a create-policy failure next to the Preview button", async () => {

@@ -243,6 +243,74 @@ def test_get_channels_returns_502_on_graph_error(test_client, monkeypatch):
     assert resp.status_code == 502
 
 
+def test_get_teams_filters_by_case_insensitive_name_substring(test_client, monkeypatch):
+    import routes_retention
+
+    _allow_retention(monkeypatch)
+    monkeypatch.setattr(routes_retention.retention_graph_connection, "get_valid_token", lambda: "token")
+    monkeypatch.setattr(
+        routes_retention, "_list_teams",
+        lambda _token: [
+            {"id": "t1", "name": "Engineering"},
+            {"id": "t2", "name": "Sales"},
+            {"id": "t3", "name": "engineering leadership"},
+        ],
+    )
+
+    resp = test_client.get("/api/retention/teams", params={"q": "ENGINEER"}, headers=RETENTION_HOST)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    assert {t["id"] for t in body["items"]} == {"t1", "t3"}
+
+
+def test_get_teams_search_composes_with_pagination(test_client, monkeypatch):
+    # Filtering must happen before offset/limit slicing, or `total` and the
+    # returned page would reflect the unfiltered list instead of the search result.
+    import routes_retention
+
+    _allow_retention(monkeypatch)
+    monkeypatch.setattr(routes_retention.retention_graph_connection, "get_valid_token", lambda: "token")
+    monkeypatch.setattr(
+        routes_retention, "_list_teams",
+        lambda _token: [
+            {"id": "t1", "name": "Engineering Alpha"},
+            {"id": "t2", "name": "Sales"},
+            {"id": "t3", "name": "Engineering Beta"},
+            {"id": "t4", "name": "Engineering Gamma"},
+        ],
+    )
+
+    resp = test_client.get(
+        "/api/retention/teams", params={"q": "engineering", "limit": 2, "offset": 1}, headers=RETENTION_HOST,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 3
+    assert [t["id"] for t in body["items"]] == ["t3", "t4"]
+
+
+def test_get_channels_filters_by_case_insensitive_name_substring(test_client, monkeypatch):
+    import routes_retention
+
+    _allow_retention(monkeypatch)
+    monkeypatch.setattr(routes_retention.retention_graph_connection, "get_valid_token", lambda: "token")
+    monkeypatch.setattr(
+        routes_retention, "_list_channels",
+        lambda _token, _team_id: [
+            {"id": "c1", "name": "General"},
+            {"id": "c2", "name": "Random"},
+            {"id": "c3", "name": "general-archive"},
+        ],
+    )
+
+    resp = test_client.get("/api/retention/teams/t1/channels", params={"q": "general"}, headers=RETENTION_HOST)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    assert {c["id"] for c in body["items"]} == {"c1", "c3"}
+
+
 def test_teams_and_channels_routes_are_sync_defs_not_async():
     """Blocking `requests` Graph enumeration must not run on the shared event loop.
 

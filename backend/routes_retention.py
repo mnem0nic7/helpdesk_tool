@@ -106,7 +106,9 @@ async def connection_callback(request: Request, session: dict[str, Any] = Depend
 # Plain `def` lets FastAPI run them in its threadpool, matching this repo's
 # precedent for blocking-I/O handlers in routes_ad.py / routes_tools.py.
 @router.get("/teams", dependencies=[Depends(_require_retention_session)])
-def get_teams(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)) -> dict[str, Any]:
+def get_teams(
+    limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), q: str = Query(""),
+) -> dict[str, Any]:
     try:
         token = retention_graph_connection.get_valid_token()
         teams = _list_teams(token)
@@ -119,12 +121,15 @@ def get_teams(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)
         active_by_team[policy["team_id"]] = active_by_team.get(policy["team_id"], 0) + 1
     for team in teams:
         team["policy_count"] = active_by_team.get(team["id"], 0)
+    needle = q.strip().lower()
+    if needle:
+        teams = [t for t in teams if needle in t["name"].lower()]
     return {"items": teams[offset : offset + limit], "total": len(teams)}
 
 
 @router.get("/teams/{team_id}/channels", dependencies=[Depends(_require_retention_session)])
 def get_channels(
-    team_id: str, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
+    team_id: str, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), q: str = Query(""),
 ) -> dict[str, Any]:
     try:
         token = retention_graph_connection.get_valid_token()
@@ -135,6 +140,9 @@ def get_channels(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     for channel in channels:
         channel["policy"] = retention_policy_store.get_policy_for_channel(team_id, channel["id"])
+    needle = q.strip().lower()
+    if needle:
+        channels = [c for c in channels if needle in c["name"].lower()]
     return {"items": channels[offset : offset + limit], "total": len(channels)}
 
 

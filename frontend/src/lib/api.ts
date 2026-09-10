@@ -5219,14 +5219,16 @@ export const api = {
     return fetchJSON<RetentionConnectionStatus>("/api/retention/connection/status");
   },
 
-  getRetentionTeams(limit = 50, offset = 0): Promise<{ items: RetentionTeam[]; total: number }> {
-    return fetchJSON(`/api/retention/teams?limit=${limit}&offset=${offset}`);
+  getRetentionTeams(limit = 50, offset = 0, q = ""): Promise<{ items: RetentionTeam[]; total: number }> {
+    return fetchJSON(`/api/retention/teams?limit=${limit}&offset=${offset}&q=${encodeURIComponent(q)}`);
   },
 
   getRetentionChannels(
-    teamId: string, limit = 50, offset = 0,
+    teamId: string, limit = 50, offset = 0, q = "",
   ): Promise<{ items: RetentionChannel[]; total: number }> {
-    return fetchJSON(`/api/retention/teams/${encodeURIComponent(teamId)}/channels?limit=${limit}&offset=${offset}`);
+    return fetchJSON(
+      `/api/retention/teams/${encodeURIComponent(teamId)}/channels?limit=${limit}&offset=${offset}&q=${encodeURIComponent(q)}`,
+    );
   },
 
   async createRetentionPolicy(body: {

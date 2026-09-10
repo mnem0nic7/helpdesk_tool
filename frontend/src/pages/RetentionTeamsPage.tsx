@@ -13,6 +13,8 @@ export default function RetentionTeamsPage() {
   const [previewPolicyId, setPreviewPolicyId] = useState<string | null>(null);
   const [teamsOffset, setTeamsOffset] = useState(0);
   const [channelsOffset, setChannelsOffset] = useState(0);
+  const [teamsSearch, setTeamsSearch] = useState("");
+  const [channelsSearch, setChannelsSearch] = useState("");
 
   const statusQuery = useQuery({
     queryKey: ["retention", "connection-status"],
@@ -20,19 +22,30 @@ export default function RetentionTeamsPage() {
   });
 
   const teamsQuery = useQuery({
-    queryKey: ["retention", "teams", teamsOffset],
-    queryFn: () => api.getRetentionTeams(TEAMS_LIMIT, teamsOffset),
+    queryKey: ["retention", "teams", teamsOffset, teamsSearch],
+    queryFn: () => api.getRetentionTeams(TEAMS_LIMIT, teamsOffset, teamsSearch),
     enabled: statusQuery.data?.status === "connected",
   });
 
   const channelsQuery = useQuery({
-    queryKey: ["retention", "channels", expandedTeamId, channelsOffset],
-    queryFn: () => api.getRetentionChannels(expandedTeamId as string, CHANNELS_LIMIT, channelsOffset),
+    queryKey: ["retention", "channels", expandedTeamId, channelsOffset, channelsSearch],
+    queryFn: () => api.getRetentionChannels(expandedTeamId as string, CHANNELS_LIMIT, channelsOffset, channelsSearch),
     enabled: !!expandedTeamId,
   });
 
   function toggleTeam(teamId: string) {
     setExpandedTeamId((current) => (current === teamId ? null : teamId));
+    setChannelsOffset(0);
+    setChannelsSearch("");
+  }
+
+  function handleTeamsSearchChange(value: string) {
+    setTeamsSearch(value);
+    setTeamsOffset(0);
+  }
+
+  function handleChannelsSearchChange(value: string) {
+    setChannelsSearch(value);
     setChannelsOffset(0);
   }
 
@@ -96,6 +109,14 @@ export default function RetentionTeamsPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Teams &amp; Channels</h1>
+      <input
+        type="search"
+        value={teamsSearch}
+        onChange={(e) => handleTeamsSearchChange(e.target.value)}
+        placeholder="Search teams..."
+        aria-label="Search teams"
+        className="block w-full max-w-sm rounded border border-slate-300 px-3 py-1.5 text-sm"
+      />
       {teamsQuery.isError && (
         <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
           {teamsQuery.error instanceof Error ? teamsQuery.error.message : "Failed to load teams"}
@@ -115,6 +136,14 @@ export default function RetentionTeamsPage() {
             </button>
             {expandedTeamId === team.id && (
               <div className="divide-y divide-slate-100 bg-slate-50 px-4">
+                <input
+                  type="search"
+                  value={channelsSearch}
+                  onChange={(e) => handleChannelsSearchChange(e.target.value)}
+                  placeholder="Search channels..."
+                  aria-label="Search channels"
+                  className="mt-2 block w-full max-w-xs rounded border border-slate-300 px-2 py-1 text-sm"
+                />
                 {channelsQuery.isError ? (
                   <p className="py-2 text-sm text-red-700">
                     {channelsQuery.error instanceof Error ? channelsQuery.error.message : "Failed to load channels"}
