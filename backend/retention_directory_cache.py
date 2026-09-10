@@ -48,6 +48,7 @@ class RetentionDirectoryCache:
         team_ids = [t["id"] for t in teams]
         self._channels_by_team = self._graph.list_channels_for_teams_batch(token, team_ids)
         self._last_refreshed_at = time.time()
+        logger.info("Retention directory cache refreshed: %d teams", len(self._channels_by_team))
 
     def start_background_runner(self) -> None:
         loop = asyncio.get_event_loop()
