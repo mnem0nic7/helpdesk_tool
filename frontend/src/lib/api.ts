@@ -5215,6 +5215,90 @@ export const api = {
     return res.json() as Promise<QuarantineReleaseStatus>;
   },
 
+  getRetentionConnectionStatus(): Promise<RetentionConnectionStatus> {
+    return fetchJSON<RetentionConnectionStatus>("/api/retention/connection/status");
+  },
+
+  getRetentionTeams(limit = 50, offset = 0): Promise<{ items: RetentionTeam[]; total: number }> {
+    return fetchJSON(`/api/retention/teams?limit=${limit}&offset=${offset}`);
+  },
+
+  getRetentionChannels(
+    teamId: string, limit = 50, offset = 0,
+  ): Promise<{ items: RetentionChannel[]; total: number }> {
+    return fetchJSON(`/api/retention/teams/${encodeURIComponent(teamId)}/channels?limit=${limit}&offset=${offset}`);
+  },
+
+  async createRetentionPolicy(body: {
+    team_id: string; team_name: string; channel_id: string; channel_name: string; retention_days: number;
+  }): Promise<RetentionPolicySummary> {
+    const res = await fetch("/api/retention/policies", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("POST", "/api/retention/policies", res));
+    }
+    return res.json() as Promise<RetentionPolicySummary>;
+  },
+
+  getRetentionPolicyPreview(policyId: string): Promise<RetentionPreview> {
+    return fetchJSON(`/api/retention/policies/${encodeURIComponent(policyId)}/preview`);
+  },
+
+  async confirmRetentionPolicy(policyId: string): Promise<RetentionPolicySummary> {
+    const res = await fetch(`/api/retention/policies/${encodeURIComponent(policyId)}/confirm`, { method: "POST" });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("POST", "/api/retention/policies/confirm", res));
+    }
+    return res.json() as Promise<RetentionPolicySummary>;
+  },
+
+  async patchRetentionPolicy(
+    policyId: string, body: { retention_days?: number; status?: string },
+  ): Promise<RetentionPolicySummary> {
+    const res = await fetch(`/api/retention/policies/${encodeURIComponent(policyId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("PATCH", `/api/retention/policies/${policyId}`, res));
+    }
+    return res.json() as Promise<RetentionPolicySummary>;
+  },
+
+  getRetentionPolicies(limit = 50, offset = 0): Promise<{ items: RetentionPolicySummary[]; total: number }> {
+    return fetchJSON(`/api/retention/policies?limit=${limit}&offset=${offset}`);
+  },
+
+  getRetentionRuns(
+    policyId?: string, limit = 30, offset = 0,
+  ): Promise<{ items: RetentionRun[]; total: number }> {
+    const policyParam = policyId ? `&policy_id=${encodeURIComponent(policyId)}` : "";
+    return fetchJSON(`/api/retention/runs?limit=${limit}&offset=${offset}${policyParam}`);
+  },
+
+  getRetentionDeletions(
+    runId?: string, limit = 50, offset = 0,
+  ): Promise<{ items: RetentionDeletion[]; total: number }> {
+    const runParam = runId ? `&run_id=${encodeURIComponent(runId)}` : "";
+    return fetchJSON(`/api/retention/deletions?limit=${limit}&offset=${offset}${runParam}`);
+  },
+
   getAskHrBotStatus(): Promise<AskHrBotStatus> {
     return fetchJSON<AskHrBotStatus>("/api/askhr-bot/status");
   },
@@ -5574,6 +5658,67 @@ export interface QuarantineReleaseStatus {
   enabled: boolean;
   allowed_domains: string[];
   last_run: QuarantineReleaseRun | null;
+}
+
+export interface RetentionConnectionStatus {
+  status: "connected" | "disconnected";
+  service_account_upn: string;
+  last_refreshed_at: string | null;
+  last_error: string | null;
+}
+
+export interface RetentionTeam {
+  id: string;
+  name: string;
+  policy_count: number;
+}
+
+export interface RetentionPolicySummary {
+  id: string;
+  team_id: string;
+  team_name: string;
+  channel_id: string;
+  channel_name: string;
+  retention_days: number;
+  status: "pending_preview" | "active" | "disabled";
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RetentionChannel {
+  id: string;
+  name: string;
+  policy: RetentionPolicySummary | null;
+}
+
+export interface RetentionPreview {
+  messages_count: number;
+  attachments_count: number;
+  oldest_message_at: string | null;
+}
+
+export interface RetentionRun {
+  id: string;
+  policy_id: string;
+  started_at: string;
+  finished_at: string | null;
+  outcome: "running" | "ok" | "partial" | "failed";
+  messages_deleted: number;
+  attachments_deleted: number;
+  error: string | null;
+}
+
+export interface RetentionDeletion {
+  id: string;
+  run_id: string;
+  item_type: "message" | "attachment";
+  item_id: string;
+  sender_or_author: string;
+  original_created_at: string;
+  deleted_at: string;
+  status: "deleted" | "failed";
+  error: string | null;
 }
 
 export interface AskHrBotRun {
