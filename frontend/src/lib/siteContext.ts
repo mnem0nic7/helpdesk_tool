@@ -1,5 +1,5 @@
 export interface SiteBranding {
-  scope: "primary" | "oasisdev" | "azure" | "security" | "hrapp";
+  scope: "primary" | "oasisdev" | "azure" | "security" | "hrapp" | "retention";
   appName: string;
   dashboardName: string;
   alertPrefix: string;
@@ -23,6 +23,11 @@ function isSecurityHost(hostname: string): boolean {
 function isHrappHost(hostname: string): boolean {
   const host = hostname.trim().toLowerCase();
   return host === "hrapp.movedocs.com" || host.startsWith("hrapp.");
+}
+
+function isRetentionHost(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase();
+  return host === "retention.movedocs.com" || host.startsWith("retention.");
 }
 
 function getCurrentHostname(): string {
@@ -54,6 +59,15 @@ export function getSiteBranding(): SiteBranding {
       appName: "AskHR Portal",
       dashboardName: "AskHR Portal",
       alertPrefix: "HR",
+    };
+  }
+
+  if (isRetentionHost(hostname)) {
+    return {
+      scope: "retention",
+      appName: "Teams Retention",
+      dashboardName: "Teams Retention",
+      alertPrefix: "Retention",
     };
   }
 

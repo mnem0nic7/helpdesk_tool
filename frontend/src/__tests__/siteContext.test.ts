@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterEach } from "vitest";
 import { getSiteBranding } from "../lib/siteContext.ts";
 
 describe("getSiteBranding", () => {
@@ -20,5 +20,18 @@ describe("getSiteBranding", () => {
     window.history.replaceState({}, "", "/");
     expect(getSiteBranding().scope).toBe("hrapp");
     expect(getSiteBranding().appName).toBe("AskHR Portal");
+  });
+});
+
+describe("retention host branding", () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.siteHostname;
+  });
+
+  it("returns the retention scope for retention.movedocs.com", () => {
+    document.documentElement.dataset.siteHostname = "retention.movedocs.com";
+    const branding = getSiteBranding();
+    expect(branding.scope).toBe("retention");
+    expect(branding.appName).toBe("Teams Retention");
   });
 });

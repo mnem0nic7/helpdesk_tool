@@ -99,6 +99,16 @@ const hrappNavGroups: NavGroup[] = [
   },
 ];
 
+const retentionNavGroups: NavGroup[] = [
+  {
+    label: "Retention",
+    items: [
+      { to: "/", label: "Teams & Channels", icon: "⏳", end: true },
+      { to: "/history", label: "Policy History", icon: "▤" },
+    ],
+  },
+];
+
 const _NAV_GROUP_STORAGE_KEY = "security_nav_collapsed";
 
 function SecurityGroupedNav({ pathname }: { pathname: string }) {
@@ -181,6 +191,38 @@ function HrAppGroupedNav({ pathname }: { pathname: string }) {
   return (
     <nav className="flex-1 space-y-3 px-3 py-4 overflow-y-auto">
       {hrappNavGroups.map(group => (
+        <div key={group.label}>
+          <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+            {group.label}
+          </div>
+          <div className="mt-1 space-y-1">
+            {group.items.map(({ to, label, icon, end }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={end ?? (pathname === to)}
+                className={({ isActive }) =>
+                  [
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    isActive ? "bg-slate-700 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white",
+                  ].join(" ")
+                }
+              >
+                <span className="text-base leading-none">{icon}</span>
+                <span>{label}</span>
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      ))}
+    </nav>
+  );
+}
+
+function RetentionGroupedNav({ pathname }: { pathname: string }) {
+  return (
+    <nav className="flex-1 space-y-3 px-3 py-4 overflow-y-auto">
+      {retentionNavGroups.map(group => (
         <div key={group.label}>
           <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
             {group.label}
@@ -397,6 +439,8 @@ export default function Layout() {
           <SecurityGroupedNav pathname={location.pathname} />
         ) : branding.scope === "hrapp" ? (
           <HrAppGroupedNav pathname={location.pathname} />
+        ) : branding.scope === "retention" ? (
+          <RetentionGroupedNav pathname={location.pathname} />
         ) : (
           <nav className="flex-1 space-y-1 px-3 py-4">
             {navItems
@@ -468,13 +512,9 @@ export default function Layout() {
               {branding.scope === "azure" && <AzureQuickJump />}
             </div>
           </>
-        ) : branding.scope === "hrapp" ? (
-          // hrapp is not a helpdesk queue (site_context.issue_matches_scope()
-          // returns False for it), so it must never render the Jira
-          // issue-cache widget — least of all its refresh-trigger controls for
-          // the shared Redis-backed cache. Same rationale as azure/security
-          // above, which get the Azure status bar instead; hrapp has no
-          // equivalent status widget today.
+        ) : branding.scope === "hrapp" || branding.scope === "retention" ? (
+          // Neither hrapp nor retention is a helpdesk queue (site_context.issue_matches_scope()
+          // returns False for both), so neither must render the Jira issue-cache widget.
           null
         ) : (
           <CacheStatusBar />

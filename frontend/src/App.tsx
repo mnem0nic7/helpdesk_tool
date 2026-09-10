@@ -48,6 +48,8 @@ const ADManagementPage = lazy(() => import("./pages/ADManagementPage"));
 const PasswordExpiryNotifierPage = lazy(() => import("./pages/PasswordExpiryNotifierPage"));
 const HrAppPage = lazy(() => import("./pages/HrAppPage"));
 const AskHrBotPage = lazy(() => import("./pages/AskHrBotPage"));
+const RetentionTeamsPage = lazy(() => import("./pages/RetentionTeamsPage"));
+const RetentionHistoryPage = lazy(() => import("./pages/RetentionHistoryPage"));
 
 function PageFallback() {
   return (
@@ -65,6 +67,7 @@ export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
   const isAzureSite = branding.scope === "azure";
   const isSecuritySite = branding.scope === "security";
   const isHrappSite = branding.scope === "hrapp";
+  const isRetentionSite = branding.scope === "retention";
 
   const securityRoutes = (
     <>
@@ -103,6 +106,12 @@ export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
               <>
                 <Route index element={<HrAppPage />} />
                 <Route path="askhr-bot" element={<AskHrBotPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </>
+            ) : isRetentionSite ? (
+              <>
+                <Route index element={<RetentionTeamsPage />} />
+                <Route path="history" element={<RetentionHistoryPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </>
             ) : isAzureSite ? (
