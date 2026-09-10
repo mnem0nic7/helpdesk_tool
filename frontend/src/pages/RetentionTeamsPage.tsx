@@ -27,14 +27,19 @@ export default function RetentionTeamsPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (input: { team: RetentionTeam; channel: RetentionChannel; retentionDays: number }) =>
-      api.createRetentionPolicy({
+    mutationFn: (input: { team: RetentionTeam; channel: RetentionChannel; retentionDays: number }) => {
+      const existingPolicy = input.channel.policy;
+      if (existingPolicy) {
+        return api.patchRetentionPolicy(existingPolicy.id, { retention_days: input.retentionDays });
+      }
+      return api.createRetentionPolicy({
         team_id: input.team.id,
         team_name: input.team.name,
         channel_id: input.channel.id,
         channel_name: input.channel.name,
         retention_days: input.retentionDays,
-      }),
+      });
+    },
     onSuccess: (policy) => {
       setPreviewPolicyId(policy.id);
       queryClient.invalidateQueries({ queryKey: ["retention", "channels", expandedTeamId] });
@@ -52,6 +57,14 @@ export default function RetentionTeamsPage() {
     onSuccess: () => {
       setConfiguringChannel(null);
       setPreviewPolicyId(null);
+      queryClient.invalidateQueries({ queryKey: ["retention", "channels", expandedTeamId] });
+      queryClient.invalidateQueries({ queryKey: ["retention", "teams"] });
+    },
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: (policyId: string) => api.patchRetentionPolicy(policyId, { status: "disabled" }),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["retention", "channels", expandedTeamId] });
     },
   });
@@ -94,7 +107,7 @@ export default function RetentionTeamsPage() {
                       <span className="text-xs text-slate-500">
                         {channel.policy ? `${channel.policy.status}, ${channel.policy.retention_days}d` : "No policy"}
                       </span>
-                      {!channel.policy && (
+                      {(!channel.policy || channel.policy.status === "disabled") && (
                         <button
                           onClick={() => setConfiguringChannel({ team, channel })}
                           className="rounded bg-blue-600 px-2 py-1 text-xs text-white"
@@ -159,6 +172,7 @@ export default function RetentionTeamsPage() {
                     </button>
                     <button
                       onClick={() => {
+                        cancelMutation.mutate(previewPolicyId);
                         setConfiguringChannel(null);
                         setPreviewPolicyId(null);
                       }}
