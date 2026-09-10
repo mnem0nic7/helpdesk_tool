@@ -24,17 +24,22 @@ class RetentionCleanupJob:
         self._graph = graph_module or _graph_module
         self._bg_task: asyncio.Task | None = None
 
-    async def _collect_items(self, policy: dict, token: str, cutoff: datetime) -> list[tuple[dict, bool]]:
-        # Ordering matters: each message's aged replies are appended BEFORE the
-        # message itself so replies are always deleted while their parent still
-        # exists. Deleting a reply whose root message is already gone is fragile
-        # (Graph can reject the reply-scoped path), so never flatten this back to
-        # "all roots first, then all replies".
+    async def _collect_items(self, policy: dict, token: str, cutoff: datetime) -> list[dict]:
+        # Each aged message is returned with its own aged replies attached under
+        # "replies" — deliberately NOT flattened into one interleaved list. The
+        # grouping is what lets _run_policy gate a parent message's deletion on
+        # all of its replies (and their attachments) having succeeded first:
+        #   * Replies must be deleted while their parent still exists — deleting a
+        #     reply whose root message is already gone is fragile (Graph can reject
+        #     the reply-scoped path).
+        #   * list_messages_older_than filters out soft-deleted messages, so once a
+        #     parent is soft-deleted its replies are never enumerated again. A
+        #     parent deleted while one of its replies failed would orphan that
+        #     reply (and its SharePoint attachment) permanently.
         loop = asyncio.get_event_loop()
         messages = await loop.run_in_executor(
             None, lambda: self._graph.list_messages_older_than(token, policy["team_id"], policy["channel_id"], cutoff),
         )
-        items: list[tuple[dict, bool]] = []
         for message in messages:
             replies = await loop.run_in_executor(
                 None,
@@ -42,9 +47,8 @@ class RetentionCleanupJob:
                     token, policy["team_id"], policy["channel_id"], m["id"], cutoff,
                 ),
             )
-            items.extend((r, True) for r in replies)
-            items.append((message, False))
-        return items
+            message["replies"] = replies
+        return messages
 
     async def compute_preview(self, policy_id: str) -> dict[str, Any]:
         policy = self._policy_store.get_policy(policy_id)
@@ -58,8 +62,11 @@ class RetentionCleanupJob:
         loop = asyncio.get_event_loop()
         token = await loop.run_in_executor(None, self._connection_store.get_valid_token)
         cutoff = datetime.now(timezone.utc) - timedelta(days=policy["retention_days"])
-        items = await self._collect_items(policy, token, cutoff)
-        all_items = [item for item, _is_reply in items]
+        messages = await self._collect_items(policy, token, cutoff)
+        all_items: list[dict] = []
+        for message in messages:
+            all_items.append(message)
+            all_items.extend(message["replies"])
         attachments_count = sum(len(item["attachments"]) for item in all_items)
         oldest = min((item["created_at"] for item in all_items), default=None)
         return {
@@ -95,10 +102,6 @@ class RetentionCleanupJob:
         had_failure = False
         for attachment in item["attachments"]:
             try:
-                if site_id is None:
-                    site_id = await loop.run_in_executor(
-                        None, lambda: self._graph.resolve_team_site_id(token, policy["team_id"]),
-                    )
                 # attachment["id"] is the Teams chatMessageAttachment id, which is NOT a
                 # SharePoint driveItem id. Deleting it directly would target a
                 # non-existent resource, and delete_drive_item tolerates 404s, so the
@@ -109,11 +112,24 @@ class RetentionCleanupJob:
                 real_item_id = await loop.run_in_executor(
                     None, lambda: self._graph.resolve_drive_item_from_content_url(token, attachment["content_url"]),
                 )
-                await loop.run_in_executor(
-                    None, lambda: self._graph.delete_drive_item(token, site_id, real_item_id),
-                )
+                # None means the share link 404s: the driveItem is already gone. That is
+                # the normal state on a retry cycle for an attachment this job deleted
+                # successfully in an earlier cycle whose owning message stayed undeleted
+                # (a sibling attachment or the message delete itself failed). Treat it as
+                # success with nothing to do — treating it as a failure would block the
+                # owning message from ever being deleted, so the retry could never
+                # converge. site_id is only resolved when there is actually something to
+                # delete, so an all-already-gone item costs no extra Graph call.
+                if real_item_id is not None:
+                    if site_id is None:
+                        site_id = await loop.run_in_executor(
+                            None, lambda: self._graph.resolve_team_site_id(token, policy["team_id"]),
+                        )
+                    await loop.run_in_executor(
+                        None, lambda: self._graph.delete_drive_item(token, site_id, real_item_id),
+                    )
                 self._policy_store.record_deletion(
-                    run_id=run_id, item_type="attachment", item_id=real_item_id,
+                    run_id=run_id, item_type="attachment", item_id=real_item_id or attachment["id"],
                     sender_or_author=item["sender_or_author"], original_created_at=item["created_at"], status="deleted",
                 )
                 deleted += 1
@@ -137,40 +153,75 @@ class RetentionCleanupJob:
         site_id: str | None = None
 
         try:
-            items = await self._collect_items(policy, token, cutoff)
+            messages = await self._collect_items(policy, token, cutoff)
         except Exception as exc:
             logger.exception("Retention job: failed to list content for policy %s", policy["id"])
             self._policy_store.finish_run(run_id, outcome="failed", messages_deleted=0, attachments_deleted=0, error=str(exc))
             return
 
-        for item, is_reply in items:
-            # Attachments MUST be deleted before the message/reply itself, and the
-            # message delete is gated on every attachment succeeding. Reason:
-            # list_messages_older_than/list_replies_older_than deliberately filter
-            # out anything with deletedDateTime set, so a soft-deleted message never
-            # reappears in a later cycle's aged list. If we deleted the message first
-            # and an attachment delete then failed, that SharePoint file would never
-            # be retried — it would leak permanently while the next run reported
-            # outcome="ok". Leaving the message undeleted keeps the whole item in
-            # next cycle's aged list so message + attachment are retried together.
-            deleted, attachment_failure, site_id = await self._delete_attachments(item, policy, token, run_id, site_id)
+        # Deletion order and gating within one message group:
+        #   attachments of each reply -> the reply -> attachments of the message -> the message
+        # and the parent message's own delete is gated on its own attachments AND
+        # every one of its replies (attachments included) having succeeded this
+        # cycle. Reason: list_messages_older_than/list_replies_older_than
+        # deliberately filter out anything with deletedDateTime set, so a
+        # soft-deleted item never reappears in a later cycle's aged list, and a
+        # soft-deleted PARENT takes its replies out of enumeration with it (replies
+        # are only ever listed under their parent message id). Anything left
+        # undeleted under an already-deleted parent — a failed reply, or the
+        # SharePoint file behind a failed attachment — would leak permanently while
+        # later runs reported outcome="ok". Leaving the parent undeleted keeps the
+        # whole group in next cycle's aged list so it is all retried together.
+        for message in messages:
+            any_reply_blocked = False
+            for reply in message["replies"]:
+                deleted, attachment_failure, site_id = await self._delete_attachments(
+                    reply, policy, token, run_id, site_id,
+                )
+                attachments_deleted += deleted
+                if attachment_failure:
+                    had_failure = True
+                    any_reply_blocked = True
+                    continue
+                try:
+                    await self._delete_item(reply, True, policy, token)
+                except Exception as exc:
+                    had_failure = True
+                    any_reply_blocked = True
+                    self._policy_store.record_deletion(
+                        run_id=run_id, item_type="message", item_id=reply["id"],
+                        sender_or_author=reply["sender_or_author"], original_created_at=reply["created_at"],
+                        status="failed", error=str(exc),
+                    )
+                    continue
+                self._policy_store.record_deletion(
+                    run_id=run_id, item_type="message", item_id=reply["id"],
+                    sender_or_author=reply["sender_or_author"], original_created_at=reply["created_at"],
+                    status="deleted",
+                )
+                messages_deleted += 1
+
+            deleted, attachment_failure, site_id = await self._delete_attachments(
+                message, policy, token, run_id, site_id,
+            )
             attachments_deleted += deleted
-            if attachment_failure:
+            if attachment_failure or any_reply_blocked:
                 had_failure = True
                 continue
             try:
-                await self._delete_item(item, is_reply, policy, token)
+                await self._delete_item(message, False, policy, token)
             except Exception as exc:
                 had_failure = True
                 self._policy_store.record_deletion(
-                    run_id=run_id, item_type="message", item_id=item["id"],
-                    sender_or_author=item["sender_or_author"], original_created_at=item["created_at"],
+                    run_id=run_id, item_type="message", item_id=message["id"],
+                    sender_or_author=message["sender_or_author"], original_created_at=message["created_at"],
                     status="failed", error=str(exc),
                 )
                 continue
             self._policy_store.record_deletion(
-                run_id=run_id, item_type="message", item_id=item["id"],
-                sender_or_author=item["sender_or_author"], original_created_at=item["created_at"], status="deleted",
+                run_id=run_id, item_type="message", item_id=message["id"],
+                sender_or_author=message["sender_or_author"], original_created_at=message["created_at"],
+                status="deleted",
             )
             messages_deleted += 1
 

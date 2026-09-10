@@ -144,16 +144,30 @@ def test_resolve_drive_item_from_content_url_calls_shares_endpoint():
     assert "$select=id" in called_url
 
 
-def test_resolve_drive_item_from_content_url_raises_on_failure():
+def test_resolve_drive_item_from_content_url_returns_none_on_404():
+    # 404 means the driveItem behind this attachment is already gone — the same
+    # "already deleted, treat as success" case delete_drive_item tolerates. The
+    # retry loop depends on it: a message whose sibling attachment failed stays
+    # undeleted, so the next cycle re-resolves the attachment this job already
+    # deleted. Raising here would record a false failure and block that message
+    # from ever being deleted.
     import retention_graph_client as g
     resp = MagicMock(ok=False, status_code=404, text="Not found")
     resp.headers = {}
     with patch("retention_graph_client.requests.request", return_value=resp):
+        assert g.resolve_drive_item_from_content_url("token", "https://sp/missing") is None
+
+
+def test_resolve_drive_item_from_content_url_raises_on_non_404_failure():
+    import retention_graph_client as g
+    resp = MagicMock(ok=False, status_code=403, text="Forbidden")
+    resp.headers = {}
+    with patch("retention_graph_client.requests.request", return_value=resp):
         try:
-            g.resolve_drive_item_from_content_url("token", "https://sp/missing")
+            g.resolve_drive_item_from_content_url("token", "https://sp/denied")
             assert False, "expected RetentionGraphError"
         except g.RetentionGraphError as exc:
-            assert exc.status_code == 404
+            assert exc.status_code == 403
 
 
 def test_request_retries_on_429_then_succeeds(monkeypatch):

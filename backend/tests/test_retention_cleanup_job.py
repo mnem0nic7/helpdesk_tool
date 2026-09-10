@@ -24,14 +24,21 @@ async def test_compute_preview_counts_messages_and_replies():
         retention_days=30, created_by="ops@example.com",
     )
     graph_module.list_messages_older_than.return_value = [
-        {"id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Alice", "attachments": [{"id": "a1", "content_url": "u"}]},
+        {"id": "m1", "created_at": "2025-02-01T00:00:00Z", "sender_or_author": "Alice", "attachments": [{"id": "a1", "content_url": "u"}]},
     ]
-    graph_module.list_replies_older_than.return_value = []
+    # Replies now hang off their parent message rather than arriving as a flat list,
+    # but the preview still counts every message + reply and every attachment.
+    graph_module.list_replies_older_than.return_value = [
+        {
+            "id": "r1", "parent_id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Bob",
+            "attachments": [{"id": "a2", "content_url": "u2"}],
+        },
+    ]
 
     preview = await job.compute_preview(policy["id"])
 
-    assert preview["messages_count"] == 1
-    assert preview["attachments_count"] == 1
+    assert preview["messages_count"] == 2
+    assert preview["attachments_count"] == 2
     assert preview["oldest_message_at"] == "2025-01-01T00:00:00Z"
 
 
@@ -364,11 +371,14 @@ async def test_reply_is_not_deleted_when_its_attachment_fails():
     await job.run_cycle()
 
     graph_module.delete_reply.assert_not_called()
-    # The parent message has no attachments of its own, so it is still purged.
-    graph_module.delete_message.assert_called_once_with("token", "team-1", "chan-1", "m1")
+    # The parent must NOT be purged either, even though it has no attachments of its
+    # own: soft-deleting it removes it from list_messages_older_than, and replies are
+    # only ever enumerated under their parent's id, so the failed reply and its
+    # SharePoint file would never be seen again.
+    graph_module.delete_message.assert_not_called()
     runs, _total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
     assert runs[0]["outcome"] == "partial"
-    assert runs[0]["messages_deleted"] == 1
+    assert runs[0]["messages_deleted"] == 0
 
 
 async def test_replies_are_deleted_before_their_parent_message():
@@ -396,6 +406,132 @@ async def test_replies_are_deleted_before_their_parent_message():
     assert order == ["reply:r1", "reply:r2", "message:m1"]
     assert graph_module.delete_reply.call_count == 2
     assert graph_module.delete_message.call_count == 1
+
+
+async def test_parent_message_is_not_deleted_when_a_reply_is_blocked_and_retry_converges():
+    # Regression (Bug A): gating a message's delete on only its OWN attachments is not
+    # enough. Replies are enumerated exclusively under their parent's message id and
+    # list_messages_older_than filters out soft-deleted messages, so soft-deleting the
+    # parent while one of its replies is still undeleted orphans that reply (and its
+    # SharePoint attachment) forever, while the run reports outcome="ok".
+    job, policy_store, _connection_store, graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    aged_message = {
+        "id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Alice",
+        "attachments": [{"id": "a-msg", "content_url": "https://sp/msgfile"}],
+    }
+    aged_reply = {
+        "id": "r1", "parent_id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Bob",
+        "attachments": [{"id": "a-reply", "content_url": "https://sp/replyfile"}],
+    }
+    graph_module.list_messages_older_than.return_value = [aged_message]
+    graph_module.list_replies_older_than.return_value = [aged_reply]
+    graph_module.resolve_team_site_id.return_value = "site-1"
+    graph_module.resolve_drive_item_from_content_url.side_effect = lambda _t, url: f"drive-{url}"
+    # Only the reply's attachment delete fails; the message's own would have succeeded.
+    graph_module.delete_drive_item.side_effect = (
+        lambda _t, _s, item_id: (_ for _ in ()).throw(RuntimeError("423 Locked"))
+        if item_id == "drive-https://sp/replyfile" else None
+    )
+
+    await job.run_cycle()
+
+    graph_module.delete_reply.assert_not_called()
+    # The parent must stay undeleted so the whole group is re-enumerated next cycle.
+    graph_module.delete_message.assert_not_called()
+    runs, _total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    assert runs[0]["outcome"] == "partial"
+    assert runs[0]["messages_deleted"] == 0
+
+    # Second cycle: the reply's attachment now succeeds, and because the parent was
+    # never soft-deleted Graph still returns the whole group. The message's own
+    # attachment was already deleted in cycle 1, so its share link now 404s -> None.
+    graph_module.delete_drive_item.side_effect = None
+    graph_module.delete_drive_item.reset_mock()
+    graph_module.resolve_drive_item_from_content_url.side_effect = (
+        lambda _t, url: None if url == "https://sp/msgfile" else f"drive-{url}"
+    )
+    job._already_ran_this_hour = lambda _policy_id: False  # bypass the per-hour gate
+
+    await job.run_cycle()
+
+    graph_module.delete_reply.assert_called_once_with("token", "team-1", "chan-1", "m1", "r1")
+    graph_module.delete_message.assert_called_once_with("token", "team-1", "chan-1", "m1")
+    runs, total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    assert total == 2
+    assert runs[0]["outcome"] == "ok"
+    assert runs[0]["messages_deleted"] == 2  # the reply and its parent
+    assert runs[0]["attachments_deleted"] == 2
+
+
+async def test_already_deleted_attachment_resolving_to_none_is_not_a_failure_and_run_converges():
+    # Regression (Bug B): a message with a failed attachment stays undeleted, so the
+    # next cycle re-resolves every attachment on it — including ones this job already
+    # deleted, whose sharing URL now 404s and resolves to None. Recording that as a
+    # failure would block the message from ever being deleted, so the retry loop could
+    # never converge past outcome="partial".
+    job, policy_store, _connection_store, graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    aged_message = {
+        "id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Alice",
+        "attachments": [
+            {"id": "a1", "content_url": "https://sp/file1"},
+            {"id": "a2", "content_url": "https://sp/file2"},
+        ],
+    }
+    graph_module.list_messages_older_than.return_value = [aged_message]
+    graph_module.list_replies_older_than.return_value = []
+    graph_module.resolve_team_site_id.return_value = "site-1"
+    graph_module.resolve_drive_item_from_content_url.side_effect = lambda _t, url: f"drive-{url}"
+    # Cycle 1: a1 deletes cleanly, a2 fails -> message stays undeleted.
+    graph_module.delete_drive_item.side_effect = (
+        lambda _t, _s, item_id: (_ for _ in ()).throw(RuntimeError("423 Locked"))
+        if item_id == "drive-https://sp/file2" else None
+    )
+
+    await job.run_cycle()
+
+    graph_module.delete_message.assert_not_called()
+    runs, _total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    assert runs[0]["outcome"] == "partial"
+    assert runs[0]["attachments_deleted"] == 1
+    cycle1_id = runs[0]["id"]
+
+    # Cycle 2: a1's driveItem is gone, so the shares lookup 404s and resolves to None;
+    # a2 now succeeds.
+    graph_module.delete_drive_item.side_effect = None
+    graph_module.delete_drive_item.reset_mock()
+    graph_module.resolve_drive_item_from_content_url.side_effect = (
+        lambda _t, url: None if url == "https://sp/file1" else f"drive-{url}"
+    )
+    job._already_ran_this_hour = lambda _policy_id: False  # bypass the per-hour gate
+
+    await job.run_cycle()
+
+    runs, total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    assert total == 2
+    cycle2 = runs[0]
+    assert cycle2["id"] != cycle1_id
+    # Converges to a clean run instead of sticking on "partial" forever.
+    assert cycle2["outcome"] == "ok"
+    assert cycle2["attachments_deleted"] == 2
+    assert cycle2["messages_deleted"] == 1
+    graph_module.delete_message.assert_called_once_with("token", "team-1", "chan-1", "m1")
+    # Only the still-present driveItem is actually deleted; the 404'd one is not retried.
+    graph_module.delete_drive_item.assert_called_once_with("token", "site-1", "drive-https://sp/file2")
+    deletions, _t = policy_store.list_deletions(run_id=cycle2["id"], limit=10, offset=0)
+    attachment_rows = {d["item_id"]: d["status"] for d in deletions if d["item_type"] == "attachment"}
+    # The already-gone attachment is audited as "deleted" (not "failed"), keyed by its
+    # Teams attachment id since there is no resolved driveItem id to record.
+    assert attachment_rows == {"a1": "deleted", "drive-https://sp/file2": "deleted"}
 
 
 async def test_run_cycle_skips_policy_already_run_this_hour():

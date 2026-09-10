@@ -148,7 +148,7 @@ def _encode_sharing_url(url: str) -> str:
     return f"u!{b64}"
 
 
-def resolve_drive_item_from_content_url(access_token: str, content_url: str) -> str:
+def resolve_drive_item_from_content_url(access_token: str, content_url: str) -> str | None:
     """Resolve a Teams attachment contentUrl to its real SharePoint driveItem id.
 
     A chatMessageAttachment's "id" is a Teams-scoped attachment id, NOT a
@@ -157,9 +157,20 @@ def resolve_drive_item_from_content_url(access_token: str, content_url: str) -> 
     so it would look like a success). The attachment's contentUrl is a sharing
     URL, which Graph's /shares/{encoded-url}/driveItem endpoint resolves to the
     actual driveItem.
+
+    Returns None on 404 — mirroring delete_drive_item's "already gone, treat as
+    success" handling. This is required for the retry loop to converge: because a
+    message/reply now stays undeleted whenever ANY of its attachments (or its own
+    delete) fails, the next cycle re-resolves every attachment on that item —
+    including ones that were already deleted successfully in an earlier cycle,
+    whose sharing URL now 404s. Raising here would be caught as an attachment
+    failure by _delete_attachments and would permanently block that item from
+    ever being deleted, even after the original problem is gone.
     """
     encoded = _encode_sharing_url(content_url)
     resp = _request("GET", f"{_GRAPH_BASE}/shares/{encoded}/driveItem?$select=id", access_token)
+    if resp.status_code == 404:
+        return None
     if not resp.ok:
         raise RetentionGraphError(
             f"Resolve drive item from content url failed: {resp.status_code} {resp.text[:300]}",
