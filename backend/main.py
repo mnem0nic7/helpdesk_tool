@@ -44,6 +44,7 @@ from routes_azure_security_copilot import router as azure_security_copilot_route
 from routes_defender_agent import router as defender_agent_router
 import defender_agent as _defender_agent
 from routes_tools import router as tools_router
+from routes_retention import router as retention_router
 from routes_user_admin import router as user_admin_router
 from routes_user_exit import router as user_exit_router
 from routes_ad import router as ad_router
@@ -472,6 +473,7 @@ app.include_router(azure_security_router)
 app.include_router(azure_security_copilot_router)
 app.include_router(defender_agent_router)
 app.include_router(tools_router)
+app.include_router(retention_router)
 app.include_router(user_admin_router)
 app.include_router(user_exit_router)
 app.include_router(ad_router)
