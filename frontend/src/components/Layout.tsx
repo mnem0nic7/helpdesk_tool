@@ -105,6 +105,7 @@ const retentionNavGroups: NavGroup[] = [
     items: [
       { to: "/", label: "Teams & Channels", icon: "⏳", end: true },
       { to: "/history", label: "Policy History", icon: "▤" },
+      { to: "/import-export", label: "Import/Export", icon: "⇄" },
     ],
   },
 ];

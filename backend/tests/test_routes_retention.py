@@ -408,3 +408,179 @@ def test_preview_returns_502_on_graph_error(test_client, monkeypatch):
 
     resp = test_client.get(f"/api/retention/policies/{policy_id}/preview", headers=RETENTION_HOST)
     assert resp.status_code == 502
+
+
+def _xlsx_bytes(headers, rows):
+    import io
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.append(headers)
+    for row in rows:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_export_channels_returns_xlsx_with_known_channels_and_policy_state(test_client, monkeypatch):
+    import routes_retention
+    from openpyxl import load_workbook
+    import io
+
+    _allow_retention(monkeypatch)
+    monkeypatch.setattr(routes_retention.retention_graph_connection, "get_valid_token", lambda: "token")
+    monkeypatch.setattr(routes_retention, "_list_teams", lambda _token: [{"id": "t1", "name": "Engineering"}])
+    monkeypatch.setattr(
+        routes_retention.retention_directory_cache, "channels_by_team_snapshot",
+        lambda: {"t1": [{"id": "c1", "name": "General"}]},
+    )
+    test_client.post(
+        "/api/retention/policies",
+        json={"team_id": "t1", "team_name": "Engineering", "channel_id": "c1", "channel_name": "General", "retention_days": 30},
+        headers=RETENTION_HOST,
+    )
+
+    resp = test_client.get("/api/retention/export", headers=RETENTION_HOST)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    wb = load_workbook(io.BytesIO(resp.content))
+    ws = wb.active
+    header = [c.value for c in ws[1]]
+    assert header == ["team_id", "team_name", "channel_id", "channel_name", "current_status", "current_retention_days", "retention_days"]
+    data_row = [c.value for c in ws[2]]
+    assert data_row == ["t1", "Engineering", "c1", "General", "pending_preview", 30, 30]
+
+
+def test_export_channels_returns_409_when_disconnected(test_client, monkeypatch):
+    import routes_retention
+    from retention_graph_connection import RetentionGraphConnectionError
+
+    _allow_retention(monkeypatch)
+    monkeypatch.setattr(
+        routes_retention.retention_graph_connection, "get_valid_token",
+        _raise(RetentionGraphConnectionError("not connected")),
+    )
+    resp = test_client.get("/api/retention/export", headers=RETENTION_HOST)
+    assert resp.status_code == 409
+
+
+def test_import_preview_rejects_a_non_xlsx_filename(test_client, monkeypatch):
+    _allow_retention(monkeypatch)
+    resp = test_client.post(
+        "/api/retention/import/preview",
+        files={"file": ("channels.csv", b"team_id,channel_id,retention_days", "text/csv")},
+        headers=RETENTION_HOST,
+    )
+    assert resp.status_code == 400
+    assert "xlsx" in resp.json()["detail"].lower()
+
+
+def test_import_preview_rejects_a_workbook_missing_required_columns(test_client, monkeypatch):
+    _allow_retention(monkeypatch)
+    content = _xlsx_bytes(["team_id", "channel_id"], [["t1", "c1"]])
+    resp = test_client.post(
+        "/api/retention/import/preview",
+        files={"file": ("channels.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=RETENTION_HOST,
+    )
+    assert resp.status_code == 400
+    assert "retention_days" in resp.json()["detail"]
+
+
+def test_import_preview_classifies_create_update_skip_and_error_rows(test_client, monkeypatch):
+    _allow_retention(monkeypatch)
+    test_client.post(
+        "/api/retention/policies",
+        json={"team_id": "t1", "team_name": "Existing", "channel_id": "c1", "channel_name": "General", "retention_days": 30},
+        headers=RETENTION_HOST,
+    )
+    content = _xlsx_bytes(
+        ["team_id", "team_name", "channel_id", "channel_name", "retention_days"],
+        [
+            ["t1", "Existing", "c1", "General", 45],       # update
+            ["t2", "New Team", "c2", "Random", 60],        # create
+            ["t3", "Another Team", "c3", "Standup", ""],   # skip: blank retention_days
+            ["t4", "Bad Team", "c4", "Bad", 400],           # error: out of range
+        ],
+    )
+    resp = test_client.post(
+        "/api/retention/import/preview",
+        files={"file": ("channels.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=RETENTION_HOST,
+    )
+    assert resp.status_code == 200
+    rows = {r["channel_id"]: r for r in resp.json()["rows"]}
+    assert rows["c1"]["action"] == "update"
+    assert rows["c1"]["current_status"] == "pending_preview"
+    assert rows["c2"]["action"] == "create"
+    assert rows["c3"]["action"] == "skip"
+    assert rows["c4"]["action"] == "error"
+    assert "between 1 and 365" in rows["c4"]["error"]
+
+
+def test_import_preview_flags_duplicate_rows_for_the_same_channel(test_client, monkeypatch):
+    _allow_retention(monkeypatch)
+    content = _xlsx_bytes(
+        ["team_id", "team_name", "channel_id", "channel_name", "retention_days"],
+        [["t1", "Eng", "c1", "General", 30], ["t1", "Eng", "c1", "General", 60]],
+    )
+    resp = test_client.post(
+        "/api/retention/import/preview",
+        files={"file": ("channels.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=RETENTION_HOST,
+    )
+    rows = resp.json()["rows"]
+    assert rows[0]["action"] == "create"
+    assert rows[1]["action"] == "error"
+    assert "Duplicate" in rows[1]["error"]
+
+
+def test_import_apply_creates_and_updates_policies(test_client, monkeypatch):
+    _allow_retention(monkeypatch)
+    test_client.post(
+        "/api/retention/policies",
+        json={"team_id": "t1", "team_name": "Existing", "channel_id": "c1", "channel_name": "General", "retention_days": 30},
+        headers=RETENTION_HOST,
+    )
+    content = _xlsx_bytes(
+        ["team_id", "team_name", "channel_id", "channel_name", "retention_days"],
+        [["t1", "Existing", "c1", "General", 45], ["t2", "New Team", "c2", "Random", 60]],
+    )
+    resp = test_client.post(
+        "/api/retention/import/apply",
+        files={"file": ("channels.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=RETENTION_HOST,
+    )
+    assert resp.status_code == 200
+    results = {r["channel_id"]: r for r in resp.json()["rows"]}
+    assert results["c1"]["result"] == "updated"
+    assert results["c2"]["result"] == "created"
+
+    from retention_policy_store import retention_policy_store as store
+    updated = store.get_policy_for_channel("t1", "c1")
+    assert updated["retention_days"] == 45
+    assert updated["status"] == "pending_preview"
+    created = store.get_policy_for_channel("t2", "c2")
+    assert created["retention_days"] == 60
+    assert created["status"] == "pending_preview"
+
+
+def test_import_apply_does_not_touch_skip_or_error_rows(test_client, monkeypatch):
+    _allow_retention(monkeypatch)
+    content = _xlsx_bytes(
+        ["team_id", "team_name", "channel_id", "channel_name", "retention_days"],
+        [["t1", "Eng", "c1", "General", ""], ["t2", "Bad", "c2", "Bad", 9999]],
+    )
+    resp = test_client.post(
+        "/api/retention/import/apply",
+        files={"file": ("channels.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=RETENTION_HOST,
+    )
+    results = {r["channel_id"]: r for r in resp.json()["rows"]}
+    assert results["c1"]["result"] == "skipped"
+    assert results["c2"]["result"] == "skipped"
+
+    from retention_policy_store import retention_policy_store as store
+    assert store.get_policy_for_channel("t1", "c1") is None
+    assert store.get_policy_for_channel("t2", "c2") is None

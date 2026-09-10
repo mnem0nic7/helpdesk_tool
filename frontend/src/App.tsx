@@ -50,6 +50,7 @@ const HrAppPage = lazy(() => import("./pages/HrAppPage"));
 const AskHrBotPage = lazy(() => import("./pages/AskHrBotPage"));
 const RetentionTeamsPage = lazy(() => import("./pages/RetentionTeamsPage"));
 const RetentionHistoryPage = lazy(() => import("./pages/RetentionHistoryPage"));
+const RetentionImportExportPage = lazy(() => import("./pages/RetentionImportExportPage"));
 
 function PageFallback() {
   return (
@@ -112,6 +113,7 @@ export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
               <>
                 <Route index element={<RetentionTeamsPage />} />
                 <Route path="history" element={<RetentionHistoryPage />} />
+                <Route path="import-export" element={<RetentionImportExportPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </>
             ) : isAzureSite ? (

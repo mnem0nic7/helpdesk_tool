@@ -5301,6 +5301,36 @@ export const api = {
     return fetchJSON(`/api/retention/deletions?limit=${limit}&offset=${offset}${runParam}`);
   },
 
+  retentionExportUrl: "/api/retention/export",
+
+  async previewRetentionImport(file: File): Promise<{ rows: RetentionImportRow[] }> {
+    const body = new FormData();
+    body.append("file", file);
+    const res = await fetch("/api/retention/import/preview", { method: "POST", body });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("POST", "/api/retention/import/preview", res));
+    }
+    return res.json() as Promise<{ rows: RetentionImportRow[] }>;
+  },
+
+  async applyRetentionImport(file: File): Promise<{ rows: RetentionImportResultRow[] }> {
+    const body = new FormData();
+    body.append("file", file);
+    const res = await fetch("/api/retention/import/apply", { method: "POST", body });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("POST", "/api/retention/import/apply", res));
+    }
+    return res.json() as Promise<{ rows: RetentionImportResultRow[] }>;
+  },
+
   getAskHrBotStatus(): Promise<AskHrBotStatus> {
     return fetchJSON<AskHrBotStatus>("/api/askhr-bot/status");
   },
@@ -5721,6 +5751,22 @@ export interface RetentionDeletion {
   deleted_at: string;
   status: "deleted" | "failed";
   error: string | null;
+}
+
+export interface RetentionImportRow {
+  team_id: string;
+  team_name: string;
+  channel_id: string;
+  channel_name: string;
+  current_status: string | null;
+  current_retention_days: number | null;
+  retention_days: number | null;
+  action: "create" | "update" | "skip" | "error";
+  error: string | null;
+}
+
+export interface RetentionImportResultRow extends RetentionImportRow {
+  result: "created" | "updated" | "skipped" | "failed";
 }
 
 export interface AskHrBotRun {
