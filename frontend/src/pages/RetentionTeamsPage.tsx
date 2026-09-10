@@ -1,6 +1,11 @@
 import { useDeferredValue, useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type RetentionChannel, type RetentionTeam } from "../lib/api.ts";
+import {
+  useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult,
+} from "@tanstack/react-query";
+import {
+  api,
+  type RetentionChannel, type RetentionPolicySummary, type RetentionPreview, type RetentionTeam,
+} from "../lib/api.ts";
 
 const TEAMS_LIMIT = 50;
 const CHANNELS_LIMIT = 50;
@@ -177,21 +182,39 @@ export default function RetentionTeamsPage() {
                   </p>
                 ) : null}
                 {(channelsQuery.isError ? [] : channelsQuery.data?.items ?? []).map((channel) => (
-                  <div key={channel.id} className="flex items-center justify-between py-2 text-sm">
-                    <span>{channel.name}</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-500">
-                        {channel.policy ? `${channel.policy.status}, ${channel.policy.retention_days}d` : "No policy"}
-                      </span>
-                      {(!channel.policy || channel.policy.status === "disabled") && (
-                        <button
-                          onClick={() => setConfiguringChannel({ team, channel })}
-                          className="rounded bg-blue-600 px-2 py-1 text-xs text-white"
-                        >
-                          Configure retention
-                        </button>
-                      )}
+                  <div key={channel.id}>
+                    <div className="flex items-center justify-between py-2 text-sm">
+                      <span>{channel.name}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-500">
+                          {channel.policy ? `${channel.policy.status}, ${channel.policy.retention_days}d` : "No policy"}
+                        </span>
+                        {(!channel.policy || channel.policy.status === "disabled") && (
+                          <button
+                            onClick={() => setConfiguringChannel({ team, channel })}
+                            className="rounded bg-blue-600 px-2 py-1 text-xs text-white"
+                          >
+                            Configure retention
+                          </button>
+                        )}
+                      </div>
                     </div>
+                    {configuringChannel?.team.id === team.id && configuringChannel.channel.id === channel.id && (
+                      <ConfigurePanel
+                        configuringChannel={configuringChannel}
+                        days={days}
+                        setDays={setDays}
+                        previewPolicyId={previewPolicyId}
+                        previewQuery={previewQuery}
+                        createMutation={createMutation}
+                        confirmMutation={confirmMutation}
+                        cancelMutation={cancelMutation}
+                        onClose={() => {
+                          setConfiguringChannel(null);
+                          setPreviewPolicyId(null);
+                        }}
+                      />
+                    )}
                   </div>
                 ))}
                 {!channelsQuery.isError && (
@@ -240,108 +263,126 @@ export default function RetentionTeamsPage() {
         </div>
       )}
 
-      {configuringChannel && (
-        <div className="rounded-md border border-slate-300 bg-white p-4 shadow-sm">
-          <h2 className="text-sm font-semibold">
-            Configure retention for {configuringChannel.channel.name} ({configuringChannel.team.name})
-          </h2>
-          {!previewPolicyId ? (
-            <div className="mt-3 flex items-center gap-2">
-              <label className="text-sm">Retain messages for</label>
-              <input
-                type="number"
-                min={1}
-                max={365}
-                value={days}
-                onChange={(e) => setDays(Number(e.target.value))}
-                className="w-20 rounded border border-slate-300 px-2 py-1 text-sm"
-              />
-              <span className="text-sm">days</span>
-              <button
-                onClick={() =>
-                  createMutation.mutate({ team: configuringChannel.team, channel: configuringChannel.channel, retentionDays: days })
-                }
-                disabled={createMutation.isPending}
-                className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white"
-              >
-                Preview
-              </button>
-              {createMutation.isError && (
-                <span className="text-sm text-red-700">
-                  {createMutation.error instanceof Error ? createMutation.error.message : "Failed to save policy"}
-                </span>
-              )}
+    </div>
+  );
+}
+
+function ConfigurePanel({
+  configuringChannel,
+  days,
+  setDays,
+  previewPolicyId,
+  previewQuery,
+  createMutation,
+  confirmMutation,
+  cancelMutation,
+  onClose,
+}: {
+  configuringChannel: { team: RetentionTeam; channel: RetentionChannel };
+  days: number;
+  setDays: (value: number) => void;
+  previewPolicyId: string | null;
+  previewQuery: UseQueryResult<RetentionPreview>;
+  createMutation: UseMutationResult<
+    RetentionPolicySummary, Error, { team: RetentionTeam; channel: RetentionChannel; retentionDays: number }
+  >;
+  confirmMutation: UseMutationResult<RetentionPolicySummary, Error, string>;
+  cancelMutation: UseMutationResult<RetentionPolicySummary, Error, string>;
+  onClose: () => void;
+}) {
+  return (
+    <div className="mb-2 rounded-md border border-slate-300 bg-white p-4 shadow-sm">
+      <h2 className="text-sm font-semibold">
+        Configure retention for {configuringChannel.channel.name} ({configuringChannel.team.name})
+      </h2>
+      {!previewPolicyId ? (
+        <div className="mt-3 flex items-center gap-2">
+          <label className="text-sm">Retain messages for</label>
+          <input
+            type="number"
+            min={1}
+            max={365}
+            value={days}
+            onChange={(e) => setDays(Number(e.target.value))}
+            className="w-20 rounded border border-slate-300 px-2 py-1 text-sm"
+          />
+          <span className="text-sm">days</span>
+          <button
+            onClick={() =>
+              createMutation.mutate({ team: configuringChannel.team, channel: configuringChannel.channel, retentionDays: days })
+            }
+            disabled={createMutation.isPending}
+            className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white"
+          >
+            Preview
+          </button>
+          {createMutation.isError && (
+            <span className="text-sm text-red-700">
+              {createMutation.error instanceof Error ? createMutation.error.message : "Failed to save policy"}
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-2 text-sm">
+          {previewQuery.isLoading ? (
+            <p>Computing preview...</p>
+          ) : previewQuery.isError ? (
+            // Never fall through to the success branch on error: `data` would be
+            // undefined, rendering a fabricated "0 messages / 0 attachments" next to
+            // a live Confirm & Enable button, which would arm a policy that purges
+            // the real backlog on the next hourly pass. Confirm is only reachable
+            // from the success branch below.
+            <div className="space-y-2">
+              <p className="text-red-700">
+                Unable to compute preview:{" "}
+                {previewQuery.error instanceof Error ? previewQuery.error.message : "Unknown error"}
+              </p>
+              <div className="flex gap-2">
+                <button onClick={() => previewQuery.refetch()} className="rounded bg-blue-600 px-3 py-1.5 text-white">
+                  Retry
+                </button>
+                <button
+                  onClick={() => {
+                    cancelMutation.mutate(previewPolicyId);
+                    onClose();
+                  }}
+                  className="rounded border border-slate-300 px-3 py-1.5"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           ) : (
-            <div className="mt-3 space-y-2 text-sm">
-              {previewQuery.isLoading ? (
-                <p>Computing preview...</p>
-              ) : previewQuery.isError ? (
-                // Never fall through to the success branch on error: `data` would be
-                // undefined, rendering a fabricated "0 messages / 0 attachments" next to
-                // a live Confirm & Enable button, which would arm a policy that purges
-                // the real backlog on the next hourly pass. Confirm is only reachable
-                // from the success branch below.
-                <div className="space-y-2">
-                  <p className="text-red-700">
-                    Unable to compute preview:{" "}
-                    {previewQuery.error instanceof Error ? previewQuery.error.message : "Unknown error"}
-                  </p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => previewQuery.refetch()}
-                      className="rounded bg-blue-600 px-3 py-1.5 text-white"
-                    >
-                      Retry
-                    </button>
-                    <button
-                      onClick={() => {
-                        cancelMutation.mutate(previewPolicyId);
-                        setConfiguringChannel(null);
-                        setPreviewPolicyId(null);
-                      }}
-                      className="rounded border border-slate-300 px-3 py-1.5"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <p>
-                    This will delete approximately <strong>{previewQuery.data?.messages_count ?? 0}</strong> message(s) and{" "}
-                    <strong>{previewQuery.data?.attachments_count ?? 0}</strong> attachment(s) older than {days} days
-                    {previewQuery.data?.oldest_message_at ? `, oldest dated ${previewQuery.data.oldest_message_at}` : ""}.
-                  </p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => confirmMutation.mutate(previewPolicyId)}
-                      disabled={confirmMutation.isPending}
-                      className="rounded bg-red-600 px-3 py-1.5 text-white"
-                    >
-                      Confirm &amp; Enable
-                    </button>
-                    <button
-                      onClick={() => {
-                        cancelMutation.mutate(previewPolicyId);
-                        setConfiguringChannel(null);
-                        setPreviewPolicyId(null);
-                      }}
-                      className="rounded border border-slate-300 px-3 py-1.5"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                  {confirmMutation.isError && (
-                    <p className="text-red-700">
-                      {confirmMutation.error instanceof Error
-                        ? confirmMutation.error.message
-                        : "Failed to enable policy"}
-                    </p>
-                  )}
-                </>
+            <>
+              <p>
+                This will delete approximately <strong>{previewQuery.data?.messages_count ?? 0}</strong> message(s) and{" "}
+                <strong>{previewQuery.data?.attachments_count ?? 0}</strong> attachment(s) older than {days} days
+                {previewQuery.data?.oldest_message_at ? `, oldest dated ${previewQuery.data.oldest_message_at}` : ""}.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => confirmMutation.mutate(previewPolicyId)}
+                  disabled={confirmMutation.isPending}
+                  className="rounded bg-red-600 px-3 py-1.5 text-white"
+                >
+                  Confirm &amp; Enable
+                </button>
+                <button
+                  onClick={() => {
+                    cancelMutation.mutate(previewPolicyId);
+                    onClose();
+                  }}
+                  className="rounded border border-slate-300 px-3 py-1.5"
+                >
+                  Cancel
+                </button>
+              </div>
+              {confirmMutation.isError && (
+                <p className="text-red-700">
+                  {confirmMutation.error instanceof Error ? confirmMutation.error.message : "Failed to enable policy"}
+                </p>
               )}
-            </div>
+            </>
           )}
         </div>
       )}

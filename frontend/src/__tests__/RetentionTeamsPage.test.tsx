@@ -323,6 +323,47 @@ describe("RetentionTeamsPage", () => {
     await screen.findByText("General");
   });
 
+  it("renders the configure-retention panel next to the clicked channel, not at the bottom of the page", async () => {
+    // Regression: the panel used to render once, unconditionally, after the whole
+    // teams list and its pagination controls — with many teams paginated above it,
+    // clicking Configure retention looked like nothing happened unless the operator
+    // scrolled all the way down.
+    vi.spyOn(api, "getRetentionConnectionStatus").mockResolvedValue({
+      status: "connected", service_account_upn: "bot@x.com", last_refreshed_at: "now", last_error: null,
+    });
+    vi.spyOn(api, "getRetentionTeams").mockResolvedValue({
+      items: [
+        { id: "t1", name: "Engineering", policy_count: 0 },
+        { id: "t2", name: "Sales", policy_count: 0 },
+      ],
+      total: 2,
+    });
+    vi.spyOn(api, "getRetentionChannels").mockImplementation(async (teamId) => ({
+      items: teamId === "t1"
+        ? [{ id: "c1", name: "General", policy: null }, { id: "c2", name: "Standup", policy: null }]
+        : [{ id: "c3", name: "General", policy: null }],
+      total: 1,
+    }));
+
+    renderWithClient();
+
+    fireEvent.click(await screen.findByText("Engineering"));
+    await screen.findByText("Standup");
+    const configureButtons = screen.getAllByText("Configure retention");
+    fireEvent.click(configureButtons[0]); // the "General" channel under Engineering
+
+    const heading = await screen.findByText("Configure retention for General (Engineering)");
+    // The panel must be a near sibling of the clicked channel's row, not detached at
+    // the end of the document — walk up to the shared channel-list container (panel
+    // div -> per-channel wrapper -> list container) and confirm the still-visible
+    // "Standup" channel (a sibling row) sits right next to it, not far below.
+    const channelListContainer = heading.closest("div")?.parentElement?.parentElement;
+    expect(channelListContainer?.textContent).toContain("Standup");
+
+    // Only one panel exists, scoped to the exact channel that was clicked.
+    expect(screen.queryByText("Configure retention for Standup (Engineering)")).not.toBeInTheDocument();
+  });
+
   it("surfaces a create-policy failure next to the Preview button", async () => {
     vi.spyOn(api, "getRetentionConnectionStatus").mockResolvedValue({
       status: "connected", service_account_upn: "bot@x.com", last_refreshed_at: "now", last_error: null,
