@@ -10,7 +10,11 @@ from pydantic import BaseModel
 
 from auth import oauth, require_retention_access
 from retention_cleanup_job import retention_cleanup_job
-from retention_graph_client import list_channels as _list_channels, list_teams as _list_teams
+from retention_graph_client import (
+    RetentionGraphError,
+    list_channels as _list_channels,
+    list_teams as _list_teams,
+)
 from retention_graph_connection import (
     RetentionGraphConnectionError,
     retention_graph_connection,
@@ -18,10 +22,28 @@ from retention_graph_connection import (
 )
 from retention_policy_store import retention_policy_store
 from routes_auth import _oauth_redirect_uri
+from site_context import get_current_site_scope
 
 router = APIRouter(prefix="/api/retention", tags=["retention"])
 
 _VALID_STATUSES = {"active", "disabled", "pending_preview"}
+
+
+def _ensure_retention_site() -> None:
+    if get_current_site_scope() != "retention":
+        raise HTTPException(status_code=404, detail="This feature is only available on retention.movedocs.com")
+
+
+def _require_retention_session(session: dict[str, Any] = Depends(require_retention_access)) -> dict[str, Any]:
+    """Composed gate: retention site scope + RETENTION_ALLOWED_USERS allowlist.
+
+    Same composition pattern as _require_tools_session/_ensure_tools_site in
+    routes_tools.py, so every route in this module is unreachable from the other
+    hosts (it-app, oasisdev, azure, security, hrapp) instead of merely 403ing
+    non-allowlisted callers there.
+    """
+    _ensure_retention_site()
+    return session
 
 
 class CreatePolicyRequest(BaseModel):
@@ -37,12 +59,12 @@ class UpdatePolicyRequest(BaseModel):
     status: str | None = None
 
 
-@router.get("/connection/status", dependencies=[Depends(require_retention_access)])
+@router.get("/connection/status", dependencies=[Depends(_require_retention_session)])
 async def connection_status() -> dict[str, Any]:
     return retention_graph_connection.get_status()
 
 
-@router.get("/connection/connect", dependencies=[Depends(require_retention_access)])
+@router.get("/connection/connect", dependencies=[Depends(_require_retention_session)])
 async def connection_connect(request: Request):
     if not retention_graph_oauth_configured():
         raise HTTPException(status_code=500, detail="Retention Graph OAuth is not configured")
@@ -54,7 +76,7 @@ async def connection_connect(request: Request):
 
 
 @router.get("/connection/callback", name="retention_graph_callback")
-async def connection_callback(request: Request, session: dict[str, Any] = Depends(require_retention_access)):
+async def connection_callback(request: Request, session: dict[str, Any] = Depends(_require_retention_session)):
     client = oauth.create_client("retention_graph")
     if not client:
         raise HTTPException(status_code=500, detail="Retention Graph OAuth is not configured")
@@ -77,10 +99,21 @@ async def connection_callback(request: Request, session: dict[str, Any] = Depend
     return RedirectResponse(url="/")
 
 
-@router.get("/teams", dependencies=[Depends(require_retention_access)])
-async def get_teams(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)) -> dict[str, Any]:
-    token = retention_graph_connection.get_valid_token()
-    teams = _list_teams(token)
+# NOTE: get_teams/get_channels are deliberately plain `def`, not `async def`.
+# Both do blocking `requests`-based Graph enumeration with no await, so declaring
+# them async would stall the single shared backend event loop for every other host
+# (it-app, oasisdev, azure, security, hrapp) for the duration of the Graph calls.
+# Plain `def` lets FastAPI run them in its threadpool, matching this repo's
+# precedent for blocking-I/O handlers in routes_ad.py / routes_tools.py.
+@router.get("/teams", dependencies=[Depends(_require_retention_session)])
+def get_teams(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)) -> dict[str, Any]:
+    try:
+        token = retention_graph_connection.get_valid_token()
+        teams = _list_teams(token)
+    except RetentionGraphConnectionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RetentionGraphError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     active_by_team: dict[str, int] = {}
     for policy in retention_policy_store.list_active_policies():
         active_by_team[policy["team_id"]] = active_by_team.get(policy["team_id"], 0) + 1
@@ -89,20 +122,25 @@ async def get_teams(limit: int = Query(50, ge=1, le=100), offset: int = Query(0,
     return {"items": teams[offset : offset + limit], "total": len(teams)}
 
 
-@router.get("/teams/{team_id}/channels", dependencies=[Depends(require_retention_access)])
-async def get_channels(
+@router.get("/teams/{team_id}/channels", dependencies=[Depends(_require_retention_session)])
+def get_channels(
     team_id: str, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
-    token = retention_graph_connection.get_valid_token()
-    channels = _list_channels(token, team_id)
+    try:
+        token = retention_graph_connection.get_valid_token()
+        channels = _list_channels(token, team_id)
+    except RetentionGraphConnectionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RetentionGraphError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     for channel in channels:
         channel["policy"] = retention_policy_store.get_policy_for_channel(team_id, channel["id"])
     return {"items": channels[offset : offset + limit], "total": len(channels)}
 
 
-@router.post("/policies", dependencies=[Depends(require_retention_access)])
+@router.post("/policies", dependencies=[Depends(_require_retention_session)])
 async def create_policy(
-    body: CreatePolicyRequest, session: dict[str, Any] = Depends(require_retention_access),
+    body: CreatePolicyRequest, session: dict[str, Any] = Depends(_require_retention_session),
 ) -> dict[str, Any]:
     if not 1 <= body.retention_days <= 365:
         raise HTTPException(status_code=400, detail="retention_days must be between 1 and 365")
@@ -115,13 +153,13 @@ async def create_policy(
     )
 
 
-@router.get("/policies", dependencies=[Depends(require_retention_access)])
+@router.get("/policies", dependencies=[Depends(_require_retention_session)])
 async def list_policies(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)) -> dict[str, Any]:
     items, total = retention_policy_store.list_policies(limit=limit, offset=offset)
     return {"items": items, "total": total}
 
 
-@router.get("/policies/{policy_id}/preview", dependencies=[Depends(require_retention_access)])
+@router.get("/policies/{policy_id}/preview", dependencies=[Depends(_require_retention_session)])
 async def preview_policy(policy_id: str) -> dict[str, Any]:
     try:
         return await retention_cleanup_job.compute_preview(policy_id)
@@ -129,9 +167,15 @@ async def preview_policy(policy_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RetentionGraphConnectionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RetentionGraphError as exc:
+        # A Graph read failure (403 after the service account lost owner rights,
+        # sustained 429, deleted channel) must surface as an explicit upstream
+        # error, not a 500 — the frontend renders it in the preview error branch
+        # so Confirm & Enable is never offered next to a fabricated "0" count.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@router.post("/policies/{policy_id}/confirm", dependencies=[Depends(require_retention_access)])
+@router.post("/policies/{policy_id}/confirm", dependencies=[Depends(_require_retention_session)])
 async def confirm_policy(policy_id: str) -> dict[str, Any]:
     policy = retention_policy_store.confirm_policy(policy_id)
     if not policy:
@@ -139,7 +183,7 @@ async def confirm_policy(policy_id: str) -> dict[str, Any]:
     return policy
 
 
-@router.patch("/policies/{policy_id}", dependencies=[Depends(require_retention_access)])
+@router.patch("/policies/{policy_id}", dependencies=[Depends(_require_retention_session)])
 async def update_policy(policy_id: str, body: UpdatePolicyRequest) -> dict[str, Any]:
     if body.retention_days is not None and not 1 <= body.retention_days <= 365:
         raise HTTPException(status_code=400, detail="retention_days must be between 1 and 365")
@@ -151,7 +195,7 @@ async def update_policy(policy_id: str, body: UpdatePolicyRequest) -> dict[str, 
     return policy
 
 
-@router.get("/runs", dependencies=[Depends(require_retention_access)])
+@router.get("/runs", dependencies=[Depends(_require_retention_session)])
 async def list_runs(
     policy_id: str | None = None, limit: int = Query(30, ge=1, le=100), offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
@@ -159,7 +203,7 @@ async def list_runs(
     return {"items": items, "total": total}
 
 
-@router.get("/deletions", dependencies=[Depends(require_retention_access)])
+@router.get("/deletions", dependencies=[Depends(_require_retention_session)])
 async def list_deletions(
     run_id: str | None = None, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:

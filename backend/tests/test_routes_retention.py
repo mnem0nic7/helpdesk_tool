@@ -31,6 +31,14 @@ def _fresh_retention_policy_store(monkeypatch):
     return store
 
 
+# Every /api/retention route is gated on the `retention` site scope as well as the
+# allowlist, and the shared test_client defaults to http://testserver (which maps to
+# the `primary` scope), so requests must carry the retention host explicitly or they
+# correctly 404. This mirrors how the SiteContextMiddleware derives scope in
+# production (host / x-forwarded-host -> get_site_scope_for_host).
+RETENTION_HOST = {"host": "retention.movedocs.com"}
+
+
 def _allow_retention(monkeypatch, email="test@example.com"):
     import auth
     monkeypatch.setattr(auth, "RETENTION_ALLOWED_USERS", email)
@@ -39,13 +47,13 @@ def _allow_retention(monkeypatch, email="test@example.com"):
 def test_connection_status_forbidden_when_not_allowlisted(test_client, monkeypatch):
     import auth
     monkeypatch.setattr(auth, "RETENTION_ALLOWED_USERS", "someone-else@example.com")
-    resp = test_client.get("/api/retention/connection/status")
+    resp = test_client.get("/api/retention/connection/status", headers=RETENTION_HOST)
     assert resp.status_code == 403
 
 
 def test_connection_status_disconnected_by_default(test_client, monkeypatch):
     _allow_retention(monkeypatch)
-    resp = test_client.get("/api/retention/connection/status")
+    resp = test_client.get("/api/retention/connection/status", headers=RETENTION_HOST)
     assert resp.status_code == 200
     assert resp.json()["status"] == "disconnected"
 
@@ -55,6 +63,7 @@ def test_create_policy_rejects_out_of_range_days(test_client, monkeypatch):
     resp = test_client.post(
         "/api/retention/policies",
         json={"team_id": "t1", "team_name": "Eng", "channel_id": "c1", "channel_name": "General", "retention_days": 400},
+        headers=RETENTION_HOST,
     )
     assert resp.status_code == 400
 
@@ -64,12 +73,13 @@ def test_create_then_confirm_policy(test_client, monkeypatch):
     create_resp = test_client.post(
         "/api/retention/policies",
         json={"team_id": "t1", "team_name": "Eng", "channel_id": "c1", "channel_name": "General", "retention_days": 30},
+        headers=RETENTION_HOST,
     )
     assert create_resp.status_code == 200
     policy = create_resp.json()
     assert policy["status"] == "pending_preview"
 
-    confirm_resp = test_client.post(f"/api/retention/policies/{policy['id']}/confirm")
+    confirm_resp = test_client.post(f"/api/retention/policies/{policy['id']}/confirm", headers=RETENTION_HOST)
     assert confirm_resp.status_code == 200
     assert confirm_resp.json()["status"] == "active"
 
@@ -77,9 +87,9 @@ def test_create_then_confirm_policy(test_client, monkeypatch):
 def test_create_policy_conflicts_when_channel_already_has_one(test_client, monkeypatch):
     _allow_retention(monkeypatch)
     body = {"team_id": "t1", "team_name": "Eng", "channel_id": "c1", "channel_name": "General", "retention_days": 30}
-    first = test_client.post("/api/retention/policies", json=body)
+    first = test_client.post("/api/retention/policies", json=body, headers=RETENTION_HOST)
     assert first.status_code == 200
-    second = test_client.post("/api/retention/policies", json=body)
+    second = test_client.post("/api/retention/policies", json=body, headers=RETENTION_HOST)
     assert second.status_code == 409
 
 
@@ -88,11 +98,12 @@ def test_patch_policy_retention_days_resets_status(test_client, monkeypatch):
     create_resp = test_client.post(
         "/api/retention/policies",
         json={"team_id": "t1", "team_name": "Eng", "channel_id": "c1", "channel_name": "General", "retention_days": 30},
+        headers=RETENTION_HOST,
     )
     policy_id = create_resp.json()["id"]
-    test_client.post(f"/api/retention/policies/{policy_id}/confirm")
+    test_client.post(f"/api/retention/policies/{policy_id}/confirm", headers=RETENTION_HOST)
 
-    patch_resp = test_client.patch(f"/api/retention/policies/{policy_id}", json={"retention_days": 60})
+    patch_resp = test_client.patch(f"/api/retention/policies/{policy_id}", json={"retention_days": 60}, headers=RETENTION_HOST)
     assert patch_resp.status_code == 200
     assert patch_resp.json()["status"] == "pending_preview"
     assert patch_resp.json()["retention_days"] == 60
@@ -112,10 +123,156 @@ def test_list_runs_and_deletions_pagination(test_client, monkeypatch):
     )
     store.finish_run(run_id, outcome="ok", messages_deleted=1, attachments_deleted=0)
 
-    runs_resp = test_client.get(f"/api/retention/runs?policy_id={policy['id']}")
+    runs_resp = test_client.get(f"/api/retention/runs?policy_id={policy['id']}", headers=RETENTION_HOST)
     assert runs_resp.status_code == 200
     assert runs_resp.json()["total"] == 1
 
-    deletions_resp = test_client.get(f"/api/retention/deletions?run_id={run_id}")
+    deletions_resp = test_client.get(f"/api/retention/deletions?run_id={run_id}", headers=RETENTION_HOST)
     assert deletions_resp.status_code == 200
     assert deletions_resp.json()["total"] == 1
+
+
+def test_retention_routes_404_on_non_retention_site_scope(test_client, monkeypatch):
+    """The spec gates these routes on the `retention` scope AND the allowlist.
+
+    Without the scope gate an allowlisted operator could drive tenant-wide Teams
+    deletion from it-app/azure/security/hrapp too.
+    """
+    _allow_retention(monkeypatch)
+    for host in ["it-app.movedocs.com", "azure.movedocs.com", "security.movedocs.com", "hrapp.movedocs.com"]:
+        resp = test_client.get("/api/retention/connection/status", headers={"host": host})
+        assert resp.status_code == 404, host
+        assert "retention.movedocs.com" in resp.json()["detail"]
+
+
+def test_retention_policy_routes_404_on_non_retention_site_scope(test_client, monkeypatch):
+    _allow_retention(monkeypatch)
+    azure = {"host": "azure.movedocs.com"}
+    body = {"team_id": "t1", "team_name": "Eng", "channel_id": "c1", "channel_name": "General", "retention_days": 30}
+    assert test_client.post("/api/retention/policies", json=body, headers=azure).status_code == 404
+    assert test_client.get("/api/retention/policies", headers=azure).status_code == 404
+    assert test_client.get("/api/retention/teams", headers=azure).status_code == 404
+    assert test_client.get("/api/retention/runs", headers=azure).status_code == 404
+    assert test_client.get("/api/retention/deletions", headers=azure).status_code == 404
+
+
+def test_ensure_retention_site_unit():
+    import routes_retention
+    from fastapi import HTTPException
+    from site_context import reset_current_site_scope, set_current_site_scope
+
+    token = set_current_site_scope("azure")
+    try:
+        try:
+            routes_retention._ensure_retention_site()
+            assert False, "expected HTTPException"
+        except HTTPException as exc:
+            assert exc.status_code == 404
+    finally:
+        reset_current_site_scope(token)
+
+    token = set_current_site_scope("retention")
+    try:
+        routes_retention._ensure_retention_site()  # must not raise
+    finally:
+        reset_current_site_scope(token)
+
+
+def _raise(exc):
+    def _inner(*_args, **_kwargs):
+        raise exc
+    return _inner
+
+
+def test_get_teams_returns_409_when_connection_is_disconnected(test_client, monkeypatch):
+    import routes_retention
+    from retention_graph_connection import RetentionGraphConnectionError
+
+    _allow_retention(monkeypatch)
+    monkeypatch.setattr(
+        routes_retention.retention_graph_connection, "get_valid_token",
+        _raise(RetentionGraphConnectionError("Retention Graph connection is not set up")),
+    )
+
+    resp = test_client.get("/api/retention/teams", headers=RETENTION_HOST)
+    assert resp.status_code == 409
+    assert "not set up" in resp.json()["detail"]
+
+
+def test_get_teams_returns_502_on_graph_error(test_client, monkeypatch):
+    import routes_retention
+    from retention_graph_client import RetentionGraphError
+
+    _allow_retention(monkeypatch)
+    monkeypatch.setattr(routes_retention.retention_graph_connection, "get_valid_token", lambda: "token")
+    monkeypatch.setattr(
+        routes_retention, "_list_teams",
+        _raise(RetentionGraphError("Graph GET /teams failed: 403 Forbidden", status_code=403)),
+    )
+
+    resp = test_client.get("/api/retention/teams", headers=RETENTION_HOST)
+    assert resp.status_code == 502
+    assert "403" in resp.json()["detail"]
+
+
+def test_get_channels_returns_409_when_connection_is_disconnected(test_client, monkeypatch):
+    import routes_retention
+    from retention_graph_connection import RetentionGraphConnectionError
+
+    _allow_retention(monkeypatch)
+    monkeypatch.setattr(
+        routes_retention.retention_graph_connection, "get_valid_token",
+        _raise(RetentionGraphConnectionError("Retention Graph connection is disconnected")),
+    )
+
+    resp = test_client.get("/api/retention/teams/t1/channels", headers=RETENTION_HOST)
+    assert resp.status_code == 409
+
+
+def test_get_channels_returns_502_on_graph_error(test_client, monkeypatch):
+    import routes_retention
+    from retention_graph_client import RetentionGraphError
+
+    _allow_retention(monkeypatch)
+    monkeypatch.setattr(routes_retention.retention_graph_connection, "get_valid_token", lambda: "token")
+    monkeypatch.setattr(
+        routes_retention, "_list_channels", _raise(RetentionGraphError("throttled", status_code=429)),
+    )
+
+    resp = test_client.get("/api/retention/teams/t1/channels", headers=RETENTION_HOST)
+    assert resp.status_code == 502
+
+
+def test_teams_and_channels_routes_are_sync_defs_not_async():
+    """Blocking `requests` Graph enumeration must not run on the shared event loop.
+
+    Declaring these handlers `async def` would stall every other host's requests
+    for the duration of the Graph calls; plain `def` puts them in FastAPI's
+    threadpool, matching routes_ad.py / routes_tools.py.
+    """
+    import inspect
+    import routes_retention
+
+    assert not inspect.iscoroutinefunction(routes_retention.get_teams)
+    assert not inspect.iscoroutinefunction(routes_retention.get_channels)
+
+
+def test_preview_returns_502_on_graph_error(test_client, monkeypatch):
+    import routes_retention
+    from retention_graph_client import RetentionGraphError
+
+    _allow_retention(monkeypatch)
+    create_resp = test_client.post(
+        "/api/retention/policies",
+        json={"team_id": "t1", "team_name": "Eng", "channel_id": "c1", "channel_name": "General", "retention_days": 30},
+        headers=RETENTION_HOST,
+    )
+    policy_id = create_resp.json()["id"]
+
+    async def _boom(_policy_id):
+        raise RetentionGraphError("Graph GET messages failed: 403 Forbidden", status_code=403)
+
+    monkeypatch.setattr(routes_retention.retention_cleanup_job, "compute_preview", _boom)
+
+    resp = test_client.get(f"/api/retention/policies/{policy_id}/preview", headers=RETENTION_HOST)
+    assert resp.status_code == 502
