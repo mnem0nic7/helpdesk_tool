@@ -1,23 +1,34 @@
 # backend/tests/test_routes_retention.py
 from __future__ import annotations
 
+import tempfile
+
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def _reset_retention_policy_store():
-    """retention_policy_store is a module-level singleton backed by a single
-    SQLite file for the whole test session (DATA_DIR is fixed once in
-    conftest.py), so rows from one test would otherwise leak into the next
-    and collide with the (team_id, channel_id) unique index used by several
-    tests below that intentionally reuse the same team_id/channel_id."""
+def _fresh_retention_policy_store(monkeypatch):
+    """retention_policy_store is a real module-level singleton also used by
+    production code in routes_retention.py, and its _conn() falls back to
+    the real shared Postgres database whenever DATABASE_URL is set (as it is
+    in the backend container) rather than always using a private SQLite
+    file. Swap in a fresh instance backed by its own temp SQLite file for
+    each test instead of mutating the real singleton's data — the same
+    pattern used by test_retention_policy_store.py / test_retention_cleanup_job.py
+    (constructing RetentionPolicyStore(db_path=...)) and by
+    test_routes_quarantine_release.py (monkeypatching the route module's
+    singleton reference to a fresh instance). This also keeps state isolated
+    between the test functions below that intentionally reuse the same
+    team_id/channel_id, which would otherwise collide on the
+    (team_id, channel_id) unique index if they shared one store."""
+    from retention_policy_store import RetentionPolicyStore
     import retention_policy_store as rps_module
+    import routes_retention
 
-    store = rps_module.retention_policy_store
-    with store._conn() as conn:
-        conn.execute("DELETE FROM retention_deletions")
-        conn.execute("DELETE FROM retention_runs")
-        conn.execute("DELETE FROM retention_policies")
+    store = RetentionPolicyStore(db_path=tempfile.mktemp(suffix=".db"))
+    monkeypatch.setattr(rps_module, "retention_policy_store", store)
+    monkeypatch.setattr(routes_retention, "retention_policy_store", store)
+    return store
 
 
 def _allow_retention(monkeypatch, email="test@example.com"):
