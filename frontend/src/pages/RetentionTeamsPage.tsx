@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useDeferredValue, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type RetentionChannel, type RetentionTeam } from "../lib/api.ts";
 
@@ -15,6 +15,12 @@ export default function RetentionTeamsPage() {
   const [channelsOffset, setChannelsOffset] = useState(0);
   const [teamsSearch, setTeamsSearch] = useState("");
   const [channelsSearch, setChannelsSearch] = useState("");
+  // Matching a channel name at the top level means Graph-fanning-out to every team's
+  // channel list (see the backend route) — deferring the value keeps fast typing from
+  // firing that expensive search on every keystroke while still needing no manual
+  // debounce timer.
+  const deferredTeamsSearch = useDeferredValue(teamsSearch);
+  const deferredChannelsSearch = useDeferredValue(channelsSearch);
 
   const statusQuery = useQuery({
     queryKey: ["retention", "connection-status"],
@@ -22,31 +28,43 @@ export default function RetentionTeamsPage() {
   });
 
   const teamsQuery = useQuery({
-    queryKey: ["retention", "teams", teamsOffset, teamsSearch],
-    queryFn: () => api.getRetentionTeams(TEAMS_LIMIT, teamsOffset, teamsSearch),
+    queryKey: ["retention", "teams", teamsOffset, deferredTeamsSearch],
+    queryFn: () => api.getRetentionTeams(TEAMS_LIMIT, teamsOffset, deferredTeamsSearch),
     enabled: statusQuery.data?.status === "connected",
   });
+  // True while React is still rendering the stale list under the deferred value, and
+  // while the (potentially slow, channel-fan-out) request for the new value is in
+  // flight — covers the whole "user is waiting on a fresh result" window.
+  const isSearchingTeams = teamsSearch !== deferredTeamsSearch || teamsQuery.isFetching;
 
   const channelsQuery = useQuery({
-    queryKey: ["retention", "channels", expandedTeamId, channelsOffset, channelsSearch],
-    queryFn: () => api.getRetentionChannels(expandedTeamId as string, CHANNELS_LIMIT, channelsOffset, channelsSearch),
+    queryKey: ["retention", "channels", expandedTeamId, channelsOffset, deferredChannelsSearch],
+    queryFn: () => api.getRetentionChannels(expandedTeamId as string, CHANNELS_LIMIT, channelsOffset, deferredChannelsSearch),
     enabled: !!expandedTeamId,
   });
+
+  useEffect(() => {
+    setTeamsOffset(0);
+  }, [deferredTeamsSearch]);
+
+  useEffect(() => {
+    setChannelsOffset(0);
+  }, [deferredChannelsSearch]);
 
   function toggleTeam(teamId: string) {
     setExpandedTeamId((current) => (current === teamId ? null : teamId));
     setChannelsOffset(0);
-    setChannelsSearch("");
+    // Prefill with the top search term: a team that only matched via one of its
+    // channels (not its own name) should open with that channel already filtered.
+    setChannelsSearch(teamsSearch);
   }
 
   function handleTeamsSearchChange(value: string) {
     setTeamsSearch(value);
-    setTeamsOffset(0);
   }
 
   function handleChannelsSearchChange(value: string) {
     setChannelsSearch(value);
-    setChannelsOffset(0);
   }
 
   const createMutation = useMutation({
@@ -109,14 +127,21 @@ export default function RetentionTeamsPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Teams &amp; Channels</h1>
-      <input
-        type="search"
-        value={teamsSearch}
-        onChange={(e) => handleTeamsSearchChange(e.target.value)}
-        placeholder="Search teams..."
-        aria-label="Search teams"
-        className="block w-full max-w-sm rounded border border-slate-300 px-3 py-1.5 text-sm"
-      />
+      <div className="flex max-w-sm items-center gap-2">
+        <input
+          type="search"
+          value={teamsSearch}
+          onChange={(e) => handleTeamsSearchChange(e.target.value)}
+          placeholder="Search teams and channels..."
+          aria-label="Search teams"
+          className="block w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
+        />
+        {isSearchingTeams && (
+          <span className="whitespace-nowrap text-xs text-slate-500">
+            Searching... (channel matches can take a while across every team)
+          </span>
+        )}
+      </div>
       {teamsQuery.isError && (
         <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
           {teamsQuery.error instanceof Error ? teamsQuery.error.message : "Failed to load teams"}

@@ -60,6 +60,44 @@ def list_channels(access_token: str, team_id: str) -> list[dict[str, Any]]:
     return [{"id": c["id"], "name": c.get("displayName", "")} for c in raw]
 
 
+_BATCH_CHUNK_SIZE = 20
+
+
+def list_channels_for_teams_batch(access_token: str, team_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """Fetch channels for many teams via Graph's $batch endpoint (up to 20 sub-requests
+    per call) instead of one request per team. Used by the top-level teams search so it
+    can match on channel names across every team in the tenant without a full sequential
+    per-team fan-out. A team whose sub-request fails, or whose channel list is large
+    enough to paginate (batch sub-responses don't follow @odata.nextLink), is treated as
+    having no channels for search purposes rather than failing the whole search."""
+    results: dict[str, list[dict[str, Any]]] = {}
+    for start in range(0, len(team_ids), _BATCH_CHUNK_SIZE):
+        chunk = team_ids[start : start + _BATCH_CHUNK_SIZE]
+        body = {
+            "requests": [
+                {"id": str(i), "method": "GET", "url": f"/teams/{team_id}/channels"}
+                for i, team_id in enumerate(chunk)
+            ],
+        }
+        resp = _request("POST", f"{_GRAPH_BASE}/$batch", access_token, json=body)
+        if not resp.ok:
+            raise RetentionGraphError(
+                f"Graph POST $batch failed: {resp.status_code} {resp.text[:300]}", status_code=resp.status_code,
+            )
+        payload = resp.json()
+        id_to_team = {str(i): team_id for i, team_id in enumerate(chunk)}
+        for item in payload.get("responses") or []:
+            team_id = id_to_team.get(str(item.get("id")))
+            if not team_id:
+                continue
+            if int(item.get("status") or 0) != 200:
+                results[team_id] = []
+                continue
+            raw = (item.get("body") or {}).get("value") or []
+            results[team_id] = [{"id": c["id"], "name": c.get("displayName", "")} for c in raw]
+    return results
+
+
 def _message_summary(raw: dict[str, Any]) -> dict[str, Any]:
     attachments = [
         {"id": a.get("id", ""), "content_url": a.get("contentUrl", "")}

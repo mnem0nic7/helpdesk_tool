@@ -13,6 +13,7 @@ from retention_cleanup_job import retention_cleanup_job
 from retention_graph_client import (
     RetentionGraphError,
     list_channels as _list_channels,
+    list_channels_for_teams_batch as _list_channels_for_teams_batch,
     list_teams as _list_teams,
 )
 from retention_graph_connection import (
@@ -123,7 +124,18 @@ def get_teams(
         team["policy_count"] = active_by_team.get(team["id"], 0)
     needle = q.strip().lower()
     if needle:
-        teams = [t for t in teams if needle in t["name"].lower()]
+        # Graph has no "search channels across every team" endpoint, so matching a
+        # channel name at this top level means fanning out to every team's channel
+        # list. Batched (20 teams per Graph $batch call) to keep this from being 347+
+        # sequential round trips, but it is still a live, uncached fan-out on every
+        # search — a deliberate tradeoff for always-fresh results over an index that
+        # could show a just-renamed/just-created channel late.
+        channels_by_team = _list_channels_for_teams_batch(token, [t["id"] for t in teams])
+        teams = [
+            t for t in teams
+            if needle in t["name"].lower()
+            or any(needle in c["name"].lower() for c in channels_by_team.get(t["id"], []))
+        ]
     return {"items": teams[offset : offset + limit], "total": len(teams)}
 
 

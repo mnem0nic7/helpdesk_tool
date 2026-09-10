@@ -180,3 +180,63 @@ def test_request_retries_on_429_then_succeeds(monkeypatch):
     with patch("retention_graph_client.requests.request", side_effect=[throttled, success]):
         resp = g._request("POST", "https://graph/x", "token")
     assert resp.ok is True
+
+
+def test_list_channels_for_teams_batch_maps_responses_back_to_team_ids():
+    import retention_graph_client as g
+    batch_response = _ok_response({
+        "responses": [
+            {"id": "0", "status": 200, "body": {"value": [{"id": "c1", "displayName": "General"}]}},
+            {"id": "1", "status": 200, "body": {"value": [{"id": "c2", "displayName": "Random"}]}},
+        ],
+    })
+    with patch("retention_graph_client.requests.request", return_value=batch_response) as mock_request:
+        result = g.list_channels_for_teams_batch("token", ["t1", "t2"])
+
+    assert result == {
+        "t1": [{"id": "c1", "name": "General"}],
+        "t2": [{"id": "c2", "name": "Random"}],
+    }
+    call_kwargs = mock_request.call_args.kwargs
+    sub_requests = call_kwargs["json"]["requests"]
+    assert [r["url"] for r in sub_requests] == ["/teams/t1/channels", "/teams/t2/channels"]
+
+
+def test_list_channels_for_teams_batch_treats_a_failed_sub_request_as_no_channels():
+    import retention_graph_client as g
+    batch_response = _ok_response({
+        "responses": [
+            {"id": "0", "status": 200, "body": {"value": [{"id": "c1", "displayName": "General"}]}},
+            {"id": "1", "status": 403, "body": {"error": {"message": "Forbidden"}}},
+        ],
+    })
+    with patch("retention_graph_client.requests.request", return_value=batch_response):
+        result = g.list_channels_for_teams_batch("token", ["t1", "t2"])
+
+    assert result == {"t1": [{"id": "c1", "name": "General"}], "t2": []}
+
+
+def test_list_channels_for_teams_batch_chunks_at_twenty_teams_per_call():
+    import retention_graph_client as g
+    team_ids = [f"t{i}" for i in range(25)]
+    empty_batch = _ok_response({"responses": []})
+    with patch("retention_graph_client.requests.request", return_value=empty_batch) as mock_request:
+        g.list_channels_for_teams_batch("token", team_ids)
+
+    assert mock_request.call_count == 2
+    first_call_requests = mock_request.call_args_list[0].kwargs["json"]["requests"]
+    second_call_requests = mock_request.call_args_list[1].kwargs["json"]["requests"]
+    assert len(first_call_requests) == 20
+    assert len(second_call_requests) == 5
+
+
+def test_list_channels_for_teams_batch_raises_on_batch_level_failure():
+    import retention_graph_client as g
+    resp = MagicMock(ok=False, status_code=500, text="Internal Server Error")
+    resp.headers = {}
+    with patch("retention_graph_client.requests.request", return_value=resp):
+        try:
+            g.list_channels_for_teams_batch("token", ["t1"])
+            assert False, "expected RetentionGraphError"
+        except g.RetentionGraphError as exc:
+            assert exc.status_code == 500
