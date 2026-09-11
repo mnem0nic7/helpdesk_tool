@@ -60,6 +60,30 @@ def test_delete_message_raises_retention_graph_error_on_failure():
             assert exc.status_code == 403
 
 
+def test_ensure_team_membership_posts_the_service_account_as_a_member():
+    resp = MagicMock(ok=True, status_code=201)
+    resp.headers = {}
+    with patch("retention_graph_client.requests.request", return_value=resp) as mock_request:
+        import retention_graph_client as g
+        g.ensure_team_membership("token", "team-1", "retention-svc@example.com")
+    _method, url = mock_request.call_args[0]
+    assert url == "https://graph.microsoft.com/v1.0/teams/team-1/members"
+    body = mock_request.call_args.kwargs["json"]
+    assert body["user@odata.bind"] == "https://graph.microsoft.com/v1.0/users('retention-svc@example.com')"
+
+
+def test_ensure_team_membership_raises_on_failure():
+    resp = MagicMock(ok=False, status_code=403, text="Forbidden")
+    resp.headers = {}
+    with patch("retention_graph_client.requests.request", return_value=resp):
+        import retention_graph_client as g
+        try:
+            g.ensure_team_membership("token", "team-1", "retention-svc@example.com")
+            assert False, "expected RetentionGraphError"
+        except g.RetentionGraphError as exc:
+            assert exc.status_code == 403
+
+
 def test_list_messages_older_than_excludes_already_soft_deleted():
     # Graph keeps returning soft-deleted messages forever; without this filter the
     # hourly job re-attempts deletes it already performed and never converges to 'ok'.

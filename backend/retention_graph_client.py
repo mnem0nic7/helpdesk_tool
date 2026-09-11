@@ -60,6 +60,33 @@ def list_channels(access_token: str, team_id: str) -> list[dict[str, Any]]:
     return [{"id": c["id"], "name": c.get("displayName", "")} for c in raw]
 
 
+def ensure_team_membership(access_token: str, team_id: str, service_account_upn: str) -> None:
+    """Add the retention service account to a team so its delegated token can read
+    that team's channel messages.
+
+    Team.ReadBasic.All/Channel.ReadBasic.All (used by list_teams/list_channels)
+    work tenant-wide regardless of membership, but the message-content APIs
+    (ChannelMessage.Read.All, delete) are scoped to teams the delegated user
+    actually belongs to — a discovery made the hard way when every channel this
+    account didn't already belong to 403'd on listing messages. This call is
+    idempotent: POSTing an existing member returns 201 again rather than an
+    error, so callers can invoke it unconditionally before every read/delete
+    pass instead of first checking membership (which needs a different,
+    unrequested permission to query).
+    """
+    url = f"{_GRAPH_BASE}/teams/{team_id}/members"
+    body = {
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        "roles": [],
+        "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{service_account_upn}')",
+    }
+    resp = _request("POST", url, access_token, json=body)
+    if not resp.ok:
+        raise RetentionGraphError(
+            f"Add team member to {team_id} failed: {resp.status_code} {resp.text[:300]}", status_code=resp.status_code,
+        )
+
+
 _BATCH_CHUNK_SIZE = 20
 
 

@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 _DB_PATH = os.path.join(DATA_DIR, "retention_graph_connection.db")
 
 RETENTION_GRAPH_SCOPES = (
-    "ChannelMessage.ReadWrite Files.ReadWrite.All "
-    "Team.ReadBasic.All Channel.ReadBasic.All offline_access"
+    "ChannelMessage.ReadWrite ChannelMessage.Read.All TeamMember.ReadWrite.All "
+    "Files.ReadWrite.All Team.ReadBasic.All Channel.ReadBasic.All offline_access"
 )
 
 if RETENTION_GRAPH_CLIENT_ID and RETENTION_GRAPH_CLIENT_SECRET and RETENTION_GRAPH_TENANT_ID:

@@ -37,6 +37,17 @@ class RetentionCleanupJob:
         #     parent deleted while one of its replies failed would orphan that
         #     reply (and its SharePoint attachment) permanently.
         loop = asyncio.get_event_loop()
+        # Team.ReadBasic.All/Channel.ReadBasic.All (teams/channel listing) work
+        # tenant-wide, but reading channel MESSAGES is scoped to teams the
+        # delegated account actually belongs to — discovered when every channel
+        # this account wasn't already a member of 403'd here. Adding membership is
+        # idempotent (see ensure_team_membership), so this runs unconditionally
+        # ahead of every preview and every real deletion pass rather than only
+        # once at policy-creation time, in case membership is ever lost.
+        service_account_upn = self._connection_store.get_status()["service_account_upn"]
+        await loop.run_in_executor(
+            None, lambda: self._graph.ensure_team_membership(token, policy["team_id"], service_account_upn),
+        )
         messages = await loop.run_in_executor(
             None, lambda: self._graph.list_messages_older_than(token, policy["team_id"], policy["channel_id"], cutoff),
         )

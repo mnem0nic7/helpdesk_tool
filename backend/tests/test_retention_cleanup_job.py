@@ -12,6 +12,7 @@ def _job_with_stores():
     policy_store = RetentionPolicyStore(db_path=tempfile.mktemp(suffix=".db"))
     connection_store = MagicMock()
     connection_store.get_valid_token.return_value = "token"
+    connection_store.get_status.return_value = {"service_account_upn": "retention-svc@example.com"}
     graph_module = MagicMock()
     job = RetentionCleanupJob(connection_store=connection_store, policy_store=policy_store, graph_module=graph_module)
     return job, policy_store, connection_store, graph_module
@@ -40,6 +41,25 @@ async def test_compute_preview_counts_messages_and_replies():
     assert preview["messages_count"] == 2
     assert preview["attachments_count"] == 2
     assert preview["oldest_message_at"] == "2025-01-01T00:00:00Z"
+
+
+async def test_compute_preview_ensures_team_membership_before_listing_messages():
+    # Team.ReadBasic.All/Channel.ReadBasic.All (teams/channel listing) work
+    # tenant-wide, but reading channel messages 403s unless the delegated
+    # service account is actually a member of that team — discovered live
+    # against a real tenant. Every preview/run must add membership first
+    # (idempotent on Graph's side) rather than assuming it from an earlier pass.
+    job, policy_store, connection_store, graph_module = _job_with_stores()
+    connection_store.get_status.return_value = {"service_account_upn": "retention-svc@example.com"}
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    graph_module.list_messages_older_than.return_value = []
+
+    await job.compute_preview(policy["id"])
+
+    graph_module.ensure_team_membership.assert_called_once_with("token", "team-1", "retention-svc@example.com")
 
 
 async def test_run_cycle_skips_when_no_active_policies():
