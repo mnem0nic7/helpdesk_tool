@@ -121,6 +121,43 @@ describe("RetentionTeamsPage", () => {
     expect(screen.getByText("Configure retention")).toBeInTheDocument();
   });
 
+  it("offers Resume preview (not Configure retention) for a channel already sitting in pending_preview, e.g. from a bulk import", async () => {
+    // Configure retention only ever appears for no-policy/disabled channels, since
+    // creating a policy locally transitions straight into the preview panel. A
+    // policy that reaches pending_preview some other way (bulk import, or a reload
+    // after leaving the panel mid-preview) has to be resumable too, or an operator
+    // has no way back into preview/confirm for it.
+    vi.spyOn(api, "getRetentionConnectionStatus").mockResolvedValue({
+      status: "connected", service_account_upn: "bot@x.com", last_refreshed_at: "now", last_error: null,
+    });
+    vi.spyOn(api, "getRetentionTeams").mockResolvedValue({ items: [{ id: "t1", name: "Engineering", policy_count: 0 }], total: 1 });
+    vi.spyOn(api, "getRetentionChannels").mockResolvedValue({
+      items: [{
+        id: "c1", name: "General",
+        policy: {
+          id: "p1", team_id: "t1", team_name: "Engineering", channel_id: "c1", channel_name: "General",
+          retention_days: 365, status: "pending_preview", created_by: "bulk-import", created_at: "now", updated_at: "now",
+        },
+      }],
+      total: 1,
+    });
+    const createSpy = vi.spyOn(api, "createRetentionPolicy");
+    vi.spyOn(api, "getRetentionPolicyPreview").mockResolvedValue({ messages_count: 12, attachments_count: 2, oldest_message_at: "2025-01-01" });
+
+    renderWithClient();
+
+    fireEvent.click(await screen.findByText("Engineering"));
+
+    expect(await screen.findByText(/pending_preview, 365d/)).toBeInTheDocument();
+    expect(screen.queryByText("Configure retention")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Resume preview"));
+
+    await waitFor(() => expect(screen.getByText(/approximately/i)).toBeInTheDocument());
+    expect(screen.getByText(/12/)).toBeInTheDocument();
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   it("reconfiguring a channel with an existing disabled policy patches instead of creating", async () => {
     vi.spyOn(api, "getRetentionConnectionStatus").mockResolvedValue({
       status: "connected", service_account_upn: "bot@x.com", last_refreshed_at: "now", last_error: null,

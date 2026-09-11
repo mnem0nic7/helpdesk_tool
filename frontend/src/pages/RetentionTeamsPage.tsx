@@ -197,6 +197,18 @@ export default function RetentionTeamsPage() {
                             Configure retention
                           </button>
                         )}
+                        {channel.policy && channel.policy.status === "pending_preview" && (
+                          <button
+                            onClick={() => {
+                              setConfiguringChannel({ team, channel });
+                              setDays(channel.policy!.retention_days);
+                              setPreviewPolicyId(channel.policy!.id);
+                            }}
+                            className="rounded bg-blue-600 px-2 py-1 text-xs text-white"
+                          >
+                            Resume preview
+                          </button>
+                        )}
                       </div>
                     </div>
                     {configuringChannel?.team.id === team.id && configuringChannel.channel.id === channel.id && (
