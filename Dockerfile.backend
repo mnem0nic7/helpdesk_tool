@@ -28,7 +28,7 @@ RUN apt-get update \
     && chmod +x /opt/microsoft/powershell/7/pwsh \
     && ln -sf /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh \
     && rm -f /tmp/powershell.tar.gz \
-    && pwsh -NoLogo -NoProfile -NonInteractive -Command "Set-PSRepository -Name PSGallery -InstallationPolicy Trusted; Install-Module -Name Microsoft.Graph.Authentication,Microsoft.Graph.Users,ExchangeOnlineManagement -Scope AllUsers -Force -AllowClobber -AcceptLicense" \
+    && pwsh -NoLogo -NoProfile -NonInteractive -Command "Set-PSRepository -Name PSGallery -InstallationPolicy Trusted; Install-Module -Name Microsoft.Graph.Authentication,Microsoft.Graph.Users,ExchangeOnlineManagement,MicrosoftTeams -Scope AllUsers -Force -AllowClobber -AcceptLicense" \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt /tmp/requirements.txt
