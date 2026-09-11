@@ -321,7 +321,20 @@ def _build_import_preview(raw_rows: list[dict[str, str]]) -> list[dict[str, Any]
     return preview
 
 
-def _apply_import_rows(preview_rows: list[dict[str, Any]], *, created_by: str) -> list[dict[str, Any]]:
+async def _apply_import_rows(preview_rows: list[dict[str, Any]], *, created_by: str) -> list[dict[str, Any]]:
+    """Create/update each actionable row, then immediately run the same live Graph
+    preview the single-channel UI runs and confirm to active on success.
+
+    Bulk import's Apply is the operator's one approval step for the whole batch, so
+    unlike the single-channel flow it doesn't stop at pending_preview waiting for a
+    second click per row — but it still never arms a deletion blind: a row only
+    reaches active after its own live message/attachment count comes back, and that
+    count travels with the result row for the audit trail. A row whose live preview
+    fails (Graph error, disconnected service account) is left at pending_preview
+    exactly like a fresh single-channel policy, with `result="preview_failed"` and
+    the actual counts left unset — it's picked up from Teams & Channels' Resume
+    preview action, never silently retried here.
+    """
     results: list[dict[str, Any]] = []
     for row in preview_rows:
         result = dict(row)
@@ -338,20 +351,34 @@ def _apply_import_rows(preview_rows: list[dict[str, Any]], *, created_by: str) -
                 if existing:
                     result["result"] = "failed"
                     result["error"] = "A policy already exists for this channel"
-                else:
-                    retention_policy_store.create_policy(
-                        team_id=row["team_id"], team_name=row["team_name"],
-                        channel_id=row["channel_id"], channel_name=row["channel_name"],
-                        retention_days=row["retention_days"], created_by=created_by,
-                    )
-                    result["result"] = "created"
+                    results.append(result)
+                    continue
+                policy = retention_policy_store.create_policy(
+                    team_id=row["team_id"], team_name=row["team_name"],
+                    channel_id=row["channel_id"], channel_name=row["channel_name"],
+                    retention_days=row["retention_days"], created_by=created_by,
+                )
             else:
                 if not existing:
                     result["result"] = "failed"
                     result["error"] = "Policy no longer exists for this channel"
-                else:
-                    retention_policy_store.update_policy(existing["id"], retention_days=row["retention_days"])
-                    result["result"] = "updated"
+                    results.append(result)
+                    continue
+                policy = retention_policy_store.update_policy(existing["id"], retention_days=row["retention_days"])
+
+            try:
+                preview = await retention_cleanup_job.compute_preview(policy["id"])
+            except (RetentionGraphConnectionError, RetentionGraphError, ValueError) as exc:
+                result["result"] = "preview_failed"
+                result["error"] = f"Saved as pending_preview, but the live preview failed: {exc}"
+                results.append(result)
+                continue
+
+            retention_policy_store.confirm_policy(policy["id"])
+            result["result"] = "created" if action == "create" else "updated"
+            result["preview_messages_count"] = preview["messages_count"]
+            result["preview_attachments_count"] = preview["attachments_count"]
+            result["preview_oldest_message_at"] = preview.get("oldest_message_at")
         except Exception as exc:
             result["result"] = "failed"
             result["error"] = str(exc)
@@ -428,5 +455,5 @@ async def import_apply(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     preview_rows = _build_import_preview(raw_rows)
-    results = _apply_import_rows(preview_rows, created_by=str(session.get("email") or ""))
+    results = await _apply_import_rows(preview_rows, created_by=str(session.get("email") or ""))
     return {"rows": results}

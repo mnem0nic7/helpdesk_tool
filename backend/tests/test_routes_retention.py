@@ -536,7 +536,9 @@ def test_import_preview_flags_duplicate_rows_for_the_same_channel(test_client, m
     assert "Duplicate" in rows[1]["error"]
 
 
-def test_import_apply_creates_and_updates_policies(test_client, monkeypatch):
+def test_import_apply_creates_and_updates_policies_and_confirms_them_active(test_client, monkeypatch):
+    import routes_retention
+
     _allow_retention(monkeypatch)
     test_client.post(
         "/api/retention/policies",
@@ -547,6 +549,12 @@ def test_import_apply_creates_and_updates_policies(test_client, monkeypatch):
         ["team_id", "team_name", "channel_id", "channel_name", "retention_days"],
         [["t1", "Existing", "c1", "General", 45], ["t2", "New Team", "c2", "Random", 60]],
     )
+
+    async def _preview(_policy_id):
+        return {"messages_count": 7, "attachments_count": 2, "oldest_message_at": "2026-01-01"}
+
+    monkeypatch.setattr(routes_retention.retention_cleanup_job, "compute_preview", _preview)
+
     resp = test_client.post(
         "/api/retention/import/apply",
         files={"file": ("channels.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
@@ -555,15 +563,50 @@ def test_import_apply_creates_and_updates_policies(test_client, monkeypatch):
     assert resp.status_code == 200
     results = {r["channel_id"]: r for r in resp.json()["rows"]}
     assert results["c1"]["result"] == "updated"
+    assert results["c1"]["preview_messages_count"] == 7
     assert results["c2"]["result"] == "created"
+    assert results["c2"]["preview_attachments_count"] == 2
 
     from retention_policy_store import retention_policy_store as store
     updated = store.get_policy_for_channel("t1", "c1")
     assert updated["retention_days"] == 45
-    assert updated["status"] == "pending_preview"
+    assert updated["status"] == "active"
     created = store.get_policy_for_channel("t2", "c2")
     assert created["retention_days"] == 60
-    assert created["status"] == "pending_preview"
+    assert created["status"] == "active"
+
+
+def test_import_apply_leaves_a_row_pending_preview_when_the_live_preview_fails(test_client, monkeypatch):
+    # Apply is the operator's one bulk approval, so it must never arm a policy
+    # blind: a failed live preview (disconnected service account, Graph error)
+    # must leave that row at pending_preview rather than confirming it anyway.
+    import routes_retention
+    from retention_graph_connection import RetentionGraphConnectionError
+
+    _allow_retention(monkeypatch)
+    content = _xlsx_bytes(
+        ["team_id", "team_name", "channel_id", "channel_name", "retention_days"],
+        [["t1", "New Team", "c1", "General", 60]],
+    )
+
+    async def _boom(_policy_id):
+        raise RetentionGraphConnectionError("not connected")
+
+    monkeypatch.setattr(routes_retention.retention_cleanup_job, "compute_preview", _boom)
+
+    resp = test_client.post(
+        "/api/retention/import/apply",
+        files={"file": ("channels.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=RETENTION_HOST,
+    )
+    assert resp.status_code == 200
+    result = resp.json()["rows"][0]
+    assert result["result"] == "preview_failed"
+    assert "not connected" in result["error"]
+
+    from retention_policy_store import retention_policy_store as store
+    saved = store.get_policy_for_channel("t1", "c1")
+    assert saved["status"] == "pending_preview"
 
 
 def test_import_apply_does_not_touch_skip_or_error_rows(test_client, monkeypatch):

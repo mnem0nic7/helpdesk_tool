@@ -5766,7 +5766,15 @@ export interface RetentionImportRow {
   // Present only in the response from applyRetentionImport, not previewRetentionImport
   // — kept on the same type (rather than a separate extends-interface) so a page that
   // renders either response's rows through one array doesn't have to deal with a union.
-  result?: "created" | "updated" | "skipped" | "failed";
+  // "preview_failed" means the policy was saved but the live Graph preview that
+  // would have confirmed it to active failed, so it's still sitting at
+  // pending_preview — resolve it from the Teams & Channels page's Resume preview.
+  result?: "created" | "updated" | "skipped" | "failed" | "preview_failed";
+  // Only set alongside result "created"/"updated": the live preview counts that
+  // were checked before the policy was confirmed to active.
+  preview_messages_count?: number | null;
+  preview_attachments_count?: number | null;
+  preview_oldest_message_at?: string | null;
 }
 
 export interface AskHrBotRun {

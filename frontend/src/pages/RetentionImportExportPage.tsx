@@ -63,9 +63,12 @@ export default function RetentionImportExportPage() {
         <h2 className="text-sm font-semibold">Import</h2>
         <p className="max-w-2xl text-sm text-slate-600">
           Upload an edited export. Only rows with a non-blank <code>retention_days</code> are touched — leave it
-          blank to leave a channel alone. Every touched policy lands as <strong>pending_preview</strong>, exactly
-          like creating one by hand: nothing deletes anything until it's individually previewed and confirmed from
-          the Teams &amp; Channels page.
+          blank to leave a channel alone. <strong>Apply is the final approval step</strong>: each touched row runs a
+          live check against Microsoft Graph for how many messages and attachments it would delete, and on success
+          is confirmed <strong>active</strong> immediately — eligible for real deletion on the next hourly cleanup
+          run. A row whose live check fails (for example the service account is disconnected) is left at{" "}
+          <strong>pending_preview</strong> instead, with the error shown below — resolve those individually from the
+          Teams &amp; Channels page's Resume preview action.
         </p>
         <div className="flex items-center gap-2">
           <input
@@ -108,7 +111,7 @@ export default function RetentionImportExportPage() {
               disabled={!file || actionableCount === 0 || applyMutation.isPending}
               className="rounded bg-red-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
             >
-              Apply {actionableCount} change{actionableCount === 1 ? "" : "s"}
+              Apply &amp; activate {actionableCount} change{actionableCount === 1 ? "" : "s"}
             </button>
           </div>
         )}
@@ -122,6 +125,7 @@ export default function RetentionImportExportPage() {
                 <th>Current</th>
                 <th>New retention_days</th>
                 <th>{resultRows ? "Result" : "Action"}</th>
+                {resultRows && <th>Live preview</th>}
                 <th>Error</th>
               </tr>
             </thead>
@@ -135,6 +139,13 @@ export default function RetentionImportExportPage() {
                   </td>
                   <td>{row.retention_days ?? "—"}</td>
                   <td>{row.result ?? row.action}</td>
+                  {resultRows && (
+                    <td>
+                      {row.preview_messages_count != null
+                        ? `${row.preview_messages_count} msg(s), ${row.preview_attachments_count ?? 0} attachment(s)`
+                        : "—"}
+                    </td>
+                  )}
                   <td className="text-red-600">{row.error ?? ""}</td>
                 </tr>
               ))}
