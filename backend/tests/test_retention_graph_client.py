@@ -182,6 +182,32 @@ def test_resolve_drive_item_from_content_url_returns_none_on_404():
         assert g.resolve_drive_item_from_content_url("token", "https://sp/missing") is None
 
 
+def test_resolve_drive_item_from_content_url_returns_none_on_shares_access_denied_file_not_found():
+    # Graph's /shares/{id}/driveItem endpoint returns 403 accessDenied /
+    # sharesAccessDenied with an HRESULT 0x80070002 "file not found" message
+    # (not a real permission denial) when the underlying driveItem behind an
+    # old share link is already gone. Observed live: a run kept coming back
+    # "partial" forever because this was raised as a real failure and blocked
+    # the owning message from ever being deleted, instead of converging like
+    # a clean 404 does.
+    import retention_graph_client as g
+    resp = MagicMock(ok=False, status_code=403)
+    resp.headers = {}
+    resp.text = (
+        '{"error":{"code":"accessDenied","innerError":{"code":"sharesAccessDenied"},'
+        '"message":"The system cannot find the file specified. (Exception from HRESULT: 0x80070002)"}}'
+    )
+    resp.json.return_value = {
+        "error": {
+            "code": "accessDenied",
+            "innerError": {"code": "sharesAccessDenied"},
+            "message": "The system cannot find the file specified. (Exception from HRESULT: 0x80070002)",
+        },
+    }
+    with patch("retention_graph_client.requests.request", return_value=resp):
+        assert g.resolve_drive_item_from_content_url("token", "https://sp/gone") is None
+
+
 def test_resolve_drive_item_from_content_url_raises_on_non_404_failure():
     import retention_graph_client as g
     resp = MagicMock(ok=False, status_code=403, text="Forbidden")

@@ -236,12 +236,31 @@ def resolve_drive_item_from_content_url(access_token: str, content_url: str) -> 
     resp = _request("GET", f"{_GRAPH_BASE}/shares/{encoded}/driveItem?$select=id", access_token)
     if resp.status_code == 404:
         return None
+    if resp.status_code == 403 and _is_shares_access_denied_file_not_found(resp):
+        return None
     if not resp.ok:
         raise RetentionGraphError(
             f"Resolve drive item from content url failed: {resp.status_code} {resp.text[:300]}",
             status_code=resp.status_code,
         )
     return resp.json()["id"]
+
+
+def _is_shares_access_denied_file_not_found(resp: requests.Response) -> bool:
+    # Graph's /shares/{id}/driveItem endpoint returns 403 accessDenied /
+    # sharesAccessDenied with an HRESULT 0x80070002 "file not found" message —
+    # not a real permission denial — when the share token's underlying
+    # driveItem is already gone (e.g. deleted directly in SharePoint, outside
+    # this job). Matched narrowly on both the inner error code and the "file
+    # not found" message text so a genuine access-denied 403 still raises.
+    try:
+        body = resp.json()
+    except ValueError:
+        return False
+    error = (body or {}).get("error") or {}
+    inner_code = (error.get("innerError") or {}).get("code")
+    message = error.get("message") or ""
+    return inner_code == "sharesAccessDenied" and "cannot find the file specified" in message.lower()
 
 
 def delete_drive_item(access_token: str, site_id: str, drive_item_id: str) -> None:
