@@ -102,7 +102,7 @@ class RetentionCleanupJob:
 
     async def _delete_attachments(
         self, item: dict, policy: dict, token: str, run_id: str, site_id: str | None,
-    ) -> tuple[int, bool, str | None]:
+    ) -> tuple[int, bool, str | None, str | None]:
         # site_id is constant for the whole run (it's derived from policy["team_id"]
         # alone), so it's resolved at most once per run and threaded back to the
         # caller for reuse across every remaining message/attachment instead of being
@@ -111,6 +111,7 @@ class RetentionCleanupJob:
         loop = asyncio.get_event_loop()
         deleted = 0
         had_failure = False
+        error: str | None = None
         for attachment in item["attachments"]:
             try:
                 # attachment["id"] is the Teams chatMessageAttachment id, which is NOT a
@@ -148,12 +149,13 @@ class RetentionCleanupJob:
                 # On failure the driveItem id may never have been resolved, so fall back
                 # to the Teams attachment id — it still identifies the item for audit.
                 had_failure = True
+                error = error or str(exc)
                 self._policy_store.record_deletion(
                     run_id=run_id, item_type="attachment", item_id=attachment["id"],
                     sender_or_author=item["sender_or_author"], original_created_at=item["created_at"],
                     status="failed", error=str(exc),
                 )
-        return deleted, had_failure, site_id
+        return deleted, had_failure, site_id, error
 
     async def _run_policy(self, policy: dict, token: str) -> None:
         run_id = self._policy_store.start_run(policy["id"])
@@ -161,6 +163,10 @@ class RetentionCleanupJob:
         messages_deleted = 0
         attachments_deleted = 0
         had_failure = False
+        # The run-level error surfaces the first failure hit this run so the Policy
+        # History list shows *why* a run is "partial" without drilling into its
+        # Deletions sub-table for every hourly run.
+        first_error: str | None = None
         site_id: str | None = None
 
         try:
@@ -186,18 +192,20 @@ class RetentionCleanupJob:
         for message in messages:
             any_reply_blocked = False
             for reply in message["replies"]:
-                deleted, attachment_failure, site_id = await self._delete_attachments(
+                deleted, attachment_failure, site_id, attach_error = await self._delete_attachments(
                     reply, policy, token, run_id, site_id,
                 )
                 attachments_deleted += deleted
                 if attachment_failure:
                     had_failure = True
+                    first_error = first_error or attach_error
                     any_reply_blocked = True
                     continue
                 try:
                     await self._delete_item(reply, True, policy, token)
                 except Exception as exc:
                     had_failure = True
+                    first_error = first_error or str(exc)
                     any_reply_blocked = True
                     self._policy_store.record_deletion(
                         run_id=run_id, item_type="message", item_id=reply["id"],
@@ -212,17 +220,19 @@ class RetentionCleanupJob:
                 )
                 messages_deleted += 1
 
-            deleted, attachment_failure, site_id = await self._delete_attachments(
+            deleted, attachment_failure, site_id, attach_error = await self._delete_attachments(
                 message, policy, token, run_id, site_id,
             )
             attachments_deleted += deleted
             if attachment_failure or any_reply_blocked:
                 had_failure = True
+                first_error = first_error or attach_error
                 continue
             try:
                 await self._delete_item(message, False, policy, token)
             except Exception as exc:
                 had_failure = True
+                first_error = first_error or str(exc)
                 self._policy_store.record_deletion(
                     run_id=run_id, item_type="message", item_id=message["id"],
                     sender_or_author=message["sender_or_author"], original_created_at=message["created_at"],
@@ -239,6 +249,7 @@ class RetentionCleanupJob:
         outcome = "partial" if had_failure else "ok"
         self._policy_store.finish_run(
             run_id, outcome=outcome, messages_deleted=messages_deleted, attachments_deleted=attachments_deleted,
+            error=first_error,
         )
 
     def _already_ran_this_hour(self, policy_id: str) -> bool:

@@ -62,11 +62,11 @@ export default function RetentionHistoryPage() {
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs uppercase text-slate-500">
-            <th className="py-1">Started</th>
-            <th>Outcome</th>
-            <th>Messages</th>
-            <th>Attachments</th>
-            <th>Error</th>
+            <th className="py-1 pr-4">Started</th>
+            <th className="pr-4">Outcome</th>
+            <th className="pr-4">Messages</th>
+            <th className="pr-4">Attachments</th>
+            <th className="pr-4">Error</th>
           </tr>
         </thead>
         <tbody>
@@ -76,11 +76,11 @@ export default function RetentionHistoryPage() {
               onClick={() => selectRun(run.id)}
               className={`cursor-pointer border-t border-slate-100 ${selectedRunId === run.id ? "bg-blue-50" : ""}`}
             >
-              <td className="py-1">{run.started_at}</td>
-              <td>{run.outcome}</td>
-              <td>{run.messages_deleted}</td>
-              <td>{run.attachments_deleted}</td>
-              <td className="text-red-600">{run.error ?? ""}</td>
+              <td className="py-1 pr-4">{run.started_at}</td>
+              <td className="pr-4">{run.outcome}</td>
+              <td className="pr-4">{run.messages_deleted}</td>
+              <td className="pr-4">{run.attachments_deleted}</td>
+              <td className="pr-4 text-red-600">{run.error ?? ""}</td>
             </tr>
           ))}
         </tbody>
@@ -110,21 +110,21 @@ export default function RetentionHistoryPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs uppercase text-slate-500">
-                <th className="py-1">Type</th>
-                <th>Sender/Author</th>
-                <th>Original Date</th>
-                <th>Deleted At</th>
-                <th>Status</th>
+                <th className="py-1 pr-4">Type</th>
+                <th className="pr-4">Sender/Author</th>
+                <th className="pr-4">Original Date</th>
+                <th className="pr-4">Deleted At</th>
+                <th className="pr-4">Status</th>
               </tr>
             </thead>
             <tbody>
               {(deletionsQuery.data?.items ?? []).map((deletion) => (
                 <tr key={deletion.id} className="border-t border-slate-100">
-                  <td className="py-1">{deletion.item_type}</td>
-                  <td>{deletion.sender_or_author}</td>
-                  <td>{deletion.original_created_at}</td>
-                  <td>{deletion.deleted_at}</td>
-                  <td>{deletion.status}</td>
+                  <td className="py-1 pr-4">{deletion.item_type}</td>
+                  <td className="pr-4">{deletion.sender_or_author}</td>
+                  <td className="pr-4">{deletion.original_created_at}</td>
+                  <td className="pr-4">{deletion.deleted_at}</td>
+                  <td className="pr-4">{deletion.status}</td>
                 </tr>
               ))}
             </tbody>

@@ -695,6 +695,30 @@ async def test_run_cycle_runs_policy_whose_last_run_was_a_previous_hour(monkeypa
     assert total == 2
 
 
+async def test_run_cycle_records_partial_run_surfaces_a_representative_error():
+    # finish_run() for the "partial" outcome never passed error=, so the Policy
+    # History list showed "partial, 0, 0" with a blank Error column for every failed
+    # run, and the real reason was only visible by drilling into that run's
+    # Deletions sub-table. Surface the first failure's message on the run itself.
+    job, policy_store, _connection_store, graph_module = _job_with_stores()
+    policy = policy_store.create_policy(
+        team_id="team-1", team_name="Eng", channel_id="chan-1", channel_name="General",
+        retention_days=30, created_by="ops@example.com",
+    )
+    policy_store.confirm_policy(policy["id"])
+    graph_module.list_messages_older_than.return_value = [
+        {"id": "m1", "created_at": "2025-01-01T00:00:00Z", "sender_or_author": "Alice", "attachments": []},
+    ]
+    graph_module.list_replies_older_than.return_value = []
+    graph_module.delete_message.side_effect = RuntimeError("AclCheckFailed: DeleteOthersMessage")
+
+    await job.run_cycle()
+
+    runs, _total = policy_store.list_runs(policy_id=policy["id"], limit=10, offset=0)
+    assert runs[0]["outcome"] == "partial"
+    assert runs[0]["error"] == "AclCheckFailed: DeleteOthersMessage"
+
+
 async def test_already_ran_this_hour_is_false_for_unparseable_started_at():
     job, policy_store, _connection_store, _graph_module = _job_with_stores()
     policy = policy_store.create_policy(
