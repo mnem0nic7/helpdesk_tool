@@ -305,14 +305,20 @@ export default function TicketWorkbenchDrawer({
     setSelectedAssignee(detail.ticket.assignee_account_id ?? "");
     setReporterSearch(detail.ticket.reporter ?? "");
     setSelectedReporterAccountId(detail.ticket.reporter_account_id ?? "");
-    setComment("");
-    setCommentAudience("internal");
     setSelectedTransitionId("");
     setApplicationInput(detail.ticket.components.join(", "));
     setWorkCategoryInput(detail.work_category ?? "");
     setIsHistoryOpen(false);
     setPreviewAttachment(null);
   }, [detail]);
+
+  const previousCommentTicketKeyRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (previousCommentTicketKeyRef.current === ticketKey) return;
+    previousCommentTicketKeyRef.current = ticketKey;
+    setComment("");
+    setCommentAudience("internal");
+  }, [ticketKey]);
 
   useEffect(() => {
     if (!previewAttachment) {
@@ -629,8 +635,10 @@ export default function TicketWorkbenchDrawer({
       }
       return api.addTicketComment(ticketKey, comment.trim(), commentAudience === "customer");
     },
-    onSuccess: (next) =>
-      handleUpdated(next, commentAudience === "customer" ? "Reply sent to customer" : "Internal note added"),
+    onSuccess: (next) => {
+      handleUpdated(next, commentAudience === "customer" ? "Reply sent to customer" : "Internal note added");
+      setComment("");
+    },
     onError: (error) => {
       setErrorText(error instanceof Error ? error.message : "Failed to add comment");
       setFeedback(null);

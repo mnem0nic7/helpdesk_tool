@@ -269,6 +269,35 @@ describe("TicketWorkbenchDrawer", () => {
     expect(screen.getAllByText("Internal Note").length).toBeGreaterThan(0);
   });
 
+  it("keeps the reply audience set to customer after sending a reply on the same ticket", async () => {
+    mockApi.addTicketComment.mockResolvedValue(ticketDetail);
+
+    render(
+      <TicketWorkbenchDrawer
+        ticketKey="OIT-1"
+        initialTicket={ticketRow}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Ticket Actions");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply To Customer" }));
+    fireEvent.change(screen.getByPlaceholderText("Write a reply that will be visible to the customer..."), {
+      target: { value: "First reply to the customer" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send Reply" }));
+
+    await waitFor(() => {
+      expect(mockApi.addTicketComment).toHaveBeenCalledWith("OIT-1", "First reply to the customer", true);
+    });
+
+    // The audience toggle must still say "Send Reply" (customer-facing), not silently
+    // revert to "Post Internal Note" for the agent's next message on this same ticket.
+    await screen.findByRole("button", { name: "Send Reply" });
+    expect(screen.queryByRole("button", { name: "Post Internal Note" })).not.toBeInTheDocument();
+  });
+
   it("shows friendly attachment names and previews supported files in-site", async () => {
     mockApi.getTicket.mockResolvedValue({
       ...ticketDetail,
