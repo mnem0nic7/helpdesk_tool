@@ -499,6 +499,14 @@ class AskHrBotJob:
             status_code = exc.response.status_code if exc.response is not None else None
             if status_code not in (400, 403):
                 raise
+            logger.warning(
+                "AskHR bot: raiseOnBehalfOf failed with status %s (%s); "
+                "falling back to classic_reporter_field for mailbox %r: %s",
+                status_code,
+                mailbox,
+                message.get("sender_email"),
+                exc.response.text if exc.response is not None else exc,
+            )
             issue = self._jira.create_issue_with_reporter(
                 project_key=JSM_PROJECT_KEY,
                 issue_type=CLASSIC_ISSUE_TYPES[mailbox],
