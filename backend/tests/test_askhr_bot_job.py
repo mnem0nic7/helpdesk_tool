@@ -644,7 +644,7 @@ def test_build_description_converts_html_body_to_adf_instead_of_dumping_raw_mark
         sender_name="Jane Doe", sender_email="jane@example.com", received_at="2026-09-03T09:00:00+00:00",
     )
 
-    description = job._build_description(message)
+    description, description_text = job._build_description(message)
 
     assert description["type"] == "doc"
     header_paragraph, body_paragraph = description["content"]
@@ -662,6 +662,9 @@ def test_build_description_converts_html_body_to_adf_instead_of_dumping_raw_mark
     # "<jane@example.com>" is expected and not part of what's being guarded).
     body_text = "".join(n["text"] for n in body_paragraph["content"] if n["type"] == "text")
     assert "<" not in body_text and ">" not in body_text
+    assert isinstance(description_text, str)
+    assert header_text in description_text
+    assert "plain bold text" in description_text
 
 
 def test_build_description_treats_plain_text_body_as_plain_text():
@@ -671,13 +674,14 @@ def test_build_description_treats_plain_text_body_as_plain_text():
     job = _fresh_job()
     message = _sample_message(body="Can someone help me with open enrollment?", body_content_type="text")
 
-    description = job._build_description(message)
+    description, description_text = job._build_description(message)
 
     _, body_paragraph = description["content"]
     assert body_paragraph == {
         "type": "paragraph",
         "content": [{"type": "text", "text": "Can someone help me with open enrollment?"}],
     }
+    assert "Can someone help me with open enrollment?" in description_text
 
 
 def test_build_description_truncates_an_oversized_body_instead_of_failing_jira():
@@ -696,7 +700,7 @@ def test_build_description_truncates_an_oversized_body_instead_of_failing_jira()
     huge_body = "x" * (job_module._MAX_DESCRIPTION_BODY_CHARS + 5_000)
     message = _sample_message(body=huge_body, body_content_type="text")
 
-    description = job._build_description(message)
+    description, description_text = job._build_description(message)
 
     header_paragraph, *body_paragraphs = description["content"]
     body_text = "".join(
@@ -705,17 +709,20 @@ def test_build_description_truncates_an_oversized_body_instead_of_failing_jira()
     assert len(body_text) < job_module._MAX_DESCRIPTION_BODY_CHARS + 200
     assert "truncated" in body_text.lower()
     assert body_text.startswith("x" * 100)
+    assert "truncated" in description_text.lower()
+    assert len(description_text) < job_module._MAX_DESCRIPTION_BODY_CHARS + 300
 
 
 def test_build_description_does_not_truncate_a_normal_sized_body():
     job = _fresh_job()
     message = _sample_message(body="A perfectly normal, short message.", body_content_type="text")
 
-    description = job._build_description(message)
+    description, description_text = job._build_description(message)
 
     _, body_paragraph = description["content"]
     body_text = "".join(n["text"] for n in body_paragraph["content"] if n["type"] == "text")
     assert body_text == "A perfectly normal, short message."
+    assert description_text.endswith("A perfectly normal, short message.")
 
 
 def test_create_ticket_uses_resolved_sender_as_reporter():
@@ -738,7 +745,7 @@ def test_create_ticket_uses_resolved_sender_as_reporter():
         request_type_id="420",
         raise_on_behalf_of="qm:tenant:sender-id",
         summary=_sample_message()["subject"],
-        description=job._build_description(_sample_message()),
+        description=job._build_description(_sample_message())[1],
     )
 
 
@@ -762,7 +769,35 @@ def test_create_ticket_falls_back_to_generic_reporter_when_resolution_fails():
         request_type_id="420",
         raise_on_behalf_of=job_module.REPORTER_ACCOUNT_IDS["askhr"],
         summary=_sample_message()["subject"],
-        description=job._build_description(_sample_message()),
+        description=job._build_description(_sample_message())[1],
+    )
+
+
+def test_create_ticket_sends_plain_string_description_to_create_request():
+    """Regression guard for the 2026-09-11 incident: JSM's raiseOnBehalfOf
+    request-creation API validates requestFieldValues.description against
+    the request type's jiraSchema (type "string" for this project), not an
+    ADF document. Sending the ADF dict got rejected with a vague 400 that
+    askhr_bot_job misread as a permission failure, permanently downgrading
+    every subsequent ticket to the classic fallback (and silently losing
+    customer-notification delivery) for days before anyone noticed.
+    create_issue_with_reporter (the classic path) and comments go through
+    the real REST API v3 and correctly keep using the ADF doc.
+    """
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(reporter_mode="raise_on_behalf_of")
+
+    mock_jira = MagicMock()
+    mock_jira.create_customer.return_value = {"accountId": "qm:tenant:sender-id"}
+    mock_jira.create_request.return_value = {"issueKey": "HRD-60"}
+    job._jira = mock_jira
+
+    job._create_ticket("askhr", _sample_message())
+
+    description_kwarg = mock_jira.create_request.call_args.kwargs["description"]
+    assert isinstance(description_kwarg, str), (
+        f"create_request must receive a plain string description, got {type(description_kwarg)}"
     )
 
 

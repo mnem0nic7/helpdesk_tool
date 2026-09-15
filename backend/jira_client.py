@@ -723,13 +723,17 @@ class JiraClient:
         request_type_id: str,
         raise_on_behalf_of: str,
         summary: str,
-        description: str | dict[str, Any],
+        description: str,
     ) -> dict[str, Any]:
         """POST /rest/servicedeskapi/request, raising the ticket on behalf of another account.
 
-        `description` is sent through untouched, so a pre-built ADF document
-        (e.g. from the AskHR bot's HTML-to-ADF converter) works the same as a
-        plain string.
+        `description` must be a plain string, not an ADF document -- unlike
+        the real Jira REST API v3 (used by create_issue_with_reporter and
+        comments), JSM's request-creation API validates requestFieldValues
+        entries against the request type's jiraSchema, and this project's
+        description field is schema type "string". Passing an ADF dict here
+        gets rejected with a 400 whose body is a vague
+        "has these errors : []" with no mention of the type mismatch.
         """
         url = f"{self.base_url}/rest/servicedeskapi/request"
         payload = {

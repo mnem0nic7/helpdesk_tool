@@ -355,11 +355,23 @@ class AskHrBotJob:
 
         return azure_cache.azure_cache._client
 
-    def _build_description(self, message: dict[str, Any]) -> dict[str, Any]:
+    def _build_description(self, message: dict[str, Any]) -> tuple[dict[str, Any], str]:
         """Build an ADF description doc: a plain-text header paragraph followed
         by the email body, converted from HTML (via email_html_to_adf) when
         Graph reports an HTML body -- see HRD-1333, where the raw HTML string
         was previously dumped verbatim into the ticket description.
+
+        Returns (adf_doc, plain_text). JSM's raiseOnBehalfOf request-creation
+        API (create_request) validates requestFieldValues.description against
+        the request type's jiraSchema, which for this project's "description"
+        field is {"type": "string"} -- confirmed live via
+        GET .../requesttype/{id}/field -- not a rich-text/ADF type. Passing
+        the ADF doc there gets rejected with a 400 whose body is a vague
+        "has these errors : []" (Jira never explains the mismatch), which
+        askhr_bot_job silently treated as "not an agent" and permanently
+        downgraded to the classic fallback. create_issue_with_reporter()
+        (the classic path) and comments both go through the real Jira REST
+        API v3, which does want ADF, so they keep using the doc form.
         """
         header_text = (
             f"Originally sent by: {message['sender_name']} <{message['sender_email']}> "
@@ -374,7 +386,9 @@ class AskHrBotJob:
             flat_text = self._flatten_adf_text(body_nodes)
             truncated_text = flat_text[:_MAX_DESCRIPTION_BODY_CHARS] + _TRUNCATION_NOTE
             body_nodes = self._jira._plain_text_to_adf(truncated_text)["content"]
-        return {"version": 1, "type": "doc", "content": header_nodes + body_nodes}
+        adf_doc = {"version": 1, "type": "doc", "content": header_nodes + body_nodes}
+        plain_text = f"{header_text}\n\n{self._flatten_adf_text(body_nodes)}"
+        return adf_doc, plain_text
 
     @staticmethod
     def _flatten_adf_text(nodes: list[dict[str, Any]]) -> str:
@@ -462,7 +476,7 @@ class AskHrBotJob:
             )
             reporter_account_id = REPORTER_ACCOUNT_IDS[mailbox]
         summary = message["subject"]
-        description = self._build_description(message)
+        description, description_text = self._build_description(message)
 
         if mode == "classic_reporter_field":
             issue = self._jira.create_issue_with_reporter(
@@ -480,7 +494,7 @@ class AskHrBotJob:
                 request_type_id=request_type_id,
                 raise_on_behalf_of=reporter_account_id,
                 summary=summary,
-                description=description,
+                description=description_text,
             )
             return str(issue["issueKey"])
 
@@ -491,7 +505,7 @@ class AskHrBotJob:
                 request_type_id=request_type_id,
                 raise_on_behalf_of=reporter_account_id,
                 summary=summary,
-                description=description,
+                description=description_text,
             )
             self._update_settings(reporter_mode="raise_on_behalf_of")
             return str(issue["issueKey"])

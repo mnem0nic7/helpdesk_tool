@@ -404,10 +404,13 @@ def test_create_issue_with_reporter_posts_classic_issue_payload():
     assert payload["fields"]["reporter"]["id"] == "qm:tenant:askhr-account-id"
 
 
-def test_create_request_passes_an_adf_description_through_untouched():
-    """create_request must accept a pre-built ADF doc (e.g. from the AskHR
-    bot's HTML-to-ADF converter) and send it as-is, rather than treating it
-    as a plain string the way it does today.
+def test_create_request_passes_a_string_description_through_untouched():
+    """Regression guard for the 2026-09-11 incident: create_request's
+    requestFieldValues.description is validated by JSM against the request
+    type's jiraSchema, which is {"type": "string"} for this project -- an
+    ADF doc gets rejected with a vague 400 that askhr_bot_job previously
+    misread as a permission failure. create_request must send whatever
+    string it's given through untouched (no ADF wrapping).
     """
     client = JiraClient(base_url="https://example.atlassian.net", email="user@example.com", token="token")
     response = MagicMock()
@@ -415,17 +418,17 @@ def test_create_request_passes_an_adf_description_through_untouched():
     response.json.return_value = {"issueKey": "HRD-3"}
     client.session.post = MagicMock(return_value=response)  # type: ignore[method-assign]
 
-    adf_description = {"version": 1, "type": "doc", "content": [{"type": "paragraph", "content": []}]}
+    plain_description = "Originally sent by: Jane Doe <jane@example.com> on 2026-09-03 09:00\n\nBody text"
     client.create_request(
         service_desk_id="73",
         request_type_id="420",
         raise_on_behalf_of="qm:tenant:askhr-account-id",
         summary="Help with benefits",
-        description=adf_description,
+        description=plain_description,
     )
 
     payload = client.session.post.call_args.kwargs["json"]
-    assert payload["requestFieldValues"]["description"] == adf_description
+    assert payload["requestFieldValues"]["description"] == plain_description
 
 
 def test_create_issue_with_reporter_passes_an_adf_description_through_untouched():
