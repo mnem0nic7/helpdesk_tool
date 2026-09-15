@@ -312,7 +312,7 @@ export default function TicketWorkbenchDrawer({
     setPreviewAttachment(null);
   }, [detail]);
 
-  const previousCommentTicketKeyRef = useRef<string | undefined>(undefined);
+  const previousCommentTicketKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (previousCommentTicketKeyRef.current === ticketKey) return;
     previousCommentTicketKeyRef.current = ticketKey;
