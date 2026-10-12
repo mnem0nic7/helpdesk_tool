@@ -85,3 +85,63 @@ def test_summary_html_mentions_counts_and_seats():
     html = r.build_summary_html(rows, excluded, r.E5Seats(975, 965), NOW)
     assert "965" in html and "975" in html
     assert "Disabled" in html and "never signed in" in html
+
+
+import pytest
+
+
+def test_check_coverage_rejects_empty_and_truncated():
+    with pytest.raises(r.E5FetchError):
+        r.check_coverage([], r.E5Seats(975, 965))
+    with pytest.raises(r.E5FetchError):
+        r.check_coverage([{}] * 100, r.E5Seats(975, 965))
+    r.check_coverage([{}] * 500, r.E5Seats(975, 965))  # ok, >= 50%
+
+
+def test_select_e5_users_filters_by_sku():
+    users = [
+        {"id": "1", "assignedLicenses": [{"skuId": "sku-e5"}]},
+        {"id": "2", "assignedLicenses": [{"skuId": "other"}]},
+        {"id": "3", "assignedLicenses": []},
+    ]
+    assert [u["id"] for u in r.select_e5_users(users, "sku-e5")] == ["1"]
+
+
+async def test_fetch_e5_data_pages_and_returns_seats(monkeypatch):
+    async def fake_token():
+        return "tok"
+
+    monkeypatch.setattr(r, "_get_access_token", fake_token)
+    skus = {"value": [{"skuPartNumber": "SPE_E5", "skuId": "sku-e5", "consumedUnits": 2,
+                       "prepaidUnits": {"enabled": 3}}]}
+    page1 = {"value": [{"id": "1", "assignedLicenses": [{"skuId": "sku-e5"}]}], "@odata.nextLink": "next-page"}
+    page2 = {"value": [{"id": "2", "assignedLicenses": [{"skuId": "sku-e5"}]}]}
+
+    class FakeResp:
+        def __init__(self, body):
+            self._b = body
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._b
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, headers=None, timeout=None):
+            if url == "next-page":
+                return FakeResp(page2)
+            if "/users" in url:
+                return FakeResp(page1)
+            return FakeResp(skus)
+
+    monkeypatch.setattr(r.httpx, "AsyncClient", lambda: FakeClient())
+    users, seats = await r.fetch_e5_data()
+    assert [u["id"] for u in users] == ["1", "2"]
+    assert (seats.purchased, seats.consumed) == (3, 2)

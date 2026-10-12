@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
+
+from email_service import _get_access_token
 
 logger = logging.getLogger(__name__)
 
@@ -189,3 +192,61 @@ def build_summary_html(rows: list[dict[str, Any]], excluded_active: int, seats: 
         f"{excluded_active} active users excluded.</p>"
         "<p>Sign-in data can lag; treat the attached workbook as leads, not proof.</p>"
     )
+
+
+_GRAPH = "https://graph.microsoft.com/v1.0"
+_USER_SELECT = (
+    "id,displayName,userPrincipalName,accountEnabled,createdDateTime,"
+    "onPremisesSyncEnabled,assignedLicenses,signInActivity"
+)
+_MIN_COVERAGE_RATIO = 0.5
+_E5_SKU = "SPE_E5"
+
+
+class E5FetchError(RuntimeError):
+    """Raised when Graph data is missing or looks truncated; the report must not be sent."""
+
+
+def select_e5_users(users: list[dict[str, Any]], sku_id: str) -> list[dict[str, Any]]:
+    return [
+        u for u in users
+        if any(lic.get("skuId") == sku_id for lic in (u.get("assignedLicenses") or []))
+    ]
+
+
+def check_coverage(e5_users: list[dict[str, Any]], seats: E5Seats) -> None:
+    if not e5_users:
+        raise E5FetchError("No SPE_E5 users returned from Graph")
+    if seats.consumed and len(e5_users) < seats.consumed * _MIN_COVERAGE_RATIO:
+        raise E5FetchError(
+            f"Graph returned {len(e5_users)} E5 users but {seats.consumed} seats are consumed; "
+            "treating the fetch as truncated"
+        )
+
+
+async def fetch_e5_data() -> tuple[list[dict[str, Any]], E5Seats]:
+    token = await _get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"{_GRAPH}/subscribedSkus", headers=headers, timeout=60.0)
+        resp.raise_for_status()
+        sku = next((s for s in resp.json().get("value", []) if s.get("skuPartNumber") == _E5_SKU), None)
+        if not sku:
+            raise E5FetchError(f"{_E5_SKU} SKU not found in /subscribedSkus")
+        seats = E5Seats(
+            purchased=int((sku.get("prepaidUnits") or {}).get("enabled") or 0),
+            consumed=int(sku.get("consumedUnits") or 0),
+        )
+
+        users: list[dict[str, Any]] = []
+        url: str | None = f"{_GRAPH}/users?$select={_USER_SELECT}&$top=500"
+        while url:
+            page = await client.get(url, headers=headers, timeout=120.0)
+            page.raise_for_status()
+            body = page.json()
+            users.extend(body.get("value", []))
+            url = body.get("@odata.nextLink")
+
+    e5_users = select_e5_users(users, sku["skuId"])
+    check_coverage(e5_users, seats)
+    return e5_users, seats
