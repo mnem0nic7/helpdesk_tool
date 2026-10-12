@@ -970,4 +970,4 @@ git add CLAUDE.md docs/ docker-compose.yml
 git commit -m "docs: document weekly E5 license report" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 6 (rollout, after approval to deploy):** set `E5_REPORT_ENABLED=true` and `E5_REPORT_RECIPIENTS=gallison@librasolutionsgroup.com,wberry@librasolutionsgroup.com` in the deployed env, deploy via `./deploy.sh`, and verify the Graph app registration has `AuditLog.Read.All` (needed for `signInActivity`) by running a one-off `await e5_license_report_job.run_weekly_job()` against a test recipient first.
+- [ ] **Step 6 (rollout, after approval to deploy):** set `E5_REPORT_ENABLED=true` and `E5_REPORT_RECIPIENTS=gallison@librasolutionsgroup.com,wberry@librasolutionsgroup.com` in the deployed env, deploy via `./deploy.sh`, and verify the Graph app registration has `AuditLog.Read.All` (needed for `signInActivity`) by running a one-off `await e5_license_report_job.run_weekly_job(recipients=["gallison@librasolutionsgroup.com"])` first (the override bypasses the enabled flag and never writes the already-sent marker).

@@ -145,3 +145,10 @@ async def test_fetch_e5_data_pages_and_returns_seats(monkeypatch):
     users, seats = await r.fetch_e5_data()
     assert [u["id"] for u in users] == ["1", "2"]
     assert (seats.purchased, seats.consumed) == (3, 2)
+
+
+def test_nonperson_flag_covers_underscore_and_marketing_dev():
+    flagged = "Possible non-person account"
+    assert r.classify_user(_user(name="Backup", upn="svc_backup@x.com", enabled=False), NOW)["flag"] == flagged
+    assert r.classify_user(_user(name="Marketing Dev Sandbox", enabled=False), NOW)["flag"] == flagged
+    assert r.classify_user(_user(name="Devon Price", upn="dprice@x.com", enabled=False), NOW)["flag"] == ""

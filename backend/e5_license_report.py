@@ -28,8 +28,10 @@ STATUS_IDLE_90 = "Enabled - idle >90d"
 STATUS_IDLE_60 = "Enabled - idle 60-90d"
 _STATUS_ORDER = [STATUS_DISABLED, STATUS_NEVER, STATUS_IDLE_90, STATUS_IDLE_60]
 _NON_PERSON_FLAG = "Possible non-person account"
+# Lookarounds instead of \b so "_" separates tokens (svc_backup) but "Devon"/"Preston" still don't match.
 _NON_PERSON_RE = re.compile(
-    r"\b(room|conf|conference|test|migration|svc|service|noreply|no-reply|scanner|printer|shared)\b",
+    r"(?<![a-z0-9])(room|conf|conference|test|migration|svc|service|noreply|no-reply|scanner|printer|shared"
+    r"|marketing[\s._-]*dev)(?![a-z0-9])",
     re.IGNORECASE,
 )
 _GUIDANCE = {
@@ -312,13 +314,22 @@ class E5LicenseReportJob:
     def is_due(self, now: datetime) -> bool:
         return now.weekday() == E5_REPORT_WEEKDAY and now.hour >= E5_REPORT_HOUR
 
-    async def run_weekly_job(self, now: datetime | None = None) -> bool:
-        """Build and send the report. True only when an email was actually sent."""
-        if not E5_REPORT_ENABLED or not E5_REPORT_RECIPIENTS:
+    async def run_weekly_job(
+        self, now: datetime | None = None, *, recipients: list[str] | None = None
+    ) -> bool:
+        """Build and send the report. True only when an email was actually sent.
+
+        ``recipients`` is for verification sends: it bypasses the enabled flag and the
+        already-sent guard, and never writes the marker, so it cannot suppress the real
+        weekly send.
+        """
+        override = recipients is not None
+        to = list(recipients) if override else list(E5_REPORT_RECIPIENTS)
+        if not to or (not override and not E5_REPORT_ENABLED):
             return False
         now = now or datetime.now(timezone.utc)
         run_date = now.strftime("%Y-%m-%d")
-        if self.already_ran(run_date):
+        if not override and self.already_ran(run_date):
             return False
         try:
             users, seats = await fetch_e5_data()
@@ -332,7 +343,7 @@ class E5LicenseReportJob:
             "content": build_workbook(rows, excluded, seats, now),
         }
         ok = await send_email(
-            list(E5_REPORT_RECIPIENTS),
+            to,
             f"Weekly E5 license reclaim report - {run_date}",
             build_summary_html(rows, excluded, seats, now),
             attachments=[attachment],
@@ -340,8 +351,9 @@ class E5LicenseReportJob:
         if not ok:
             logger.error("E5 license report: send_email failed; will retry next tick")
             return False
-        self._record_run(run_date, E5_REPORT_RECIPIENTS, len(rows))
-        logger.info("E5 license report sent to %s (%d rows)", E5_REPORT_RECIPIENTS, len(rows))
+        if not override:
+            self._record_run(run_date, to, len(rows))
+        logger.info("E5 license report sent to %s (%d rows)%s", to, len(rows), " [override]" if override else "")
         return True
 
     def start_background_runner(self) -> None:

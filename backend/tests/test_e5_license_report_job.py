@@ -98,3 +98,20 @@ def test_config_defaults(monkeypatch):
     assert cfg.E5_REPORT_WEEKDAY == 6
     assert cfg.E5_REPORT_HOUR == 13
     assert cfg.E5_REPORT_RECIPIENTS == []
+
+
+async def test_recipients_override_sends_but_writes_no_marker(job, monkeypatch):
+    """Verification sends to a test address must not suppress the real weekly send."""
+    _patch_fetch(monkeypatch)
+    sent = []
+
+    async def fake_send(to, subject, html_body, **kw):
+        sent.append(to)
+        return True
+
+    monkeypatch.setattr(r, "send_email", fake_send)
+    assert await job.run_weekly_job(SUNDAY_1305, recipients=["test@x.com"]) is True
+    assert sent == [["test@x.com"]]
+    assert not job.already_ran("2026-10-18")
+    assert await job.run_weekly_job(SUNDAY_1305) is True
+    assert sent[-1] == ["a@x.com", "b@x.com"]
