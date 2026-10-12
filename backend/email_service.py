@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Any
 
@@ -51,6 +52,7 @@ async def send_email(
     html_body: str,
     sender: str = DEFAULT_SENDER,
     cc: list[str] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> bool:
     """Send an email from the shared mailbox via Graph API.
 
@@ -75,6 +77,16 @@ async def send_email(
     }
     if cc:
         message["ccRecipients"] = [{"emailAddress": {"address": addr}} for addr in cc]
+    if attachments:
+        message["attachments"] = [
+            {
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": att["name"],
+                "contentType": att["content_type"],
+                "contentBytes": base64.b64encode(att["content"]).decode("ascii"),
+            }
+            for att in attachments
+        ]
 
     payload = {"message": message, "saveToSentItems": True}
 
