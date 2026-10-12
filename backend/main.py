@@ -54,6 +54,7 @@ from routes_quarantine_release import router as quarantine_release_router
 from routes_askhr_bot import router as askhr_bot_router
 from deactivation_schedule import deactivation_schedule as _deactivation_schedule_store
 from password_expiry_notifier import password_expiry_notifier as _password_expiry_notifier
+from e5_license_report import e5_license_report_job as _e5_license_report_job
 from quarantine_release_job import quarantine_release_job as _quarantine_release_job
 from retention_cleanup_job import retention_cleanup_job as _retention_cleanup_job
 from retention_directory_cache import retention_directory_cache as _retention_directory_cache
@@ -154,6 +155,11 @@ async def _start_deferred_services(app: FastAPI) -> None:
         logger.exception("Failed to start password expiry notifier")
 
     try:
+        _e5_license_report_job.start_background_runner()
+    except Exception:
+        logger.exception("Failed to start E5 license report job")
+
+    try:
         _quarantine_release_job.start_background_runner()
     except Exception:
         logger.exception("Failed to start quarantine release job")
@@ -218,6 +224,7 @@ async def _stop_leader_services(app: FastAPI) -> None:
     await cache.stop_background_refresh()
     _deactivation_schedule_store.stop_background_runner()
     _password_expiry_notifier.stop_background_runner()
+    _e5_license_report_job.stop_background_runner()
     _quarantine_release_job.stop_background_runner()
     _retention_cleanup_job.stop_background_runner()
     _retention_directory_cache.stop_background_runner()

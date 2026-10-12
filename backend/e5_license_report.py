@@ -1,8 +1,10 @@
 """Weekly SPE_E5 license reclaim report: builds the workbook and emails it."""
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,7 +15,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
-from email_service import _get_access_token
+from config import DATA_DIR, E5_REPORT_ENABLED, E5_REPORT_HOUR, E5_REPORT_RECIPIENTS, E5_REPORT_WEEKDAY
+from email_service import _get_access_token, send_email
+from postgres_utils import connect_postgres, ensure_postgres_schema, postgres_enabled
+from sqlite_utils import connect_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -250,3 +255,114 @@ async def fetch_e5_data() -> tuple[list[dict[str, Any]], E5Seats]:
     e5_users = select_e5_users(users, sku["skuId"])
     check_coverage(e5_users, seats)
     return e5_users, seats
+
+
+_DB_PATH = os.path.join(DATA_DIR, "e5_license_report.db")
+_POLL_SECONDS = 900
+
+
+class E5LicenseReportJob:
+    def __init__(self, db_path: str | None = None) -> None:
+        self._db_path = db_path or _DB_PATH
+        self._use_postgres = postgres_enabled() and db_path is None
+        os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
+        self._bg_task: asyncio.Task[None] | None = None
+        self._init_db()
+
+    def _ph(self) -> str:
+        return "%s" if self._use_postgres else "?"
+
+    def _conn(self):
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return connect_postgres()
+        return connect_sqlite(self._db_path)
+
+    def _init_db(self) -> None:
+        if self._use_postgres:
+            ensure_postgres_schema()
+            return
+        with self._conn() as conn:
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS e5_license_report_runs (
+                    run_date    TEXT PRIMARY KEY,
+                    sent_at     TEXT NOT NULL,
+                    recipients  TEXT NOT NULL DEFAULT '',
+                    row_count   INTEGER NOT NULL DEFAULT 0
+                )"""
+            )
+
+    def already_ran(self, run_date: str) -> bool:
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT 1 FROM e5_license_report_runs WHERE run_date = {self._ph()}", (run_date,)
+            ).fetchone()
+        return row is not None
+
+    def _record_run(self, run_date: str, recipients: list[str], row_count: int) -> None:
+        ph = self._ph()
+        with self._conn() as conn:
+            conn.execute(
+                f"""INSERT INTO e5_license_report_runs (run_date, sent_at, recipients, row_count)
+                    VALUES ({ph},{ph},{ph},{ph})
+                    ON CONFLICT (run_date) DO NOTHING""",
+                (run_date, datetime.now(timezone.utc).isoformat(), ",".join(recipients), row_count),
+            )
+
+    def is_due(self, now: datetime) -> bool:
+        return now.weekday() == E5_REPORT_WEEKDAY and now.hour >= E5_REPORT_HOUR
+
+    async def run_weekly_job(self, now: datetime | None = None) -> bool:
+        """Build and send the report. True only when an email was actually sent."""
+        if not E5_REPORT_ENABLED or not E5_REPORT_RECIPIENTS:
+            return False
+        now = now or datetime.now(timezone.utc)
+        run_date = now.strftime("%Y-%m-%d")
+        if self.already_ran(run_date):
+            return False
+        try:
+            users, seats = await fetch_e5_data()
+        except Exception:
+            logger.exception("E5 license report: Graph fetch failed; skipping send")
+            return False
+        rows, excluded = build_rows(users, now)
+        attachment = {
+            "name": f"e5_license_reclaim_candidates_{run_date}.xlsx",
+            "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "content": build_workbook(rows, excluded, seats, now),
+        }
+        ok = await send_email(
+            list(E5_REPORT_RECIPIENTS),
+            f"Weekly E5 license reclaim report - {run_date}",
+            build_summary_html(rows, excluded, seats, now),
+            attachments=[attachment],
+        )
+        if not ok:
+            logger.error("E5 license report: send_email failed; will retry next tick")
+            return False
+        self._record_run(run_date, E5_REPORT_RECIPIENTS, len(rows))
+        logger.info("E5 license report sent to %s (%d rows)", E5_REPORT_RECIPIENTS, len(rows))
+        return True
+
+    def start_background_runner(self) -> None:
+        self._bg_task = asyncio.get_event_loop().create_task(self._run_loop())
+
+    def stop_background_runner(self) -> None:
+        if self._bg_task:
+            self._bg_task.cancel()
+
+    async def _run_loop(self) -> None:
+        while True:
+            try:
+                now = datetime.now(timezone.utc)
+                if self.is_due(now):
+                    await self.run_weekly_job(now)
+                await asyncio.sleep(_POLL_SECONDS)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("E5 license report loop error")
+                await asyncio.sleep(300)
+
+
+e5_license_report_job = E5LicenseReportJob()

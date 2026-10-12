@@ -344,6 +344,12 @@ DEFENDER_AGENT_TEAMS_NOTIFY_T1: bool = os.getenv("DEFENDER_AGENT_TEAMS_NOTIFY_T1
 DEFENDER_AGENT_TEAMS_NOTIFY_T2: bool = os.getenv("DEFENDER_AGENT_TEAMS_NOTIFY_T2", "true").lower() == "true"
 SECURITY_DIGEST_TEAMS_WEBHOOK: str = os.getenv("SECURITY_DIGEST_TEAMS_WEBHOOK", "").strip()
 SECURITY_DIGEST_HOUR: int = int(os.getenv("SECURITY_DIGEST_HOUR", "8"))
+E5_REPORT_ENABLED: bool = os.getenv("E5_REPORT_ENABLED", "false").lower() == "true"
+E5_REPORT_RECIPIENTS: list[str] = [
+    a.strip() for a in os.getenv("E5_REPORT_RECIPIENTS", "").split(",") if a.strip()
+]
+E5_REPORT_WEEKDAY: int = int(os.getenv("E5_REPORT_WEEKDAY", "6"))  # Monday=0 ... Sunday=6
+E5_REPORT_HOUR: int = int(os.getenv("E5_REPORT_HOUR", "13"))  # UTC
 DEFENDER_AGENT_MAX_JOBS_PER_CYCLE: int = int(os.getenv("DEFENDER_AGENT_MAX_JOBS_PER_CYCLE", "10"))
 SECURITY_LANE_SUMMARY_INTERVAL_MINUTES: int = int(os.getenv("SECURITY_LANE_SUMMARY_INTERVAL_MINUTES", "60"))
 AZURE_COST_LOOKBACK_DAYS: int = int(os.getenv("AZURE_COST_LOOKBACK_DAYS", "30"))
