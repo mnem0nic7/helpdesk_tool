@@ -24,7 +24,7 @@
 - Durable last-sent marker (existing runtime-state store) so restarts and blue/green cutovers do not double-send.
 - Graph fetch failure or empty user result: log and skip the send; never email a partial/empty report as if complete. Retry next loop tick within the same day.
 - `send_email` returns False on failure: marker is only written on success.
-- No new tables, so no Postgres migration.
+- One small table, `e5_license_report_runs` (migration `0033`), holds the already-sent marker; the repo has no generic key-value store.
 
 ## Testing
 - Unit: bucketing and day thresholds, non-person flagging, workbook sheets/formulas.

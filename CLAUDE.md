@@ -175,6 +175,7 @@ These are durable rules and design contracts — not time-bound release notes. G
 
 ### Reporting
 
+- The weekly SPE_E5 license reclaim report (`backend/e5_license_report.py`, started from `main.py` beside the password-expiry notifier) emails an xlsx (`Summary` + `E5 Accounts`) to `E5_REPORT_RECIPIENTS` on `E5_REPORT_WEEKDAY`/`E5_REPORT_HOUR` (default Sunday 13:00 UTC). It ships disabled (`E5_REPORT_ENABLED=false`), is read-only, and needs `AuditLog.Read.All` on the Entra app for `signInActivity`. `fetch_e5_data()` raises (and the job skips the send) when Graph returns no E5 users or fewer than 50% of the SKU's `consumedUnits`, so a truncated fetch never produces a partial report. The `e5_license_report_runs` row (migration `0033`) is written only after `send_email` succeeds, so a failed send retries on the next 15-minute tick the same day and a restart or blue/green cutover cannot double-send.
 - The report builder preview includes an `Export Current View` action in `frontend/src/pages/ReportsPage.tsx`; it reuses the existing report export API and should export the current filters, selected columns, sort, and grouping.
 - Master workbook dashboard AI summaries are written per KPI row in `backend/report_workbook_builder.py`; keep each metric's paragraph and bullets in one wrapped cell so summaries do not spill into adjacent metric rows.
 
