@@ -61,6 +61,14 @@ server-side) so any live ticket can be tested.
 - 3 accounts carry ADP header text (`JobFunction`, `JobFunctionDescription`) as their value; treated as empty.
 - 1054 of 1686 enabled accounts have no jobFunction at all, so many fields will legitimately be left unwritten.
 
+## Real runs and rollback
+`backend/hr_entra_sync_rollback.py` snapshots a ticket's mapped fields before a real run and restores them on request
+(`python hr_entra_sync_rollback.py <snapshot.json>` plans, `--apply` restores). It only reverts a field that still holds the
+value the sync wrote, so a person's later edit is never undone (`--force` overrides). Snapshots hold employee data and live
+in `data/hr_entra_sync_rollbacks/` (git-ignored, mode 600); also record connector settings and the git SHA in effect.
+- 2026-10-14: first real run on **HRD-2163** (open General Inquiry, matched via reporter fallback, 15 fields filled,
+  nothing overwritten). Snapshot: `data/hr_entra_sync_rollbacks/HRD-2163-20261014T162819Z.json`.
+
 ## Admin API (admin only)
 `GET /api/hr-entra-sync/status`, `GET /api/hr-entra-sync/issues`, `POST /api/hr-entra-sync/issues/{key}/run`
 (`dry_run=true` by default).
