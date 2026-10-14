@@ -24,8 +24,13 @@ Source mapping: `ADP Jira Mapping v1.xlsx`. Code: `backend/hr_entra_sync.py`, `h
   `GET api.atlassian.com/jira/forms/cloud/{cloudId}/issue/{key}/form`; 22 of 25 recent tickets have it; subject to the
   internal-domain rule; `email_source = form`). A ticket in a blocked type with no identifiable employee ends `not_found`
   quietly (no note, no write).
-  **Not yet built:** Status Change (employee is named by First/Last name and Position ID fields, no email),
-  Employee onboarding and Requisition - see open decisions below.
+  **Status Change** has no email, so the employee is identified by the ticket's **Position ID** (Entra directory
+  extension `positionID`, exact), then exact **first + last name** (`givenName`/`surname`); an email on the ticket still
+  wins. Only enabled, member, non-service accounts count; more than one match is `ambiguous` (no write). Status Change is
+  **fill-only**: HR types the *requested* values (e.g. a new Job Title) and Entra holds the current ones, so existing
+  Jira values are never overwritten (`fields_kept`). On 25 recent tickets: 14 matched by Position ID, 4 by name, 3 by
+  email, 4 unresolved.
+  **Not yet built:** Employee onboarding and Requisition - see open decisions below.
   A reporter is only a guess at the subject, so a reporter-only ticket with no Entra match ends `not_found` with **no
   note** (e.g. DocuSign/ADP notification senders). Which source matched is stored in `email_source`. Jira stores these as text or wiki links (`[a@x.com|mailto:a@x.com]`), so the
   first address in the value is extracted. Graph filter: `mail`, `userPrincipalName`, or `otherMails`
@@ -90,8 +95,7 @@ in `data/hr_entra_sync_rollbacks/` (git-ignored, mode 600); also record connecto
 
 
 ## Open decisions (2026-10-14)
-- **Status Change** tickets carry HR-entered *proposed* values (Job Title 12/25, Position ID 16/25, names 22/25). With
-  "Entra always overwrites" the sync would replace a requested new title with Entra's current (old) one. Decide
-  fill-only vs overwrite for this type before enabling subject lookup by Position ID / name for it.
 - **Requisition**: the Headcount Request Form's "Email Address" (24/25) - whose is it and is an Entra lookup wanted?
-- **Employee onboarding**: new hires are usually not in Entra yet; sparse identifying data on the ticket.
+  Currently no lookup and no write.
+- **Employee onboarding**: new hires are usually not in Entra yet; sparse identifying data on the ticket (personal email
+  field is honoured when present). Currently no reporter fallback.

@@ -197,6 +197,13 @@ REPORTER_IS_NOT_SUBJECT_TYPES = frozenset(
     t.lower() for t in ("Employee offboarding", "Status Change", "Requisition", "Employee onboarding")
 )
 REPORTER_IS_NOT_SUBJECT_PROJECTS = frozenset({"LIBTA"})
+POSITION_ID_FIELD_ID = "customfield_12865"
+FIRST_NAME_FIELD_ID = "customfield_12873"
+LAST_NAME_FIELD_ID = "customfield_12874"
+# Request types whose employee is named by Position ID / first+last name fields (no email), not by an email.
+ATTRIBUTE_SUBJECT_TYPES = frozenset({"status change"})
+# Request types where HR types the values being requested (e.g. a new job title), so Entra may only fill blanks.
+FILL_ONLY_TYPES = frozenset({"status change"})
 # For these request types the employee is named by a JSM Form question on the ticket (the form is not a Jira field).
 # issue type (lowercase) -> question labels (lowercase) whose answer is the employee's work email.
 FORM_SUBJECT_EMAIL_QUESTIONS: dict[str, tuple[str, ...]] = {
@@ -209,6 +216,26 @@ def reporter_is_subject_candidate(fields: dict[str, Any]) -> bool:
     issue_type = str((fields.get("issuetype") or {}).get("name") or "").strip().lower()
     project = str((fields.get("project") or {}).get("key") or "").upper()
     return issue_type not in REPORTER_IS_NOT_SUBJECT_TYPES and project not in REPORTER_IS_NOT_SUBJECT_PROJECTS
+
+
+def _issue_type(fields: dict[str, Any]) -> str:
+    return str((fields.get("issuetype") or {}).get("name") or "").strip().lower()
+
+
+def is_fill_only(fields: dict[str, Any]) -> bool:
+    return _issue_type(fields) in FILL_ONLY_TYPES
+
+
+def _is_blank(value: Any) -> bool:
+    if isinstance(value, dict):
+        value = value.get("value")
+    return value is None or (isinstance(value, (str, list)) and not value)
+
+
+def drop_filled(payload: dict[str, Any], fields: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Fill-only: remove payload entries whose Jira field already holds a value; also return the kept field ids."""
+    kept = [fid for fid in payload if not _is_blank(fields.get(fid))]
+    return {fid: v for fid, v in payload.items() if fid not in kept}, kept
 
 
 def ticket_emails(fields: dict[str, Any]) -> list[str]:

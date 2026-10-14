@@ -291,6 +291,39 @@ class HrEntraSyncJob:
         )
         return list(resp.get("value") or [])
 
+    def _graph_users(self, flt: str) -> list[dict[str, Any]]:
+        resp = self._azure_client().graph_request(
+            "GET", "users",
+            params={"$filter": flt, "$select": ",".join(fmap.graph_select_properties()), "$count": "true", "$top": "5"},
+            headers={"ConsistencyLevel": "eventual"},
+        )
+        return [u for u in (resp.get("value") or []) if fmap.is_person_account(u)]
+
+    def lookup_by_attributes(
+        self, fields: dict[str, Any], tried: list[str]
+    ) -> tuple[str, list[dict[str, Any]], str] | None:
+        """Status Change: no email on the ticket, so identify the employee by Position ID, then exact first+last name.
+
+        Returns (source, users, via) for the first attribute that matches anyone, else None. Only enabled,
+        member, non-service accounts count, and the caller treats more than one user as ambiguous.
+        """
+        position = str(fields.get(fmap.POSITION_ID_FIELD_ID) or "").strip()
+        if position:
+            tried.append("Position ID")
+            prop = fmap.EXT_PREFIX + "positionID"
+            users = self._graph_users(f"{prop} eq '{position.replace(chr(39), chr(39) * 2)}'")
+            if users:
+                return "position", users, "position_id"
+        first = str(fields.get(fmap.FIRST_NAME_FIELD_ID) or "").strip()
+        last = str(fields.get(fmap.LAST_NAME_FIELD_ID) or "").strip()
+        if first and last:
+            tried.append("first and last name")
+            q = lambda t: t.replace("'", "''")  # noqa: E731
+            users = self._graph_users(f"givenName eq '{q(first)}' and surname eq '{q(last)}'")
+            if users:
+                return "name", users, "name"
+        return None
+
     def fetch_manager(self, user_id: str) -> dict[str, Any] | None:
         try:
             return self._azure_client().graph_request(
@@ -392,9 +425,8 @@ class HrEntraSyncJob:
             "reporter_only": not ticket_emails and not form_email_found and (bool(candidates) or bool(skipped_external)),
             "reporter_blocked": reporter_blocked,
         }
-        if not candidates:
-            return {"outcome": "no_email", **base}
-
+        matched: tuple[dict[str, Any], str, str, str] | None = None  # (user, label, source, via)
+        tried_attrs: list[str] = []
         for email, source, _ in candidates:
             users = self.find_entra_users(email)
             if source == "reporter":
@@ -402,28 +434,47 @@ class HrEntraSyncJob:
                 users = [u for u in users if fmap.is_person_account(u)]
             if len(users) > 1:
                 return {"outcome": STATUS_AMBIGUOUS, "matched_email": email, "email_source": source,
-                        "candidates": [u.get("userPrincipalName") for u in users], **base}
+                        "candidates": [u.get("userPrincipalName") for u in users], "attrs": tried_attrs, **base}
             if users:
-                user = users[0]
-                manager = self.fetch_manager(str(user["id"]))
-                payload, empty = fmap.build_issue_fields(user, manager)
-                if dry_run:
-                    written, skipped = payload, {}
-                else:
-                    written, skipped = self._write_fields(issue_key, payload)
-                return {
-                    "outcome": STATUS_SYNCED,
-                    "dry_run": dry_run,
-                    "matched_email": email,
-                    "email_source": source,
-                    "matched_upn": user.get("userPrincipalName") or "",
-                    "matched_via": self._matched_via(user, email),
-                    "fields_written": written,
-                    "fields_skipped": skipped,
-                    "entra_empty": empty,
-                    **base,
-                }
-        return {"outcome": "no_match", **base}
+                matched = (users[0], email, source, self._matched_via(users[0], email))
+                break
+        if matched is None and not email_override and fmap._issue_type(fields) in fmap.ATTRIBUTE_SUBJECT_TYPES:
+            found = self.lookup_by_attributes(fields, tried_attrs)
+            if found:
+                source, users, via = found
+                if len(users) > 1:
+                    return {"outcome": STATUS_AMBIGUOUS, "matched_email": f"{source} on ticket", "email_source": source,
+                            "candidates": [u.get("userPrincipalName") for u in users], "attrs": tried_attrs, **base}
+                matched = (users[0], f"{source} on ticket", source, via)
+        base["attrs"] = tried_attrs
+        if matched is None:
+            if not candidates and not tried_attrs:
+                return {"outcome": "no_email", **base}
+            return {"outcome": "no_match", **base}
+
+        user, label, source, via = matched
+        manager = self.fetch_manager(str(user["id"]))
+        payload, empty = fmap.build_issue_fields(user, manager)
+        kept: list[str] = []
+        if fmap.is_fill_only(fields):
+            payload, kept = fmap.drop_filled(payload, fields)
+        if dry_run:
+            written, skipped = payload, {}
+        else:
+            written, skipped = self._write_fields(issue_key, payload)
+        return {
+            "outcome": STATUS_SYNCED,
+            "dry_run": dry_run,
+            "matched_email": label,
+            "email_source": source,
+            "matched_upn": user.get("userPrincipalName") or "",
+            "matched_via": via,
+            "fields_written": written,
+            "fields_skipped": skipped,
+            "fields_kept": kept,
+            "entra_empty": empty,
+            **base,
+        }
 
     def _post_note(self, issue_key: str, text: str) -> None:
         self._jira_client().add_internal_comment(issue_key, text)
@@ -491,7 +542,8 @@ class HrEntraSyncJob:
             elif outcome == "no_email":
                 reason = "no work or personal email address was found on this ticket"
             else:
-                reason = f"no Entra account matched {', '.join(result['emails'])}"
+                tried = result["emails"] + [f"the {a} on the ticket" for a in result.get("attrs") or []]
+                reason = f"no Entra account matched {', '.join(tried)}"
             self._finish_with_note(
                 key, STATUS_NOT_FOUND, now, result["fingerprint"],
                 f"Entra sync: {reason} after {HR_ENTRA_SYNC_RETRY_MINUTES} minutes of retries. "

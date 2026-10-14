@@ -560,3 +560,73 @@ def test_forms_are_only_fetched_for_types_that_use_them(tmp_path):
     jira.forms = None  # would raise if the job tried to read forms
     azure = FakeAzure({"rep@x.com": [_user(upn="rep@x.com", accountEnabled=True)]})
     assert _job(tmp_path, jira, azure).sync_issue("HRD-1")["email_source"] == "reporter"
+
+
+# ---- Status Change: employee named by Position ID / name; fill-only ----
+
+def _status_change(**extra):
+    return _typed("Status Change", reporter=_person("hr@x.com"), **extra)
+
+
+def test_status_change_identifies_the_employee_by_position_id_and_only_fills_blanks(tmp_path):
+    jira = FakeJira({"HRD-1": _status_change(customfield_12865="P123", customfield_12866="Proposed New Title",
+                                              customfield_13458="")})
+    azure = FakeAzure({"P123": [_user(upn="emp@x.com", title="Old Title")], "hr@x.com": [_user(upn="hr@x.com")]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["outcome"] == "synced" and res["email_source"] == "position" and res["matched_upn"] == "emp@x.com"
+    written = jira.updates[0][1]
+    assert "customfield_12866" not in written  # HR's typed new title is never overwritten
+    assert "customfield_12865" not in written  # nor the Position ID HR typed
+    assert written["customfield_13458"] == "Ops"  # a blank field is filled
+    assert "customfield_12866" in res["fields_kept"]
+
+
+def test_status_change_falls_back_to_exact_first_and_last_name(tmp_path):
+    jira = FakeJira({"HRD-1": _status_change(customfield_12865="NOPE", customfield_12873="Jane", customfield_12874="Doe")})
+    azure = FakeAzure({"Jane": [_user(upn="jane@x.com")]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["outcome"] == "synced" and res["email_source"] == "name" and res["matched_via"] == "name"
+
+
+def test_status_change_ambiguous_name_writes_nothing(tmp_path):
+    jira = FakeJira({"HRD-1": _status_change(customfield_12873="Jane", customfield_12874="Doe")})
+    azure = FakeAzure({"Jane": [_user(upn="jane1@x.com"), _user(upn="jane2@x.com")]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["outcome"] == "ambiguous" and jira.updates == []
+
+
+def test_status_change_only_matches_enabled_person_accounts(tmp_path):
+    jira = FakeJira({"HRD-1": _status_change(customfield_12865="P123")})
+    azure = FakeAzure({"P123": [_user(upn="gone@x.com", accountEnabled=False)]})
+    assert _job(tmp_path, jira, azure).sync_issue("HRD-1")["outcome"] == "no_match"
+
+
+def test_status_change_ticket_email_wins_over_attributes(tmp_path):
+    jira = FakeJira({"HRD-1": _status_change(customfield_12879="jdoe@x.com", customfield_12865="P123")})
+    azure = FakeAzure({"jdoe@x.com": [_user(upn="jdoe@x.com")], "P123": [_user(upn="other@x.com")]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["email_source"] == "ticket" and res["matched_upn"] == "jdoe@x.com"
+
+
+def test_status_change_no_match_after_window_notes_which_attributes_were_tried(tmp_path):
+    jira = FakeJira({"HRD-1": _status_change(customfield_12865="P123", customfield_12873="Jane", customfield_12874="Doe")})
+    job = _job(tmp_path, jira, FakeAzure())
+    _seed(job, "HRD-1", 20)
+    job._process_pending(job.get_row("HRD-1"), NOW)
+    note = jira.notes[0][1]
+    assert job.get_row("HRD-1")["status"] == "not_found"
+    assert "Position ID on the ticket" in note and "first and last name on the ticket" in note
+
+
+def test_other_request_types_still_overwrite_existing_values(tmp_path):
+    jira = FakeJira({"HRD-1": _typed("General Inquiry", customfield_12879="jdoe@x.com", customfield_12866="Typed Title")})
+    azure = FakeAzure({"jdoe@x.com": [_user()]})
+    _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert jira.updates[0][1]["customfield_12866"] == "Engineer"
+
+
+def test_position_id_with_a_quote_cannot_break_out_of_the_filter(tmp_path):
+    jira = FakeJira({"HRD-1": _status_change(customfield_12865="P'1")})
+    azure = FakeAzure()
+    _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert "eq 'P''1'" in azure.calls[0][1]["$filter"]
