@@ -81,7 +81,8 @@ export default function HrEntraSyncPage() {
         <p className="mt-1 text-sm text-slate-500">
           Fills newly created {status?.projects.join(" and ") || "HRD and LIBTA"} tickets with the employee&apos;s
           Entra attributes, matched by the work or personal email on the ticket, or the reporter&apos;s email when the
-          ticket has none (service accounts and automation are ignored). Editing either email on a ticket re-runs it.
+          ticket has none. Reporters and company emails are only looked up on our own tenant domains; service accounts and
+          automation are ignored. Editing either email on a ticket re-runs it.
         </p>
       </div>
 

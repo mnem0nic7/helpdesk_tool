@@ -11,6 +11,12 @@ Source mapping: `ADP Jira Mapping v1.xlsx`. Code: `backend/hr_entra_sync.py`, `h
   (New Hire)` (customfield_12883), then - for every request type - the **reporter's** email if the reporter is a person
   (`customer`/`atlassian` account type; apps, null reporters, the AskHR/Benefits mailboxes and service-style names such as
   payroll/donotreply/svc are ignored) and resolves to an *enabled, member, non-service-style* Entra account.
+  **Internal-domain rule:** the reporter and the *Company email address* field are only looked up if the address is on a
+  domain verified on our Entra tenant (`GET /organization`, `Email` capability, excluding `*.onmicrosoft.com` and relay
+  entries; subdomains count; cached 1h; **fails closed** - if the list cannot be loaded the ticket retries instead of
+  looking up blindly). The *Personal Email Address (New Hire)* field is exempt because it exists for outside addresses
+  (matched via Entra `otherMails`), and the dry-run tester's email override is exempt. An outside-only reporter (vendor or
+  notification sender) is never sent to Graph and the ticket ends `not_found` immediately with no note.
   A reporter is only a guess at the subject, so a reporter-only ticket with no Entra match ends `not_found` with **no
   note** (e.g. DocuSign/ADP notification senders). Which source matched is stored in `email_source`. Jira stores these as text or wiki links (`[a@x.com|mailto:a@x.com]`), so the
   first address in the value is extracted. Graph filter: `mail`, `userPrincipalName`, or `otherMails`

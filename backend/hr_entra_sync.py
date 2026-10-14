@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -42,6 +43,7 @@ STATUS_AMBIGUOUS = "ambiguous"
 STATUS_FAILED = "failed"
 
 _DB_PATH = os.path.join(DATA_DIR, "hr_entra_sync.db")
+_DOMAINS_TTL_SECONDS = 3600
 
 
 def _utcnow() -> datetime:
@@ -63,6 +65,8 @@ class HrEntraSyncJob:
         self._jira = jira
         self._azure = azure
         self._bg_task: asyncio.Task[None] | None = None
+        self._domains: frozenset[str] = frozenset()
+        self._domains_at = 0.0
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._init_db()
 
@@ -212,6 +216,33 @@ class HrEntraSyncJob:
 
     # ------------------------------------------------------------------ Entra
 
+    def internal_domains(self) -> frozenset[str]:
+        """Mail domains verified on our Entra tenant (cached 1h). Fails closed: raises if none can be loaded.
+
+        Excludes the *.onmicrosoft.com routing domains and capability-less relay entries (CodeTwo, Egress).
+        """
+        if self._domains and time.monotonic() - self._domains_at < _DOMAINS_TTL_SECONDS:
+            return self._domains
+        domains: set[str] = set()
+        try:
+            org = self._azure_client().graph_request(
+                "GET", "organization", params={"$select": "verifiedDomains"}
+            )
+            for tenant in org.get("value") or []:
+                for d in tenant.get("verifiedDomains") or []:
+                    name = str(d.get("name") or "").strip().lower()
+                    if name and "Email" in str(d.get("capabilities") or "") and not name.endswith(".onmicrosoft.com"):
+                        domains.add(name)
+        except Exception:
+            logger.exception("HR Entra sync: could not load the tenant's verified domains")
+        if domains:
+            self._domains, self._domains_at = frozenset(domains), time.monotonic()
+        elif self._domains:
+            logger.warning("HR Entra sync: verified-domain refresh returned nothing; using the previous list")
+        else:
+            raise RuntimeError("Entra verified domains unavailable; not looking up emails without the internal-domain rule")
+        return self._domains
+
     def find_entra_users(self, email: str) -> list[dict[str, Any]]:
         safe = email.replace("'", "''")
         flt = f"mail eq '{safe}' or userPrincipalName eq '{safe}' or otherMails/any(c:c eq '{safe}')"
@@ -284,24 +315,42 @@ class HrEntraSyncJob:
         """
         issue = self._jira_client().get_issue(issue_key)
         fields = issue.get("fields") or {}
+        # Candidates are (email, source, must_be_internal). The reporter and the Company email field must be on
+        # a tenant domain; the Personal Email field exists for outside addresses, so it is exempt. A test-only
+        # email override is exempt too.
+        by_field: list[tuple[str, str]] = []
+        reporter = None
         if email_override:
-            ticket_emails = [e for e in [fmap.normalize_email(email_override)] if e]
-            reporter = None
+            if fmap.normalize_email(email_override):
+                by_field = [(fmap.normalize_email(email_override), "")]  # type: ignore[list-item]
         else:
-            ticket_emails = fmap.ticket_emails(fields)
+            by_field = fmap.ticket_emails_by_field(fields)
             reporter = fmap.reporter_email(fields)
-        candidates = [(e, "ticket") for e in ticket_emails]
+        ticket_emails = [e for e, _ in by_field]
+        candidates = [(e, "ticket", f == fmap.COMPANY_EMAIL_FIELD_ID) for e, f in by_field]
         if reporter and reporter not in ticket_emails:
-            candidates.append((reporter, "reporter"))
+            candidates.append((reporter, "reporter", True))
+        skipped_external: list[str] = []
+        if any(restricted for _, _, restricted in candidates):
+            domains = self.internal_domains()
+            kept = []
+            for email, source, restricted in candidates:
+                if restricted and not fmap.is_internal_email(email, domains):
+                    skipped_external.append(email)
+                else:
+                    kept.append((email, source, restricted))
+            candidates = kept
         base = {
-            "emails": [e for e, _ in candidates],
+            "emails": [e for e, _, _ in candidates],
             "fingerprint": fmap.fingerprint(ticket_emails),
-            "reporter_only": bool(candidates) and not ticket_emails,
+            "skipped_external": skipped_external,
+            # No email on the ticket itself: only the reporter was a candidate (or was ruled out as external).
+            "reporter_only": not ticket_emails and (bool(candidates) or bool(skipped_external)),
         }
         if not candidates:
             return {"outcome": "no_email", **base}
 
-        for email, source in candidates:
+        for email, source, _ in candidates:
             users = self.find_entra_users(email)
             if source == "reporter":
                 # The reporter is a guess at the subject, so only trust an enabled, person-style account.
@@ -352,7 +401,14 @@ class HrEntraSyncJob:
             return
 
         outcome = result["outcome"]
-        if outcome == STATUS_SYNCED:
+        if outcome == "no_email" and result.get("reporter_only") and result["skipped_external"]:
+            # Only an outside reporter (vendor/notification sender): nothing to look up, nothing to wait for.
+            self._finish(
+                key, STATUS_NOT_FOUND, now,
+                lookup_fingerprint=result["fingerprint"], email_source="reporter",
+                error=f"No email on ticket; reporter {result['skipped_external'][0]} is not on a tenant domain.",
+            )
+        elif outcome == STATUS_SYNCED:
             self._finish(
                 key, STATUS_SYNCED, now,
                 matched_upn=result["matched_upn"], matched_via=result["matched_via"],
@@ -376,11 +432,13 @@ class HrEntraSyncJob:
                 error=f"No email on ticket; reporter {result['emails'][0]} is not an Entra employee.",
             )
         elif window_over:
-            reason = (
-                "no work or personal email address was found on this ticket"
-                if outcome == "no_email"
-                else f"no Entra account matched {', '.join(result['emails'])}"
-            )
+            external = result.get("skipped_external") or []
+            if outcome == "no_email" and external:
+                reason = f"{', '.join(external)} is not on a tenant domain, so it was not looked up"
+            elif outcome == "no_email":
+                reason = "no work or personal email address was found on this ticket"
+            else:
+                reason = f"no Entra account matched {', '.join(result['emails'])}"
             self._finish_with_note(
                 key, STATUS_NOT_FOUND, now, result["fingerprint"],
                 f"Entra sync: {reason} after {HR_ENTRA_SYNC_RETRY_MINUTES} minutes of retries. "

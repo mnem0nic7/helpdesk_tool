@@ -73,10 +73,13 @@ FIELD_MAP: tuple[FieldMapping, ...] = (
     FieldMapping("Work Arrangement", KIND_SELECT, None, "customfield_15095", enabled=False, note="Entra source undefined in sheet."),
 )
 
+COMPANY_EMAIL_FIELD_ID = "customfield_12879"
+PERSONAL_EMAIL_FIELD_ID = "customfield_12883"
+
 # Jira fields that carry the address used to find the Entra user (checked in this order).
 LOOKUP_EMAIL_FIELD_IDS: tuple[str, ...] = (
-    "customfield_12879",  # Company email address (HRD)
-    "customfield_12883",  # Personal Email Address (New Hire) (HRD onboarding, LIBTA)
+    COMPANY_EMAIL_FIELD_ID,  # Company email address (HRD)
+    PERSONAL_EMAIL_FIELD_ID,  # Personal Email Address (New Hire) (HRD onboarding, LIBTA)
 )
 
 
@@ -198,6 +201,22 @@ def ticket_emails(fields: dict[str, Any]) -> list[str]:
         if email and email not in found:
             found.append(email)
     return found
+
+
+def ticket_emails_by_field(fields: dict[str, Any]) -> list[tuple[str, str]]:
+    """(email, jira field id) for each lookup field that holds an address, de-duplicated by address."""
+    found: list[tuple[str, str]] = []
+    for field_id in LOOKUP_EMAIL_FIELD_IDS:
+        email = normalize_email(fields.get(field_id))
+        if email and email not in [e for e, _ in found]:
+            found.append((email, field_id))
+    return found
+
+
+def is_internal_email(email: str, internal_domains: set[str] | frozenset[str]) -> bool:
+    """True if the address is on a tenant domain (or a subdomain of one)."""
+    domain = email.rpartition("@")[2].lower()
+    return any(domain == d or domain.endswith("." + d) for d in internal_domains)
 
 
 def fingerprint(emails: list[str]) -> str:

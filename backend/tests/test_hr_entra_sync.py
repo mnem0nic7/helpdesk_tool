@@ -50,14 +50,29 @@ class FakeJira:
         return type("R", (), {"raise_for_status": lambda self: None, "json": lambda self: body})()
 
 
+ORG_DOMAINS = [
+    {"name": "x.com", "capabilities": "Email, OfficeCommunicationsOnline"},
+    {"name": "librasolutionsgroup.com", "capabilities": "Email"},
+    {"name": "tenant.onmicrosoft.com", "capabilities": "Email"},  # routing domain: never internal
+    {"name": "relay.codetwo.online", "capabilities": "None"},  # relay entry: never internal
+]
+
+
 class FakeAzure:
-    def __init__(self, users=None, manager=None, fail=None):
+    def __init__(self, users=None, manager=None, fail=None, domains=ORG_DOMAINS):
         self.users = users or {}
         self.manager = manager
         self.fail = fail
+        self.domains = domains
         self.calls = []
+        self.org_calls = 0
 
     def graph_request(self, method, path, params=None, headers=None, **_):
+        if path == "organization":
+            self.org_calls += 1
+            if self.domains is None:
+                raise AzureApiError("org down", status_code=500)
+            return {"value": [{"verifiedDomains": self.domains}]}
         self.calls.append((path, params, headers))
         if self.fail:
             raise self.fail
@@ -266,7 +281,7 @@ def test_external_reporter_only_ticket_ends_not_found_without_a_note(tmp_path):
     _seed(job, "HRD-1", 20)
     job._process_pending(job.get_row("HRD-1"), NOW)
     row = job.get_row("HRD-1")
-    assert row["status"] == "not_found" and jira.notes == [] and "not an Entra employee" in row["error"]
+    assert row["status"] == "not_found" and jira.notes == [] and "not on a tenant domain" in row["error"]
 
 
 # ---- email change re-sync ----
@@ -335,3 +350,95 @@ def test_pending_ticket_with_changed_email_is_not_reopened(tmp_path):
     _seed(job, "HRD-1", 2)
     jira.updated_results = [{"key": "HRD-1", "fields": {"customfield_12879": "b@x.com", "project": {"key": "HRD"}}}]
     assert job.discover_email_changes(NOW) == 0
+
+
+# ---- internal-domain rule ----
+
+def test_internal_domains_exclude_routing_and_relay_entries(tmp_path):
+    job = _job(tmp_path, FakeJira(), FakeAzure())
+    assert job.internal_domains() == frozenset({"x.com", "librasolutionsgroup.com"})
+
+
+def test_domains_are_cached_between_lookups(tmp_path):
+    azure = FakeAzure()
+    job = _job(tmp_path, FakeJira(), azure)
+    job.internal_domains()
+    job.internal_domains()
+    assert azure.org_calls == 1
+
+
+def test_domains_fail_closed_when_unavailable_and_use_stale_list_when_refresh_fails(tmp_path, monkeypatch):
+    job = _job(tmp_path, FakeJira(), FakeAzure(domains=None))
+    with pytest.raises(RuntimeError, match="verified domains unavailable"):
+        job.internal_domains()
+    good = _job(tmp_path, FakeJira(), FakeAzure())
+    good.internal_domains()
+    good._azure = FakeAzure(domains=None)
+    good._domains_at -= s._DOMAINS_TTL_SECONDS + 1  # force a refresh that fails
+    assert good.internal_domains() == frozenset({"x.com", "librasolutionsgroup.com"})
+
+
+def test_external_company_email_is_not_looked_up(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="someone@gmail.com")})
+    azure = FakeAzure({"someone@gmail.com": [_user(upn="someone@gmail.com")]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["outcome"] == "no_email" and res["skipped_external"] == ["someone@gmail.com"]
+    assert azure.calls == [] and jira.updates == []
+
+
+def test_personal_email_field_is_exempt_from_the_domain_rule(tmp_path):
+    jira = FakeJira({"LIBTA-1": _issue(customfield_12883="newhire@gmail.com")})
+    azure = FakeAzure({"newhire@gmail.com": [_user(upn="nh@x.com", mail=None)]})
+    res = _job(tmp_path, jira, azure).sync_issue("LIBTA-1")
+    assert res["outcome"] == "synced" and res["email_source"] == "ticket" and azure.org_calls == 0
+
+
+def test_subdomain_of_a_tenant_domain_counts_as_internal(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="a@mail.x.com")})
+    azure = FakeAzure({"a@mail.x.com": [_user(upn="a@x.com")]})
+    assert _job(tmp_path, jira, azure).sync_issue("HRD-1")["outcome"] == "synced"
+
+
+def test_external_company_email_falls_through_to_internal_reporter(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="x@gmail.com", reporter=_person("rep@x.com"))})
+    azure = FakeAzure({"rep@x.com": [_user(upn="rep@x.com", accountEnabled=True)]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["outcome"] == "synced" and res["email_source"] == "reporter"
+
+
+def test_external_reporter_is_never_looked_up_and_ends_immediately_without_a_note(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(reporter=_person("dse@docusign.net", "dse@docusign.net"))})
+    azure = FakeAzure({"dse@docusign.net": [_user(upn="dse@x.com")]})
+    job = _job(tmp_path, jira, azure)
+    _seed(job, "HRD-1", 1)  # inside the retry window: no waiting needed
+    job._process_pending(job.get_row("HRD-1"), NOW)
+    row = job.get_row("HRD-1")
+    assert row["status"] == "not_found" and "not on a tenant domain" in row["error"]
+    assert azure.calls == [] and jira.notes == [] and jira.updates == []
+
+
+def test_external_company_email_alone_gets_an_explanatory_note_after_the_window(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="someone@gmail.com")})
+    job = _job(tmp_path, jira, FakeAzure())
+    _seed(job, "HRD-1", 20)
+    job._process_pending(job.get_row("HRD-1"), NOW)
+    assert job.get_row("HRD-1")["status"] == "not_found"
+    assert "someone@gmail.com is not on a tenant domain" in jira.notes[0][1]
+
+
+def test_domain_lookup_failure_retries_instead_of_looking_up_blindly(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(reporter=_person("rep@x.com"))})
+    azure = FakeAzure({"rep@x.com": [_user(upn="rep@x.com", accountEnabled=True)]}, domains=None)
+    job = _job(tmp_path, jira, azure)
+    _seed(job, "HRD-1", 2)
+    job._process_pending(job.get_row("HRD-1"), NOW)
+    row = job.get_row("HRD-1")
+    assert row["status"] == "pending" and "verified domains unavailable" in row["error"]
+    assert azure.calls == [] and jira.updates == []
+
+
+def test_email_override_is_exempt_for_dry_run_testing(tmp_path):
+    jira = FakeJira({"HRD-1": _issue()})
+    azure = FakeAzure({"tester@gmail.com": [_user(upn="t@x.com")]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1", dry_run=True, email_override="tester@gmail.com")
+    assert res["outcome"] == "synced" and azure.org_calls == 0
