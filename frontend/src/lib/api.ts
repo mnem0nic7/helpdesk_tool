@@ -5418,6 +5418,14 @@ export const api = {
     return fetchJSON(`/api/hr-entra-sync/issues?limit=${limit}${statusParam}`);
   },
 
+  getHrAutoCancelStatus(): Promise<HrAutoCancelStatus> {
+    return fetchJSON<HrAutoCancelStatus>("/api/hr-auto-cancel/status");
+  },
+
+  getHrAutoCancelActions(limit = 10): Promise<{ actions: HrAutoCancelAction[] }> {
+    return fetchJSON(`/api/hr-auto-cancel/actions?limit=${limit}`);
+  },
+
   async dryRunHrEntraSync(issueKey: string, email?: string): Promise<HrEntraSyncDryRun> {
     const emailParam = email ? `&email=${encodeURIComponent(email)}` : "";
     const url = `/api/hr-entra-sync/issues/${encodeURIComponent(issueKey)}/run?dry_run=true${emailParam}`;
@@ -5821,6 +5829,28 @@ export interface AskHrBotMessage {
   jira_issue_key: string | null;
   error: string | null;
   processed_at: string;
+}
+
+export interface HrAutoCancelStatus {
+  enabled: boolean;
+  projects: string[];
+  sender_domains: string[];
+  target_status: string;
+  lookback_minutes: number;
+  counts: { cancelled: number; pending: number; no_transition: number; failed: number };
+}
+
+export interface HrAutoCancelAction {
+  issue_key: string;
+  project_key: string;
+  sender: string;
+  from_status: string;
+  to_status: string;
+  result: "pending" | "cancelled" | "no_transition" | "failed";
+  attempts: number;
+  first_seen_at: string;
+  acted_at: string;
+  error: string;
 }
 
 export interface HrEntraSyncMapping {

@@ -79,6 +79,22 @@ tab and re-running is a no-op. Applied 2026-10-14. The pre-change layouts are sa
 This orders the create/edit/transition screens; the issue view's Details panel is governed by Project settings -> Issue
 layout, which Jira has no public API for.
 
+## Auto-cancel by sender domain
+`backend/hr_auto_cancel.py` (+ `routes_hr_auto_cancel.py`, migration `0036`, table `hr_auto_cancel_actions`): a separate
+leader-only job that sets new HRD/LIBTA tickets from a listed sender domain to **Cancelled by HR**. Settings:
+`HR_AUTO_CANCEL_ENABLED`, `_PROJECTS` (HRD,LIBTA), `_SENDER_DOMAINS` (osidigital.com; subdomains match, lookalikes do not),
+`_STATUS`, `_POLL_SECONDS` (60), `_LOOKBACK_MINUTES` (120).
+- Candidates: created in the lookback window **and still in a "To Do" status category** (a ticket a human already moved is
+  never touched); the sender is the reporter's email (the creator's if the reporter's is hidden).
+- Action: the project's transition whose *target status* is "Cancelled by HR" (no required fields; present from New Request),
+  then one **internal** note saying why and how to undo it. A project whose workflow has no such status (LIBTA today:
+  only "Offer Declined") is recorded `no_transition` and left alone.
+- **Once only**: the ledger row is claimed before acting, so a ticket someone reopens is never cancelled again and a
+  blue/green overlap cannot act twice. A failed transition is retried (max 5 attempts) while the ticket is in the window.
+- No backfill: only tickets created inside the lookback window are considered. As of 2026-10-14 `HRD-1410` (an L&D request
+  from a person at osidigital.com, open since 2026-09-14) is outside it and untouched.
+- Admin API: `GET /api/hr-auto-cancel/status|actions|preview` (preview is read-only). Shown on the hrapp status page.
+
 ## Status page
 `hrapp.movedocs.com/entra-sync` (`frontend/src/pages/HrEntraSyncPage.tsx`, nav entry "Entra → Jira Sync"): enabled/running/failed
 banner, counts by outcome, config summary, recent tickets (filterable), the field-mapping table with why each disabled row

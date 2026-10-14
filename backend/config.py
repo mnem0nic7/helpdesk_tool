@@ -356,6 +356,16 @@ HR_ENTRA_SYNC_PROJECTS: list[str] = [
 ]
 HR_ENTRA_SYNC_POLL_SECONDS: int = int(os.getenv("HR_ENTRA_SYNC_POLL_SECONDS", "60"))
 HR_ENTRA_SYNC_RETRY_MINUTES: int = int(os.getenv("HR_ENTRA_SYNC_RETRY_MINUTES", "15"))
+HR_AUTO_CANCEL_ENABLED: bool = os.getenv("HR_AUTO_CANCEL_ENABLED", "false").lower() == "true"
+HR_AUTO_CANCEL_PROJECTS: list[str] = [
+    p.strip().upper() for p in os.getenv("HR_AUTO_CANCEL_PROJECTS", "HRD,LIBTA").split(",") if p.strip()
+]
+HR_AUTO_CANCEL_SENDER_DOMAINS: list[str] = [
+    d.strip().lower() for d in os.getenv("HR_AUTO_CANCEL_SENDER_DOMAINS", "osidigital.com").split(",") if d.strip()
+]
+HR_AUTO_CANCEL_STATUS: str = os.getenv("HR_AUTO_CANCEL_STATUS", "Cancelled by HR").strip() or "Cancelled by HR"
+HR_AUTO_CANCEL_POLL_SECONDS: int = int(os.getenv("HR_AUTO_CANCEL_POLL_SECONDS", "60"))
+HR_AUTO_CANCEL_LOOKBACK_MINUTES: int = int(os.getenv("HR_AUTO_CANCEL_LOOKBACK_MINUTES", "120"))
 HR_ENTRA_SYNC_LOOKBACK_MINUTES: int = int(os.getenv("HR_ENTRA_SYNC_LOOKBACK_MINUTES", "120"))
 DEFENDER_AGENT_MAX_JOBS_PER_CYCLE: int = int(os.getenv("DEFENDER_AGENT_MAX_JOBS_PER_CYCLE", "10"))
 SECURITY_LANE_SUMMARY_INTERVAL_MINUTES: int = int(os.getenv("SECURITY_LANE_SUMMARY_INTERVAL_MINUTES", "60"))

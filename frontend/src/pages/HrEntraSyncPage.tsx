@@ -48,6 +48,18 @@ export default function HrEntraSyncPage() {
     ...getPollingQueryOptions("slow_5m"),
   });
 
+  const autoCancelStatus = useQuery({
+    queryKey: ["hr-auto-cancel", "status"],
+    queryFn: () => api.getHrAutoCancelStatus(),
+    ...getPollingQueryOptions("slow_5m"),
+  });
+
+  const autoCancelActions = useQuery({
+    queryKey: ["hr-auto-cancel", "actions"],
+    queryFn: () => api.getHrAutoCancelActions(),
+    ...getPollingQueryOptions("slow_5m"),
+  });
+
   const dryRun = useMutation({
     mutationFn: (target: { key: string; email?: string }) => api.dryRunHrEntraSync(target.key, target.email),
   });
@@ -265,6 +277,51 @@ export default function HrEntraSyncPage() {
                 <tr>
                   <td className="px-3 py-4 text-center text-slate-500" colSpan={7}>
                     {issuesQuery.isLoading ? "Loading…" : "No tickets yet."}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-6">
+        <h2 className="text-sm font-semibold text-slate-700">Auto-cancel by sender domain</h2>
+        {autoCancelStatus.data ? (
+          <p className="mt-1 text-xs text-slate-500">
+            {autoCancelStatus.data.enabled ? "On" : "Off"} — new {autoCancelStatus.data.projects.join(" and ")} tickets from{" "}
+            {autoCancelStatus.data.sender_domains.join(", ")} still in their first status are set to &quot;
+            {autoCancelStatus.data.target_status}&quot;. Cancelled: {autoCancelStatus.data.counts.cancelled} · No matching
+            status: {autoCancelStatus.data.counts.no_transition} · Failed: {autoCancelStatus.data.counts.failed}
+          </p>
+        ) : null}
+        <div className="mt-2 overflow-x-auto rounded-2xl border border-slate-200">
+          <table className="min-w-full divide-y divide-slate-200 text-sm">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="px-3 py-2 text-left">Ticket</th>
+                <th className="px-3 py-2 text-left">Sender</th>
+                <th className="px-3 py-2 text-left">Result</th>
+                <th className="px-3 py-2 text-left">When</th>
+                <th className="px-3 py-2 text-left">Detail</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {(autoCancelActions.data?.actions ?? []).map((row) => (
+                <tr key={row.issue_key}>
+                  <td className="px-3 py-2 font-medium">{row.issue_key}</td>
+                  <td className="px-3 py-2">{row.sender}</td>
+                  <td className="px-3 py-2">{row.result}</td>
+                  <td className="px-3 py-2">{formatDateTime(row.acted_at || row.first_seen_at)}</td>
+                  <td className="max-w-xs truncate px-3 py-2 text-slate-500" title={row.error}>
+                    {row.error || "—"}
+                  </td>
+                </tr>
+              ))}
+              {(autoCancelActions.data?.actions ?? []).length === 0 ? (
+                <tr>
+                  <td className="px-3 py-4 text-center text-slate-500" colSpan={5}>
+                    Nothing auto-cancelled yet.
                   </td>
                 </tr>
               ) : null}

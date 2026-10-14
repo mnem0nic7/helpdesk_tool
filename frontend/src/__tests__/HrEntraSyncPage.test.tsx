@@ -77,6 +77,30 @@ describe("HrEntraSyncPage", () => {
         },
       ],
     });
+    vi.spyOn(api, "getHrAutoCancelStatus").mockResolvedValue({
+      enabled: true,
+      projects: ["HRD", "LIBTA"],
+      sender_domains: ["osidigital.com"],
+      target_status: "Cancelled by HR",
+      lookback_minutes: 120,
+      counts: { cancelled: 3, pending: 0, no_transition: 1, failed: 0 },
+    });
+    vi.spyOn(api, "getHrAutoCancelActions").mockResolvedValue({
+      actions: [
+        {
+          issue_key: "HRD-77",
+          project_key: "HRD",
+          sender: "support@osidigital.com",
+          from_status: "New Request",
+          to_status: "Cancelled by HR",
+          result: "cancelled",
+          attempts: 1,
+          first_seen_at: "2026-10-14T12:00:00+00:00",
+          acted_at: "2026-10-14T12:00:01+00:00",
+          error: "",
+        },
+      ],
+    });
     vi.spyOn(api, "dryRunHrEntraSync").mockResolvedValue({
       outcome: "synced",
       dry_run: true,
@@ -120,6 +144,14 @@ describe("HrEntraSyncPage", () => {
     await waitFor(() => expect(screen.getByLabelText("Filter by status")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("Filter by status"), { target: { value: "failed" } });
     await waitFor(() => expect(api.getHrEntraSyncIssues).toHaveBeenCalledWith("failed"));
+  });
+
+  it("shows the auto-cancel rule and what it has cancelled", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText("HRD-77")).toBeInTheDocument());
+    expect(screen.getByText(/from osidigital\.com still in their first status/)).toBeInTheDocument();
+    expect(screen.getByText(/Cancelled: 3/)).toBeInTheDocument();
+    expect(screen.getByText("support@osidigital.com")).toBeInTheDocument();
   });
 
   it("explains disabled mappings", async () => {
