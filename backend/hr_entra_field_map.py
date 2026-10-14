@@ -197,6 +197,11 @@ REPORTER_IS_NOT_SUBJECT_TYPES = frozenset(
     t.lower() for t in ("Employee offboarding", "Status Change", "Requisition", "Employee onboarding")
 )
 REPORTER_IS_NOT_SUBJECT_PROJECTS = frozenset({"LIBTA"})
+# For these request types the employee is named by a JSM Form question on the ticket (the form is not a Jira field).
+# issue type (lowercase) -> question labels (lowercase) whose answer is the employee's work email.
+FORM_SUBJECT_EMAIL_QUESTIONS: dict[str, tuple[str, ...]] = {
+    "employee offboarding": ("employee work email",),
+}
 
 
 def reporter_is_subject_candidate(fields: dict[str, Any]) -> bool:

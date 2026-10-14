@@ -17,6 +17,15 @@ Source mapping: `ADP Jira Mapping v1.xlsx`. Code: `backend/hr_entra_sync.py`, `h
   looking up blindly). The *Personal Email Address (New Hire)* field is exempt because it exists for outside addresses
   (matched via Entra `otherMails`), and the dry-run tester's email override is exempt. An outside-only reporter (vendor or
   notification sender) is never sent to Graph and the ticket ends `not_found` immediately with no note.
+  **The reporter is not used where it is not the subject:** Employee offboarding, Status Change, Requisition,
+  Employee onboarding and every LIBTA ticket are filed by HR or a manager for someone else (on recent offboarding
+  tickets the filer was not the leaver ~58% of the time), so the reporter's profile would be the wrong person's.
+  **Offboarding** instead reads the employee from the ticket's JSM Form answer *Employee Work Email* (Forms API,
+  `GET api.atlassian.com/jira/forms/cloud/{cloudId}/issue/{key}/form`; 22 of 25 recent tickets have it; subject to the
+  internal-domain rule; `email_source = form`). A ticket in a blocked type with no identifiable employee ends `not_found`
+  quietly (no note, no write).
+  **Not yet built:** Status Change (employee is named by First/Last name and Position ID fields, no email),
+  Employee onboarding and Requisition - see open decisions below.
   A reporter is only a guess at the subject, so a reporter-only ticket with no Entra match ends `not_found` with **no
   note** (e.g. DocuSign/ADP notification senders). Which source matched is stored in `email_source`. Jira stores these as text or wiki links (`[a@x.com|mailto:a@x.com]`), so the
   first address in the value is extracted. Graph filter: `mail`, `userPrincipalName`, or `otherMails`
@@ -78,3 +87,11 @@ in `data/hr_entra_sync_rollbacks/` (git-ignored, mode 600); also record connecto
 ## Admin API (admin only)
 `GET /api/hr-entra-sync/status`, `GET /api/hr-entra-sync/issues`, `POST /api/hr-entra-sync/issues/{key}/run`
 (`dry_run=true` by default).
+
+
+## Open decisions (2026-10-14)
+- **Status Change** tickets carry HR-entered *proposed* values (Job Title 12/25, Position ID 16/25, names 22/25). With
+  "Entra always overwrites" the sync would replace a requested new title with Entra's current (old) one. Decide
+  fill-only vs overwrite for this type before enabling subject lookup by Position ID / name for it.
+- **Requisition**: the Headcount Request Form's "Email Address" (24/25) - whose is it and is an Entra lookup wanted?
+- **Employee onboarding**: new hires are usually not in Entra yet; sparse identifying data on the ticket.

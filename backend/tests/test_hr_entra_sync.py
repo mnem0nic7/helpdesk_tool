@@ -22,6 +22,7 @@ class FakeJira:
         self.updated_results = []
         self.base_url = "https://jira.test"
         self.changelogs = {}  # key -> list of changelog entries
+        self.forms = {}  # key -> list of {"id","name","questions":{qid:label},"answers":{qid:text}}
         self.session = self
 
     def get_issue(self, key):
@@ -43,11 +44,24 @@ class FakeJira:
         self.searched.append(jql)
         return self.updated_results if "updated >=" in jql else self.search_results
 
-    def get(self, url, params=None, timeout=None):  # stands in for requests.Session.get (changelog)
+    def get(self, url, params=None, timeout=None):  # stands in for requests.Session.get
+        def resp(body):
+            return type("R", (), {"raise_for_status": lambda self: None, "json": lambda self: body})()
+
+        if url.endswith("/_edge/tenant_info"):
+            return resp({"cloudId": "cloud-1"})
+        if "/jira/forms/cloud/" in url:
+            key = url.split("/issue/")[1].split("/")[0]
+            forms = self.forms.get(key, [])
+            tail = url.split(f"/issue/{key}/form")[1]
+            if tail in ("", "/"):
+                return resp([{"id": f["id"], "name": f["name"]} for f in forms])
+            form = next(f for f in forms if f["id"] == tail.strip("/"))
+            return resp({"design": {"questions": {q: {"label": label} for q, label in form["questions"].items()}},
+                         "state": {"answers": {q: {"text": t} for q, t in form["answers"].items()}}})
         key = url.split("/issue/")[1].split("/")[0]
         entries = self.changelogs.get(key, [])
-        body = {"total": len(entries), "values": entries[(params or {}).get("startAt", 0):]}
-        return type("R", (), {"raise_for_status": lambda self: None, "json": lambda self: body})()
+        return resp({"total": len(entries), "values": entries[(params or {}).get("startAt", 0):]})
 
 
 ORG_DOMAINS = [
@@ -488,3 +502,61 @@ def test_blocked_reporter_ticket_ends_quietly_with_no_note_and_no_write(tmp_path
     row = job.get_row("HRD-1")
     assert row["status"] == "not_found" and "Employee not identified" in row["error"]
     assert jira.notes == [] and jira.updates == []
+
+
+# ---- offboarding: the employee comes from the form's "Employee Work Email" ----
+
+def _offboarding(**extra):
+    return _typed("Employee offboarding", reporter=_person("hr@x.com"), **extra)
+
+
+def _resignation_form(work_email, contact_email="leaver.personal@gmail.com"):
+    return [{"id": "f1", "name": "Voluntary Resignation Request",
+             "questions": {"38": "Employee Work Email", "51": "Contact Email Address", "46": "Additional Comments"},
+             "answers": {"38": work_email, "51": contact_email, "46": "see hr@x.com"}}]
+
+
+def test_offboarding_uses_the_forms_employee_work_email_not_the_reporter(tmp_path):
+    jira = FakeJira({"HRD-1": _offboarding()})
+    jira.forms["HRD-1"] = _resignation_form("[leaver@x.com|mailto:leaver@x.com]")
+    azure = FakeAzure({"leaver@x.com": [_user(upn="leaver@x.com")], "hr@x.com": [_user(upn="hr@x.com")]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["outcome"] == "synced" and res["email_source"] == "form" and res["matched_upn"] == "leaver@x.com"
+    assert [c[1]["$filter"].split("'")[1] for c in azure.calls if c[0] == "users"] == ["leaver@x.com"]
+
+
+def test_only_the_work_email_question_is_used_not_other_email_answers(tmp_path):
+    jira = FakeJira({"HRD-1": _offboarding()})
+    jira.forms["HRD-1"] = [{"id": "f1", "name": "x", "questions": {"51": "Contact Email Address"},
+                            "answers": {"51": "leaver.personal@gmail.com"}}]
+    azure = FakeAzure({"leaver.personal@gmail.com": [_user(upn="leaver@x.com")]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["outcome"] == "no_email" and azure.calls == []
+
+
+def test_offboarding_without_a_form_is_left_alone_not_matched_to_the_reporter(tmp_path):
+    jira = FakeJira({"HRD-1": _offboarding()})
+    azure = FakeAzure({"hr@x.com": [_user(upn="hr@x.com", accountEnabled=True)]})
+    job = _job(tmp_path, jira, azure)
+    _seed(job, "HRD-1", 1)
+    job._process_pending(job.get_row("HRD-1"), NOW)
+    row = job.get_row("HRD-1")
+    assert row["status"] == "not_found" and "Employee not identified" in row["error"]
+    assert azure.calls == [] and jira.updates == [] and jira.notes == []
+
+
+def test_external_form_email_gets_a_note_after_the_window_and_is_never_looked_up(tmp_path):
+    jira = FakeJira({"HRD-1": _offboarding()})
+    jira.forms["HRD-1"] = _resignation_form("leaver@gmail.com")
+    azure = FakeAzure({"leaver@gmail.com": [_user(upn="leaver@x.com")]})
+    job = _job(tmp_path, jira, azure)
+    _seed(job, "HRD-1", 20)
+    job._process_pending(job.get_row("HRD-1"), NOW)
+    assert azure.calls == [] and "leaver@gmail.com is not on a tenant domain" in jira.notes[0][1]
+
+
+def test_forms_are_only_fetched_for_types_that_use_them(tmp_path):
+    jira = FakeJira({"HRD-1": _typed("General Inquiry", reporter=_person("rep@x.com"))})
+    jira.forms = None  # would raise if the job tried to read forms
+    azure = FakeAzure({"rep@x.com": [_user(upn="rep@x.com", accountEnabled=True)]})
+    assert _job(tmp_path, jira, azure).sync_issue("HRD-1")["email_source"] == "reporter"

@@ -214,6 +214,38 @@ class HrEntraSyncJob:
             )
             return bool(cur.rowcount)
 
+    # ------------------------------------------------------------------ JSM Forms
+
+    def _cloud_id(self) -> str:
+        if not getattr(self, "_cloud", ""):
+            jira = self._jira_client()
+            resp = jira.session.get(f"{jira.base_url}/_edge/tenant_info", timeout=30)
+            resp.raise_for_status()
+            self._cloud = str(resp.json().get("cloudId") or "")
+            if not self._cloud:
+                raise RuntimeError("Could not determine the Atlassian cloudId for the Forms API")
+        return self._cloud
+
+    def form_subject_email(self, issue_key: str, questions: tuple[str, ...]) -> str | None:
+        """The employee's email from a JSM Form answer on the ticket (e.g. offboarding 'Employee Work Email')."""
+        jira = self._jira_client()
+        base = f"https://api.atlassian.com/jira/forms/cloud/{self._cloud_id()}/issue/{issue_key}/form"
+        listing = jira.session.get(base, timeout=30)
+        listing.raise_for_status()
+        for form in listing.json() or []:
+            detail = jira.session.get(f"{base}/{form['id']}", timeout=30)
+            detail.raise_for_status()
+            body = detail.json()
+            labels = {qid: str(q.get("label") or "").strip().lower()
+                      for qid, q in ((body.get("design") or {}).get("questions") or {}).items()}
+            answers = (body.get("state") or {}).get("answers") or {}
+            for qid, answer in answers.items():
+                if labels.get(qid) in questions:
+                    email = fmap.normalize_email(answer.get("text") if isinstance(answer, dict) else answer)
+                    if email:
+                        return email
+        return None
+
     # ------------------------------------------------------------------ Entra
 
     def internal_domains(self) -> frozenset[str]:
@@ -332,8 +364,16 @@ class HrEntraSyncJob:
                 reporter = None
         ticket_emails = [e for e, _ in by_field]
         candidates = [(e, "ticket", f == fmap.COMPANY_EMAIL_FIELD_ID) for e, f in by_field]
+        if not email_override:
+            form_questions = fmap.FORM_SUBJECT_EMAIL_QUESTIONS.get(
+                str((fields.get("issuetype") or {}).get("name") or "").strip().lower()
+            )
+            form_email = self.form_subject_email(issue_key, form_questions) if form_questions else None
+            if form_email and form_email not in ticket_emails:
+                candidates.append((form_email, "form", True))
         if reporter and reporter not in ticket_emails:
             candidates.append((reporter, "reporter", True))
+        form_email_found = any(src == "form" for _, src, _ in candidates)
         skipped_external: list[str] = []
         if any(restricted for _, _, restricted in candidates):
             domains = self.internal_domains()
@@ -349,7 +389,7 @@ class HrEntraSyncJob:
             "fingerprint": fmap.fingerprint(ticket_emails),
             "skipped_external": skipped_external,
             # No email on the ticket itself: only the reporter was a candidate (or was ruled out as external).
-            "reporter_only": not ticket_emails and (bool(candidates) or bool(skipped_external)),
+            "reporter_only": not ticket_emails and not form_email_found and (bool(candidates) or bool(skipped_external)),
             "reporter_blocked": reporter_blocked,
         }
         if not candidates:
