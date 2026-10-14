@@ -116,6 +116,14 @@ def parse_date(value: Any) -> date | None:
     return None
 
 
+# Entra spellings that mean an option Jira already has (Function select). Anything else that is not a Jira
+# option is rejected by Jira per-field and skipped, so add new Jira options rather than aliases for new concepts.
+SELECT_ALIASES: dict[str, dict[str, str]] = {
+    "Function": {"information technology": "IT", "human resources": "HR"},
+}
+# ADP import header text that leaked into some accounts' attributes; never a real value.
+_HEADER_ARTIFACTS = {"jobfunction", "jobfunctiondescription"}
+
 _YES = {"y", "yes", "true", "1"}
 _NO = {"n", "no", "false", "0"}
 
@@ -139,7 +147,10 @@ def jira_value(mapping: FieldMapping, raw: Any) -> Any | None:
         if mapping.jira_name == "People Manager (Yes/No)":
             normalized = to_yes_no(raw)
             return {"value": normalized} if normalized else None
-        return {"value": str(raw).strip()}
+        text = str(raw).strip()
+        if text.lower() in _HEADER_ARTIFACTS:
+            return None
+        return {"value": SELECT_ALIASES.get(mapping.jira_name, {}).get(text.lower(), text)}
     if mapping.kind in (KIND_DATE, KIND_DATETIME):
         parsed = parse_date(raw)
         if parsed is None:

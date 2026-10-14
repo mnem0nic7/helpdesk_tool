@@ -91,3 +91,17 @@ def test_normalize_email_extracts_from_jira_wiki_links_and_plain_text():
 def test_normalize_email_keeps_apostrophes_in_local_part():
     assert m.normalize_email("o'brien@x.com") == "o'brien@x.com"
     assert m.normalize_email("'quoted@x.com'") == "quoted@x.com"
+
+
+def test_function_aliases_map_entra_spellings_to_existing_jira_options():
+    fn = next(x for x in m.FIELD_MAP if x.jira_name == "Function")
+    assert m.jira_value(fn, "Information Technology") == {"value": "IT"}
+    assert m.jira_value(fn, " human resources ") == {"value": "HR"}
+    assert m.jira_value(fn, "Operations") == {"value": "Operations"}  # exact option passes through
+    assert m.jira_value(fn, "Exec/Admin") == {"value": "Exec/Admin"}  # no Jira option: left for Jira to reject per-field
+
+
+def test_adp_header_artifacts_are_treated_as_empty():
+    fn = next(x for x in m.FIELD_MAP if x.jira_name == "Function")
+    assert m.jira_value(fn, "JobFunction") is None
+    assert m.jira_value(fn, "JobFunctionDescription") is None

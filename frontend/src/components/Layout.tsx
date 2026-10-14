@@ -95,6 +95,7 @@ const hrappNavGroups: NavGroup[] = [
     items: [
       { to: "/", label: "Overview", icon: "hr", end: true },
       { to: "/askhr-bot", label: "AskHR / Benefits Bot", icon: "hr" },
+      { to: "/entra-sync", label: "Entra → Jira Sync", icon: "hr" },
     ],
   },
 ];

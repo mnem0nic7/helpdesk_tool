@@ -48,6 +48,7 @@ const ADManagementPage = lazy(() => import("./pages/ADManagementPage"));
 const PasswordExpiryNotifierPage = lazy(() => import("./pages/PasswordExpiryNotifierPage"));
 const HrAppPage = lazy(() => import("./pages/HrAppPage"));
 const AskHrBotPage = lazy(() => import("./pages/AskHrBotPage"));
+const HrEntraSyncPage = lazy(() => import("./pages/HrEntraSyncPage"));
 const RetentionTeamsPage = lazy(() => import("./pages/RetentionTeamsPage"));
 const RetentionHistoryPage = lazy(() => import("./pages/RetentionHistoryPage"));
 const RetentionImportExportPage = lazy(() => import("./pages/RetentionImportExportPage"));
@@ -107,6 +108,7 @@ export default function App({ diagnostics }: { diagnostics?: ReactNode } = {}) {
               <>
                 <Route index element={<HrAppPage />} />
                 <Route path="askhr-bot" element={<AskHrBotPage />} />
+                <Route path="entra-sync" element={<HrEntraSyncPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </>
             ) : isRetentionSite ? (

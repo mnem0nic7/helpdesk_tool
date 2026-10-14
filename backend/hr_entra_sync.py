@@ -139,6 +139,27 @@ class HrEntraSyncJob:
         with self._conn() as conn:
             return [dict(r) for r in conn.execute(sql, args).fetchall()]
 
+    def summary(self) -> dict[str, Any]:
+        """Ticket counts by status and the most recent activity timestamp, for the status page."""
+        with self._conn() as conn:
+            counts = {
+                r["status"]: int(r["cnt"])
+                for r in conn.execute(
+                    "SELECT status, COUNT(*) AS cnt FROM hr_entra_sync_issues GROUP BY status"
+                ).fetchall()
+            }
+            ts = conn.execute(
+                "SELECT MAX(last_attempt_at) AS a, MAX(completed_at) AS c, MAX(first_seen_at) AS f "
+                "FROM hr_entra_sync_issues"
+            ).fetchone()
+        last_activity = max((ts["a"] or "", ts["c"] or "", ts["f"] or "")) or None
+        return {
+            "counts": {k: counts.get(k, 0) for k in (
+                STATUS_PENDING, STATUS_SYNCED, STATUS_NOT_FOUND, STATUS_AMBIGUOUS, STATUS_FAILED)},
+            "total": sum(counts.values()),
+            "last_activity_at": last_activity,
+        }
+
     def _record_attempt(self, issue_key: str, now: datetime, error: str = "") -> None:
         ph = self._ph()
         with self._conn() as conn:
@@ -229,13 +250,20 @@ class HrEntraSyncJob:
             jira.update_issue_fields(issue_key, remaining)
         return remaining, skipped
 
-    def sync_issue(self, issue_key: str, *, dry_run: bool = False) -> dict[str, Any]:
-        """Look the employee up in Entra and write mapped fields. Does not touch the store."""
+    def sync_issue(
+        self, issue_key: str, *, dry_run: bool = False, email_override: str | None = None
+    ) -> dict[str, Any]:
+        """Look the employee up in Entra and write mapped fields. Does not touch the store.
+
+        ``email_override`` replaces the ticket's own email fields; it exists for testing a ticket
+        that carries no email, and is rejected for anything but a dry run through the API.
+        """
         issue = self._jira_client().get_issue(issue_key)
         fields = issue.get("fields") or {}
         emails: list[str] = []
-        for field_id in fmap.LOOKUP_EMAIL_FIELD_IDS:
-            email = fmap.normalize_email(fields.get(field_id))
+        sources = [email_override] if email_override else [fields.get(f) for f in fmap.LOOKUP_EMAIL_FIELD_IDS]
+        for raw in sources:
+            email = fmap.normalize_email(raw)
             if email and email not in emails:
                 emails.append(email)
         if not emails:

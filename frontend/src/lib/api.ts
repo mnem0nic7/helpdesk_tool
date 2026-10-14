@@ -5408,6 +5408,29 @@ export const api = {
     }
     return res.json();
   },
+
+  getHrEntraSyncStatus(): Promise<HrEntraSyncStatus> {
+    return fetchJSON<HrEntraSyncStatus>("/api/hr-entra-sync/status");
+  },
+
+  getHrEntraSyncIssues(status?: string, limit = 50): Promise<{ issues: HrEntraSyncIssue[] }> {
+    const statusParam = status ? `&status=${encodeURIComponent(status)}` : "";
+    return fetchJSON(`/api/hr-entra-sync/issues?limit=${limit}${statusParam}`);
+  },
+
+  async dryRunHrEntraSync(issueKey: string, email?: string): Promise<HrEntraSyncDryRun> {
+    const emailParam = email ? `&email=${encodeURIComponent(email)}` : "";
+    const url = `/api/hr-entra-sync/issues/${encodeURIComponent(issueKey)}/run?dry_run=true${emailParam}`;
+    const res = await fetch(url, { method: "POST" });
+    if (res.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new Error("Not authenticated");
+    }
+    if (!res.ok) {
+      throw new Error(await buildErrorMessage("POST", url, res));
+    }
+    return res.json();
+  },
 };
 
 export default api;
@@ -5798,6 +5821,53 @@ export interface AskHrBotMessage {
   jira_issue_key: string | null;
   error: string | null;
   processed_at: string;
+}
+
+export interface HrEntraSyncMapping {
+  jira_name: string;
+  jira_field_id: string | null;
+  entra_source: string | null;
+  kind: string;
+  active: boolean;
+  note: string;
+}
+
+export interface HrEntraSyncStatus {
+  enabled: boolean;
+  projects: string[];
+  retry_minutes: number;
+  poll_seconds: number;
+  lookback_minutes: number;
+  counts: { pending: number; synced: number; not_found: number; ambiguous: number; failed: number };
+  total: number;
+  last_activity_at: string | null;
+  mappings: HrEntraSyncMapping[];
+}
+
+export interface HrEntraSyncIssue {
+  issue_key: string;
+  project_key: string;
+  status: "pending" | "synced" | "not_found" | "ambiguous" | "failed";
+  first_seen_at: string;
+  last_attempt_at: string;
+  attempts: number;
+  completed_at: string;
+  matched_upn: string;
+  matched_via: string;
+  fields_written: string;
+  fields_skipped: string;
+  error: string;
+}
+
+export interface HrEntraSyncDryRun {
+  outcome: "synced" | "no_match" | "no_email" | "ambiguous";
+  dry_run?: boolean;
+  emails: string[];
+  matched_via?: string;
+  matched_upn?: string;
+  fields_written?: string[];
+  entra_empty?: string[];
+  candidates?: string[];
 }
 
 export interface AskHrBotStatus {

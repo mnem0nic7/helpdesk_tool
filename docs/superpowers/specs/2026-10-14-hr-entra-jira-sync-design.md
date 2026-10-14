@@ -40,6 +40,18 @@ had no Edit Issues there. It was added to the **Developers** project role in LIB
 project, so OASIS/PAYR are unaffected) rather than editing the shared scheme. Do not add a user grant to the Default
 scheme for this account: that would extend its edit rights to PAYR/OASIS.
 
+## Status page
+`hrapp.movedocs.com/entra-sync` (`frontend/src/pages/HrEntraSyncPage.tsx`, nav entry "Entra → Jira Sync"): enabled/running/failed
+banner, counts by outcome, config summary, recent tickets (filterable), the field-mapping table with why each disabled row
+is off, and a dry-run tester. The tester accepts an optional email that replaces the ticket's own (dry run only, enforced
+server-side) so any live ticket can be tested.
+
+## Data-quality notes (Entra, 2026-10-14)
+- Function: Entra says "Information Technology"/"Human Resources" -> aliased to Jira's IT/HR. "Exec/Admin" (20 users) has no
+  Jira option; Jira rejects it per field and the field is skipped. Add the option in Jira or decide an alias.
+- 3 accounts carry ADP header text (`JobFunction`, `JobFunctionDescription`) as their value; treated as empty.
+- 1054 of 1686 enabled accounts have no jobFunction at all, so many fields will legitimately be left unwritten.
+
 ## Admin API (admin only)
 `GET /api/hr-entra-sync/status`, `GET /api/hr-entra-sync/issues`, `POST /api/hr-entra-sync/issues/{key}/run`
 (`dry_run=true` by default).
