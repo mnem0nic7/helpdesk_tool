@@ -34,9 +34,11 @@ Name, Employee location, People Manager, Position ID, Position Status, Manager N
 (12275, 12533), and Company email address to LIBTA's create screen (12274). Both modes are idempotent.
 Still manual: option lists for Function and Worker Category (the sheet gives no target values).
 
-## Known blocker: LIBTA writes
-The Jira service account ("IT AI atlassian") has no **Edit Issues** permission in LIBTA (it does in HRD), so a
-LIBTA ticket gets a Jira 403 and is marked `failed`. Grant it Edit Issues in the LIBTA permission scheme.
+## LIBTA write access (resolved 2026-10-14)
+LIBTA uses the shared *Default Permission Scheme* (also OASIS and PAYR), and the Jira service account ("IT AI atlassian")
+had no Edit Issues there. It was added to the **Developers** project role in LIBTA only (role membership is per
+project, so OASIS/PAYR are unaffected) rather than editing the shared scheme. Do not add a user grant to the Default
+scheme for this account: that would extend its edit rights to PAYR/OASIS.
 
 ## Admin API (admin only)
 `GET /api/hr-entra-sync/status`, `GET /api/hr-entra-sync/issues`, `POST /api/hr-entra-sync/issues/{key}/run`
