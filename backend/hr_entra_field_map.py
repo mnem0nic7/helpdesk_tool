@@ -83,6 +83,22 @@ LOOKUP_EMAIL_FIELD_IDS: tuple[str, ...] = (
 )
 
 
+# Display order of these fields on the HRD/LIBTA screens: the "Order #" column of ADP Jira Mapping v1.xlsx.
+DISPLAY_ORDER: tuple[str, ...] = (
+    "Preferred Name", "Job Title", "Home Department", "Employee location", "FLSA Status", "Seniority Date",
+    "People Manager (Yes/No)", "Work Arrangement", "Manager Name", "Manager Email", "Leadership Level 2",
+    "Leadership Level 3", "Job Class", "Business Unit", "Function", "Home State", "Worker Category", "Hire Date",
+    "Position ID", "Legal First Name", "Legal Middle Name", "Legal Last Name", "Position Status",
+    "Company email address", "Associate ID",
+)
+
+
+def display_order_field_ids() -> list[str]:
+    """Jira field ids in DISPLAY_ORDER."""
+    ids = {m.jira_name: m.jira_field_id for m in FIELD_MAP}
+    return [ids[name] for name in DISPLAY_ORDER if ids.get(name)]
+
+
 def active_mappings() -> list[FieldMapping]:
     """Mappings that can actually be written right now."""
     return [m for m in FIELD_MAP if m.enabled and m.jira_field_id]

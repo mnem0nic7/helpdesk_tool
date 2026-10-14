@@ -101,3 +101,58 @@ def test_plan_screens_is_empty_when_everything_present_and_apply_posts_each_add(
     a.apply_screens(client, adds)
     assert len(client.session.posted) == len(adds)
     assert client.session.posted[0][1] == {"fieldId": adds[0].field_id}
+
+
+# ---- field ordering ----
+
+def test_display_order_is_every_mapped_field_exactly_once():
+    import hr_entra_field_map as fm
+
+    assert sorted(fm.DISPLAY_ORDER) == sorted(m.jira_name for m in fm.FIELD_MAP)
+    ids = fm.display_order_field_ids()
+    assert len(ids) == len(set(ids)) == len(fm.FIELD_MAP)
+    assert fm.DISPLAY_ORDER[0] == "Preferred Name" and fm.DISPLAY_ORDER[-1] == "Associate ID"
+
+
+def _apply_to(current, moves):
+    work = list(current)
+    for mv in moves:
+        work.remove(mv.field_id)
+        work.insert(0 if mv.after is None else work.index(mv.after) + 1, mv.field_id)
+    return work
+
+
+def test_plan_moves_makes_a_contiguous_ordered_block_in_place_keeping_other_fields_in_order():
+    current = ["summary", "c", "x1", "a", "x2", "b", "x3", "d", "description"]
+    moves = a.plan_moves(7, 70, current, ["a", "b", "c", "d"])
+    result = _apply_to(current, moves)
+    # the block starts where the earliest of its fields (c, at index 1) was
+    assert result[1:5] == ["a", "b", "c", "d"]
+    block = [f for f in result if f in "abcd"]
+    assert block == ["a", "b", "c", "d"]
+    idx = [result.index(f) for f in block]
+    assert idx == list(range(idx[0], idx[0] + 4))
+    assert [f for f in result if f.startswith("x")] == ["x1", "x2", "x3"]
+    assert result[0] == "summary" and result[-1] == "description"
+
+
+def test_plan_moves_puts_the_block_first_when_a_field_is_already_first_and_is_idempotent():
+    current = ["b", "x", "a"]
+    moves = a.plan_moves(1, 1, current, ["a", "b"])
+    assert moves[0].after is None or moves[0].after == "b"
+    result = _apply_to(current, moves)
+    assert result[:2] == ["a", "b"]
+    assert a.plan_moves(1, 1, result, ["a", "b"]) == []
+
+
+def test_plan_moves_ignores_fields_not_on_the_tab():
+    assert a.plan_moves(1, 1, ["x", "y"], ["a", "b"]) == []
+    moves = a.plan_moves(1, 1, ["x", "b", "y"], ["a", "b"])
+    assert moves == []  # only b is present: already a contiguous, ordered block of one
+
+
+def test_plan_restore_reproduces_the_saved_order():
+    saved = {"5": {"9": {"name": "Default", "fields": ["a", "b", "c", "d"]}}}
+    client = _Client({5: {9: ["d", "b", "a", "c"]}})
+    moves = a.plan_restore(client, saved)
+    assert _apply_to(["d", "b", "a", "c"], moves) == ["a", "b", "c", "d"]

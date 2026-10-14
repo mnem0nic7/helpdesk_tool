@@ -69,6 +69,16 @@ had no Edit Issues there. It was added to the **Developers** project role in LIB
 project, so OASIS/PAYR are unaffected) rather than editing the shared scheme. Do not add a user grant to the Default
 scheme for this account: that would extend its edit rights to PAYR/OASIS.
 
+## Field order on screens
+The sheet's **Order #** (column A of `ADP Jira Mapping v1.xlsx`, mirrored in `hr_entra_field_map.DISPLAY_ORDER`) is the order
+the 25 fields appear on the HRD screens (12223-12229) and LIBTA's (12275, 12533; the create screen 12274 holds the 8 it
+carries). `python hr_jira_field_admin.py --order [--apply]` makes them one contiguous block in that order, placed where the
+earliest of them already sat, leaving every other field in its existing relative order; it only moves fields within their
+tab and re-running is a no-op. Applied 2026-10-14. The pre-change layouts are saved in
+`data/hr_entra_sync_rollbacks/screen-layout-before-20261014.json`; `--restore-order <file> [--apply]` puts them back.
+This orders the create/edit/transition screens; the issue view's Details panel is governed by Project settings -> Issue
+layout, which Jira has no public API for.
+
 ## Status page
 `hrapp.movedocs.com/entra-sync` (`frontend/src/pages/HrEntraSyncPage.tsx`, nav entry "Entra → Jira Sync"): enabled/running/failed
 banner, counts by outcome, config summary, recent tickets (filterable), the field-mapping table with why each disabled row

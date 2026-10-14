@@ -6,6 +6,9 @@ Run from ``backend/``::
     python hr_jira_field_admin.py --apply    # perform renames/creates, then print field ids
     python hr_jira_field_admin.py --screens          # plan adding mapped fields to HRD/LIBTA screens
     python hr_jira_field_admin.py --screens --apply  # add the missing fields (never removes any)
+    python hr_jira_field_admin.py --order            # plan putting the mapped fields in sheet order on the screens
+    python hr_jira_field_admin.py --order --apply    # do it (only moves fields within their tab)
+    python hr_jira_field_admin.py --restore-order data/hr_entra_sync_rollbacks/screen-layout-before-<date>.json --apply
 
 Driven by ``ADP Jira Mapping v1.xlsx``. Re-running is safe: a rename is skipped when the field
 already carries the target name, and a create is skipped when a custom field with that exact name
@@ -110,6 +113,94 @@ def apply_screens(client: Any, adds: list[ScreenAdd]) -> None:
 
 
 @dataclass
+class FieldMove:
+    screen_id: int
+    tab_id: int
+    field_id: str
+    after: str | None  # field id to sit directly after; None = first on the tab
+
+
+def _screen_layouts(client: Any, screen_ids: list[int]) -> dict[int, dict[int, list[str]]]:
+    """{screen id: {tab id: [field ids in display order]}}"""
+    out: dict[int, dict[int, list[str]]] = {}
+    for sid in screen_ids:
+        resp = client.session.get(f"{client.base_url}/rest/api/3/screens/{sid}/tabs", timeout=30)
+        client._raise_for_status(resp)
+        tabs: dict[int, list[str]] = {}
+        for tab in resp.json():
+            fresp = client.session.get(f"{client.base_url}/rest/api/3/screens/{sid}/tabs/{tab['id']}/fields", timeout=30)
+            client._raise_for_status(fresp)
+            tabs[int(tab["id"])] = [f["id"] for f in fresp.json()]
+        out[sid] = tabs
+    return out
+
+
+def plan_moves(sid: int, tab_id: int, current: list[str], desired: list[str]) -> list[FieldMove]:
+    """Moves that make the desired fields (those present) one contiguous block in order, in place.
+
+    The block sits where the earliest of them already is, so the rest of the screen keeps its relative order.
+    Fields on other tabs are left alone. Returns [] when the block is already correct.
+    """
+    present = [f for f in desired if f in current]
+    if not present:
+        return []
+    work = list(current)
+    first = min(work.index(f) for f in present)
+    anchor = work[first - 1] if first > 0 else None
+    moves: list[FieldMove] = []
+    for k, fid in enumerate(present):
+        after = anchor if k == 0 else present[k - 1]
+        idx = work.index(fid)
+        target = 0 if after is None else work.index(after) + 1
+        if idx == target:
+            continue
+        moves.append(FieldMove(sid, tab_id, fid, after))
+        work.pop(idx)
+        work.insert(0 if after is None else work.index(after) + 1, fid)
+    return moves
+
+
+def plan_order(client: Any, field_ids: list[str]) -> list[FieldMove]:
+    targets = [*HRD_SCREENS, *LIBTA_SCREENS, LIBTA_CREATE_SCREEN]
+    moves: list[FieldMove] = []
+    for sid, tabs in _screen_layouts(client, targets).items():
+        for tab_id, current in tabs.items():
+            moves.extend(plan_moves(sid, tab_id, current, field_ids))
+    return moves
+
+
+def apply_moves(client: Any, moves: list[FieldMove]) -> None:
+    for mv in moves:
+        body: dict[str, str] = {"position": "First"} if mv.after is None else {"after": mv.after}
+        resp = client.session.post(
+            f"{client.base_url}/rest/api/3/screens/{mv.screen_id}/tabs/{mv.tab_id}/fields/{mv.field_id}/move",
+            json=body,
+            timeout=30,
+        )
+        client._raise_for_status(resp)
+
+
+def plan_restore(client: Any, saved: dict[str, dict[str, Any]]) -> list[FieldMove]:
+    """Moves that put each saved tab's fields back in their saved order (fields not in the save are untouched)."""
+    moves: list[FieldMove] = []
+    layouts = _screen_layouts(client, [int(s) for s in saved])
+    for sid_text, tabs in saved.items():
+        for tab_text, tab in tabs.items():
+            current = layouts[int(sid_text)].get(int(tab_text), [])
+            desired = [f for f in tab["fields"] if f in current]
+            work = list(current)
+            for k, fid in enumerate(desired):
+                after = None if k == 0 else desired[k - 1]
+                idx, target = work.index(fid), (0 if after is None else work.index(after) + 1)
+                if idx == target:
+                    continue
+                moves.append(FieldMove(int(sid_text), int(tab_text), fid, after))
+                work.pop(idx)
+                work.insert(0 if after is None else work.index(after) + 1, fid)
+    return moves
+
+
+@dataclass
 class Step:
     action: str  # rename | create | skip
     detail: str
@@ -184,11 +275,35 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--apply", action="store_true", help="perform the changes (default: plan only)")
     parser.add_argument("--screens", action="store_true", help="plan/add mapped fields on the HRD/LIBTA screens")
+    parser.add_argument("--order", action="store_true", help="plan/apply the sheet's field order on the screens")
+    parser.add_argument("--restore-order", metavar="FILE", help="restore screen field order from a saved layout JSON")
     args = parser.parse_args(argv)
 
     from jira_client import JiraClient
 
     client = JiraClient()
+    if args.order or args.restore_order:
+        if args.restore_order:
+            import json
+
+            with open(args.restore_order) as fh:
+                moves = plan_restore(client, json.load(fh))
+        else:
+            import hr_entra_field_map as fmap
+
+            moves = plan_order(client, fmap.display_order_field_ids())
+        by_screen: dict[int, int] = {}
+        for mv in moves:
+            by_screen[mv.screen_id] = by_screen.get(mv.screen_id, 0) + 1
+        for sid, n in by_screen.items():
+            print(f"[MOVE] screen {sid}: {n} field move(s)")
+        print(f"\n{len(moves)} move(s) on {len(by_screen)} screen(s).")
+        if args.apply:
+            apply_moves(client, moves)
+            print("Applied.")
+        else:
+            print("Plan only. Re-run with --apply.")
+        return 0
     if args.screens:
         import hr_entra_field_map as fmap
 
