@@ -191,6 +191,19 @@ NON_PERSON_RE = re.compile(
     re.IGNORECASE,
 )
 _PERSON_REPORTER_TYPES = {"customer", "atlassian"}
+# Request types where the reporter is HR or a manager filing on someone else's behalf, so the reporter's Entra profile
+# is the WRONG person. The reporter fallback never applies to these (or to any LIBTA ticket: candidates are not reporters).
+REPORTER_IS_NOT_SUBJECT_TYPES = frozenset(
+    t.lower() for t in ("Employee offboarding", "Status Change", "Requisition", "Employee onboarding")
+)
+REPORTER_IS_NOT_SUBJECT_PROJECTS = frozenset({"LIBTA"})
+
+
+def reporter_is_subject_candidate(fields: dict[str, Any]) -> bool:
+    """False for request types/projects where the reporter files on behalf of someone else."""
+    issue_type = str((fields.get("issuetype") or {}).get("name") or "").strip().lower()
+    project = str((fields.get("project") or {}).get("key") or "").upper()
+    return issue_type not in REPORTER_IS_NOT_SUBJECT_TYPES and project not in REPORTER_IS_NOT_SUBJECT_PROJECTS
 
 
 def ticket_emails(fields: dict[str, Any]) -> list[str]:

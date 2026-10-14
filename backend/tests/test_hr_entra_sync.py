@@ -442,3 +442,49 @@ def test_email_override_is_exempt_for_dry_run_testing(tmp_path):
     azure = FakeAzure({"tester@gmail.com": [_user(upn="t@x.com")]})
     res = _job(tmp_path, jira, azure).sync_issue("HRD-1", dry_run=True, email_override="tester@gmail.com")
     assert res["outcome"] == "synced" and azure.org_calls == 0
+
+
+# ---- reporter is not the subject (offboarding, status change, ...) ----
+
+def _typed(issue_type, project="HRD", **fields):
+    return _issue(issuetype={"name": issue_type}, project={"key": project}, **fields)
+
+
+@pytest.mark.parametrize("issue_type", ["Employee offboarding", "Status Change", "Requisition", "Employee onboarding"])
+def test_reporter_fallback_never_applies_to_types_filed_on_someones_behalf(tmp_path, issue_type):
+    jira = FakeJira({"HRD-1": _typed(issue_type, reporter=_person("rep@x.com"))})
+    azure = FakeAzure({"rep@x.com": [_user(upn="rep@x.com", accountEnabled=True)]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["outcome"] == "no_email" and res["reporter_blocked"] is True
+    assert azure.calls == [] and jira.updates == []
+
+
+def test_libta_reporter_is_never_used(tmp_path):
+    jira = FakeJira({"LIBTA-1": _typed("New Hire Candidate", project="LIBTA", reporter=_person("rep@x.com"))})
+    azure = FakeAzure({"rep@x.com": [_user(upn="rep@x.com", accountEnabled=True)]})
+    assert _job(tmp_path, jira, azure).sync_issue("LIBTA-1")["reporter_blocked"] is True
+    assert azure.calls == []
+
+
+def test_reporter_still_used_for_self_service_types(tmp_path):
+    jira = FakeJira({"HRD-1": _typed("General Inquiry", reporter=_person("rep@x.com"))})
+    azure = FakeAzure({"rep@x.com": [_user(upn="rep@x.com", accountEnabled=True)]})
+    assert _job(tmp_path, jira, azure).sync_issue("HRD-1")["email_source"] == "reporter"
+
+
+def test_ticket_email_still_works_on_offboarding_tickets(tmp_path):
+    jira = FakeJira({"HRD-1": _typed("Employee offboarding", customfield_12883="leaver@gmail.com",
+                                     reporter=_person("hr@x.com"))})
+    azure = FakeAzure({"leaver@gmail.com": [_user(upn="leaver@x.com", mail=None)]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["outcome"] == "synced" and res["email_source"] == "ticket" and res["matched_upn"] == "leaver@x.com"
+
+
+def test_blocked_reporter_ticket_ends_quietly_with_no_note_and_no_write(tmp_path):
+    jira = FakeJira({"HRD-1": _typed("Status Change", reporter=_person("hr@x.com"))})
+    job = _job(tmp_path, jira, FakeAzure())
+    _seed(job, "HRD-1", 1)
+    job._process_pending(job.get_row("HRD-1"), NOW)
+    row = job.get_row("HRD-1")
+    assert row["status"] == "not_found" and "Employee not identified" in row["error"]
+    assert jira.notes == [] and jira.updates == []

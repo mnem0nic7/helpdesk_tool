@@ -320,12 +320,16 @@ class HrEntraSyncJob:
         # email override is exempt too.
         by_field: list[tuple[str, str]] = []
         reporter = None
+        reporter_blocked = False
         if email_override:
             if fmap.normalize_email(email_override):
                 by_field = [(fmap.normalize_email(email_override), "")]  # type: ignore[list-item]
         else:
             by_field = fmap.ticket_emails_by_field(fields)
             reporter = fmap.reporter_email(fields)
+            reporter_blocked = bool(reporter) and not fmap.reporter_is_subject_candidate(fields)
+            if reporter_blocked:
+                reporter = None
         ticket_emails = [e for e, _ in by_field]
         candidates = [(e, "ticket", f == fmap.COMPANY_EMAIL_FIELD_ID) for e, f in by_field]
         if reporter and reporter not in ticket_emails:
@@ -346,6 +350,7 @@ class HrEntraSyncJob:
             "skipped_external": skipped_external,
             # No email on the ticket itself: only the reporter was a candidate (or was ruled out as external).
             "reporter_only": not ticket_emails and (bool(candidates) or bool(skipped_external)),
+            "reporter_blocked": reporter_blocked,
         }
         if not candidates:
             return {"outcome": "no_email", **base}
@@ -401,7 +406,15 @@ class HrEntraSyncJob:
             return
 
         outcome = result["outcome"]
-        if outcome == "no_email" and result.get("reporter_only") and result["skipped_external"]:
+        if outcome == "no_email" and result.get("reporter_blocked") and not result["emails"] and not result["skipped_external"]:
+            # The reporter files this request type on someone else's behalf, so their profile is the wrong person's,
+            # and nothing on the ticket identifies the employee yet. Do not guess and do not nag the ticket.
+            self._finish(
+                key, STATUS_NOT_FOUND, now,
+                lookup_fingerprint=result["fingerprint"],
+                error="Employee not identified: the reporter files this request type for someone else.",
+            )
+        elif outcome == "no_email" and result.get("reporter_only") and result["skipped_external"]:
             # Only an outside reporter (vendor/notification sender): nothing to look up, nothing to wait for.
             self._finish(
                 key, STATUS_NOT_FOUND, now,
