@@ -56,8 +56,8 @@ is off, and a dry-run tester. The tester accepts an optional email that replaces
 server-side) so any live ticket can be tested.
 
 ## Data-quality notes (Entra, 2026-10-14)
-- Function: Entra says "Information Technology"/"Human Resources" -> aliased to Jira's IT/HR. "Exec/Admin" (20 users) has no
-  Jira option; Jira rejects it per field and the field is skipped. Add the option in Jira or decide an alias.
+- Function: Entra says "Information Technology"/"Human Resources" -> aliased to Jira's IT/HR. "Exec/Admin" (20 users) had no
+  Jira option, so Jira rejected it per field; the option was added to Function (context 12027) on 2026-10-14.
 - 3 accounts carry ADP header text (`JobFunction`, `JobFunctionDescription`) as their value; treated as empty.
 - 1054 of 1686 enabled accounts have no jobFunction at all, so many fields will legitimately be left unwritten.
 
