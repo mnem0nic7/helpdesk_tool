@@ -179,6 +179,11 @@ These are durable rules and design contracts — not time-bound release notes. G
 - The report builder preview includes an `Export Current View` action in `frontend/src/pages/ReportsPage.tsx`; it reuses the existing report export API and should export the current filters, selected columns, sort, and grouping.
 - Master workbook dashboard AI summaries are written per KPI row in `backend/report_workbook_builder.py`; keep each metric's paragraph and bullets in one wrapped cell so summaries do not spill into adjacent metric rows.
 
+### HR Entra -> Jira sync
+
+- `backend/hr_entra_sync.py` copies Entra attributes into newly created HRD/LIBTA tickets (design: `docs/superpowers/specs/2026-10-14-hr-entra-jira-sync-design.md`). It ships disabled (`HR_ENTRA_SYNC_ENABLED=false`). Entra always overwrites Jira values. No Entra match is retried for 15 minutes, then one **internal** note (`sd.public.comment`, via `JiraClient.add_internal_comment`) is posted — never fall back to a public comment, since HRD is a JSM project and the submitter would see it. Lookup emails live in Jira text fields as wiki links (`[a@x.com|mailto:a@x.com]`), so `normalize_email` extracts rather than validates.
+- Only `FIELD_MAP` rows that are enabled **and** have a `jira_field_id` are written. Rows the mapping sheet leaves undefined (or that look wrong: FLSA, Legal Middle Name) stay disabled with a `note` — do not enable them without a confirmed Entra source. The Jira renames/creates go through the dry-run-first `backend/hr_jira_field_admin.py`.
+
 ### Shared Tools surface
 
 - The shared Tools surface on `it-app.movedocs.com` and `azure.movedocs.com` is available to all signed-in users, not just a small operator allowlist. It includes OneDrive copy, login audit, read-only mailbox Inbox rule lookup, and Exchange mailbox delegate lookups for Send on behalf, Send As, and Full Access that use the shared app registration. Keep that access model and feature set aligned across `backend/auth.py`, `backend/routes_tools.py`, `frontend/src/components/Layout.tsx`, and `frontend/src/pages/ToolsPage.tsx`. `TOOLS_ALLOWED_IDENTIFIERS` is now legacy-only config and should not be treated as an active runtime gate.

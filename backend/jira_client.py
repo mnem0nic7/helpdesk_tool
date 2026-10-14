@@ -867,6 +867,21 @@ class JiraClient:
         self._raise_for_status(resp)
         return resp.json()
 
+    def add_internal_comment(self, key: str, body_text: str) -> dict[str, Any]:
+        """POST an ADF comment flagged internal (``sd.public.comment``) so JSM customers cannot see it.
+
+        On non-JSM projects the property is inert and this is an ordinary comment.
+        """
+        validate_jira_key(key)
+        url = f"{self.base_url}/rest/api/3/issue/{key}/comment"
+        payload = {
+            "body": self._plain_text_to_adf(body_text),
+            "properties": [{"key": "sd.public.comment", "value": {"internal": True}}],
+        }
+        resp = self.session.post(url, json=payload, timeout=self._TIMEOUT)
+        self._raise_for_status(resp)
+        return resp.json()
+
     def add_request_comment(self, key: str, body_text: str, public: bool = False) -> dict[str, Any]:
         """POST a JSM request comment as an internal note or customer reply."""
         validate_jira_key(key)

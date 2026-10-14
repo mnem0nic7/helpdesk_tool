@@ -52,6 +52,7 @@ from routes_deactivation_schedule import router as deactivation_schedule_router
 from routes_password_expiry_notifier import router as password_expiry_notifier_router
 from routes_quarantine_release import router as quarantine_release_router
 from routes_askhr_bot import router as askhr_bot_router
+from routes_hr_entra_sync import router as hr_entra_sync_router
 from deactivation_schedule import deactivation_schedule as _deactivation_schedule_store
 from password_expiry_notifier import password_expiry_notifier as _password_expiry_notifier
 from e5_license_report import e5_license_report_job as _e5_license_report_job
@@ -59,6 +60,7 @@ from quarantine_release_job import quarantine_release_job as _quarantine_release
 from retention_cleanup_job import retention_cleanup_job as _retention_cleanup_job
 from retention_directory_cache import retention_directory_cache as _retention_directory_cache
 from askhr_bot_job import askhr_bot_job as _askhr_bot_job
+from hr_entra_sync import hr_entra_sync_job as _hr_entra_sync_job
 from ai_work_scheduler import AIWorkScheduler
 from azure_alert_engine import start_azure_alert_loop, stop_azure_alert_loop
 from azure_cost_exports import azure_cost_export_service
@@ -179,6 +181,11 @@ async def _start_deferred_services(app: FastAPI) -> None:
     except Exception:
         logger.exception("Failed to start AskHR bot job")
 
+    try:
+        _hr_entra_sync_job.start_background_runner()
+    except Exception:
+        logger.exception("Failed to start HR Entra sync job")
+
     for label, starter in starters:
         try:
             await starter()
@@ -229,6 +236,7 @@ async def _stop_leader_services(app: FastAPI) -> None:
     _retention_cleanup_job.stop_background_runner()
     _retention_directory_cache.stop_background_runner()
     _askhr_bot_job.stop_background_runner()
+    _hr_entra_sync_job.stop_background_runner()
     await _defender_agent.stop_worker()
     await _security_digest_service.stop_worker()
     await _security_lane_summary_service.stop_worker()
@@ -502,6 +510,7 @@ app.include_router(deactivation_schedule_router)
 app.include_router(password_expiry_notifier_router)
 app.include_router(quarantine_release_router)
 app.include_router(askhr_bot_router)
+app.include_router(hr_entra_sync_router)
 
 # ---------------------------------------------------------------------------
 # Routes

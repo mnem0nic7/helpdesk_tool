@@ -350,6 +350,13 @@ E5_REPORT_RECIPIENTS: list[str] = [
 ]
 E5_REPORT_WEEKDAY: int = int(os.getenv("E5_REPORT_WEEKDAY", "6"))  # Monday=0 ... Sunday=6
 E5_REPORT_HOUR: int = int(os.getenv("E5_REPORT_HOUR", "13"))  # UTC
+HR_ENTRA_SYNC_ENABLED: bool = os.getenv("HR_ENTRA_SYNC_ENABLED", "false").lower() == "true"
+HR_ENTRA_SYNC_PROJECTS: list[str] = [
+    p.strip().upper() for p in os.getenv("HR_ENTRA_SYNC_PROJECTS", "HRD,LIBTA").split(",") if p.strip()
+]
+HR_ENTRA_SYNC_POLL_SECONDS: int = int(os.getenv("HR_ENTRA_SYNC_POLL_SECONDS", "60"))
+HR_ENTRA_SYNC_RETRY_MINUTES: int = int(os.getenv("HR_ENTRA_SYNC_RETRY_MINUTES", "15"))
+HR_ENTRA_SYNC_LOOKBACK_MINUTES: int = int(os.getenv("HR_ENTRA_SYNC_LOOKBACK_MINUTES", "120"))
 DEFENDER_AGENT_MAX_JOBS_PER_CYCLE: int = int(os.getenv("DEFENDER_AGENT_MAX_JOBS_PER_CYCLE", "10"))
 SECURITY_LANE_SUMMARY_INTERVAL_MINUTES: int = int(os.getenv("SECURITY_LANE_SUMMARY_INTERVAL_MINUTES", "60"))
 AZURE_COST_LOOKBACK_DAYS: int = int(os.getenv("AZURE_COST_LOOKBACK_DAYS", "30"))

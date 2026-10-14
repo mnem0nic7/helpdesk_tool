@@ -1,0 +1,193 @@
+"""Mapping between Entra user attributes and Jira HR-board custom fields.
+
+Source of truth is ``ADP Jira Mapping v1.xlsx``. A row is only written to Jira when it is
+``enabled`` *and* has a ``jira_field_id``. Rows the sheet marks "Create" have no Jira field ID
+until ``scripts/hr_jira_field_admin.py`` has been applied -- paste the emitted IDs in here.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from typing import Any
+
+EXT_PREFIX = "extension_e845d067ba25406ab31994d924ae9524_"
+
+# Jira field value kinds -> how the payload is shaped.
+KIND_TEXT = "text"
+KIND_SELECT = "select"
+KIND_DATE = "date"
+KIND_DATETIME = "datetime"
+
+
+@dataclass(frozen=True)
+class FieldMapping:
+    jira_name: str
+    kind: str
+    # Entra property to $select. ``None`` for values derived from another lookup (manager).
+    entra_property: str | None = None
+    # Field-id as ``customfield_NNNNN``; ``None`` until the Jira field has been created.
+    jira_field_id: str | None = None
+    # Special derivations resolved by the sync service: "manager_name" / "manager_email".
+    derived: str | None = None
+    enabled: bool = True
+    note: str = ""
+
+
+def _ext(name: str) -> str:
+    return f"{EXT_PREFIX}{name}"
+
+
+FIELD_MAP: tuple[FieldMapping, ...] = (
+    FieldMapping("Business Unit", KIND_TEXT, _ext("division"), "customfield_13458"),
+    FieldMapping("Preferred Name", KIND_TEXT, "displayName"),
+    FieldMapping("Home State", KIND_TEXT, _ext("msDS_cloudExtensionAttribute19")),
+    FieldMapping(
+        "FLSA Status", KIND_SELECT, "employeeId", "customfield_13028", enabled=False,
+        note="Sheet maps FLSA to employeeID, which looks wrong; Jira options are Exempt/Non-Exempt/Unknown. Confirm source.",
+    ),
+    FieldMapping("Home Department", KIND_TEXT, "department", "customfield_13459"),
+    FieldMapping("Function", KIND_SELECT, _ext("jobFunction"), "customfield_11113"),
+    FieldMapping("Job Title", KIND_TEXT, "title", "customfield_12866"),
+    FieldMapping("Leadership Level 2", KIND_TEXT, _ext("msDS_cloudExtensionAttribute14")),
+    FieldMapping("Leadership Level 3", KIND_TEXT, _ext("msDS_cloudExtensionAttribute15")),
+    FieldMapping("Legal First Name", KIND_TEXT, "givenName", "customfield_12873"),
+    FieldMapping("Legal Last Name", KIND_TEXT, "surname", "customfield_12874"),
+    FieldMapping(
+        "Legal Middle Name", KIND_TEXT, None, "customfield_12881", enabled=False,
+        note="'middleName' is an AD attribute, not a Microsoft Graph v1.0 user property; confirm the Entra source.",
+    ),
+    FieldMapping("Employee location", KIND_TEXT, "officeLocation", "customfield_12893"),
+    FieldMapping("People Manager (Yes/No)", KIND_SELECT, _ext("msDS_cloudExtensionAttribute13")),
+    FieldMapping("Position ID", KIND_TEXT, _ext("positionID"), "customfield_12865"),
+    FieldMapping("Position Status", KIND_TEXT, _ext("positionStatus")),
+    FieldMapping("Manager Name", KIND_TEXT, None, "customfield_15038", derived="manager_name"),
+    FieldMapping("Seniority Date", KIND_DATE, _ext("msDS_cloudExtensionAttribute1")),
+    # --- Sheet rows still marked "Please provide": wired up but off until HR/ADP define the source. ---
+    FieldMapping("Associate ID", KIND_TEXT, None, enabled=False, note="Entra source undefined in sheet."),
+    FieldMapping("Company email address", KIND_TEXT, None, "customfield_12879", enabled=False, note="Entra source undefined in sheet."),
+    FieldMapping("Hire Date", KIND_DATETIME, None, "customfield_12870", enabled=False, note="Entra source undefined in sheet."),
+    FieldMapping("Worker Category", KIND_SELECT, None, "customfield_12894", enabled=False, note="Entra source undefined in sheet."),
+    FieldMapping("Job Class", KIND_TEXT, None, enabled=False, note="Entra source undefined in sheet."),
+    FieldMapping("Manager Email", KIND_TEXT, None, derived="manager_email", enabled=False, note="Entra source undefined in sheet."),
+    FieldMapping("Work Arrangement", KIND_SELECT, None, enabled=False, note="Entra source undefined in sheet."),
+)
+
+# Jira fields that carry the address used to find the Entra user (checked in this order).
+LOOKUP_EMAIL_FIELD_IDS: tuple[str, ...] = (
+    "customfield_12879",  # Company email address (HRD)
+    "customfield_12883",  # Personal Email Address (New Hire) (HRD onboarding, LIBTA)
+)
+
+
+def active_mappings() -> list[FieldMapping]:
+    """Mappings that can actually be written right now."""
+    return [m for m in FIELD_MAP if m.enabled and m.jira_field_id]
+
+
+def graph_select_properties() -> list[str]:
+    props = {"id", "userPrincipalName", "mail", "otherMails", "manager"}
+    props.update(m.entra_property for m in active_mappings() if m.entra_property)
+    return sorted(props)
+
+
+def issue_fields_to_request() -> list[str]:
+    ids = set(LOOKUP_EMAIL_FIELD_IDS)
+    ids.update(m.jira_field_id for m in active_mappings() if m.jira_field_id)
+    return sorted(ids)
+
+
+_DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%Y%m%d", "%m-%d-%Y")
+
+
+def parse_date(value: Any) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+_YES = {"y", "yes", "true", "1"}
+_NO = {"n", "no", "false", "0"}
+
+
+def to_yes_no(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if text in _YES:
+        return "Yes"
+    if text in _NO:
+        return "No"
+    return None
+
+
+def jira_value(mapping: FieldMapping, raw: Any) -> Any | None:
+    """Shape an Entra value for the Jira REST payload; ``None`` means nothing to write."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    if mapping.kind == KIND_TEXT:
+        return str(raw).strip()
+    if mapping.kind == KIND_SELECT:
+        if mapping.jira_name == "People Manager (Yes/No)":
+            normalized = to_yes_no(raw)
+            return {"value": normalized} if normalized else None
+        return {"value": str(raw).strip()}
+    if mapping.kind in (KIND_DATE, KIND_DATETIME):
+        parsed = parse_date(raw)
+        if parsed is None:
+            return None
+        if mapping.kind == KIND_DATE:
+            return parsed.isoformat()
+        stamp = datetime(parsed.year, parsed.month, parsed.day, tzinfo=timezone.utc)
+        return stamp.strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+    return None
+
+
+_EMAIL_FIND_RE = re.compile(r"[A-Za-z0-9._%+'\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+def normalize_email(value: Any) -> str | None:
+    """First email address in a field value, lowercased.
+
+    Jira text fields often hold wiki links (``[a@x.com|mailto:a@x.com]``) rather than a bare address.
+    Apostrophes are legal in a local part (O'Brien), so quoting is handled where the address is used.
+    """
+    match = _EMAIL_FIND_RE.search(str(value or ""))
+    if not match:
+        return None
+    local, _, domain = match.group(0).partition("@")
+    local = local.strip("'")
+    return f"{local}@{domain}".lower() if local else None
+
+
+def entra_value(mapping: FieldMapping, user: dict[str, Any], manager: dict[str, Any] | None) -> Any:
+    if mapping.derived == "manager_name":
+        return (manager or {}).get("displayName")
+    if mapping.derived == "manager_email":
+        return (manager or {}).get("mail")
+    if mapping.entra_property:
+        return user.get(mapping.entra_property)
+    return None
+
+
+def build_issue_fields(
+    user: dict[str, Any], manager: dict[str, Any] | None
+) -> tuple[dict[str, Any], list[str]]:
+    """Return (jira fields payload, jira names Entra had no value for)."""
+    payload: dict[str, Any] = {}
+    empty: list[str] = []
+    for mapping in active_mappings():
+        value = jira_value(mapping, entra_value(mapping, user, manager))
+        if value is None:
+            empty.append(mapping.jira_name)
+            continue
+        payload[mapping.jira_field_id] = value  # type: ignore[index]
+    return payload, empty
