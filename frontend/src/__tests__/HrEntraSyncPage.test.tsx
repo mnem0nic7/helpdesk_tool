@@ -56,6 +56,8 @@ describe("HrEntraSyncPage", () => {
           fields_written: '["customfield_12866","customfield_13458"]',
           fields_skipped: '{"customfield_9":"not on screen"}',
           error: "",
+          lookup_fingerprint: "",
+          email_source: "reporter",
         },
         {
           issue_key: "HRD-2",
@@ -70,6 +72,8 @@ describe("HrEntraSyncPage", () => {
           fields_written: "[]",
           fields_skipped: "{}",
           error: "Entra sync: no Entra account matched a@x.com",
+          lookup_fingerprint: "a@x.com",
+          email_source: "",
         },
       ],
     });
@@ -107,6 +111,7 @@ describe("HrEntraSyncPage", () => {
     renderPage();
     await waitFor(() => expect(screen.getByText("HRD-1")).toBeInTheDocument());
     expect(screen.getByText("2 written, 1 rejected by Jira")).toBeInTheDocument();
+    expect(screen.getByText("jdoe@x.com (upn, from reporter)")).toBeInTheDocument();
     expect(screen.getByText(/no Entra account matched a@x.com/)).toBeInTheDocument();
   });
 

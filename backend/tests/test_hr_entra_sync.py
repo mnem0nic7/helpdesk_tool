@@ -19,6 +19,10 @@ class FakeJira:
         self.reject = {}  # field id -> message, simulated 400
         self.searched = []
         self.search_results = []
+        self.updated_results = []
+        self.base_url = "https://jira.test"
+        self.changelogs = {}  # key -> list of changelog entries
+        self.session = self
 
     def get_issue(self, key):
         return self.issues[key]
@@ -37,7 +41,13 @@ class FakeJira:
 
     def search_all(self, jql, fields=None, progress_callback=None):
         self.searched.append(jql)
-        return self.search_results
+        return self.updated_results if "updated >=" in jql else self.search_results
+
+    def get(self, url, params=None, timeout=None):  # stands in for requests.Session.get (changelog)
+        key = url.split("/issue/")[1].split("/")[0]
+        entries = self.changelogs.get(key, [])
+        body = {"total": len(entries), "values": entries[(params or {}).get("startAt", 0):]}
+        return type("R", (), {"raise_for_status": lambda self: None, "json": lambda self: body})()
 
 
 class FakeAzure:
@@ -68,6 +78,10 @@ def _user(upn="jdoe@x.com", **extra):
 
 def _issue(**fields):
     return {"fields": fields}
+
+
+def _person(email="rep@x.com", name="Rae Porter", account_type="customer"):
+    return {"accountType": account_type, "emailAddress": email, "displayName": name}
 
 
 def _job(tmp_path, jira, azure):
@@ -158,7 +172,7 @@ def test_no_match_after_window_posts_one_internal_note(tmp_path):
     assert job.get_row("HRD-1")["status"] == "not_found"
     assert len(jira.notes) == 1 and "jdoe@x.com" in jira.notes[0][1]
     # A second runner (blue/green) racing in must not post again.
-    job._finish_with_note("HRD-1", "not_found", NOW, "dup")
+    job._finish_with_note("HRD-1", "not_found", NOW, "", "dup")
     assert len(jira.notes) == 1
 
 
@@ -205,3 +219,119 @@ def test_run_cycle_sync_end_to_end(tmp_path):
     # Next cycle: already terminal, nothing to process and no second write.
     assert job.run_cycle_sync(NOW) == {"discovered": 0, "processed": 0}
     assert len(jira.updates) == 1
+
+
+# ---- reporter fallback ----
+
+def test_reporter_is_used_when_ticket_has_no_email(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(reporter=_person("rep@x.com"))})
+    azure = FakeAzure({"rep@x.com": [_user(upn="rep@x.com", displayName="Rae Porter", accountEnabled=True, userType="Member")]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["outcome"] == "synced" and res["email_source"] == "reporter" and res["fingerprint"] == ""
+
+
+def test_ticket_email_wins_over_reporter(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="jdoe@x.com", reporter=_person("rep@x.com"))})
+    azure = FakeAzure({"jdoe@x.com": [_user()], "rep@x.com": [_user(upn="rep@x.com")]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert res["email_source"] == "ticket" and res["matched_upn"] == "jdoe@x.com"
+
+
+@pytest.mark.parametrize("reporter", [
+    _person(account_type="app"),
+    {"accountType": None},
+    _person("askhr@librasolutionsgroup.com", "AskHR"),
+    _person("payroll@librasolutionsgroup.com", "Payroll"),
+    _person("donotreply@adp.com", "donotreply@adp.com"),
+])
+def test_service_style_reporters_are_never_used(tmp_path, reporter):
+    jira = FakeJira({"HRD-1": _issue(reporter=reporter)})
+    azure = FakeAzure()
+    assert _job(tmp_path, jira, azure).sync_issue("HRD-1")["outcome"] == "no_email"
+    assert azure.calls == []
+
+
+def test_reporter_match_must_be_an_enabled_person_account(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(reporter=_person("rep@x.com"))})
+    for user in (_user(upn="rep@x.com", accountEnabled=False),
+                 _user(upn="rep@x.com", userType="Guest"),
+                 _user(upn="rep@x.com", displayName="Shared Mailbox")):
+        res = _job(tmp_path, jira, FakeAzure({"rep@x.com": [user]})).sync_issue("HRD-1")
+        assert res["outcome"] == "no_match" and jira.updates == []
+
+
+def test_external_reporter_only_ticket_ends_not_found_without_a_note(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(reporter=_person("dse@docusign.net", "dse@docusign.net"))})
+    job = _job(tmp_path, jira, FakeAzure())
+    _seed(job, "HRD-1", 20)
+    job._process_pending(job.get_row("HRD-1"), NOW)
+    row = job.get_row("HRD-1")
+    assert row["status"] == "not_found" and jira.notes == [] and "not an Entra employee" in row["error"]
+
+
+# ---- email change re-sync ----
+
+def _synced_job(tmp_path, jira, azure, key="HRD-1"):
+    job = _job(tmp_path, jira, azure)
+    _seed(job, key, 1)
+    job._process_pending(job.get_row(key), NOW)
+    assert job.get_row(key)["status"] == "synced"
+    return job
+
+
+def test_changed_email_reopens_and_resyncs_with_the_new_address(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="old@x.com")})
+    azure = FakeAzure({"old@x.com": [_user(upn="old@x.com")], "new@x.com": [_user(upn="new@x.com")]})
+    job = _synced_job(tmp_path, jira, azure)
+    assert job.get_row("HRD-1")["lookup_fingerprint"] == "old@x.com"
+    jira.issues["HRD-1"] = _issue(customfield_12879="new@x.com")
+    jira.updated_results = [{"key": "HRD-1", "fields": {"customfield_12879": "new@x.com", "project": {"key": "HRD"}}}]
+    assert job.run_cycle_sync(NOW) == {"discovered": 1, "processed": 1}
+    row = job.get_row("HRD-1")
+    assert row["status"] == "synced" and row["matched_upn"] == "new@x.com" and row["lookup_fingerprint"] == "new@x.com"
+    assert len(jira.updates) == 2
+
+
+def test_unchanged_email_on_an_updated_ticket_does_not_resync(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="old@x.com")})
+    job = _synced_job(tmp_path, jira, FakeAzure({"old@x.com": [_user(upn="old@x.com")]}))
+    jira.updated_results = [{"key": "HRD-1", "fields": {"customfield_12879": "[old@x.com|mailto:old@x.com]",
+                                                        "project": {"key": "HRD"}}}]
+    assert job.run_cycle_sync(NOW)["processed"] == 0 and len(jira.updates) == 1
+
+
+def test_email_added_later_to_a_reporter_synced_ticket_resyncs(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(reporter=_person("rep@x.com"))})
+    azure = FakeAzure({"rep@x.com": [_user(upn="rep@x.com")], "subj@x.com": [_user(upn="subj@x.com")]})
+    job = _synced_job(tmp_path, jira, azure)
+    assert job.get_row("HRD-1")["email_source"] == "reporter"
+    jira.issues["HRD-1"] = _issue(customfield_12883="subj@x.com", reporter=_person("rep@x.com"))
+    jira.updated_results = [{"key": "HRD-1", "fields": {"customfield_12883": "subj@x.com", "project": {"key": "HRD"}}}]
+    job.run_cycle_sync(NOW)
+    row = job.get_row("HRD-1")
+    assert row["matched_upn"] == "subj@x.com" and row["email_source"] == "ticket"
+
+
+def test_old_unregistered_ticket_is_picked_up_only_if_its_email_was_edited(tmp_path):
+    edit = {"created": (NOW - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S.000+0000"),
+            "items": [{"fieldId": "customfield_12879"}]}
+    other = {"created": (NOW - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S.000+0000"),
+             "items": [{"fieldId": "summary"}]}
+    stale = {"created": (NOW - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S.000+0000"),
+             "items": [{"fieldId": "customfield_12879"}]}
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="jdoe@x.com"), "HRD-2": _issue(customfield_12879="jdoe@x.com"),
+                     "HRD-3": _issue(customfield_12879="jdoe@x.com")})
+    jira.changelogs = {"HRD-1": [edit], "HRD-2": [other], "HRD-3": [stale]}
+    jira.updated_results = [{"key": k, "fields": {"customfield_12879": "jdoe@x.com", "project": {"key": "HRD"}}}
+                            for k in ("HRD-1", "HRD-2", "HRD-3")]
+    job = _job(tmp_path, jira, FakeAzure())
+    assert job.discover_email_changes(NOW) == 1
+    assert job.get_row("HRD-1") is not None and job.get_row("HRD-2") is None and job.get_row("HRD-3") is None
+
+
+def test_pending_ticket_with_changed_email_is_not_reopened(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="a@x.com")})
+    job = _job(tmp_path, jira, FakeAzure())
+    _seed(job, "HRD-1", 2)
+    jira.updated_results = [{"key": "HRD-1", "fields": {"customfield_12879": "b@x.com", "project": {"key": "HRD"}}}]
+    assert job.discover_email_changes(NOW) == 0

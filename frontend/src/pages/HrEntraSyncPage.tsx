@@ -80,7 +80,8 @@ export default function HrEntraSyncPage() {
         <h1 className="mt-1 text-2xl font-semibold text-slate-900">Entra → Jira Sync</h1>
         <p className="mt-1 text-sm text-slate-500">
           Fills newly created {status?.projects.join(" and ") || "HRD and LIBTA"} tickets with the employee&apos;s
-          Entra attributes, matched by the work or personal email on the ticket.
+          Entra attributes, matched by the work or personal email on the ticket, or the reporter&apos;s email when the
+          ticket has none (service accounts and automation are ignored). Editing either email on a ticket re-runs it.
         </p>
       </div>
 
@@ -178,7 +179,9 @@ export default function HrEntraSyncPage() {
           <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
             <div>
               Result: <strong>{dryRun.data.outcome}</strong>
-              {dryRun.data.matched_upn ? ` — matched ${dryRun.data.matched_upn} (${dryRun.data.matched_via})` : ""}
+              {dryRun.data.matched_upn
+                ? ` — matched ${dryRun.data.matched_upn} (${dryRun.data.matched_via}${dryRun.data.email_source ? `, from ${dryRun.data.email_source}` : ""})`
+                : ""}
             </div>
             {dryRun.data.outcome === "no_email" ? <div>No work or personal email was found on this ticket.</div> : null}
             {dryRun.data.outcome === "no_match" ? (
@@ -243,7 +246,9 @@ export default function HrEntraSyncPage() {
                     </td>
                     <td className="px-3 py-2">{formatDateTime(row.first_seen_at)}</td>
                     <td className="px-3 py-2">{row.attempts}</td>
-                    <td className="px-3 py-2">{row.matched_upn ? `${row.matched_upn} (${row.matched_via})` : "—"}</td>
+                    <td className="px-3 py-2">{row.matched_upn
+                        ? `${row.matched_upn} (${row.matched_via}${row.email_source ? `, from ${row.email_source}` : ""})`
+                        : "—"}</td>
                     <td className="px-3 py-2">
                       {row.status === "synced"
                         ? `${parseList(row.fields_written).length} written${skipped.length ? `, ${skipped.length} rejected by Jira` : ""}`

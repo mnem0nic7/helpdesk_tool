@@ -8,9 +8,18 @@ Source mapping: `ADP Jira Mapping v1.xlsx`. Code: `backend/hr_entra_sync.py`, `h
   `HR_ENTRA_SYNC_PROJECTS` (default `HRD,LIBTA`) created within `HR_ENTRA_SYNC_LOOKBACK_MINUTES` (120) and
   registers each once. Other triggers are not defined yet: `HrEntraSyncJob.sync_issue()` is trigger-agnostic.
 - **User match.** First email found in `Company email address` (customfield_12879), then `Personal Email Address
-  (New Hire)` (customfield_12883). Jira stores these as text or wiki links (`[a@x.com|mailto:a@x.com]`), so the
+  (New Hire)` (customfield_12883), then - for every request type - the **reporter's** email if the reporter is a person
+  (`customer`/`atlassian` account type; apps, null reporters, the AskHR/Benefits mailboxes and service-style names such as
+  payroll/donotreply/svc are ignored) and resolves to an *enabled, member, non-service-style* Entra account.
+  A reporter is only a guess at the subject, so a reporter-only ticket with no Entra match ends `not_found` with **no
+  note** (e.g. DocuSign/ADP notification senders). Which source matched is stored in `email_source`. Jira stores these as text or wiki links (`[a@x.com|mailto:a@x.com]`), so the
   first address in the value is extracted. Graph filter: `mail`, `userPrincipalName`, or `otherMails`
   (`ConsistencyLevel: eventual`). More than one match is `ambiguous`: nothing is written.
+- **Trigger #2 - email edited.** Each cycle the job also looks at tickets `updated` within the lookback window. A
+  registered ticket whose work/personal emails differ from `lookup_fingerprint` (the emails it was last processed with)
+  is reopened as `pending` with a fresh 15-minute window; an unregistered older ticket is picked up only if its changelog
+  shows a real edit to either email field. Jira's `changed` JQL operator is not usable on this site, hence the
+  fingerprint + changelog approach. Migration `0035` adds `lookup_fingerprint` and `email_source`.
 - **Write.** Entra always overwrites. One PUT; if Jira rejects specific fields (not on the edit screen, unknown
   select option) they are dropped, recorded in `fields_skipped`, and the rest is written.
 - **No match.** Retried every poll for `HR_ENTRA_SYNC_RETRY_MINUTES` (15), then one *internal* note

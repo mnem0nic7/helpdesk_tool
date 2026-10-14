@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -106,9 +107,16 @@ class HrEntraSyncJob:
                     matched_via      TEXT NOT NULL DEFAULT '',
                     fields_written   TEXT NOT NULL DEFAULT '[]',
                     fields_skipped   TEXT NOT NULL DEFAULT '{}',
-                    error            TEXT NOT NULL DEFAULT ''
+                    error            TEXT NOT NULL DEFAULT '',
+                    lookup_fingerprint TEXT NOT NULL DEFAULT '',
+                    email_source     TEXT NOT NULL DEFAULT ''
                 )"""
             )
+            for column in ("lookup_fingerprint", "email_source"):  # DBs created before the re-sync trigger
+                try:
+                    conn.execute(f"ALTER TABLE hr_entra_sync_issues ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+                except sqlite3.OperationalError:
+                    pass
 
     # ------------------------------------------------------------------ store
 
@@ -160,15 +168,31 @@ class HrEntraSyncJob:
             "last_activity_at": last_activity,
         }
 
-    def _record_attempt(self, issue_key: str, now: datetime, error: str = "") -> None:
+    def _record_attempt(
+        self, issue_key: str, now: datetime, error: str = "", fingerprint: str | None = None
+    ) -> None:
         ph = self._ph()
         with self._conn() as conn:
             conn.execute(
                 f"""UPDATE hr_entra_sync_issues
-                    SET attempts = attempts + 1, last_attempt_at = {ph}, error = {ph}
+                    SET attempts = attempts + 1, last_attempt_at = {ph}, error = {ph},
+                        lookup_fingerprint = COALESCE({ph}, lookup_fingerprint)
                     WHERE issue_key = {ph} AND status = {ph}""",
-                (now.isoformat(), error[:1000], issue_key, STATUS_PENDING),
+                (now.isoformat(), error[:1000], fingerprint, issue_key, STATUS_PENDING),
             )
+
+    def _reopen(self, issue_key: str, fingerprint: str, now: datetime) -> bool:
+        """Send a finished ticket back through the pipeline because its lookup email changed."""
+        ph = self._ph()
+        with self._conn() as conn:
+            cur = conn.execute(
+                f"""UPDATE hr_entra_sync_issues
+                    SET status = {ph}, first_seen_at = {ph}, attempts = 0, completed_at = '', error = '',
+                        lookup_fingerprint = {ph}
+                    WHERE issue_key = {ph} AND status <> {ph}""",
+                (STATUS_PENDING, now.isoformat(), fingerprint, issue_key, STATUS_PENDING),
+            )
+            return bool(cur.rowcount)
 
     def _finish(self, issue_key: str, status: str, now: datetime, **cols: Any) -> bool:
         """Atomically move a pending row to a terminal status; False if another runner won."""
@@ -260,20 +284,31 @@ class HrEntraSyncJob:
         """
         issue = self._jira_client().get_issue(issue_key)
         fields = issue.get("fields") or {}
-        emails: list[str] = []
-        sources = [email_override] if email_override else [fields.get(f) for f in fmap.LOOKUP_EMAIL_FIELD_IDS]
-        for raw in sources:
-            email = fmap.normalize_email(raw)
-            if email and email not in emails:
-                emails.append(email)
-        if not emails:
-            return {"outcome": "no_email", "emails": []}
+        if email_override:
+            ticket_emails = [e for e in [fmap.normalize_email(email_override)] if e]
+            reporter = None
+        else:
+            ticket_emails = fmap.ticket_emails(fields)
+            reporter = fmap.reporter_email(fields)
+        candidates = [(e, "ticket") for e in ticket_emails]
+        if reporter and reporter not in ticket_emails:
+            candidates.append((reporter, "reporter"))
+        base = {
+            "emails": [e for e, _ in candidates],
+            "fingerprint": fmap.fingerprint(ticket_emails),
+            "reporter_only": bool(candidates) and not ticket_emails,
+        }
+        if not candidates:
+            return {"outcome": "no_email", **base}
 
-        for email in emails:
+        for email, source in candidates:
             users = self.find_entra_users(email)
+            if source == "reporter":
+                # The reporter is a guess at the subject, so only trust an enabled, person-style account.
+                users = [u for u in users if fmap.is_person_account(u)]
             if len(users) > 1:
-                return {"outcome": STATUS_AMBIGUOUS, "emails": emails, "matched_email": email,
-                        "candidates": [u.get("userPrincipalName") for u in users]}
+                return {"outcome": STATUS_AMBIGUOUS, "matched_email": email, "email_source": source,
+                        "candidates": [u.get("userPrincipalName") for u in users], **base}
             if users:
                 user = users[0]
                 manager = self.fetch_manager(str(user["id"]))
@@ -285,15 +320,16 @@ class HrEntraSyncJob:
                 return {
                     "outcome": STATUS_SYNCED,
                     "dry_run": dry_run,
-                    "emails": emails,
                     "matched_email": email,
+                    "email_source": source,
                     "matched_upn": user.get("userPrincipalName") or "",
                     "matched_via": self._matched_via(user, email),
                     "fields_written": written,
                     "fields_skipped": skipped,
                     "entra_empty": empty,
+                    **base,
                 }
-        return {"outcome": "no_match", "emails": emails}
+        return {"outcome": "no_match", **base}
 
     def _post_note(self, issue_key: str, text: str) -> None:
         self._jira_client().add_internal_comment(issue_key, text)
@@ -321,14 +357,23 @@ class HrEntraSyncJob:
                 key, STATUS_SYNCED, now,
                 matched_upn=result["matched_upn"], matched_via=result["matched_via"],
                 fields_written=sorted(result["fields_written"]), fields_skipped=result["fields_skipped"],
+                lookup_fingerprint=result["fingerprint"], email_source=result["email_source"],
             )
             logger.info("HR Entra sync %s: wrote %d field(s) from %s", key, len(result["fields_written"]), result["matched_upn"])
         elif outcome == STATUS_AMBIGUOUS:
             self._finish_with_note(
-                key, STATUS_AMBIGUOUS, now,
+                key, STATUS_AMBIGUOUS, now, result["fingerprint"],
                 "Entra sync skipped: more than one Entra account matches "
                 f"{result['matched_email']} ({', '.join(str(c) for c in result['candidates'])}). "
                 "No fields were updated.",
+            )
+        elif window_over and result.get("reporter_only"):
+            # Only the reporter was available and nothing matched (e.g. an external sender such as a vendor
+            # notification): not worth a note on the ticket, but record the outcome.
+            self._finish(
+                key, STATUS_NOT_FOUND, now,
+                lookup_fingerprint=result["fingerprint"], email_source="reporter",
+                error=f"No email on ticket; reporter {result['emails'][0]} is not an Entra employee.",
             )
         elif window_over:
             reason = (
@@ -337,15 +382,15 @@ class HrEntraSyncJob:
                 else f"no Entra account matched {', '.join(result['emails'])}"
             )
             self._finish_with_note(
-                key, STATUS_NOT_FOUND, now,
+                key, STATUS_NOT_FOUND, now, result["fingerprint"],
                 f"Entra sync: {reason} after {HR_ENTRA_SYNC_RETRY_MINUTES} minutes of retries. "
                 "No fields were updated.",
             )
         else:
-            self._record_attempt(key, now)
+            self._record_attempt(key, now, fingerprint=result["fingerprint"])
 
-    def _finish_with_note(self, key: str, status: str, now: datetime, note: str) -> None:
-        if not self._finish(key, status, now, error=note[:1000]):
+    def _finish_with_note(self, key: str, status: str, now: datetime, fingerprint: str, note: str) -> None:
+        if not self._finish(key, status, now, error=note[:1000], lookup_fingerprint=fingerprint):
             return  # another runner already finalized (and posted) this ticket
         try:
             self._post_note(key, note)
@@ -377,9 +422,51 @@ class HrEntraSyncJob:
                 added += 1
         return added
 
+    def _email_edited_since(self, issue_key: str, since: datetime) -> bool:
+        """True if the ticket's work/personal email field was edited after ``since`` (from the changelog)."""
+        jira = self._jira_client()
+        base = f"{jira.base_url}/rest/api/3/issue/{issue_key}/changelog"
+        head = jira.session.get(base, params={"maxResults": 1}, timeout=30)
+        head.raise_for_status()
+        total = int(head.json().get("total") or 0)
+        resp = jira.session.get(base, params={"startAt": max(0, total - 100), "maxResults": 100}, timeout=30)
+        resp.raise_for_status()
+        for entry in resp.json().get("values") or []:
+            created = _parse_dt(str(entry.get("created") or "").replace("+0000", "+00:00"))
+            if created and created >= since and any(
+                item.get("fieldId") in fmap.LOOKUP_EMAIL_FIELD_IDS for item in entry.get("items") or []
+            ):
+                return True
+        return False
+
+    def discover_email_changes(self, now: datetime | None = None) -> int:
+        """Re-queue tickets whose work/personal email changed, so the new address is looked up in Entra."""
+        now = now or _utcnow()
+        projects = ", ".join(HR_ENTRA_SYNC_PROJECTS)
+        jql = f"project in ({projects}) AND updated >= -{int(HR_ENTRA_SYNC_LOOKBACK_MINUTES)}m ORDER BY updated ASC"
+        since = now - timedelta(minutes=HR_ENTRA_SYNC_LOOKBACK_MINUTES)
+        reopened = 0
+        for issue in self._jira_client().search_all(jql, fields=[*fmap.LOOKUP_EMAIL_FIELD_IDS, "project"]):
+            key = str(issue.get("key") or "")
+            fields = issue.get("fields") or {}
+            fp = fmap.fingerprint(fmap.ticket_emails(fields))
+            if not key or not fp:
+                continue
+            row = self.get_row(key)
+            if row is None:
+                # Never seen (older than the creation lookback): only act if the email field was really edited.
+                project = str((fields.get("project") or {}).get("key") or key.split("-")[0])
+                if self._email_edited_since(key, since) and self._register(key, project, now):
+                    reopened += 1
+            elif row["status"] != STATUS_PENDING and row["lookup_fingerprint"] != fp:
+                if self._reopen(key, fp, now):
+                    reopened += 1
+        return reopened
+
     def run_cycle_sync(self, now: datetime | None = None) -> dict[str, int]:
         now = now or _utcnow()
         added = self.discover_new_issues(now)
+        added += self.discover_email_changes(now)
         pending = self.list_rows(status=STATUS_PENDING, limit=200)
         for row in reversed(pending):  # oldest first
             self._process_pending(row, _utcnow())

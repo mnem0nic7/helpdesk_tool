@@ -5857,6 +5857,8 @@ export interface HrEntraSyncIssue {
   fields_written: string;
   fields_skipped: string;
   error: string;
+  lookup_fingerprint: string;
+  email_source: "" | "ticket" | "reporter";
 }
 
 export interface HrEntraSyncDryRun {
@@ -5865,6 +5867,7 @@ export interface HrEntraSyncDryRun {
   emails: string[];
   matched_via?: string;
   matched_upn?: string;
+  email_source?: "ticket" | "reporter";
   fields_written?: string[];
   entra_empty?: string[];
   candidates?: string[];

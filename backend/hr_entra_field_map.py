@@ -86,13 +86,13 @@ def active_mappings() -> list[FieldMapping]:
 
 
 def graph_select_properties() -> list[str]:
-    props = {"id", "userPrincipalName", "mail", "otherMails", "manager"}
+    props = {"id", "userPrincipalName", "mail", "otherMails", "manager", "displayName", "accountEnabled", "userType"}
     props.update(m.entra_property for m in active_mappings() if m.entra_property)
     return sorted(props)
 
 
 def issue_fields_to_request() -> list[str]:
-    ids = set(LOOKUP_EMAIL_FIELD_IDS)
+    ids = set(LOOKUP_EMAIL_FIELD_IDS) | {"reporter"}
     ids.update(m.jira_field_id for m in active_mappings() if m.jira_field_id)
     return sorted(ids)
 
@@ -177,6 +177,53 @@ def normalize_email(value: Any) -> str | None:
     local, _, domain = match.group(0).partition("@")
     local = local.strip("'")
     return f"{local}@{domain}".lower() if local else None
+
+
+# Mailboxes the AskHR/Benefits bot files tickets as; a ticket whose reporter is one of these has no human reporter.
+SERVICE_MAILBOXES = frozenset({"askhr@librasolutionsgroup.com", "benefits@librasolutionsgroup.com"})
+# Same intent as e5_license_report's non-person flag: shared/room/test/service-style accounts are not employees.
+NON_PERSON_RE = re.compile(
+    r"(?<![a-z0-9])(room|conf|conference|test|migration|svc|service|noreply|no-reply|donotreply|scanner|printer"
+    r"|shared|payroll|benefits|askhr|marketing[\s._-]*dev)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+_PERSON_REPORTER_TYPES = {"customer", "atlassian"}
+
+
+def ticket_emails(fields: dict[str, Any]) -> list[str]:
+    """Work/personal emails typed on the ticket, in LOOKUP_EMAIL_FIELD_IDS order, de-duplicated."""
+    found: list[str] = []
+    for field_id in LOOKUP_EMAIL_FIELD_IDS:
+        email = normalize_email(fields.get(field_id))
+        if email and email not in found:
+            found.append(email)
+    return found
+
+
+def fingerprint(emails: list[str]) -> str:
+    return "|".join(sorted(emails))
+
+
+def reporter_email(fields: dict[str, Any]) -> str | None:
+    """The reporter's email when the reporter is a person (not an app, a bot mailbox, or a service-style account)."""
+    reporter = fields.get("reporter") or {}
+    if str(reporter.get("accountType") or "") not in _PERSON_REPORTER_TYPES:
+        return None
+    email = normalize_email(reporter.get("emailAddress"))
+    if not email or email in SERVICE_MAILBOXES:
+        return None
+    if NON_PERSON_RE.search(email.split("@")[0]) or NON_PERSON_RE.search(str(reporter.get("displayName") or "")):
+        return None
+    return email
+
+
+def is_person_account(user: dict[str, Any]) -> bool:
+    """Entra-side check for a reporter-derived match: an enabled member account that is not service-style."""
+    if user.get("accountEnabled") is False:
+        return False
+    if str(user.get("userType") or "Member") != "Member":
+        return False
+    return not NON_PERSON_RE.search(str(user.get("displayName") or ""))
 
 
 def entra_value(mapping: FieldMapping, user: dict[str, Any], manager: dict[str, Any] | None) -> Any:
