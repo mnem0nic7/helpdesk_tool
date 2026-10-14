@@ -7,12 +7,18 @@ EXT = m.EXT_PREFIX
 def test_only_enabled_fields_with_jira_ids_are_active():
     active = {x.jira_name for x in m.active_mappings()}
     assert "Job Title" in active and "Business Unit" in active and "Manager Name" in active
-    # "Create" rows have no Jira field id yet; "Please provide" / suspect rows are disabled.
-    assert "Preferred Name" not in active
+    # Fields created from the sheet's "Create" rows are live now.
+    assert {"Preferred Name", "Home State", "Position Status", "Seniority Date", "People Manager (Yes/No)"} <= active
+    # "Please provide" / suspect rows stay disabled even though they now have Jira ids.
     assert "FLSA Status" not in active
     assert "Legal Middle Name" not in active
     assert "Hire Date" not in active
     assert "Company email address" not in active
+
+
+def test_every_mapped_jira_field_id_is_unique():
+    ids = [x.jira_field_id for x in m.FIELD_MAP if x.jira_field_id]
+    assert len(ids) == len(set(ids))
 
 
 def test_every_disabled_row_explains_itself_or_awaits_a_jira_field():

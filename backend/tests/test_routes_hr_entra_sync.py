@@ -14,7 +14,7 @@ def test_status_lists_active_and_inactive_fields(test_client):
     assert data["projects"] and "Job Title" in data["active_fields"]
     inactive = {f["jira_name"]: f for f in data["inactive_fields"]}
     assert inactive["FLSA Status"]["enabled"] is False and inactive["FLSA Status"]["note"]
-    assert inactive["Preferred Name"]["has_jira_field_id"] is False
+    assert inactive["Associate ID"]["enabled"] is False and inactive["Associate ID"]["has_jira_field_id"] is True
 
 
 def test_status_forbidden_for_non_admin(test_client, monkeypatch):

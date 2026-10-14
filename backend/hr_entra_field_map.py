@@ -40,8 +40,8 @@ def _ext(name: str) -> str:
 
 FIELD_MAP: tuple[FieldMapping, ...] = (
     FieldMapping("Business Unit", KIND_TEXT, _ext("division"), "customfield_13458"),
-    FieldMapping("Preferred Name", KIND_TEXT, "displayName"),
-    FieldMapping("Home State", KIND_TEXT, _ext("msDS_cloudExtensionAttribute19")),
+    FieldMapping("Preferred Name", KIND_TEXT, "displayName", "customfield_15085"),
+    FieldMapping("Home State", KIND_TEXT, _ext("msDS_cloudExtensionAttribute19"), "customfield_15086"),
     FieldMapping(
         "FLSA Status", KIND_SELECT, "employeeId", "customfield_13028", enabled=False,
         note="Sheet maps FLSA to employeeID, which looks wrong; Jira options are Exempt/Non-Exempt/Unknown. Confirm source.",
@@ -49,8 +49,8 @@ FIELD_MAP: tuple[FieldMapping, ...] = (
     FieldMapping("Home Department", KIND_TEXT, "department", "customfield_13459"),
     FieldMapping("Function", KIND_SELECT, _ext("jobFunction"), "customfield_11113"),
     FieldMapping("Job Title", KIND_TEXT, "title", "customfield_12866"),
-    FieldMapping("Leadership Level 2", KIND_TEXT, _ext("msDS_cloudExtensionAttribute14")),
-    FieldMapping("Leadership Level 3", KIND_TEXT, _ext("msDS_cloudExtensionAttribute15")),
+    FieldMapping("Leadership Level 2", KIND_TEXT, _ext("msDS_cloudExtensionAttribute14"), "customfield_15087"),
+    FieldMapping("Leadership Level 3", KIND_TEXT, _ext("msDS_cloudExtensionAttribute15"), "customfield_15088"),
     FieldMapping("Legal First Name", KIND_TEXT, "givenName", "customfield_12873"),
     FieldMapping("Legal Last Name", KIND_TEXT, "surname", "customfield_12874"),
     FieldMapping(
@@ -58,19 +58,19 @@ FIELD_MAP: tuple[FieldMapping, ...] = (
         note="'middleName' is an AD attribute, not a Microsoft Graph v1.0 user property; confirm the Entra source.",
     ),
     FieldMapping("Employee location", KIND_TEXT, "officeLocation", "customfield_12893"),
-    FieldMapping("People Manager (Yes/No)", KIND_SELECT, _ext("msDS_cloudExtensionAttribute13")),
+    FieldMapping("People Manager (Yes/No)", KIND_SELECT, _ext("msDS_cloudExtensionAttribute13"), "customfield_15089"),
     FieldMapping("Position ID", KIND_TEXT, _ext("positionID"), "customfield_12865"),
-    FieldMapping("Position Status", KIND_TEXT, _ext("positionStatus")),
+    FieldMapping("Position Status", KIND_TEXT, _ext("positionStatus"), "customfield_15090"),
     FieldMapping("Manager Name", KIND_TEXT, None, "customfield_15038", derived="manager_name"),
-    FieldMapping("Seniority Date", KIND_DATE, _ext("msDS_cloudExtensionAttribute1")),
+    FieldMapping("Seniority Date", KIND_DATE, _ext("msDS_cloudExtensionAttribute1"), "customfield_15091"),
     # --- Sheet rows still marked "Please provide": wired up but off until HR/ADP define the source. ---
-    FieldMapping("Associate ID", KIND_TEXT, None, enabled=False, note="Entra source undefined in sheet."),
+    FieldMapping("Associate ID", KIND_TEXT, None, "customfield_15092", enabled=False, note="Entra source undefined in sheet."),
     FieldMapping("Company email address", KIND_TEXT, None, "customfield_12879", enabled=False, note="Entra source undefined in sheet."),
     FieldMapping("Hire Date", KIND_DATETIME, None, "customfield_12870", enabled=False, note="Entra source undefined in sheet."),
     FieldMapping("Worker Category", KIND_SELECT, None, "customfield_12894", enabled=False, note="Entra source undefined in sheet."),
-    FieldMapping("Job Class", KIND_TEXT, None, enabled=False, note="Entra source undefined in sheet."),
-    FieldMapping("Manager Email", KIND_TEXT, None, derived="manager_email", enabled=False, note="Entra source undefined in sheet."),
-    FieldMapping("Work Arrangement", KIND_SELECT, None, enabled=False, note="Entra source undefined in sheet."),
+    FieldMapping("Job Class", KIND_TEXT, None, "customfield_15093", enabled=False, note="Entra source undefined in sheet."),
+    FieldMapping("Manager Email", KIND_TEXT, None, "customfield_15094", derived="manager_email", enabled=False, note="Entra source undefined in sheet."),
+    FieldMapping("Work Arrangement", KIND_SELECT, None, "customfield_15095", enabled=False, note="Entra source undefined in sheet."),
 )
 
 # Jira fields that carry the address used to find the Entra user (checked in this order).

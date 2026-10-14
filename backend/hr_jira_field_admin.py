@@ -4,6 +4,8 @@ Run from ``backend/``::
 
     python hr_jira_field_admin.py            # plan only (default) -- prints what would change
     python hr_jira_field_admin.py --apply    # perform renames/creates, then print field ids
+    python hr_jira_field_admin.py --screens          # plan adding mapped fields to HRD/LIBTA screens
+    python hr_jira_field_admin.py --screens --apply  # add the missing fields (never removes any)
 
 Driven by ``ADP Jira Mapping v1.xlsx``. Re-running is safe: a rename is skipped when the field
 already carries the target name, and a create is skipped when a custom field with that exact name
@@ -58,6 +60,53 @@ MANUAL = (
     "Function (customfield_11113): sheet says 'Update options' but gives no target list -- edit options in Jira admin.",
     "Worker Category (customfield_12894): sheet says 'update options' but gives no target list -- edit options in Jira admin.",
 )
+
+
+# Screens the sync needs its fields on (company-managed projects; ids from the issue type screen schemes).
+# HRD uses one default screen per request type; LIBTA's "create" screen is separate from edit/view.
+HRD_SCREENS = (12223, 12224, 12225, 12226, 12227, 12228, 12229)
+LIBTA_SCREENS = (12275, 12533)
+# Company email address must be enterable when a LIBTA ticket is created (it is the Entra lookup key).
+LIBTA_CREATE_SCREEN = 12274
+COMPANY_EMAIL_FIELD_ID = "customfield_12879"
+
+
+@dataclass
+class ScreenAdd:
+    screen_id: int
+    tab_id: int
+    field_id: str
+
+
+def plan_screens(client: Any, field_ids: list[str]) -> list[ScreenAdd]:
+    """Fields from ``field_ids`` missing on each target screen. Read-only."""
+    base = client.base_url
+    targets = [(sid, field_ids) for sid in (*HRD_SCREENS, *LIBTA_SCREENS)]
+    targets.append((LIBTA_CREATE_SCREEN, [COMPANY_EMAIL_FIELD_ID]))
+    adds: list[ScreenAdd] = []
+    for screen_id, wanted in targets:
+        resp = client.session.get(f"{base}/rest/api/3/screens/{screen_id}/tabs", timeout=30)
+        client._raise_for_status(resp)
+        tabs = resp.json()
+        if not tabs:
+            continue
+        present: set[str] = set()
+        for tab in tabs:
+            fresp = client.session.get(f"{base}/rest/api/3/screens/{screen_id}/tabs/{tab['id']}/fields", timeout=30)
+            client._raise_for_status(fresp)
+            present.update(f["id"] for f in fresp.json())
+        adds.extend(ScreenAdd(screen_id, int(tabs[0]["id"]), fid) for fid in wanted if fid not in present)
+    return adds
+
+
+def apply_screens(client: Any, adds: list[ScreenAdd]) -> None:
+    for add in adds:
+        resp = client.session.post(
+            f"{client.base_url}/rest/api/3/screens/{add.screen_id}/tabs/{add.tab_id}/fields",
+            json={"fieldId": add.field_id},
+            timeout=30,
+        )
+        client._raise_for_status(resp)
 
 
 @dataclass
@@ -134,11 +183,26 @@ def apply(client: Any, steps: list[Step]) -> dict[str, str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--apply", action="store_true", help="perform the changes (default: plan only)")
+    parser.add_argument("--screens", action="store_true", help="plan/add mapped fields on the HRD/LIBTA screens")
     args = parser.parse_args(argv)
 
     from jira_client import JiraClient
 
     client = JiraClient()
+    if args.screens:
+        import hr_entra_field_map as fmap
+
+        ids = sorted({m.jira_field_id for m in fmap.FIELD_MAP if m.jira_field_id})
+        adds = plan_screens(client, ids)
+        for add in adds:
+            print(f"[ADD] screen {add.screen_id} tab {add.tab_id}: {add.field_id}")
+        print(f"\n{len(adds)} field(s) to add.")
+        if args.apply:
+            apply_screens(client, adds)
+            print("Applied.")
+        else:
+            print("Plan only. Re-run with --screens --apply.")
+        return 0
     resp = client.session.get(f"{client.base_url}/rest/api/3/field", timeout=60)
     client._raise_for_status(resp)
     steps = plan(resp.json())

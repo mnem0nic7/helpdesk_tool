@@ -20,14 +20,23 @@ Source mapping: `ADP Jira Mapping v1.xlsx`. Code: `backend/hr_entra_sync.py`, `h
 - Ships disabled: `HR_ENTRA_SYNC_ENABLED=false`.
 
 ## Field mapping status
-Only rows that are `enabled` **and** have a `jira_field_id` are written (`active_mappings()`).
-- Disabled, source undefined in the sheet: Associate ID, Company email address, Hire Date, Worker Category,
-  Job Class, Manager Email, Work Arrangement.
+Only rows that are `enabled` **and** have a `jira_field_id` are written (`active_mappings()`) - 16 today:
+Business Unit, Preferred Name, Home State, Home Department, Function, Job Title, Leadership Level 2/3, Legal First/Last
+Name, Employee location, People Manager, Position ID, Position Status, Manager Name, Seniority Date.
+- Disabled, source undefined in the sheet (Jira fields exist, ids 15092-15095 etc.): Associate ID, Company email
+  address, Hire Date, Worker Category, Job Class, Manager Email, Work Arrangement.
 - Disabled, needs confirmation: FLSA Status (sheet maps it to `employeeID`), Legal Middle Name (`middleName` is an
   AD attribute, not a Graph v1.0 user property).
-- Enabled but waiting on a Jira field: "Create" rows (Preferred Name, Home State, Leadership Level 2/3, People
-  Manager, Position Status, Seniority Date). Run `python hr_jira_field_admin.py` (plan) then `--apply`, add the
-  fields to the HRD/LIBTA screens, and paste the ids into `FIELD_MAP`.
+
+## Jira setup (done 2026-10-14)
+`python hr_jira_field_admin.py --apply` renamed 9 fields and created 11 (ids `customfield_15085`-`15095`);
+`--screens --apply` added every mapped field to the 7 HRD screens (12223-12229) and LIBTA's edit/view screens
+(12275, 12533), and Company email address to LIBTA's create screen (12274). Both modes are idempotent.
+Still manual: option lists for Function and Worker Category (the sheet gives no target values).
+
+## Known blocker: LIBTA writes
+The Jira service account ("IT AI atlassian") has no **Edit Issues** permission in LIBTA (it does in HRD), so a
+LIBTA ticket gets a Jira 403 and is marked `failed`. Grant it Edit Issues in the LIBTA permission scheme.
 
 ## Admin API (admin only)
 `GET /api/hr-entra-sync/status`, `GET /api/hr-entra-sync/issues`, `POST /api/hr-entra-sync/issues/{key}/run`

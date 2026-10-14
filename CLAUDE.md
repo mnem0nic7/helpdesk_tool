@@ -182,7 +182,7 @@ These are durable rules and design contracts — not time-bound release notes. G
 ### HR Entra -> Jira sync
 
 - `backend/hr_entra_sync.py` copies Entra attributes into newly created HRD/LIBTA tickets (design: `docs/superpowers/specs/2026-10-14-hr-entra-jira-sync-design.md`). It ships disabled (`HR_ENTRA_SYNC_ENABLED=false`). Entra always overwrites Jira values. No Entra match is retried for 15 minutes, then one **internal** note (`sd.public.comment`, via `JiraClient.add_internal_comment`) is posted — never fall back to a public comment, since HRD is a JSM project and the submitter would see it. Lookup emails live in Jira text fields as wiki links (`[a@x.com|mailto:a@x.com]`), so `normalize_email` extracts rather than validates.
-- Only `FIELD_MAP` rows that are enabled **and** have a `jira_field_id` are written. Rows the mapping sheet leaves undefined (or that look wrong: FLSA, Legal Middle Name) stay disabled with a `note` — do not enable them without a confirmed Entra source. The Jira renames/creates go through the dry-run-first `backend/hr_jira_field_admin.py`.
+- Only `FIELD_MAP` rows that are enabled **and** have a `jira_field_id` are written. Rows the mapping sheet leaves undefined (or that look wrong: FLSA, Legal Middle Name) stay disabled with a `note` — do not enable them without a confirmed Entra source. The Jira renames/creates/screen additions go through the dry-run-first, idempotent `backend/hr_jira_field_admin.py` (`--apply`, `--screens`). The sync needs Edit Issues on each tracked project for the Jira service account; LIBTA lacked it as of 2026-10-14 (403 → ticket marked `failed`).
 
 ### Shared Tools surface
 
