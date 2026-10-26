@@ -2,7 +2,7 @@
 
 **Goal:** Email the SPE_E5 license reclaim workbook (same shape as `e5_license_reclaim_candidates_2026-10-12.xlsx`) to Grant Allison and Wayne Berry every Sunday, so reclaim candidates are reviewed on a regular cadence instead of ad hoc.
 
-**Audience / recipients:** `gallison@librasolutionsgroup.com`, `wberry@librasolutionsgroup.com` (Wayne's regular account, not the `ca-`/`sa-` admin accounts). Configured via `E5_REPORT_RECIPIENTS`, not hardcoded.
+**Audience / recipients:** `gallison@librasolutionsgroup.com`, `wberry@librasolutionsgroup.com` (Wayne's regular account, not the `ca-`/`sa-` admin accounts), `smetcalf@librasolutionsgroup.com` (Scott Metcalf, added 2026-10-26). Configured via `E5_REPORT_RECIPIENTS`, not hardcoded.
 
 **Scope:** primary site scope's tenant (same Entra app registration the backend already uses). Read-only: nothing is reclaimed automatically.
 
