@@ -844,6 +844,7 @@ def test_should_process_skips_trusted_domain_and_allows_payroll_bypass():
     assert job._should_process("someone@librasolutionsgroup.com", trusted) is False
     assert job._should_process("outsider@example.com", trusted) is True
     assert job._should_process("payroll@librasolutionsgroup.com", trusted) is True
+    assert job._should_process("ARivard@librasolutionsgroup.com", trusted) is True
 
 
 async def test_run_cycle_skips_entirely_when_disabled():

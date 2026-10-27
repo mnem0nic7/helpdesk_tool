@@ -34,6 +34,11 @@ MAILBOXES: dict[str, dict[str, str]] = {
     "benefits": {"address": "Benefits@librasolutionsgroup.com", "request_type_id": "619"},
 }
 PAYROLL_BYPASS_SENDER = "payroll@librasolutionsgroup.com"
+# Internal senders whose mail still becomes a ticket despite their domain being trusted.
+BYPASS_SENDERS = frozenset({
+    PAYROLL_BYPASS_SENDER,
+    "arivard@librasolutionsgroup.com",  # Alyx Rivard: her AskHR emails create portal cases
+})
 JSM_SERVICE_DESK_ID = "73"
 JSM_PROJECT_KEY = "HRD"
 REPORTER_ACCOUNT_IDS: dict[str, str] = {
@@ -657,7 +662,7 @@ class AskHrBotJob:
 
     def _should_process(self, sender_email: str, trusted_domains: list[str]) -> bool:
         sender = sender_email.strip().lower()
-        if sender == PAYROLL_BYPASS_SENDER:
+        if sender in BYPASS_SENDERS:
             return True
         domain = sender.rsplit("@", 1)[-1] if "@" in sender else ""
         return domain not in trusted_domains
