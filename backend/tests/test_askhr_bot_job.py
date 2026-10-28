@@ -1278,3 +1278,71 @@ async def test_start_and_stop_background_runner_does_not_raise():
     job.stop_background_runner()
     await asyncio.sleep(0)
     assert job._bg_task.cancelled() or job._bg_task.done()
+
+
+def _internal_requests_azure(*, in_folder, folder_found=True, fail=False):
+    """Fake Graph: empty Inbox, an Internal Requests child folder holding `in_folder` (summaries), full fetch by id."""
+    def graph_paged_get(path, params=None, headers=None):
+        if "mailFolders/IR-FOLDER/messages" in path:
+            if fail:
+                raise RuntimeError("graph down")
+            return [{k: v for k, v in m.items() if k != "body"} for m in in_folder]
+        return []
+
+    def graph_request(method, path, params=None, **_):
+        if path.endswith("/Inbox/childFolders"):
+            return {"value": [{"id": "IR-FOLDER"}] if folder_found else []}
+        return next(m for m in in_folder if path.endswith(m["id"]))
+
+    azure = MagicMock()
+    azure.graph_paged_get.side_effect = graph_paged_get
+    azure.graph_request.side_effect = graph_request
+    return azure
+
+
+def _ir_message(msg_id, sender):
+    return {
+        "id": msg_id, "internetMessageId": f"<{msg_id}@mail.example.com>", "subject": "SCF",
+        "receivedDateTime": "2026-10-28T14:12:34Z",
+        "from": {"emailAddress": {"address": sender, "name": "Sender"}}, "body": {"content": "see attached"},
+    }
+
+
+async def test_bypass_sender_in_internal_requests_folder_creates_a_ticket(monkeypatch):
+    """A rule files company-domain mail into Inbox/Internal Requests; Alyx's mail must still reach the bot."""
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(enabled=True, trusted_domains=["librasolutionsgroup.com"])
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
+    monkeypatch.setattr(job, "_azure_client", lambda: _internal_requests_azure(in_folder=[
+        _ir_message("alyx", "ARivard@librasolutionsgroup.com"),
+        _ir_message("other", "someone@librasolutionsgroup.com"),
+    ]))
+    attempts = []
+    monkeypatch.setattr(job, "_create_or_attach_ticket",
+                        lambda mailbox, message, existing_issue_key: attempts.append((mailbox, message["graph_message_id"], message["body"])) or ("created", "HRD-1", None))
+
+    await job.run_cycle()
+
+    assert attempts == [("askhr", "alyx", "see attached"), ("benefits", "alyx", "see attached")]
+    assert job._get_settings()["askhr_checkpoint_at"].startswith("2026-10-28T14:12:34")
+
+
+async def test_internal_requests_read_failure_holds_the_checkpoint(monkeypatch):
+    job = _fresh_job()
+    job._get_settings()
+    job._update_settings(enabled=True, trusted_domains=["librasolutionsgroup.com"])
+    monkeypatch.setattr(job, "_refresh_trusted_domains_if_needed", lambda: None)
+    monkeypatch.setattr(job, "_azure_client", lambda: _internal_requests_azure(
+        in_folder=[_ir_message("alyx", "ARivard@librasolutionsgroup.com")], fail=True))
+
+    await job.run_cycle()
+
+    assert job._get_settings()["askhr_checkpoint_at"] == ""
+
+
+async def test_missing_internal_requests_folder_is_not_an_error(monkeypatch):
+    job = _fresh_job()
+    assert job._bypass_messages_in_internal_requests.__name__
+    monkeypatch.setattr(job, "_azure_client", lambda: _internal_requests_azure(in_folder=[], folder_found=False))
+    assert job._bypass_messages_in_internal_requests("AskHR@x.com", "2026-10-28T00:00:00Z") == []

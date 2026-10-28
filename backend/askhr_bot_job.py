@@ -39,6 +39,9 @@ BYPASS_SENDERS = frozenset({
     PAYROLL_BYPASS_SENDER,
     "arivard@librasolutionsgroup.com",  # Alyx Rivard: her AskHR emails create portal cases
 })
+# The mailboxes carry a rule that files every company-domain sender into this Inbox subfolder, so the bot
+# never sees their mail in the Inbox itself. Bypass senders' mail is therefore also read from here.
+INTERNAL_REQUESTS_FOLDER = "Internal Requests"
 JSM_SERVICE_DESK_ID = "73"
 JSM_PROJECT_KEY = "HRD"
 REPORTER_ACCOUNT_IDS: dict[str, str] = {
@@ -719,6 +722,39 @@ class AskHrBotJob:
         ).fetchone()
         return dict(row) if row is not None else None
 
+    def _bypass_messages_in_internal_requests(self, mailbox_address: str, since_iso: str) -> list[dict[str, Any]]:
+        """Messages from BYPASS_SENDERS that a mailbox rule filed into the Inbox's Internal Requests subfolder.
+
+        Raises on any Graph failure so the caller can hold the checkpoint instead of silently dropping them.
+        """
+        azure = self._azure_client()
+        folders = azure.graph_request(
+            "GET", f"users/{mailbox_address}/mailFolders/Inbox/childFolders",
+            params={"$filter": f"displayName eq '{INTERNAL_REQUESTS_FOLDER}'", "$select": "id"},
+        ).get("value") or []
+        if not folders:
+            return []
+        candidates = azure.graph_paged_get(
+            f"users/{mailbox_address}/mailFolders/{folders[0]['id']}/messages",
+            params={
+                "$filter": f"receivedDateTime ge {since_iso}",
+                "$select": "id,internetMessageId,subject,receivedDateTime,from",
+                "$top": "100",
+            },
+        )
+        wanted = [
+            m for m in candidates
+            if str(((m.get("from") or {}).get("emailAddress") or {}).get("address") or "").strip().lower() in BYPASS_SENDERS
+        ]
+        # Only the matches need the (large) body.
+        return [
+            azure.graph_request(
+                "GET", f"users/{mailbox_address}/messages/{m['id']}",
+                params={"$select": "id,internetMessageId,subject,receivedDateTime,from,body"},
+            )
+            for m in wanted
+        ]
+
     async def _poll_mailbox(self, mailbox: str, settings: dict[str, Any]) -> None:
         import asyncio
 
@@ -779,6 +815,16 @@ class AskHrBotJob:
             ),
         )
 
+        internal_failed = False
+        try:
+            graph_messages = graph_messages + await loop.run_in_executor(
+                None, lambda: self._bypass_messages_in_internal_requests(mailbox_address, since_iso)
+            )
+        except Exception:
+            # Inbox mail is still processed; the checkpoint is held below so the next cycle retries this folder.
+            internal_failed = True
+            logger.exception("AskHR bot: could not read the %s folder for %s", INTERNAL_REQUESTS_FOLDER, mailbox)
+
         trusted_domains = settings["trusted_domains"]
         created = skipped = failed = 0
         latest_received_dt: datetime | None = None
@@ -836,7 +882,7 @@ class AskHrBotJob:
                 (uuid.uuid4().hex, mailbox, _utcnow().isoformat(), len(graph_messages), created, skipped, failed),
             )
 
-        if latest_received_dt is not None:
+        if latest_received_dt is not None and not internal_failed:
             self._update_settings(**{checkpoint_key: latest_received_dt.isoformat()})
 
     async def run_cycle(self) -> None:
