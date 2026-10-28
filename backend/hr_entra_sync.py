@@ -21,6 +21,7 @@ from typing import Any
 import requests
 
 import hr_entra_field_map as fmap
+import hr_trimed_sheet
 from azure_client import AzureApiError
 from config import (
     DATA_DIR,
@@ -447,14 +448,33 @@ class HrEntraSyncJob:
                             "candidates": [u.get("userPrincipalName") for u in users], "attrs": tried_attrs, **base}
                 matched = (users[0], f"{source} on ticket", source, via)
         base["attrs"] = tried_attrs
-        if matched is None:
+        # Trimed roster sheet: fills any field Entra left empty, or supplies everything when Entra has no match.
+        # Looked up by the same emails the Entra search considered (including ones skipped as external).
+        sheet_row = None
+        if not email_override:
+            position = str(fields.get(fmap.POSITION_ID_FIELD_ID) or "") if fmap._issue_type(fields) in fmap.ATTRIBUTE_SUBJECT_TYPES else ""
+            sheet_row = hr_trimed_sheet.find_row([e for e, _, _ in candidates] + skipped_external, position)
+        if matched is None and sheet_row is None:
             if not candidates and not tried_attrs:
                 return {"outcome": "no_email", **base}
             return {"outcome": "no_match", **base}
 
-        user, label, source, via = matched
-        manager = self.fetch_manager(str(user["id"]))
-        payload, empty = fmap.build_issue_fields(user, manager)
+        if matched is not None:
+            user, label, source, via = matched
+            manager = self.fetch_manager(str(user["id"]))
+            payload, empty = fmap.build_issue_fields(user, manager)
+        else:
+            user, label, source, via = {}, "trimed sheet", "sheet", "trimed_sheet"
+            payload, empty = {}, []
+        sheet_filled: list[str] = []
+        if sheet_row is not None:
+            sheet_payload, _ = hr_trimed_sheet.build_issue_fields(sheet_row)
+            for field_id, value in sheet_payload.items():
+                if field_id not in payload:
+                    payload[field_id] = value
+                    sheet_filled.append(field_id)
+            names = {m.jira_field_id: m.jira_name for m in fmap.active_mappings()}
+            empty = [n for n in empty if n not in {names.get(f) for f in sheet_filled}]
         kept: list[str] = []
         if fmap.is_fill_only(fields):
             payload, kept = fmap.drop_filled(payload, fields)
@@ -472,6 +492,7 @@ class HrEntraSyncJob:
             "fields_written": written,
             "fields_skipped": skipped,
             "fields_kept": kept,
+            "fields_from_sheet": sorted(sheet_filled),
             "entra_empty": empty,
             **base,
         }
