@@ -33,10 +33,10 @@ MAILBOXES: dict[str, dict[str, str]] = {
     "askhr": {"address": "AskHR@librasolutionsgroup.com", "request_type_id": "420"},
     "benefits": {"address": "Benefits@librasolutionsgroup.com", "request_type_id": "619"},
 }
-PAYROLL_BYPASS_SENDER = "payroll@librasolutionsgroup.com"
 # Internal senders whose mail still becomes a ticket despite their domain being trusted.
+# Do NOT add senders that Jira's native email channel already ticketizes (e.g. payroll@): the
+# bot would file a second ticket for every message (HRD-2582/2583 onward, 2026-10-29).
 BYPASS_SENDERS = frozenset({
-    PAYROLL_BYPASS_SENDER,
     "arivard@librasolutionsgroup.com",  # Alyx Rivard: her AskHR emails create portal cases
 })
 # The mailboxes carry a rule that files every company-domain sender into this Inbox subfolder, so the bot

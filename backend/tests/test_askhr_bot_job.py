@@ -837,13 +837,15 @@ def test_fetch_message_from_graph_builds_a_full_message_dict():
     )
 
 
-def test_should_process_skips_trusted_domain_and_allows_payroll_bypass():
+def test_should_process_skips_trusted_domain_and_allows_bypass_senders():
     job = _fresh_job()
     trusted = ["librasolutionsgroup.com", "movedocs.com"]
 
     assert job._should_process("someone@librasolutionsgroup.com", trusted) is False
     assert job._should_process("outsider@example.com", trusted) is True
-    assert job._should_process("payroll@librasolutionsgroup.com", trusted) is True
+    # Payroll's mail is already ticketed by Jira's native email channel; processing it here too
+    # created a second ticket for every Payroll email (2026-10-29 onward).
+    assert job._should_process("payroll@librasolutionsgroup.com", trusted) is False
     assert job._should_process("ARivard@librasolutionsgroup.com", trusted) is True
 
 
