@@ -478,10 +478,21 @@ class HrEntraSyncJob:
         kept: list[str] = []
         if fmap.is_fill_only(fields):
             payload, kept = fmap.drop_filled(payload, fields)
+        else:
+            # The lookup-email fields identify the employee, so they are only ever filled, never overwritten.
+            lookup = {f: v for f, v in payload.items() if f in fmap.FILL_ONLY_FIELD_IDS}
+            _, kept = fmap.drop_filled(lookup, fields)
+            payload = {f: v for f, v in payload.items() if f not in kept}
         if dry_run:
             written, skipped = payload, {}
         else:
             written, skipped = self._write_fields(issue_key, payload)
+        # Emails this run wrote into empty lookup fields count as the ticket's emails from now on, so the
+        # email-change trigger does not mistake the sync's own write for a human edit and re-run the ticket.
+        written_emails = [e for f in fmap.FILL_ONLY_FIELD_IDS if f in written
+                          for e in [fmap.normalize_email(written[f])] if e]
+        if written_emails:
+            base["fingerprint"] = fmap.fingerprint(sorted(set(fmap.ticket_emails(fields)) | set(written_emails)))
         return {
             "outcome": STATUS_SYNCED,
             "dry_run": dry_run,

@@ -75,3 +75,19 @@ def test_sheet_fills_only_what_entra_left_empty(tmp_path):
 def test_no_sheet_row_keeps_no_match(tmp_path):
     jira = FakeJira({"HRD-1": _issue(customfield_12883="stranger@gmail.com")})
     assert _job(tmp_path, jira, FakeAzure()).sync_issue("HRD-1")["outcome"] == "no_match"
+
+
+def test_sheet_supplies_manager_email_flsa_and_both_emails():
+    payload, _ = sheet.build_issue_fields(sheet.find_row(["tfranklin@trimed-billing.com"]))
+    assert payload["customfield_15094"] == "bjames@trimed-billing.com"  # Manager Email
+    assert payload["customfield_13028"] == {"value": "Non-Exempt"}  # FLSA, aliased to the Jira option
+    assert payload["customfield_12879"] == "tfranklin@trimed-billing.com"  # Company email address
+    assert payload["customfield_12883"] == "traci.franklin06@gmail.com"  # Personal email address
+
+
+def test_sheet_never_overwrites_an_email_typed_on_the_ticket(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12883="traci.franklin06@gmail.com")})
+    res = _job(tmp_path, jira, FakeAzure()).sync_issue("HRD-1")
+    written = jira.updates[0][1]
+    assert "customfield_12883" not in written and written["customfield_12879"] == "tfranklin@trimed-billing.com"
+    assert res["fingerprint"] == "tfranklin@trimed-billing.com|traci.franklin06@gmail.com"

@@ -42,10 +42,8 @@ FIELD_MAP: tuple[FieldMapping, ...] = (
     FieldMapping("Business Unit", KIND_TEXT, _ext("division"), "customfield_13458"),
     FieldMapping("Preferred Name", KIND_TEXT, "displayName", "customfield_15085"),
     FieldMapping("Home State", KIND_TEXT, _ext("msDS_cloudExtensionAttribute19"), "customfield_15086"),
-    FieldMapping(
-        "FLSA Status", KIND_SELECT, "employeeId", "customfield_13028", enabled=False,
-        note="Sheet maps FLSA to employeeID, which looks wrong; Jira options are Exempt/Non-Exempt/Unknown. Confirm source.",
-    ),
+    # FLSA: ADP writes the FLSA description ("Exempt"/"Non-exempt") into employeeID (verified on 638 accounts).
+    FieldMapping("FLSA Status", KIND_SELECT, "employeeId", "customfield_13028"),
     FieldMapping("Home Department", KIND_TEXT, "department", "customfield_13459"),
     FieldMapping("Function", KIND_SELECT, _ext("jobFunction"), "customfield_11113"),
     FieldMapping("Job Title", KIND_TEXT, "title", "customfield_12866"),
@@ -53,24 +51,25 @@ FIELD_MAP: tuple[FieldMapping, ...] = (
     FieldMapping("Leadership Level 3", KIND_TEXT, _ext("msDS_cloudExtensionAttribute15"), "customfield_15088"),
     FieldMapping("Legal First Name", KIND_TEXT, "givenName", "customfield_12873"),
     FieldMapping("Legal Last Name", KIND_TEXT, "surname", "customfield_12874"),
-    FieldMapping(
-        "Legal Middle Name", KIND_TEXT, None, "customfield_12881", enabled=False,
-        note="'middleName' is an AD attribute, not a Microsoft Graph v1.0 user property; confirm the Entra source.",
-    ),
+    FieldMapping("Legal Middle Name", KIND_TEXT, _ext("middleName"), "customfield_12881"),
     FieldMapping("Employee location", KIND_TEXT, "officeLocation", "customfield_12893"),
     FieldMapping("People Manager (Yes/No)", KIND_SELECT, _ext("msDS_cloudExtensionAttribute13"), "customfield_15089"),
     FieldMapping("Position ID", KIND_TEXT, _ext("positionID"), "customfield_12865"),
     FieldMapping("Position Status", KIND_TEXT, _ext("positionStatus"), "customfield_15090"),
     FieldMapping("Manager Name", KIND_TEXT, None, "customfield_15038", derived="manager_name"),
     FieldMapping("Seniority Date", KIND_DATE, _ext("msDS_cloudExtensionAttribute1"), "customfield_15091"),
-    # --- Sheet rows still marked "Please provide": wired up but off until HR/ADP define the source. ---
-    FieldMapping("Associate ID", KIND_TEXT, None, "customfield_15092", enabled=False, note="Entra source undefined in sheet."),
-    FieldMapping("Company email address", KIND_TEXT, None, "customfield_12879", enabled=False, note="Entra source undefined in sheet."),
-    FieldMapping("Hire Date", KIND_DATETIME, None, "customfield_12870", enabled=False, note="Entra source undefined in sheet."),
-    FieldMapping("Worker Category", KIND_SELECT, None, "customfield_12894", enabled=False, note="Entra source undefined in sheet."),
-    FieldMapping("Job Class", KIND_TEXT, None, "customfield_15093", enabled=False, note="Entra source undefined in sheet."),
-    FieldMapping("Manager Email", KIND_TEXT, None, "customfield_15094", derived="manager_email", enabled=False, note="Entra source undefined in sheet."),
-    FieldMapping("Work Arrangement", KIND_SELECT, None, "customfield_15095", enabled=False, note="Entra source undefined in sheet."),
+    # --- Rows the sheet listed as "Please provide" for Entra; sources found by profiling the synced ADP extensions
+    # (2026-11-05): cloudExtensionAttribute5-9 hold work arrangement, manager email, job class, worker type, hire date.
+    FieldMapping("Associate ID", KIND_TEXT, _ext("employeeNumber"), "customfield_15092"),
+    FieldMapping("Company email address", KIND_TEXT, "mail", "customfield_12879"),
+    FieldMapping("Hire Date", KIND_DATETIME, _ext("msDS_cloudExtensionAttribute9"), "customfield_12870"),
+    FieldMapping("Worker Category", KIND_SELECT, _ext("msDS_cloudExtensionAttribute8"), "customfield_12894"),
+    FieldMapping("Job Class", KIND_TEXT, _ext("msDS_cloudExtensionAttribute7"), "customfield_15093"),
+    # ADP's manager email; falls back to the Entra manager's mail when blank (they agree on 96% of accounts).
+    FieldMapping("Manager Email", KIND_TEXT, _ext("msDS_cloudExtensionAttribute6"), "customfield_15094", derived="manager_email"),
+    FieldMapping("Work Arrangement", KIND_SELECT, _ext("msDS_cloudExtensionAttribute5"), "customfield_15095"),
+    # No Entra source (otherMails holds work addresses for a handful of accounts); filled from the Trimed sheet.
+    FieldMapping("Personal email address", KIND_TEXT, None, "customfield_12883"),
 )
 
 COMPANY_EMAIL_FIELD_ID = "customfield_12879"
@@ -79,8 +78,10 @@ PERSONAL_EMAIL_FIELD_ID = "customfield_12883"
 # Jira fields that carry the address used to find the Entra user (checked in this order).
 LOOKUP_EMAIL_FIELD_IDS: tuple[str, ...] = (
     COMPANY_EMAIL_FIELD_ID,  # Company email address (HRD)
-    PERSONAL_EMAIL_FIELD_ID,  # Personal Email Address (New Hire) (HRD onboarding, LIBTA)
+    PERSONAL_EMAIL_FIELD_ID,  # Personal email address (renamed from "Personal Email Address (New Hire)")
 )
+# The lookup-email fields are only ever filled, never overwritten: they are what identifies the employee.
+FILL_ONLY_FIELD_IDS = frozenset(LOOKUP_EMAIL_FIELD_IDS)
 
 
 # Display order of these fields on the HRD/LIBTA screens: the "Order #" column of ADP Jira Mapping v1.xlsx.
@@ -89,7 +90,7 @@ DISPLAY_ORDER: tuple[str, ...] = (
     "People Manager (Yes/No)", "Work Arrangement", "Manager Name", "Manager Email", "Leadership Level 2",
     "Leadership Level 3", "Job Class", "Business Unit", "Function", "Home State", "Worker Category", "Hire Date",
     "Position ID", "Legal First Name", "Legal Middle Name", "Legal Last Name", "Position Status",
-    "Company email address", "Associate ID",
+    "Company email address", "Personal email address", "Associate ID",
 )
 
 
@@ -135,11 +136,16 @@ def parse_date(value: Any) -> date | None:
     return None
 
 
-# Entra spellings that mean an option Jira already has (Function select). Anything else that is not a Jira
-# option is rejected by Jira per-field and skipped, so add new Jira options rather than aliases for new concepts.
-SELECT_ALIASES: dict[str, dict[str, str]] = {
+# Entra spellings that mean a value Jira already has (select options), or that AD truncated (Job Class is cut at
+# 20 characters). Anything else that is not a Jira option is rejected by Jira per-field and skipped, so add new
+# Jira options rather than aliases for new concepts.
+VALUE_ALIASES: dict[str, dict[str, str]] = {
     "Function": {"information technology": "IT", "human resources": "HR"},
+    "FLSA Status": {"exempt": "Exempt", "non-exempt": "Non-Exempt"},
+    "Work Arrangement": {"in office": "In office", "hybrid": "Hybrid", "remote": "Remote"},
+    "Job Class": {"individual contribut": "Individual Contributor"},
 }
+SELECT_ALIASES = VALUE_ALIASES  # older name
 # ADP import header text that leaked into some accounts' attributes; never a real value.
 _HEADER_ARTIFACTS = {"jobfunction", "jobfunctiondescription"}
 
@@ -161,7 +167,8 @@ def jira_value(mapping: FieldMapping, raw: Any) -> Any | None:
     if raw is None or (isinstance(raw, str) and not raw.strip()):
         return None
     if mapping.kind == KIND_TEXT:
-        return str(raw).strip()
+        text = str(raw).strip()
+        return VALUE_ALIASES.get(mapping.jira_name, {}).get(text.lower(), text)
     if mapping.kind == KIND_SELECT:
         if mapping.jira_name == "People Manager (Yes/No)":
             normalized = to_yes_no(raw)
@@ -169,7 +176,7 @@ def jira_value(mapping: FieldMapping, raw: Any) -> Any | None:
         text = str(raw).strip()
         if text.lower() in _HEADER_ARTIFACTS:
             return None
-        return {"value": SELECT_ALIASES.get(mapping.jira_name, {}).get(text.lower(), text)}
+        return {"value": VALUE_ALIASES.get(mapping.jira_name, {}).get(text.lower(), text)}
     if mapping.kind in (KIND_DATE, KIND_DATETIME):
         parsed = parse_date(raw)
         if parsed is None:
@@ -310,7 +317,8 @@ def entra_value(mapping: FieldMapping, user: dict[str, Any], manager: dict[str, 
     if mapping.derived == "manager_name":
         return (manager or {}).get("displayName")
     if mapping.derived == "manager_email":
-        return (manager or {}).get("mail")
+        own = user.get(mapping.entra_property) if mapping.entra_property else None
+        return own or (manager or {}).get("mail")
     if mapping.entra_property:
         return user.get(mapping.entra_property)
     return None

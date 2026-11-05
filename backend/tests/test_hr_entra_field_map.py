@@ -9,11 +9,10 @@ def test_only_enabled_fields_with_jira_ids_are_active():
     assert "Job Title" in active and "Business Unit" in active and "Manager Name" in active
     # Fields created from the sheet's "Create" rows are live now.
     assert {"Preferred Name", "Home State", "Position Status", "Seniority Date", "People Manager (Yes/No)"} <= active
-    # "Please provide" / suspect rows stay disabled even though they now have Jira ids.
-    assert "FLSA Status" not in active
-    assert "Legal Middle Name" not in active
-    assert "Hire Date" not in active
-    assert "Company email address" not in active
+    # The sheet's former "Please provide" rows are sourced from the synced ADP extensions now.
+    assert {"FLSA Status", "Legal Middle Name", "Hire Date", "Company email address", "Worker Category", "Job Class",
+            "Manager Email", "Work Arrangement", "Associate ID", "Personal email address"} <= active
+    assert len(active) == len(m.FIELD_MAP) == 26
 
 
 def test_every_mapped_jira_field_id_is_unique():
@@ -31,7 +30,7 @@ def test_graph_select_includes_extensions_and_lookup_props_but_not_disabled():
     props = m.graph_select_properties()
     assert f"{EXT}division" in props
     assert {"id", "userPrincipalName", "mail", "otherMails", "manager", "title"} <= set(props)
-    assert "employeeId" not in props  # FLSA source is disabled
+    assert "employeeId" in props and f"{EXT}msDS_cloudExtensionAttribute9" in props
 
 
 def test_issue_fields_to_request_includes_lookup_emails():
@@ -105,3 +104,36 @@ def test_adp_header_artifacts_are_treated_as_empty():
     fn = next(x for x in m.FIELD_MAP if x.jira_name == "Function")
     assert m.jira_value(fn, "JobFunction") is None
     assert m.jira_value(fn, "JobFunctionDescription") is None
+
+
+
+def _m(name):
+    return next(x for x in m.FIELD_MAP if x.jira_name == name)
+
+
+def test_aliases_map_entra_spellings_to_jira_options_and_fix_ad_truncation():
+    assert m.jira_value(_m("FLSA Status"), "Non-exempt") == {"value": "Non-Exempt"}
+    assert m.jira_value(_m("FLSA Status"), "Exempt") == {"value": "Exempt"}
+    assert m.jira_value(_m("Work Arrangement"), "In Office") == {"value": "In office"}
+    assert m.jira_value(_m("Worker Category"), "Full Time") == {"value": "Full Time"}
+    assert m.jira_value(_m("Job Class"), "Individual Contribut") == "Individual Contributor"
+    assert m.jira_value(_m("Job Class"), "Director") == "Director"
+
+
+def test_hire_date_from_iso_extension_value_is_a_jira_datetime():
+    assert m.jira_value(_m("Hire Date"), "2021-03-15") == "2021-03-15T00:00:00.000+0000"
+
+
+def test_manager_email_prefers_adp_value_and_falls_back_to_entra_manager():
+    me = _m("Manager Email")
+    assert m.entra_value(me, {me.entra_property: "adp.boss@x.com"}, {"mail": "entra.boss@x.com"}) == "adp.boss@x.com"
+    assert m.entra_value(me, {}, {"mail": "entra.boss@x.com"}) == "entra.boss@x.com"
+    assert m.entra_value(me, {}, None) is None
+
+
+def test_personal_email_has_no_entra_source():
+    assert m.entra_value(_m("Personal email address"), {"otherMails": ["a@x.com"], "mail": "b@x.com"}, None) is None
+
+
+def test_display_order_puts_personal_email_before_associate_id():
+    assert m.DISPLAY_ORDER[-3:] == ("Company email address", "Personal email address", "Associate ID")

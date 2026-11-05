@@ -36,7 +36,9 @@ async def get_status() -> dict[str, Any]:
                 "jira_name": m.jira_name,
                 "jira_field_id": m.jira_field_id,
                 "entra_source": (
-                    {"manager_name": "manager → displayName", "manager_email": "manager → mail"}.get(m.derived or "")
+                    (m.entra_property or "").replace(fmap.EXT_PREFIX, "ext:") + " (else manager → mail)"
+                    if m.derived == "manager_email" and m.entra_property
+                    else {"manager_name": "manager → displayName", "manager_email": "manager → mail"}.get(m.derived or "")
                     or (m.entra_property or "").replace(fmap.EXT_PREFIX, "ext:")
                     or None
                 ),

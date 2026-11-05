@@ -42,6 +42,13 @@ RENAMES: tuple[tuple[str, str, str], ...] = (
     ("customfield_12865", "Associate ID", "Position ID"),  # must run before the new Associate ID is created
     ("customfield_12870", "Start Date (New Hire)", "Hire Date"),
     ("customfield_12894", "Employment type", "Worker Category"),
+    ("customfield_12883", "Personal Email Address (New  Hire)", "Personal email address"),
+)
+
+# (field id, option value) that must exist on the field's default context: values Entra actually holds.
+ENSURE_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("customfield_11113", "Exec/Admin"),  # Function (added by hand 2026-10-14)
+    ("customfield_12894", "Intern"),  # Worker Category: Entra cloudExtensionAttribute8
 )
 
 # (name, kind, options) -- the sheet's "Create" rows.
@@ -59,10 +66,39 @@ CREATES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Work Arrangement", "select", ("In office", "Hybrid", "Remote")),
 )
 
-MANUAL = (
-    "Function (customfield_11113): sheet says 'Update options' but gives no target list -- edit options in Jira admin.",
-    "Worker Category (customfield_12894): sheet says 'update options' but gives no target list -- edit options in Jira admin.",
-)
+def _field_options(client: Any, field_id: str) -> tuple[str, list[str]]:
+    """(default context id, option values)."""
+    ctx = client.session.get(f"{client.base_url}/rest/api/3/field/{field_id}/context", timeout=30)
+    client._raise_for_status(ctx)
+    context_id = str(ctx.json()["values"][0]["id"])
+    opts = client.session.get(
+        f"{client.base_url}/rest/api/3/field/{field_id}/context/{context_id}/option", params={"maxResults": 100}, timeout=30
+    )
+    client._raise_for_status(opts)
+    return context_id, [o["value"] for o in opts.json().get("values", [])]
+
+
+def plan_options(client: Any) -> list[tuple[str, str, str]]:
+    """(field id, context id, value) for each ENSURE_OPTIONS value the field is missing."""
+    missing = []
+    for field_id, value in ENSURE_OPTIONS:
+        context_id, values = _field_options(client, field_id)
+        if value not in values:
+            missing.append((field_id, context_id, value))
+    return missing
+
+
+def apply_options(client: Any, missing: list[tuple[str, str, str]]) -> None:
+    for field_id, context_id, value in missing:
+        resp = client.session.post(
+            f"{client.base_url}/rest/api/3/field/{field_id}/context/{context_id}/option",
+            json={"options": [{"value": value}]}, timeout=30,
+        )
+        client._raise_for_status(resp)
+
+
+# Select-option work is driven by the values Entra actually holds (ENSURE_OPTIONS), not by hand.
+MANUAL: tuple[str, ...] = ()
 
 
 # Screens the sync needs its fields on (company-managed projects; ids from the issue type screen schemes).
@@ -325,10 +361,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{step.action.upper():6}] {step.detail}")
     for line in MANUAL:
         print(f"[MANUAL] {line}")
+    missing_options = plan_options(client)
+    for field_id, _, value in missing_options:
+        print(f"[OPTION] add {value!r} to {field_id}")
     if not args.apply:
         print("\nPlan only. Re-run with --apply to make these changes.")
         return 0
     created = apply(client, steps)
+    apply_options(client, missing_options)
     print("\nCreated fields (paste ids into hr_entra_field_map.FIELD_MAP, then add to HRD/LIBTA screens):")
     for name, fid in created.items():
         print(f"  {name}: {fid}")

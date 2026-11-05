@@ -256,7 +256,9 @@ def test_reporter_is_used_when_ticket_has_no_email(tmp_path):
     jira = FakeJira({"HRD-1": _issue(reporter=_person("rep@x.com"))})
     azure = FakeAzure({"rep@x.com": [_user(upn="rep@x.com", displayName="Rae Porter", accountEnabled=True, userType="Member")]})
     res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
-    assert res["outcome"] == "synced" and res["email_source"] == "reporter" and res["fingerprint"] == ""
+    assert res["outcome"] == "synced" and res["email_source"] == "reporter"
+    # the empty Company email field was filled from Entra mail, and that counts as the ticket's email now
+    assert res["fields_written"]["customfield_12879"] == "rep@x.com" and res["fingerprint"] == "rep@x.com"
 
 
 def test_ticket_email_wins_over_reporter(tmp_path):
@@ -630,3 +632,23 @@ def test_position_id_with_a_quote_cannot_break_out_of_the_filter(tmp_path):
     azure = FakeAzure()
     _job(tmp_path, jira, azure).sync_issue("HRD-1")
     assert "eq 'P''1'" in azure.calls[0][1]["$filter"]
+
+
+
+# ---- lookup-email fields: fill only, and the sync's own write is not an "email edit" ----
+
+def test_company_email_typed_on_the_ticket_is_never_overwritten(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="[typed@x.com|mailto:typed@x.com]")})
+    azure = FakeAzure({"typed@x.com": [_user(upn="typed@x.com", mail="other.alias@x.com")]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert "customfield_12879" not in jira.updates[0][1] and "customfield_12879" in res["fields_kept"]
+
+
+def test_filling_an_empty_company_email_does_not_trigger_an_email_change_resync(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(reporter=_person("rep@x.com"))})
+    azure = FakeAzure({"rep@x.com": [_user(upn="rep@x.com", accountEnabled=True)]})
+    job = _synced_job(tmp_path, jira, azure)
+    assert job.get_row("HRD-1")["lookup_fingerprint"] == "rep@x.com"
+    # Jira now shows the email the sync wrote; the update-window scan must not treat it as a human edit.
+    jira.updated_results = [{"key": "HRD-1", "fields": {"customfield_12879": "rep@x.com", "project": {"key": "HRD"}}}]
+    assert job.discover_email_changes(NOW) == 0

@@ -36,6 +36,10 @@ SHEET_COLUMNS: dict[str, str] = {
     "Position ID": "Position ID",
     "Position Status": "Position Status",
     "Seniority Date": "Seniority Date",
+    "Manager Email": "Reports to Email",
+    "FLSA Status": "FLSA Description",
+    "Company email address": "Work Contact: Work Email",
+    "Personal email address": "Personal Contact: Personal Email",
 }
 _WORK_EMAIL = "Work Contact: Work Email"
 _PERSONAL_EMAIL = "Personal Contact: Personal Email"

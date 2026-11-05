@@ -12,9 +12,8 @@ def _job(tmp_path, jira=None, azure=None):
 def test_status_lists_active_and_inactive_fields(test_client):
     data = test_client.get("/api/hr-entra-sync/status").json()
     assert data["projects"] and "Job Title" in data["active_fields"]
-    inactive = {f["jira_name"]: f for f in data["inactive_fields"]}
-    assert inactive["FLSA Status"]["enabled"] is False and inactive["FLSA Status"]["note"]
-    assert inactive["Associate ID"]["enabled"] is False and inactive["Associate ID"]["has_jira_field_id"] is True
+    assert data["inactive_fields"] == []  # every sheet row has a source now
+    assert "FLSA Status" in data["active_fields"] and "Associate ID" in data["active_fields"]
 
 
 def test_status_forbidden_for_non_admin(test_client, monkeypatch):
@@ -59,7 +58,9 @@ def test_status_includes_summary_and_mapping_table(test_client, monkeypatch, tmp
     by_name = {m["jira_name"]: m for m in data["mappings"]}
     assert by_name["Business Unit"]["active"] is True and by_name["Business Unit"]["entra_source"] == "ext:division"
     assert by_name["Manager Name"]["entra_source"] == "manager → displayName"
-    assert by_name["FLSA Status"]["active"] is False and by_name["FLSA Status"]["note"]
+    assert by_name["FLSA Status"]["active"] is True and by_name["FLSA Status"]["entra_source"] == "employeeId"
+    assert by_name["Hire Date"]["entra_source"] == "ext:msDS_cloudExtensionAttribute9"
+    assert by_name["Personal email address"]["entra_source"] is None
 
 
 def test_email_override_only_on_dry_run_and_must_be_valid(test_client, monkeypatch, tmp_path):

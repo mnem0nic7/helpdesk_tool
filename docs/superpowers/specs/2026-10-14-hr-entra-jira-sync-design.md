@@ -48,14 +48,28 @@ Source mapping: `ADP Jira Mapping v1.xlsx`. Code: `backend/hr_entra_sync.py`, `h
 - Graph/Jira errors retry inside the window, then status `failed` (no note). Jira 403/404 fails immediately.
 - Ships disabled: `HR_ENTRA_SYNC_ENABLED=false`.
 
-## Field mapping status
-Only rows that are `enabled` **and** have a `jira_field_id` are written (`active_mappings()`) - 16 today:
-Business Unit, Preferred Name, Home State, Home Department, Function, Job Title, Leadership Level 2/3, Legal First/Last
-Name, Employee location, People Manager, Position ID, Position Status, Manager Name, Seniority Date.
-- Disabled, source undefined in the sheet (Jira fields exist, ids 15092-15095 etc.): Associate ID, Company email
-  address, Hire Date, Worker Category, Job Class, Manager Email, Work Arrangement.
-- Disabled, needs confirmation: FLSA Status (sheet maps it to `employeeID`), Legal Middle Name (`middleName` is an
-  AD attribute, not a Graph v1.0 user property).
+## Field mapping status (2026-11-05: all 26 sheet rows sourced)
+Every `FIELD_MAP` row is active. The sheet's former "Please provide" rows were sourced by profiling the ADP attributes
+synced into Entra (`POST /directoryObjects/getAvailableExtensionProperties`) and cross-checking them against live data:
+
+| Jira field | Entra source | Evidence |
+|---|---|---|
+| FLSA Status | `employeeId` | holds Exempt/Non-exempt on 638 accounts (the sheet was right); "Non-exempt" aliased to "Non-Exempt" |
+| Legal Middle Name | ext `middleName` | AD attribute synced as an extension (not a Graph user property) |
+| Work Arrangement | ext `msDS_cloudExtensionAttribute5` | Remote/Hybrid/In Office (611); "In Office" aliased to Jira's "In office" |
+| Manager Email | ext `msDS_cloudExtensionAttribute6`, else Entra manager's `mail` | equals the Entra manager's mail on 547/570 |
+| Job Class | ext `msDS_cloudExtensionAttribute7` | Individual Contributor/Manager/Director/VP...; AD truncates to 20 chars, "Individual Contribut" restored |
+| Worker Category | ext `msDS_cloudExtensionAttribute8` | Full Time/Part Time/Intern; "Intern" option added |
+| Hire Date | ext `msDS_cloudExtensionAttribute9` | ISO dates, on/before Seniority Date for 611/611 (equal 600) |
+| Associate ID | ext `employeeNumber` | 623 accounts, never equal to Position ID |
+| Company email address | `mail` | fill-only (lookup field) |
+| Personal email address | none in Entra (`otherMails` holds work addresses for 6 accounts) | Trimed sheet only |
+
+The two lookup-email fields (Company, Personal) are **fill-only on every request type**: they identify the employee, so
+an address typed on the ticket is never replaced. When the sync fills one, that address is folded into
+`lookup_fingerprint` so the email-change trigger does not treat the sync's own write as a human edit.
+`customfield_12883` was renamed "Personal Email Address (New  Hire)" -> "Personal email address" (sheet row 25) rather
+than creating a duplicate field, and sits at Order # 25 on every screen.
 
 ## Jira setup (done 2026-10-14)
 `python hr_jira_field_admin.py --apply` renamed 9 fields and created 11 (ids `customfield_15085`-`15095`);
