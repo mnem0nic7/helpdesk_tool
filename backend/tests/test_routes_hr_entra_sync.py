@@ -60,7 +60,7 @@ def test_status_includes_summary_and_mapping_table(test_client, monkeypatch, tmp
     assert by_name["Manager Name"]["entra_source"] == "manager → displayName"
     assert by_name["FLSA Status"]["active"] is True and by_name["FLSA Status"]["entra_source"] == "employeeId"
     assert by_name["Hire Date"]["entra_source"] == "ext:msDS_cloudExtensionAttribute9"
-    assert by_name["Personal email address"]["entra_source"] is None
+    assert by_name["Personal email address"]["entra_source"] == "ext:msDS_cloudExtensionAttribute20"
 
 
 def test_email_override_only_on_dry_run_and_must_be_valid(test_client, monkeypatch, tmp_path):

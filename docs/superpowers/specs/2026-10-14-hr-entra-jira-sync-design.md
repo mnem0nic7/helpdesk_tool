@@ -63,7 +63,13 @@ synced into Entra (`POST /directoryObjects/getAvailableExtensionProperties`) and
 | Hire Date | ext `msDS_cloudExtensionAttribute9` | ISO dates, on/before Seniority Date for 611/611 (equal 600) |
 | Associate ID | ext `employeeNumber` | 623 accounts, never equal to Position ID |
 | Company email address | `mail` | fill-only (lookup field) |
-| Personal email address | none in Entra (`otherMails` holds work addresses for 6 accounts) | Trimed sheet only |
+| Personal email address | ext `msDS_cloudExtensionAttribute20` (mapped by Aquera from ADP, 2026-11-11) | 609 accounts, all personal domains, unique, never the work mail; Trimed sheet still fills gaps |
+
+`msDS_cloudExtensionAttribute20` is also part of the Entra **lookup** filter (`mail`, `userPrincipalName`, `otherMails`,
+personal email; Graph compares it case-insensitively), so a ticket that only carries a personal email - typical for LIBTA
+candidates and new-hire onboarding - now finds the employee (`matched_via = personal_email`). Replaying all 609 real
+personal emails resolved every one to its own account. When an email matches several accounts and exactly one is an
+enabled member, that one wins: 4 personal addresses are also the `mail` of an old, disabled guest invite.
 
 The two lookup-email fields (Company, Personal) are **fill-only on every request type**: they identify the employee, so
 an address typed on the ticket is never replaced. When the sync fills one, that address is folded into

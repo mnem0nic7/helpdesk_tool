@@ -131,8 +131,11 @@ def test_manager_email_prefers_adp_value_and_falls_back_to_entra_manager():
     assert m.entra_value(me, {}, None) is None
 
 
-def test_personal_email_has_no_entra_source():
-    assert m.entra_value(_m("Personal email address"), {"otherMails": ["a@x.com"], "mail": "b@x.com"}, None) is None
+def test_personal_email_comes_from_cloud_extension_attribute_20_not_other_mails():
+    pe = _m("Personal email address")
+    assert pe.entra_property == f"{EXT}msDS_cloudExtensionAttribute20"
+    assert m.entra_value(pe, {"otherMails": ["a@x.com"], pe.entra_property: "me@gmail.com"}, None) == "me@gmail.com"
+    assert m.entra_value(pe, {"otherMails": ["a@x.com"]}, None) is None
 
 
 def test_display_order_puts_personal_email_before_associate_id():

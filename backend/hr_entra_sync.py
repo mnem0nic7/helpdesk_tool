@@ -278,7 +278,10 @@ class HrEntraSyncJob:
 
     def find_entra_users(self, email: str) -> list[dict[str, Any]]:
         safe = email.replace("'", "''")
-        flt = f"mail eq '{safe}' or userPrincipalName eq '{safe}' or otherMails/any(c:c eq '{safe}')"
+        flt = (
+            f"mail eq '{safe}' or userPrincipalName eq '{safe}' or otherMails/any(c:c eq '{safe}') "
+            f"or {fmap.PERSONAL_EMAIL_PROPERTY} eq '{safe}'"
+        )
         resp = self._azure_client().graph_request(
             "GET",
             "users",
@@ -341,6 +344,8 @@ class HrEntraSyncJob:
             return "upn"
         if str(user.get("mail") or "").lower() == email:
             return "mail"
+        if str(user.get(fmap.PERSONAL_EMAIL_PROPERTY) or "").strip().lower() == email:
+            return "personal_email"
         return "other_mail"
 
     # ------------------------------------------------------------------ core
@@ -433,6 +438,12 @@ class HrEntraSyncJob:
             if source == "reporter":
                 # The reporter is a guess at the subject, so only trust an enabled, person-style account.
                 users = [u for u in users if fmap.is_person_account(u)]
+            if len(users) > 1:
+                # A personal address is often also the mail of an old, disabled guest invite. When exactly one of
+                # the matches is an enabled member account, that is the employee; otherwise it stays ambiguous.
+                members = [u for u in users if fmap.is_person_account(u)]
+                if len(members) == 1:
+                    users = members
             if len(users) > 1:
                 return {"outcome": STATUS_AMBIGUOUS, "matched_email": email, "email_source": source,
                         "candidates": [u.get("userPrincipalName") for u in users], "attrs": tried_attrs, **base}

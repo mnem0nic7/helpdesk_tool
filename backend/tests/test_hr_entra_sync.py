@@ -652,3 +652,47 @@ def test_filling_an_empty_company_email_does_not_trigger_an_email_change_resync(
     # Jira now shows the email the sync wrote; the update-window scan must not treat it as a human edit.
     jira.updated_results = [{"key": "HRD-1", "fields": {"customfield_12879": "rep@x.com", "project": {"key": "HRD"}}}]
     assert job.discover_email_changes(NOW) == 0
+
+
+# ---- personal email (ADP -> msDS-cloudExtensionAttribute20) ----
+
+def test_lookup_also_searches_the_personal_email_attribute(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="jdoe@x.com")})
+    azure = FakeAzure({"jdoe@x.com": [_user()]})
+    _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    flt = azure.calls[0][1]["$filter"]
+    assert f"{EXT}msDS_cloudExtensionAttribute20 eq 'jdoe@x.com'" in flt and "otherMails/any" in flt
+
+
+def test_ticket_personal_email_matches_via_the_adp_personal_email(tmp_path):
+    jira = FakeJira({"LIBTA-1": _issue(customfield_12883="New.Hire@Gmail.com")})
+    user = _user(upn="nh@x.com", mail="nh@x.com", **{f"{EXT}msDS_cloudExtensionAttribute20": "new.hire@gmail.com"})
+    azure = FakeAzure({"new.hire@gmail.com": [user]})
+    res = _job(tmp_path, jira, azure).sync_issue("LIBTA-1")
+    assert res["outcome"] == "synced" and res["matched_via"] == "personal_email"
+    written = jira.updates[0][1]
+    assert written["customfield_12879"] == "nh@x.com"  # empty Company email filled from Entra
+    assert "customfield_12883" not in written  # typed personal email kept (fill-only)
+
+
+def test_empty_personal_email_field_is_filled_from_entra(tmp_path):
+    jira = FakeJira({"HRD-1": _issue(customfield_12879="jdoe@x.com")})
+    azure = FakeAzure({"jdoe@x.com": [_user(**{f"{EXT}msDS_cloudExtensionAttribute20": "jane.personal@yahoo.com"})]})
+    res = _job(tmp_path, jira, azure).sync_issue("HRD-1")
+    assert jira.updates[0][1]["customfield_12883"] == "jane.personal@yahoo.com"
+    assert res["fingerprint"] == "jane.personal@yahoo.com|jdoe@x.com"  # not mistaken for a human edit
+
+
+def test_disabled_guest_sharing_the_personal_email_does_not_make_the_match_ambiguous(tmp_path):
+    jira = FakeJira({"LIBTA-1": _issue(customfield_12883="me@gmail.com")})
+    guest = _user(upn="me_gmail.com#EXT#@x.com", mail="me@gmail.com", userType="Guest", accountEnabled=False)
+    member = _user(upn="emp@x.com", **{f"{EXT}msDS_cloudExtensionAttribute20": "me@gmail.com"})
+    res = _job(tmp_path, jira, FakeAzure({"me@gmail.com": [guest, member]})).sync_issue("LIBTA-1")
+    assert res["outcome"] == "synced" and res["matched_upn"] == "emp@x.com"
+
+
+def test_two_enabled_members_on_one_email_stay_ambiguous(tmp_path):
+    jira = FakeJira({"LIBTA-1": _issue(customfield_12883="me@gmail.com")})
+    azure = FakeAzure({"me@gmail.com": [_user(upn="a@x.com"), _user(upn="b@x.com")]})
+    res = _job(tmp_path, jira, azure).sync_issue("LIBTA-1")
+    assert res["outcome"] == "ambiguous" and jira.updates == []

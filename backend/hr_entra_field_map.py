@@ -68,10 +68,12 @@ FIELD_MAP: tuple[FieldMapping, ...] = (
     # ADP's manager email; falls back to the Entra manager's mail when blank (they agree on 96% of accounts).
     FieldMapping("Manager Email", KIND_TEXT, _ext("msDS_cloudExtensionAttribute6"), "customfield_15094", derived="manager_email"),
     FieldMapping("Work Arrangement", KIND_SELECT, _ext("msDS_cloudExtensionAttribute5"), "customfield_15095"),
-    # No Entra source (otherMails holds work addresses for a handful of accounts); filled from the Trimed sheet.
-    FieldMapping("Personal email address", KIND_TEXT, None, "customfield_12883"),
+    # ADP personal email, mapped by Aquera into AD/Entra msDS-cloudExtensionAttribute20 (2026-11-11; 609 accounts,
+    # all personal domains, unique). Also searched when matching a ticket's personal email to an employee.
+    FieldMapping("Personal email address", KIND_TEXT, _ext("msDS_cloudExtensionAttribute20"), "customfield_12883"),
 )
 
+PERSONAL_EMAIL_PROPERTY = _ext("msDS_cloudExtensionAttribute20")
 COMPANY_EMAIL_FIELD_ID = "customfield_12879"
 PERSONAL_EMAIL_FIELD_ID = "customfield_12883"
 
